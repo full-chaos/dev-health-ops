@@ -1,0 +1,340 @@
+{
+  "header": {
+    "test": "TestSyncConfigDeleteVenueOracle",
+    "python_build": "758a8d9fbb1f7548bef84df452597f9e7ddf145a",
+    "producer_digest": "53028fde43de410ecb5704202be163d92617d6794f5d2108513c8868e2607e80",
+    "recipe": "git worktree add --detach \u003cdir\u003e 758a8d9fbb1f7548bef84df452597f9e7ddf145a; from internal/api/syncadmin: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestSyncConfigDeleteVenueOracle$' ."
+  },
+  "requests": [
+    {
+      "name": "no token",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/cd257abd-094e-500b-b150-e2a23333b4ca",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7660e4fa-81b1-4bcd-9a6c-12cc7543b388"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/cd257abd-094e-500b-b150-e2a23333b4ca",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2bc9eab84ccd9648b4933f4e3f0aafb2ce8fb17f3ee0447aa6eb106592f5ffac",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7290154f-b6c9-4aaa-8c38-28397a8f737c"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "other org's config",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/f161fa17-2918-5690-a793-f3ce9e3583de",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a5cbcd73-2b4f-43f5-9018-502e55866055"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "unknown id",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/a1689b2c-2728-5856-af3e-6b032359e5e0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3ce5d58d-4e8b-432d-ae1a-0b6eda4483a2"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "not a uuid",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/not-a-uuid",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0c382f3d-8312-4715-a1ed-23e359e50004"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "planner config",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/cd257abd-094e-500b-b150-e2a23333b4ca",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 204,
+      "headers": {
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "87ecaeec-577b-4a62-9fc5-d71e0295664f"
+      },
+      "body": ""
+    },
+    {
+      "name": "planner config again",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/cd257abd-094e-500b-b150-e2a23333b4ca",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9e3017a0-4743-4153-b389-743aed91f673"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "legacy parent with children",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/4e3bbac8-22b8-57a6-9b5d-d430425833ae",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "child with a child",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/ce653150-d53d-53a4-9403-df2f3d8c5957",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "parent of another org's child only",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/cf93d692-4214-52f6-b902-228015e9f9b0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "grandchild",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/c9b7a735-2a7f-5dd6-be91-7c3f4533a3bd",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 204,
+      "headers": {
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9db0921b-51b2-45ff-b03d-675bf687918b"
+      },
+      "body": ""
+    },
+    {
+      "name": "one of two same-name configs",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/e23e8a2b-9e24-526c-9aae-5f32c9bca259",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 204,
+      "headers": {
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4005b763-3e8b-4988-a6f7-5783dc8cdd3f"
+      },
+      "body": ""
+    },
+    {
+      "name": "child after its child is gone",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/6abc0e6f-ec3b-5d30-978e-a229236cdf10",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 204,
+      "headers": {
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "edbbe397-4ca0-4ade-92c6-5458f531701a"
+      },
+      "body": ""
+    },
+    {
+      "name": "upper-case braced id",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/{ADE0DB57-E53E-5445-9182-48936B0CBDE7}",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 204,
+      "headers": {
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "570dbf0c-d35f-4984-9f0f-79adc88cd66a"
+      },
+      "body": ""
+    },
+    {
+      "name": "sourced config",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/e02bbf7c-fc5e-54c8-a2cc-6dea840a9726",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 204,
+      "headers": {
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6dfdec56-cb43-464c-bccc-1413e1c4f34e"
+      },
+      "body": ""
+    },
+    {
+      "name": "owner of the other org",
+      "method": "DELETE",
+      "path": "/api/v1/admin/sync-configs/f161fa17-2918-5690-a793-f3ce9e3583de",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "3a3c12df4fd9656c9580472d5759259b699c6a79ce3c1c06e75a4d6d22e1c169",
+      "status": 204,
+      "headers": {
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6c78fbf2-fa30-4b38-a919-17ec4ba1aa0e"
+      },
+      "body": ""
+    },
+    {
+      "name": "list after",
+      "method": "GET",
+      "path": "/api/v1/admin/sync-configs?include_migrated=true",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "255e5e408d40f88938f0a741c6570436b0eb781c0a50f9b60195cf4195c4cc45",
+      "status": 200,
+      "headers": {
+        "content-length": "5181",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "022635ab-b7c9-4712-ad46-558147879374"
+      },
+      "body": "[{\"id\":\"f2239d3a-8ca1-5e17-92ed-9c1c379268f8\",\"name\":\"cross-org\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":5,\"owner\":0,\"group\":\"g\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:13Z\",\"updated_at\":\"2026-01-01T01:00:13Z\"},{\"id\":\"cf93d692-4214-52f6-b902-228015e9f9b0\",\"name\":\"foreign-parent\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":1,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:31Z\",\"updated_at\":\"2026-01-01T00:00:31Z\"},{\"id\":\"076acab1-f2af-5186-a33c-c2b8837e88b0\",\"name\":\"no-sources\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":\"x/y\",\"owner\":\"ignored\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:12Z\",\"updated_at\":\"2026-01-01T01:00:12Z\"},{\"id\":\"ce653150-d53d-53a4-9403-df2f3d8c5957\",\"name\":\"child1\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":\"r1\",\"owner\":\"o1\"},\"is_active\":true,\"parent_id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:02Z\",\"updated_at\":\"2026-01-01T01:00:02Z\"},{\"id\":\"fce094b3-f244-5782-92ba-ba08f405eaf7\",\"name\":\"child3\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":\"a/b\",\"owner\":\"o\"},\"is_active\":true,\"parent_id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:04Z\",\"updated_at\":\"2026-01-01T01:00:04Z\"},{\"id\":\"a8050a0b-c46d-5619-b923-83c588ae682e\",\"name\":\"child4\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":\"\",\"project_id\":null},\"is_active\":false,\"parent_id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:05Z\",\"updated_at\":\"2026-01-01T01:00:05Z\"},{\"id\":\"c3289917-9e62-5915-bbbf-7c66c03d71dd\",\"name\":\"child5\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":0,\"project_id\":7,\"group\":1.5,\"owner\":\"\"},\"is_active\":true,\"parent_id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:06Z\",\"updated_at\":\"2026-01-01T01:00:06Z\"},{\"id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"name\":\"legacy\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"grp\",\"repo\":\"own\"},\"is_active\":true,\"parent_id\":null,\"children_count\":5,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:01Z\",\"updated_at\":\"2026-01-01T01:00:01Z\"},{\"id\":\"af4a9cd2-d154-5fe1-9204-81813c6a7975\",\"name\":\"same-name\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:41Z\",\"updated_at\":\"2026-01-01T00:00:41Z\"},{\"id\":\"96227c85-f8b5-5c89-a1f8-4a531379a183\",\"name\":\"dict-targets\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"z\",\"y\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":\"2026-02-02T02:02:02Z\",\"last_sync_success\":false,\"last_sync_error\":\"boom\",\"created_at\":\"2026-01-01T00:00:10Z\",\"updated_at\":\"2026-01-01T01:00:10Z\"},{\"id\":\"29d15a4a-d2cb-53c9-a375-192fc5e8de59\",\"name\":\"inactive\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"repo\":\"lonely\"},\"is_active\":false,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:11Z\",\"updated_at\":\"2026-01-01T01:00:11Z\"},{\"id\":\"bb625b32-dfb8-520b-b175-9bfe6b1b78fb\",\"name\":\"jobs-bad-list\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:14Z\",\"updated_at\":\"2026-01-01T01:00:14Z\"},{\"id\":\"99016da2-8629-535d-9348-9f37927389e8\",\"name\":\"jobs-inf\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:15Z\",\"updated_at\":\"2026-01-01T01:00:15Z\"},{\"id\":\"7bc98cc1-086c-5d60-9c1f-74955aeb125e\",\"name\":\"weird\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"a\",\"b\",\"c\"],\"sync_options\":{\"k\":3.5e-6,\"x\":\"y\",\"p\":\"q\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:09Z\",\"updated_at\":\"2026-01-01T01:00:09Z\"}]"
+    }
+  ],
+  "rows": {
+    "rows:backfill_jobs": {
+      "rows": ""
+    },
+    "rows:scheduled_jobs": {
+      "rows": "(1a9a8042-0f53-5a0c-8b1c-4da2f4944a1f,7fb8a862-0bf3-5de8-8033-89ad4a06947b,sync-1a9a8042,sync,\"0 * * * *\",UTC,{},,1,f,,,,,,0,0,\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\",github)\n(20e3d97f-72c6-5a48-b57f-4aec301a4546,7fb8a862-0bf3-5de8-8033-89ad4a06947b,metrics-20e3d97f,metrics,\"0 * * * *\",UTC,{},,1,f,,,,,,0,0,\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\",github)\n(28ce24da-b908-5239-bd27-df378b710ac5,7fb8a862-0bf3-5de8-8033-89ad4a06947b,sync-28ce24da,sync,\"0 * * * *\",UTC,{},99016da2-8629-535d-9348-9f37927389e8,1,f,,,,,,0,0,\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\",github)\n(60f1b42b-f17f-5d23-a54e-fd5a644cd47c,bfa0a64f-d2b2-582a-b893-15b4567bf681,sync-60f1b42b,sync,\"0 * * * *\",UTC,{},,1,f,,,,,,0,0,\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\",github)\n(7896264c-aa63-56cb-8e3b-990b5722e709,7fb8a862-0bf3-5de8-8033-89ad4a06947b,sync-7896264c,sync,\"0 * * * *\",UTC,{},bb625b32-dfb8-520b-b175-9bfe6b1b78fb,1,f,,,,,,0,0,\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\",github)"
+    },
+    "rows:scheduled_sync_occurrences": {
+      "rows": ""
+    },
+    "rows:sync_configurations": {
+      "rows": "(076acab1-f2af-5186-a33c-c2b8837e88b0,7fb8a862-0bf3-5de8-8033-89ad4a06947b,no-sources,github,\"[\"\"git\"\"]\",\"{\"\"repo\"\": \"\"x/y\"\", \"\"owner\"\": \"\"ignored\"\"}\",t,,,,,\"2026-01-01 00:00:12+00\",\"2026-01-01 01:00:12+00\",,a0eb4a39-9812-5a38-b2e5-b15b8eb907ff,,t)\n(17f5e490-3d1e-5416-97eb-bb61a83f1653,d285ff90-c3ac-5495-8b59-51b7028f854b,bad-options-true,github,[],true,t,,,,,\"2026-01-01 00:00:23+00\",\"2026-01-01 01:00:23+00\",,,,f)\n(1a7308b9-a1ce-5852-bca3-ccede45df3ab,bfa0a64f-d2b2-582a-b893-15b4567bf681,foreign-parent-child,github,\"[\"\"git\"\"]\",{},t,,,,,\"2026-01-01 00:00:32+00\",\"2026-01-01 00:00:32+00\",cf93d692-4214-52f6-b902-228015e9f9b0,,,f)\n(24b21fcb-5955-5529-83df-9d12abfde379,d285ff90-c3ac-5495-8b59-51b7028f854b,bad-targets-true,github,true,{},t,,,,,\"2026-01-01 00:00:20+00\",\"2026-01-01 01:00:20+00\",,,,f)\n(29d15a4a-d2cb-53c9-a375-192fc5e8de59,7fb8a862-0bf3-5de8-8033-89ad4a06947b,inactive,jira,[],\"{\"\"repo\"\": \"\"lonely\"\"}\",f,,,,,\"2026-01-01 00:00:11+00\",\"2026-01-01 01:00:11+00\",,,,f)\n(4e3bbac8-22b8-57a6-9b5d-d430425833ae,7fb8a862-0bf3-5de8-8033-89ad4a06947b,legacy,gitlab,\"[\"\"git\"\"]\",\"{\"\"group\"\": \"\"grp\"\", \"\"repo\"\": \"\"own\"\"}\",t,,,,,\"2026-01-01 00:00:01+00\",\"2026-01-01 01:00:01+00\",,,,f)\n(63c5a9e8-89e0-5a1e-b76d-e4a31787030e,d285ff90-c3ac-5495-8b59-51b7028f854b,surrogate,github,[],\"{\"\"x\"\": \"\"\\\\ud800\"\"}\",t,,,,,\"2026-01-01 00:00:24+00\",\"2026-01-01 01:00:24+00\",,,,f)\n(654a422c-8594-51e0-bd3c-3d57855130ef,bfa0a64f-d2b2-582a-b893-15b4567bf681,foreign-child,gitlab,\"[\"\"git\"\"]\",{},t,,,,,\"2026-01-01 00:00:17+00\",\"2026-01-01 01:00:17+00\",4e3bbac8-22b8-57a6-9b5d-d430425833ae,,,f)\n(7bc98cc1-086c-5d60-9c1f-74955aeb125e,7fb8a862-0bf3-5de8-8033-89ad4a06947b,weird,linear,\"\"\"abc\"\"\",\"[[\"\"k\"\", \"\"v\"\"], \"\"xy\"\", {\"\"p\"\": 1, \"\"q\"\": 2}, [\"\"k\"\", 3.5e-06]]\",t,,,,,\"2026-01-01 00:00:09+00\",\"2026-01-01 01:00:09+00\",,,,f)\n(8f798600-fc2b-5849-a5d7-75a16da60b17,d285ff90-c3ac-5495-8b59-51b7028f854b,bad-options-int-key,github,[],\"[[1, 2], [\"\"repo\"\", \"\"r\"\"], [\"\"owner\"\", \"\"o\"\"]]\",t,,,,,\"2026-01-01 00:00:22+00\",\"2026-01-01 01:00:22+00\",,,,f)\n(96227c85-f8b5-5c89-a1f8-4a531379a183,7fb8a862-0bf3-5de8-8033-89ad4a06947b,dict-targets,jira,\"{\"\"z\"\": 1, \"\"y\"\": 2}\",null,t,\"2026-02-02 02:02:02+00\",f,boom,,\"2026-01-01 00:00:10+00\",\"2026-01-01 01:00:10+00\",,,,f)\n(99016da2-8629-535d-9348-9f37927389e8,7fb8a862-0bf3-5de8-8033-89ad4a06947b,jobs-inf,jira,[],{},t,,,,,\"2026-01-01 00:00:15+00\",\"2026-01-01 01:00:15+00\",,,,f)\n(a8050a0b-c46d-5619-b923-83c588ae682e,7fb8a862-0bf3-5de8-8033-89ad4a06947b,child4,gitlab,\"[\"\"git\"\"]\",\"{\"\"repo\"\": \"\"\"\", \"\"project_id\"\": null}\",f,,,,,\"2026-01-01 00:00:05+00\",\"2026-01-01 01:00:05+00\",4e3bbac8-22b8-57a6-9b5d-d430425833ae,,,f)\n(af4a9cd2-d154-5fe1-9204-81813c6a7975,7fb8a862-0bf3-5de8-8033-89ad4a06947b,same-name,gitlab,\"[\"\"git\"\"]\",{},t,,,,,\"2026-01-01 00:00:41+00\",\"2026-01-01 00:00:41+00\",,,,f)\n(bb625b32-dfb8-520b-b175-9bfe6b1b78fb,7fb8a862-0bf3-5de8-8033-89ad4a06947b,jobs-bad-list,jira,[],{},t,,,,,\"2026-01-01 00:00:14+00\",\"2026-01-01 01:00:14+00\",,,,f)\n(bd208a9f-3fed-56f0-84e4-27f1988b1378,d285ff90-c3ac-5495-8b59-51b7028f854b,bad-targets-int,github,\"[\"\"git\"\", 1]\",{},t,,,,,\"2026-01-01 00:00:18+00\",\"2026-01-01 01:00:18+00\",,,,f)\n(c3289917-9e62-5915-bbbf-7c66c03d71dd,7fb8a862-0bf3-5de8-8033-89ad4a06947b,child5,gitlab,\"[\"\"git\"\"]\",\"{\"\"repo\"\": 0, \"\"project_id\"\": 7, \"\"group\"\": 1.5, \"\"owner\"\": \"\"\"\"}\",t,,,,,\"2026-01-01 00:00:06+00\",\"2026-01-01 01:00:06+00\",4e3bbac8-22b8-57a6-9b5d-d430425833ae,,,f)\n(ce653150-d53d-53a4-9403-df2f3d8c5957,7fb8a862-0bf3-5de8-8033-89ad4a06947b,child1,gitlab,\"[\"\"git\"\"]\",\"{\"\"repo\"\": \"\"r1\"\", \"\"owner\"\": \"\"o1\"\"}\",t,,,,,\"2026-01-01 00:00:02+00\",\"2026-01-01 01:00:02+00\",4e3bbac8-22b8-57a6-9b5d-d430425833ae,,,f)\n(cf93d692-4214-52f6-b902-228015e9f9b0,7fb8a862-0bf3-5de8-8033-89ad4a06947b,foreign-parent,github,\"[\"\"git\"\"]\",{},t,,,,,\"2026-01-01 00:00:31+00\",\"2026-01-01 00:00:31+00\",,,,f)\n(dac2bbf4-ced7-5aa8-a04f-b983d29d3ea8,d285ff90-c3ac-5495-8b59-51b7028f854b,bad-targets-number,github,5,{},t,,,,,\"2026-01-01 00:00:19+00\",\"2026-01-01 01:00:19+00\",,,,f)\n(f2239d3a-8ca1-5e17-92ed-9c1c379268f8,7fb8a862-0bf3-5de8-8033-89ad4a06947b,cross-org,github,\"[\"\"git\"\"]\",\"{\"\"repo\"\": 5, \"\"owner\"\": 0, \"\"group\"\": \"\"g\"\"}\",t,,,,,\"2026-01-01 00:00:13+00\",\"2026-01-01 01:00:13+00\",,64e9c2d6-3eea-589e-9539-b8f7fc751e71,,t)\n(f23dba54-ee7f-5aa1-add4-7f9227ce850c,d285ff90-c3ac-5495-8b59-51b7028f854b,bad-options-string,github,[],\"\"\"abc\"\"\",t,,,,,\"2026-01-01 00:00:21+00\",\"2026-01-01 01:00:21+00\",,,,f)\n(fce094b3-f244-5782-92ba-ba08f405eaf7,7fb8a862-0bf3-5de8-8033-89ad4a06947b,child3,gitlab,\"[\"\"git\"\"]\",\"{\"\"repo\"\": \"\"a/b\"\", \"\"owner\"\": \"\"o\"\"}\",t,,,,,\"2026-01-01 00:00:04+00\",\"2026-01-01 01:00:04+00\",4e3bbac8-22b8-57a6-9b5d-d430425833ae,,,f)"
+    },
+    "rows:sync_coverage_projections": {
+      "rows": "(4af6f8c1-4e7e-596c-9a71-ef210d8c8851,7fb8a862-0bf3-5de8-8033-89ad4a06947b,bb625b32-dfb8-520b-b175-9bfe6b1b78fb,3650,2,\"2026-09-01 10:00:00+00\",,,,\"{\"\"config_id\"\": \"\"x\"\", \"\"projection_version\"\": 2}\",\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\")\n(58df67c0-a876-5d08-b14e-78d72a3e550c,7fb8a862-0bf3-5de8-8033-89ad4a06947b,96227c85-f8b5-5c89-a1f8-4a531379a183,3650,2,\"2026-09-01 10:00:00+00\",,,,null,\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\")\n(5c4150f8-a63d-519a-bae1-0f3cd8ecd65e,7fb8a862-0bf3-5de8-8033-89ad4a06947b,99016da2-8629-535d-9348-9f37927389e8,3650,2,\"2026-09-01 10:00:00+00\",,,,\"{\"\"config_id\"\": \"\"99016da2-8629-535d-9348-9f37927389e8\"\", \"\"provider\"\": \"\"github\"\", \"\"generated_at\"\": \"\"2026-09-01T10:00:00.123456+00:00\"\",\n\"\"data_basis\"\": \"\"planner\"\", \"\"history_lookback_days\"\": \"\"3650\"\", \"\"truncated_before\"\": \"\"2016-09-03T10:00:00+00:00\"\",\n\"\"coverage_since\"\": \"\"2026-01-01T05:30:00+05:30\"\", \"\"coverage_through\"\": null, \"\"is_truncated\"\": \"\"off\"\",\n\"\"truncation_reason\"\": null, \"\"projection_version\"\": 2, \"\"projection_complete\"\": true,\n\"\"overall\"\": {\"\"health\"\": \"\"gaps\"\", \"\"latest_successful_run_at\"\": \"\"2026-08-31\"\", \"\"latest_covered_through\"\": null,\n \"\"next_scheduled_run_at\"\": null, \"\"gap_count\"\": 1.0, \"\"stale_dataset_count\"\": 0, \"\"failed_range_count\"\": 0},\n\"\"datasets\"\": [{\"\"dataset_key\"\": \"\"git.commits\"\", \"\"status\"\": \"\"gaps\"\", \"\"covered_through\"\": \"\"2026-08-31\"\",\n \"\"requested_ranges\"\": [{\"\"since\"\": \"\"2026-01-01T05:30:00+05:30\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"run_ids\"\": []}],\n \"\"gaps\"\": [{\"\"since\"\": \"\"2026-01-01T05:30:00+05:30\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\"}]}],\n\"\"sources\"\": [{\"\"source_id\"\": \"\"s1\"\", \"\"source_name\"\": \"\"org/repo\"\", \"\"status\"\": \"\"not_enabled\"\", \"\"covered_through\"\": null, \"\"gap_count\"\": 1.0, \"\"failed_range_count\"\": 0}],\n\"\"backfill_windows\"\": [{\"\"since\"\": \"\"2026-01-01\"\", \"\"before\"\": \"\"2026-01-02T00:00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"dataset_keys\"\": [\"\"git.commits\"\"], \"\"reasons\"\": [\"\"gap\"\", \"\"failed\"\"]}], \"\"extra\"\": {\"\"ignored\"\": [1e400]}}\",\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\")\n(60b86059-2030-5001-83de-d3478aaaf8d9,7fb8a862-0bf3-5de8-8033-89ad4a06947b,ce653150-d53d-53a4-9403-df2f3d8c5957,3650,2,\"2026-09-01 10:00:00+00\",,,,\"{\"\"config_id\"\": \"\"ce653150-d53d-53a4-9403-df2f3d8c5957\"\", \"\"provider\"\": \"\"github\"\", \"\"generated_at\"\": \"\"2026-09-01T10:00:00.123456+00:00\"\",\n\"\"data_basis\"\": \"\"legacy\"\", \"\"history_lookback_days\"\": 3650, \"\"truncated_before\"\": \"\"2016-09-03T10:00:00+00:00\"\",\n\"\"coverage_since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"coverage_through\"\": null, \"\"is_truncated\"\": false,\n\"\"truncation_reason\"\": null, \"\"projection_version\"\": 2, \"\"projection_complete\"\": true,\n\"\"overall\"\": {\"\"health\"\": \"\"gaps\"\", \"\"latest_successful_run_at\"\": \"\"2026-08-31T00:00:00+00:00\"\", \"\"latest_covered_through\"\": null,\n \"\"next_scheduled_run_at\"\": null, \"\"gap_count\"\": 1, \"\"stale_dataset_count\"\": 0, \"\"failed_range_count\"\": 0},\n\"\"datasets\"\": [{\"\"dataset_key\"\": \"\"git.commits\"\", \"\"status\"\": \"\"gaps\"\", \"\"covered_through\"\": \"\"2026-08-31T00:00:00+00:00\"\",\n \"\"requested_ranges\"\": [{\"\"since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"run_ids\"\": []}],\n \"\"gaps\"\": [{\"\"since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\"}]}],\n\"\"sources\"\": [{\"\"source_id\"\": \"\"s1\"\", \"\"source_name\"\": \"\"org/repo\"\", \"\"status\"\": \"\"not_enabled\"\", \"\"covered_through\"\": null, \"\"gap_count\"\": 1, \"\"failed_range_count\"\": 0}],\n\"\"backfill_windows\"\": [{\"\"since\"\": \"\"20260101\"\", \"\"before\"\": \"\"2026-W01-5\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"dataset_keys\"\": [\"\"git.commits\"\"], \"\"reasons\"\": [\"\"gap\"\", \"\"failed\"\"]}]}\",\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\")\n(80acdb01-a2ac-596a-8bd4-c7559f9b4bcb,7fb8a862-0bf3-5de8-8033-89ad4a06947b,29d15a4a-d2cb-53c9-a375-192fc5e8de59,3650,2,\"2026-09-01 10:00:00+00\",,,,\"{\"\"config_id\"\": \"\"29d15a4a-d2cb-53c9-a375-192fc5e8de59\"\", \"\"provider\"\": \"\"github\"\", \"\"generated_at\"\": \"\"2026-09-01T10:00:00.123456+00:00\"\",\n\"\"data_basis\"\": \"\"planner\"\", \"\"history_lookback_days\"\": 3650, \"\"truncated_before\"\": \"\"2016-09-03T10:00:00+00:00\"\",\n\"\"coverage_since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"coverage_through\"\": null, \"\"is_truncated\"\": false,\n\"\"truncation_reason\"\": null, \"\"projection_version\"\": 2, \"\"projection_complete\"\": true,\n\"\"overall\"\": {\"\"health\"\": \"\"bogus\"\", \"\"latest_successful_run_at\"\": \"\"2026-08-31T00:00:00+00:00\"\", \"\"latest_covered_through\"\": null,\n \"\"next_scheduled_run_at\"\": null, \"\"gap_count\"\": 1, \"\"stale_dataset_count\"\": 0, \"\"failed_range_count\"\": 0},\n\"\"datasets\"\": [{\"\"dataset_key\"\": \"\"git.commits\"\", \"\"status\"\": \"\"gaps\"\", \"\"covered_through\"\": \"\"2026-08-31T00:00:00+00:00\"\",\n \"\"requested_ranges\"\": [{\"\"since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"run_ids\"\": []}],\n \"\"gaps\"\": [{\"\"since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\"}]}],\n\"\"sources\"\": [{\"\"source_id\"\": \"\"s1\"\", \"\"source_name\"\": \"\"org/repo\"\", \"\"status\"\": \"\"not_enabled\"\", \"\"covered_through\"\": null, \"\"gap_count\"\": 1, \"\"failed_range_count\"\": 0}],\n\"\"backfill_windows\"\": [{\"\"since\"\": \"\"2026-01-01\"\", \"\"before\"\": \"\"2026-01-02T00:00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"dataset_keys\"\": [\"\"git.commits\"\"], \"\"reasons\"\": [\"\"gap\"\", \"\"failed\"\"]}]}\",\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\")\n(8c2c9a35-8d95-5202-9a14-4d7081c45051,7fb8a862-0bf3-5de8-8033-89ad4a06947b,4e3bbac8-22b8-57a6-9b5d-d430425833ae,3650,2,\"2026-09-01 10:00:00+00\",,,\"2026-07-01 00:00:00+00\",\"{\"\"config_id\"\": \"\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\"\", \"\"provider\"\": \"\"github\"\", \"\"generated_at\"\": \"\"2026-09-01T10:00:00.123456+00:00\"\",\n\"\"data_basis\"\": \"\"legacy\"\", \"\"history_lookback_days\"\": 3650, \"\"truncated_before\"\": \"\"2016-09-03T10:00:00+00:00\"\",\n\"\"coverage_since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"coverage_through\"\": null, \"\"is_truncated\"\": false,\n\"\"truncation_reason\"\": null, \"\"projection_version\"\": 2, \"\"projection_complete\"\": true,\n\"\"overall\"\": {\"\"health\"\": \"\"gaps\"\", \"\"latest_successful_run_at\"\": \"\"2026-08-31T00:00:00+00:00\"\", \"\"latest_covered_through\"\": null,\n \"\"next_scheduled_run_at\"\": null, \"\"gap_count\"\": 1, \"\"stale_dataset_count\"\": 0, \"\"failed_range_count\"\": 0},\n\"\"datasets\"\": [{\"\"dataset_key\"\": \"\"git.commits\"\", \"\"status\"\": \"\"gaps\"\", \"\"covered_through\"\": \"\"2026-08-31T00:00:00+00:00\"\",\n \"\"requested_ranges\"\": [{\"\"since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"run_ids\"\": []}],\n \"\"gaps\"\": [{\"\"since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\"}]}],\n\"\"sources\"\": [{\"\"source_id\"\": \"\"s1\"\", \"\"source_name\"\": \"\"org/repo\"\", \"\"status\"\": \"\"not_enabled\"\", \"\"covered_through\"\": null, \"\"gap_count\"\": 1, \"\"failed_range_count\"\": 0}],\n\"\"backfill_windows\"\": [{\"\"since\"\": \"\"2026-01-01\"\", \"\"before\"\": \"\"2026-01-02T00:00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"dataset_keys\"\": [\"\"git.commits\"\"], \"\"reasons\"\": [\"\"gap\"\", \"\"failed\"\"]}], \"\"projection_refreshing\"\": false}\",\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\")\n(a43b9d85-e6c8-536c-b07d-4440ec386f16,7fb8a862-0bf3-5de8-8033-89ad4a06947b,076acab1-f2af-5186-a33c-c2b8837e88b0,30,2,\"2026-09-01 10:00:00+00\",,,,\"{\"\"config_id\"\": \"\"076acab1-f2af-5186-a33c-c2b8837e88b0\"\", \"\"provider\"\": \"\"github\"\", \"\"generated_at\"\": \"\"2026-09-01T10:00:00.123456+00:00\"\",\n\"\"data_basis\"\": \"\"planner\"\", \"\"history_lookback_days\"\": 3650, \"\"truncated_before\"\": \"\"2016-09-03T10:00:00+00:00\"\",\n\"\"coverage_since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"coverage_through\"\": null, \"\"is_truncated\"\": false,\n\"\"truncation_reason\"\": null, \"\"projection_version\"\": 2, \"\"projection_complete\"\": true,\n\"\"overall\"\": {\"\"health\"\": \"\"gaps\"\", \"\"latest_successful_run_at\"\": \"\"2026-08-31T00:00:00+00:00\"\", \"\"latest_covered_through\"\": null,\n \"\"next_scheduled_run_at\"\": null, \"\"gap_count\"\": 1, \"\"stale_dataset_count\"\": 0, \"\"failed_range_count\"\": 0},\n\"\"datasets\"\": [{\"\"dataset_key\"\": \"\"git.commits\"\", \"\"status\"\": \"\"gaps\"\", \"\"covered_through\"\": \"\"2026-08-31T00:00:00+00:00\"\",\n \"\"requested_ranges\"\": [{\"\"since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"run_ids\"\": []}],\n \"\"gaps\"\": [{\"\"since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\"}]}],\n\"\"sources\"\": [{\"\"source_id\"\": \"\"s1\"\", \"\"source_name\"\": \"\"org/repo\"\", \"\"status\"\": \"\"not_enabled\"\", \"\"covered_through\"\": null, \"\"gap_count\"\": 1, \"\"failed_range_count\"\": 0}],\n\"\"backfill_windows\"\": [{\"\"since\"\": \"\"2026-01-01\"\", \"\"before\"\": \"\"2026-01-02T00:00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"dataset_keys\"\": [\"\"git.commits\"\"], \"\"reasons\"\": [\"\"gap\"\", \"\"failed\"\"]}]}\",\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\")\n(f59073d5-264e-53ac-9372-f90dc361207a,7fb8a862-0bf3-5de8-8033-89ad4a06947b,7bc98cc1-086c-5d60-9c1f-74955aeb125e,3650,2,\"2026-09-01 10:00:00+00\",,,,\"[[\"\"backfill_windows\"\", [{\"\"since\"\": \"\"2026-01-01\"\", \"\"before\"\": \"\"2026-01-02T00:00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"dataset_keys\"\": [\"\"git.commits\"\"], \"\"reasons\"\": [\"\"gap\"\", \"\"failed\"\"]}]], [\"\"config_id\"\", \"\"7bc98cc1-086c-5d60-9c1f-74955aeb125e\"\"], [\"\"coverage_since\"\", \"\"2026-01-01T00:00:00+00:00\"\"], [\"\"coverage_through\"\", null], [\"\"data_basis\"\", \"\"legacy\"\"], [\"\"datasets\"\", [{\"\"dataset_key\"\": \"\"git.commits\"\", \"\"status\"\": \"\"gaps\"\", \"\"covered_through\"\": \"\"2026-08-31T00:00:00+00:00\"\",\n \"\"requested_ranges\"\": [{\"\"since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"run_ids\"\": []}],\n \"\"gaps\"\": [{\"\"since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\"}]}]], [\"\"generated_at\"\", \"\"2026-09-01T10:00:00.123456+00:00\"\"], [\"\"history_lookback_days\"\", 3650], [\"\"is_truncated\"\", false], [\"\"overall\"\", {\"\"health\"\": \"\"gaps\"\", \"\"latest_successful_run_at\"\": \"\"2026-08-31T00:00:00+00:00\"\", \"\"latest_covered_through\"\": null,\n \"\"next_scheduled_run_at\"\": null, \"\"gap_count\"\": 1, \"\"stale_dataset_count\"\": 0, \"\"failed_range_count\"\": 0}], [\"\"projection_complete\"\", true], [\"\"projection_version\"\", 2], [\"\"provider\"\", \"\"github\"\"], [\"\"sources\"\", [{\"\"source_id\"\": \"\"s1\"\", \"\"source_name\"\": \"\"org/repo\"\", \"\"status\"\": \"\"not_enabled\"\", \"\"covered_through\"\": null, \"\"gap_count\"\": 1, \"\"failed_range_count\"\": 0}]], [\"\"truncated_before\"\", \"\"2016-09-03T10:00:00+00:00\"\"], [\"\"truncation_reason\"\", null]]\",\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\")\n(f9060328-78b3-57aa-b3b0-565dea57bb05,bfa0a64f-d2b2-582a-b893-15b4567bf681,f2239d3a-8ca1-5e17-92ed-9c1c379268f8,3650,2,\"2026-09-01 10:00:00+00\",,,,\"{\"\"config_id\"\": \"\"f2239d3a-8ca1-5e17-92ed-9c1c379268f8\"\", \"\"provider\"\": \"\"github\"\", \"\"generated_at\"\": \"\"2026-09-01T10:00:00.123456+00:00\"\",\n\"\"data_basis\"\": \"\"planner\"\", \"\"history_lookback_days\"\": 3650, \"\"truncated_before\"\": \"\"2016-09-03T10:00:00+00:00\"\",\n\"\"coverage_since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"coverage_through\"\": null, \"\"is_truncated\"\": false,\n\"\"truncation_reason\"\": null, \"\"projection_version\"\": 2, \"\"projection_complete\"\": true,\n\"\"overall\"\": {\"\"health\"\": \"\"gaps\"\", \"\"latest_successful_run_at\"\": \"\"2026-08-31T00:00:00+00:00\"\", \"\"latest_covered_through\"\": null,\n \"\"next_scheduled_run_at\"\": null, \"\"gap_count\"\": 1, \"\"stale_dataset_count\"\": 0, \"\"failed_range_count\"\": 0},\n\"\"datasets\"\": [{\"\"dataset_key\"\": \"\"git.commits\"\", \"\"status\"\": \"\"gaps\"\", \"\"covered_through\"\": \"\"2026-08-31T00:00:00+00:00\"\",\n \"\"requested_ranges\"\": [{\"\"since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"run_ids\"\": []}],\n \"\"gaps\"\": [{\"\"since\"\": \"\"2026-01-01T00:00:00+00:00\"\", \"\"before\"\": \"\"2026-01-02T00:00:00+00:00\"\"}]}],\n\"\"sources\"\": [{\"\"source_id\"\": \"\"s1\"\", \"\"source_name\"\": \"\"org/repo\"\", \"\"status\"\": \"\"not_enabled\"\", \"\"covered_through\"\": null, \"\"gap_count\"\": 1, \"\"failed_range_count\"\": 0}],\n\"\"backfill_windows\"\": [{\"\"since\"\": \"\"2026-01-01\"\", \"\"before\"\": \"\"2026-01-02T00:00:00\"\", \"\"source_ids\"\": [\"\"s1\"\"], \"\"dataset_keys\"\": [\"\"git.commits\"\"], \"\"reasons\"\": [\"\"gap\"\", \"\"failed\"\"]}]}\",\"2026-07-01 00:00:00+00\",\"2026-07-01 00:00:00+00\")"
+    }
+  }
+}

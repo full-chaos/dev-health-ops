@@ -1,0 +1,834 @@
+{
+  "header": {
+    "test": "TestSyncConfigRepositoriesVenueOracle",
+    "python_build": "758a8d9fbb1f7548bef84df452597f9e7ddf145a",
+    "producer_digest": "53028fde43de410ecb5704202be163d92617d6794f5d2108513c8868e2607e80",
+    "recipe": "git worktree add --detach \u003cdir\u003e 758a8d9fbb1f7548bef84df452597f9e7ddf145a; from internal/api/syncadmin: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestSyncConfigRepositoriesVenueOracle$' ."
+  },
+  "requests": [
+    {
+      "name": "no token",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "8319a0102037e7355aa342c9ecb4f2fac1ae52580d065c454b3e879817e4a3eb",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ff438541-4e3c-4f8a-a04f-b4547bc02586"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "8319a0102037e7355aa342c9ecb4f2fac1ae52580d065c454b3e879817e4a3eb",
+      "request_headers_sha256": "6edd06db1a84c2d66678409c6b540abe59b136b8e7e51e8fa940945947a01d2c",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "06091f03-a4e0-4658-a11a-dcbe147b117a"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "invalid json",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "01d25bdd8f92831ed3aafa0c022b32e8db54a2f313f6c15df797bdcc957d574d",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7ceb6046-a9a5-4d5a-9f25-5cffd943fc89"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",9],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
+    },
+    {
+      "name": "not an object",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "052888a71319fe24c9950c494d36331e80bb326f97c565f0ba78da4649e5c26e",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 422,
+      "headers": {
+        "content-length": "153",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "56936702-ba98-4b55-9853-a6fe5eacde40"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[\"acme\"]}]}"
+    },
+    {
+      "name": "owner missing",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 422,
+      "headers": {
+        "content-length": "88",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "478289da-720c-435b-bf03-d07ef09a721d"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"owner\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "owner empty",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "5a64a8b11926d0197a46a5fdf1fdda715fa3b12a4762cdd035e855c4ce7abf2b",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 422,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "47ad74b4-edad-4476-bebd-df43e0271999"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"owner\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
+    },
+    {
+      "name": "repos not a list",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "b41e95ca19c433eb270b90e4b404e11cb52d349068f09c33a1dcf8c5472de669",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 422,
+      "headers": {
+        "content-length": "105",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c3e895ad-897f-4f1b-9983-2b4989872c72"
+      },
+      "body": "{\"detail\":[{\"type\":\"list_type\",\"loc\":[\"body\",\"repos\"],\"msg\":\"Input should be a valid list\",\"input\":\"a\"}]}"
+    },
+    {
+      "name": "repos item not a str",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "f6bac4efb979e23d28ae0403e1ae767fe790c34492a717a4801825b13c49af62",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 422,
+      "headers": {
+        "content-length": "109",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "162bfcd9-b69d-4664-994e-a9fa3ff793fc"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"repos\",1],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "unknown config",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/a4cb59be-52fe-5cd7-accb-6eaf61c73d73/repositories",
+      "body_sha256": "8319a0102037e7355aa342c9ecb4f2fac1ae52580d065c454b3e879817e4a3eb",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "03d12f00-3923-401c-8d8a-8216bc4efa7c"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "config id not a uuid",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/not-a-uuid/repositories",
+      "body_sha256": "8319a0102037e7355aa342c9ecb4f2fac1ae52580d065c454b3e879817e4a3eb",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8be4fad6-cad1-4205-b8eb-2680b7258714"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "jira config",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/43dcdc36-8108-5e1b-8c4d-702683eefd00/repositories",
+      "body_sha256": "b93edf7ca15c289e0f3f77b0201684751b30ce539f624dbb7084e19b3f7e99a9",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 400,
+      "headers": {
+        "content-length": "81",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "394528cb-1f79-4135-a3ef-f82f6a3d1848"
+      },
+      "body": "{\"detail\":\"Repository selection is only supported for GitHub and GitLab configs\"}"
+    },
+    {
+      "name": "legacy config",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/d5fca7f2-c261-58c6-98b2-bc1ea72c4f95/repositories",
+      "body_sha256": "b93edf7ca15c289e0f3f77b0201684751b30ce539f624dbb7084e19b3f7e99a9",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 409,
+      "headers": {
+        "content-length": "77",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d058456c-67fd-48bb-9ab3-f112ee7ac38a"
+      },
+      "body": "{\"detail\":\"Repository selection edits require a planner-managed sync config\"}"
+    },
+    {
+      "name": "gated targets",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/209a8d27-f642-5b02-9c11-30a1009e5c29/repositories",
+      "body_sha256": "b93edf7ca15c289e0f3f77b0201684751b30ce539f624dbb7084e19b3f7e99a9",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 403,
+      "headers": {
+        "content-length": "95",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1fcf811e-1891-4c3e-a3f0-e1ae9d328400"
+      },
+      "body": "{\"detail\":\"feature_disabled: canonical incident ingestion is disabled (org_override_disabled)\"}"
+    },
+    {
+      "name": "non-str target",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/fd87d012-29c4-5d42-9374-55855af34598/repositories",
+      "body_sha256": "b93edf7ca15c289e0f3f77b0201684751b30ce539f624dbb7084e19b3f7e99a9",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "empty config name",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/3dc8fdd8-48be-5010-9852-777e195a85b5/repositories",
+      "body_sha256": "b93edf7ca15c289e0f3f77b0201684751b30ce539f624dbb7084e19b3f7e99a9",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "github select",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "61e6067df7dad6c514b368e5717656f67bcc2a7ba80d3bc44cf4b89c21f58a28",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "88",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9aa2b973-7c54-4450-9838-cc317ccfc7fb"
+      },
+      "body": "{\"owner\":\"acme\",\"repos\":[\"acme/one\",\"acme/three\",\"new-org/four\"],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "github narrow",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "5a7246d73f2864a3bd4b035da3c860983c05651f5da0bd659bc49372aec8fdd2",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "60",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a113f782-f174-4760-8da5-f4f2eb3a8f82"
+      },
+      "body": "{\"owner\":\"acme\",\"repos\":[\"acme/one\"],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "github same again",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "5a7246d73f2864a3bd4b035da3c860983c05651f5da0bd659bc49372aec8fdd2",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "60",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "66f4fc2f-0e60-494f-9bec-caa5c74cd042"
+      },
+      "body": "{\"owner\":\"acme\",\"repos\":[\"acme/one\"],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "github new owner, none",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "1a4631cb67fc22c21051ab0fb749b7ddfa08702a97ec49eb2f01ddf57a7c944b",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7dde7ab0-1a0a-42af-8cb6-675bec17b7cb"
+      },
+      "body": "{\"owner\":\"other\",\"repos\":[],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "github duplicate new",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "5b0a2eeb3a377124abbb377a41b9db267273a738b9672faa8d6643010949b0ef",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "stored pairs options",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/482e0b15-7d34-53cf-b456-f840e528d584/repositories",
+      "body_sha256": "4ee0c7a4c5e745f50a93a2057a5ea1896baccb9715abeba1c25a7c8b08102668",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "56",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "af55bc79-ea19-4fd8-a776-7add82650b85"
+      },
+      "body": "{\"owner\":\"old\",\"repos\":[\"old/a\"],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "stored infinite option, unchanged",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/d878155b-6f02-5af5-9da0-f5d10da2357d/repositories",
+      "body_sha256": "43b7b4008fe3dc76285567ffb32360972e22295dffd971f2df210c8e165816da",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "50",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d749c7af-048c-49e7-b69c-ede49f3c9f7b"
+      },
+      "body": "{\"owner\":\"acme\",\"repos\":[],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "stored infinite option, new owner",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/d878155b-6f02-5af5-9da0-f5d10da2357d/repositories",
+      "body_sha256": "1a4631cb67fc22c21051ab0fb749b7ddfa08702a97ec49eb2f01ddf57a7c944b",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "gitlab names, path, ids",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/1b228806-da0e-5772-870a-68d4c45aa50b/repositories",
+      "body_sha256": "f4f429fc57d969308d4fc50daa443d07905390e871930426f50c6c6745df6751",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "248",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bb458b53-f62b-430e-bb49-ccdfcc9c4c89"
+      },
+      "body": "{\"owner\":\"gitlab-examples/maven\",\"repos\":[\"gitlab-examples/maven/simple-maven-dep\",\"gitlab-examples/maven/simple-maven-example\",\"gitlab-examples/maven/simple-maven-app\",\"gitlab-examples/maven/999\",\"gitlab-examples/maven/12\"],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "gitlab unknown name",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/1b228806-da0e-5772-870a-68d4c45aa50b/repositories",
+      "body_sha256": "61502e5b2db2feb0bb0d7210b387f9f110bd7a446a7e2d977c245e95b6b7dd28",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 400,
+      "headers": {
+        "content-length": "99",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "34fd2a17-924d-41ce-b1bf-b6a2b91ef560"
+      },
+      "body": "{\"detail\":\"Could not resolve GitLab projects — not found in group 'gitlab-examples/maven': nope\"}"
+    },
+    {
+      "name": "gitlab ambiguous name",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/1b228806-da0e-5772-870a-68d4c45aa50b/repositories",
+      "body_sha256": "67982b24bd24c152e6336df18fb0507d6cbdbcee1778c42dc47c836902ef4002",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 400,
+      "headers": {
+        "content-length": "137",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "777e2662-9f0e-49f1-8ff4-f1d89936b003"
+      },
+      "body": "{\"detail\":\"Could not resolve GitLab projects — ambiguous (multiple projects share this name, use the full path): Simple Maven Example\"}"
+    },
+    {
+      "name": "gitlab empty group",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/1b228806-da0e-5772-870a-68d4c45aa50b/repositories",
+      "body_sha256": "30c7f6e01f461d160def67553a44af433c79b025d2ed2fbfa9d92601467bc3df",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 400,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b87c0b48-d3d7-4c68-bed0-26f6996272db"
+      },
+      "body": "{\"detail\":\"Could not resolve GitLab projects — not found in group 'gitlab-examples/ops': anything\"}"
+    },
+    {
+      "name": "gitlab missing group",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/1b228806-da0e-5772-870a-68d4c45aa50b/repositories",
+      "body_sha256": "17d8d133d0af4c322a6bd8af252699aee9ec1c41573aee9213f5c1d01aaebf3d",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 400,
+      "headers": {
+        "content-length": "278",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3b900a54-e895-41a5-bfc7-e8eaea3c2192"
+      },
+      "body": "{\"detail\":\"Failed to list GitLab projects for group 'gitlab-examples/no-such-group-for-venue-test': gitlab resource not found on project:GET /groups/{id}/projects: http://127.0.0.1:34081/api/v4/groups/gitlab-examples%2Fno-such-group-for-venue-test/projects?page=1\u0026per_page=100\"}"
+    },
+    {
+      "name": "gitlab ids with failed listing",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/1b228806-da0e-5772-870a-68d4c45aa50b/repositories",
+      "body_sha256": "2564dbb19222b7487658795da3d893cdfb018a90958ede7b0b6aa8581297cf25",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "189",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0abb5296-ecaf-48f2-9fca-c61a8d2a68a0"
+      },
+      "body": "{\"owner\":\"gitlab-examples/no-such-group-for-venue-test\",\"repos\":[\"gitlab-examples/no-such-group-for-venue-test/31\",\"gitlab-examples/no-such-group-for-venue-test/32\"],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "gitlab invalid token",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/044ac872-4fa5-5820-a3e2-cfce800d73eb/repositories",
+      "body_sha256": "5ffb8201384044d5de9af62f392a0db2c2b963bbc1bbd58ac1d3d6549fa7537c",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 400,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6e7d5bca-80f2-44f4-be5e-61a2a0cb8c0d"
+      },
+      "body": "{\"detail\":\"Failed to list GitLab projects for group 'gitlab-examples/maven': gitlab authentication failed on project:GET /groups/{id}/projects\"}"
+    },
+    {
+      "name": "gitlab page above int32",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/1b228806-da0e-5772-870a-68d4c45aa50b/repositories",
+      "body_sha256": "8737dbdd1a3f625db44a512a891d6fc1d0d8b5a171627e7cd5053dfdccb08db0",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "71",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "32704a43-2707-4270-9522-1f8d4f3d66c2"
+      },
+      "body": "{\"owner\":\"overflow\",\"repos\":[\"overflow/target\"],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "gitlab none",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/1b228806-da0e-5772-870a-68d4c45aa50b/repositories",
+      "body_sha256": "69b20984992c879b95d153ff44867bf13768ffc2252eddf83e12e7a67d03f1f3",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "67",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8aa2b02f-490f-49fc-9088-abcbcd67c87d"
+      },
+      "body": "{\"owner\":\"gitlab-examples/maven\",\"repos\":[],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "gitlab no credential, name",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/43560180-a1f1-5f93-892f-e93bfa9080a5/repositories",
+      "body_sha256": "5ffb8201384044d5de9af62f392a0db2c2b963bbc1bbd58ac1d3d6549fa7537c",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 400,
+      "headers": {
+        "content-length": "95",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b746db21-6440-4448-99d4-fcca309b5551"
+      },
+      "body": "{\"detail\":\"GitLab batch create requires credential_id to resolve project names to project ids\"}"
+    },
+    {
+      "name": "gitlab no credential, ids",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/43560180-a1f1-5f93-892f-e93bfa9080a5/repositories",
+      "body_sha256": "6a5b8d237ab405c260d439017f93ea516896e32738c4506e848442fc97ba401d",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "118",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "31b913c3-5408-4d77-8f40-fdb34d165392"
+      },
+      "body": "{\"owner\":\"gitlab-examples/maven\",\"repos\":[\"gitlab-examples/maven/5\",\"gitlab-examples/maven/6\"],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "gitlab no token, name",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/5acfb72e-6faa-54be-8b63-73bdc548211e/repositories",
+      "body_sha256": "5ffb8201384044d5de9af62f392a0db2c2b963bbc1bbd58ac1d3d6549fa7537c",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 400,
+      "headers": {
+        "content-length": "44",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "efc2bc1e-a897-490f-a2cb-13d4d21f5a96"
+      },
+      "body": "{\"detail\":\"GitLab credential missing token\"}"
+    },
+    {
+      "name": "gitlab no token, id",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/5acfb72e-6faa-54be-8b63-73bdc548211e/repositories",
+      "body_sha256": "7d7a1f7dc31a9413782e161120994e8335af6fd08bdb6b994a75264f03f03ae7",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "92",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4be4b956-5353-4352-b5d6-483d3fccd18d"
+      },
+      "body": "{\"owner\":\"gitlab-examples/maven\",\"repos\":[\"gitlab-examples/maven/7\"],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "gitlab url from config",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/cf90fc46-3c1c-5c91-80f1-3179301732e9/repositories",
+      "body_sha256": "eb9ced7ea5e6967bf4bb7e23bb225cbec1c9368f124e0d8e6f795e230697b3a7",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "131",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "62df2e3d-c7de-41f4-a73f-d126652e9c13"
+      },
+      "body": "{\"owner\":\"acme\",\"repos\":[\"gitlab-examples/maven/simple-maven-app\",\"gitlab-examples/maven/simple-maven-dep\"],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "gitlab credential not decryptable",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/d084cecc-c390-53f7-bd89-1de11e71a4f1/repositories",
+      "body_sha256": "5ffb8201384044d5de9af62f392a0db2c2b963bbc1bbd58ac1d3d6549fa7537c",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 400,
+      "headers": {
+        "content-length": "33",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bd06ce76-0265-4356-9a72-509e60045323"
+      },
+      "body": "{\"detail\":\"Credential not found\"}"
+    },
+    {
+      "name": "over the repo limit",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/cd98437d-af9d-57bf-aea1-9c79dd5d7f1c/repositories",
+      "body_sha256": "0458b85d845d862e7782e2c2c0677bf66430acfccb958e54cb4c8bd003de3e49",
+      "request_headers_sha256": "1eeec250a1a057370dc7e9e51f69f1accda768a57c43366672c061e8f9377484",
+      "status": 403,
+      "headers": {
+        "content-length": "44",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "78016009-5815-4d7a-a3c0-fd91c6bb4e26"
+      },
+      "body": "{\"detail\":\"Limit exceeded: max_repos (5/3)\"}"
+    },
+    {
+      "name": "at the repo limit",
+      "method": "PUT",
+      "path": "/api/v1/admin/sync-configs/cd98437d-af9d-57bf-aea1-9c79dd5d7f1c/repositories",
+      "body_sha256": "a41310c23237498255d93ade6810690a147e475f82f62a414b2d4915b2b5d1ad",
+      "request_headers_sha256": "1eeec250a1a057370dc7e9e51f69f1accda768a57c43366672c061e8f9377484",
+      "status": 200,
+      "headers": {
+        "content-length": "76",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cff7ca98-1e1c-4ce0-a40f-281af52af95d"
+      },
+      "body": "{\"owner\":\"acme\",\"repos\":[\"acme/a\",\"acme/b\",\"acme/c\"],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "github after",
+      "method": "GET",
+      "path": "/api/v1/admin/sync-configs/da038436-41e2-5cab-ace9-2d6d08a1c62c/repositories",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "01131420-aad8-412d-8e67-882a171871c1"
+      },
+      "body": "{\"owner\":\"other\",\"repos\":[],\"sync_all_repos\":false}"
+    },
+    {
+      "name": "gitlab after",
+      "method": "GET",
+      "path": "/api/v1/admin/sync-configs/1b228806-da0e-5772-870a-68d4c45aa50b/repositories",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e47256affb65c819de0c93e40061c09292d0f374c6a70586444893890303c80c",
+      "status": 200,
+      "headers": {
+        "content-length": "67",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4df97d27-60c6-44e3-bd53-cfc86c69ab2d"
+      },
+      "body": "{\"owner\":\"gitlab-examples/maven\",\"repos\":[],\"sync_all_repos\":false}"
+    }
+  ],
+  "rows": {
+    "rows:integration_sources": {
+      "rows": "1f4c5812-2f11-5f46-b0e1-270d1937d18f | ed2b4457-a930-5ef8-99c4-72d506ca786e | e70a1ce3-c1f8-5c88-9ecc-593a32e6167b | github | repository | acme/y | y | acme/y | {\"planner_managed_sync_config_id\": \"cd98437d-af9d-57bf-aea1-9c79dd5d7f1c\", \"owner\": \"acme\"} | f | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n3b784544-c73b-5132-838a-c4d6600a5050 | 84acea46-cb40-58fe-874c-1371ba891a42 | f823f777-0abf-5282-ad84-1edb0d38b1d0 | GitHub | repository | acme/case | case | acme/case | {\"planner_managed_sync_config_id\": \"da038436-41e2-5cab-ace9-2d6d08a1c62c\", \"owner\": \"acme\"} | t | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n4c64603a-7e55-5492-b768-12c2c983c37d | 84acea46-cb40-58fe-874c-1371ba891a42 | bd58317e-542e-5b1b-b252-477b02598b88 | gitlab | project | 3467553 | simple-maven-dep | gitlab-examples/maven/simple-maven-dep | {\"path_with_namespace\": \"gitlab-examples/maven/simple-maven-dep\", \"planner_managed_sync_config_id\": \"1b228806-da0e-5772-870a-68d4c45aa50b\"} | f | 2026-01-01 00:00:00+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n5d9086f9-3ecd-5626-a8a4-a30b32c8dc59 | ed2b4457-a930-5ef8-99c4-72d506ca786e | e70a1ce3-c1f8-5c88-9ecc-593a32e6167b | github | repository | acme/x | x | acme/x | {\"planner_managed_sync_config_id\": \"cd98437d-af9d-57bf-aea1-9c79dd5d7f1c\", \"owner\": \"acme\"} | f | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n87bc7250-3ab4-5f9d-aa30-4c98adab17fa | 84acea46-cb40-58fe-874c-1371ba891a42 | f823f777-0abf-5282-ad84-1edb0d38b1d0 | github | repository | acme/one | one | acme/one | {\"owner\":\"acme\",\"planner_managed_sync_config_id\":\"da038436-41e2-5cab-ace9-2d6d08a1c62c\"} | f | 2026-01-01 00:00:00+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n89d3975d-058a-52ac-be2f-e1a7c6c28f6d | 84acea46-cb40-58fe-874c-1371ba891a42 | f823f777-0abf-5282-ad84-1edb0d38b1d0 | github | repository | acme/other | other | acme/other | {\"planner_managed_sync_config_id\": \"388d123a-669e-539d-baec-e6c9773ce0b1\"} | t | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n8c141a3a-8926-536c-b61f-cab819e9b55b | 84acea46-cb40-58fe-874c-1371ba891a42 | f823f777-0abf-5282-ad84-1edb0d38b1d0 | github | repository | acme/two | two | acme/two | {\"planner_managed_sync_config_id\": \"da038436-41e2-5cab-ace9-2d6d08a1c62c\", \"owner\": \"acme\"} | f | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\na2f18f98-1fb4-5d2b-8765-5941b67da004 | 84acea46-cb40-58fe-874c-1371ba891a42 | f823f777-0abf-5282-ad84-1edb0d38b1d0 | github | repository | acme/three | three | acme/three | {\"planner_managed_sync_config_id\": \"da038436-41e2-5cab-ace9-2d6d08a1c62c\", \"owner\": \"acme\"} | f | 2026-01-01 00:00:00+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nf477d36c-f08b-5dc4-a2dc-d27a03b75a04 | ed2b4457-a930-5ef8-99c4-72d506ca786e | e70a1ce3-c1f8-5c88-9ecc-593a32e6167b | github | repository | acme/z | z | acme/z | {\"planner_managed_sync_config_id\": \"cd98437d-af9d-57bf-aea1-9c79dd5d7f1c\", \"owner\": \"acme\"} | f | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nfbb97051-9d46-521d-9198-500f44647667 | 84acea46-cb40-58fe-874c-1371ba891a42 | bd58317e-542e-5b1b-b252-477b02598b88 | gitlab | project | 99 | old | gitlab-examples/maven/old | {\"path_with_namespace\": \"gitlab-examples/maven/old\", \"planner_managed_sync_config_id\": \"1b228806-da0e-5772-870a-68d4c45aa50b\"} | f | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | 73ed272e-6412-52ac-9032-03254cc5a54e | gitlab | project | 5 | 5 | gitlab-examples/maven/5 | {\"path_with_namespace\": \"gitlab-examples/maven/5\", \"planner_managed_sync_config_id\": \"43560180-a1f1-5f93-892f-e93bfa9080a5\"} | t | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | 73ed272e-6412-52ac-9032-03254cc5a54e | gitlab | project | 6 | 6 | gitlab-examples/maven/6 | {\"path_with_namespace\": \"gitlab-examples/maven/6\", \"planner_managed_sync_config_id\": \"43560180-a1f1-5f93-892f-e93bfa9080a5\"} | t | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | 796ee76e-b6b5-5862-9f8d-43eabffd867d | gitlab | project | 7 | 7 | gitlab-examples/maven/7 | {\"path_with_namespace\": \"gitlab-examples/maven/7\", \"planner_managed_sync_config_id\": \"5acfb72e-6faa-54be-8b63-73bdc548211e\"} | t | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | 9a6cc1f4-fcda-570e-957e-80a96982c6fb | github | repository | old/a | a | old/a | {\"planner_managed_sync_config_id\": \"482e0b15-7d34-53cf-b456-f840e528d584\", \"owner\": \"old\"} | t | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | bd58317e-542e-5b1b-b252-477b02598b88 | gitlab | project | 12 | 12 | gitlab-examples/maven/12 | {\"path_with_namespace\": \"gitlab-examples/maven/12\", \"planner_managed_sync_config_id\": \"1b228806-da0e-5772-870a-68d4c45aa50b\"} | f | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | bd58317e-542e-5b1b-b252-477b02598b88 | gitlab | project | 23791548 | simple-maven-example | gitlab-examples/maven/simple-maven-example | {\"path_with_namespace\": \"gitlab-examples/maven/simple-maven-example\", \"planner_managed_sync_config_id\": \"1b228806-da0e-5772-870a-68d4c45aa50b\"} | f | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | bd58317e-542e-5b1b-b252-477b02598b88 | gitlab | project | 31 | 31 | gitlab-examples/no-such-group-for-venue-test/31 | {\"path_with_namespace\": \"gitlab-examples/no-such-group-for-venue-test/31\", \"planner_managed_sync_config_id\": \"1b228806-da0e-5772-870a-68d4c45aa50b\"} | f | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | bd58317e-542e-5b1b-b252-477b02598b88 | gitlab | project | 32 | 32 | gitlab-examples/no-such-group-for-venue-test/32 | {\"path_with_namespace\": \"gitlab-examples/no-such-group-for-venue-test/32\", \"planner_managed_sync_config_id\": \"1b228806-da0e-5772-870a-68d4c45aa50b\"} | f | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | bd58317e-542e-5b1b-b252-477b02598b88 | gitlab | project | 3467535 | simple-maven-app | gitlab-examples/maven/simple-maven-app | {\"path_with_namespace\": \"gitlab-examples/maven/simple-maven-app\", \"planner_managed_sync_config_id\": \"1b228806-da0e-5772-870a-68d4c45aa50b\"} | f | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | bd58317e-542e-5b1b-b252-477b02598b88 | gitlab | project | 9 | target | overflow/target | {\"path_with_namespace\": \"overflow/target\", \"planner_managed_sync_config_id\": \"1b228806-da0e-5772-870a-68d4c45aa50b\"} | f | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | bd58317e-542e-5b1b-b252-477b02598b88 | gitlab | project | 999 | 999 | gitlab-examples/maven/999 | {\"path_with_namespace\": \"gitlab-examples/maven/999\", \"planner_managed_sync_config_id\": \"1b228806-da0e-5772-870a-68d4c45aa50b\"} | f | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | dbded811-bf71-56ae-9dbd-611d1c63a4be | GitLab | project | 3467535 | simple-maven-app | gitlab-examples/maven/simple-maven-app | {\"path_with_namespace\": \"gitlab-examples/maven/simple-maven-app\", \"planner_managed_sync_config_id\": \"cf90fc46-3c1c-5c91-80f1-3179301732e9\"} | t | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | dbded811-bf71-56ae-9dbd-611d1c63a4be | GitLab | project | 3467553 | simple-maven-dep | gitlab-examples/maven/simple-maven-dep | {\"path_with_namespace\": \"gitlab-examples/maven/simple-maven-dep\", \"planner_managed_sync_config_id\": \"cf90fc46-3c1c-5c91-80f1-3179301732e9\"} | t | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | 84acea46-cb40-58fe-874c-1371ba891a42 | f823f777-0abf-5282-ad84-1edb0d38b1d0 | github | repository | new-org/four | four | new-org/four | {\"planner_managed_sync_config_id\": \"da038436-41e2-5cab-ace9-2d6d08a1c62c\", \"owner\": \"new-org\"} | f | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | ed2b4457-a930-5ef8-99c4-72d506ca786e | e70a1ce3-c1f8-5c88-9ecc-593a32e6167b | github | repository | acme/a | a | acme/a | {\"planner_managed_sync_config_id\": \"cd98437d-af9d-57bf-aea1-9c79dd5d7f1c\", \"owner\": \"acme\"} | t | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | ed2b4457-a930-5ef8-99c4-72d506ca786e | e70a1ce3-c1f8-5c88-9ecc-593a32e6167b | github | repository | acme/b | b | acme/b | {\"planner_managed_sync_config_id\": \"cd98437d-af9d-57bf-aea1-9c79dd5d7f1c\", \"owner\": \"acme\"} | t | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nnew:true | ed2b4457-a930-5ef8-99c4-72d506ca786e | e70a1ce3-c1f8-5c88-9ecc-593a32e6167b | github | repository | acme/c | c | acme/c | {\"planner_managed_sync_config_id\": \"cd98437d-af9d-57bf-aea1-9c79dd5d7f1c\", \"owner\": \"acme\"} | t | 2026-09-01 12:34:56.123456+00 | 2026-09-01 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e"
+    },
+    "rows:sync_configurations": {
+      "rows": "(044ac872-4fa5-5820-a3e2-cfce800d73eb,84acea46-cb40-58fe-874c-1371ba891a42,gl-invalid-token,gitlab,\"[\"\"git\"\"]\",{},t,,,,,\"2026-01-01 00:00:00+00\",\"2026-01-01 00:00:00+00\",,f0127f45-f0fb-5a01-b21f-43bbe907789e,,t)\n(1b228806-da0e-5772-870a-68d4c45aa50b,84acea46-cb40-58fe-874c-1371ba891a42,gl,gitlab,\"[\"\"git\"\"]\",\"{\"\"group\"\": \"\"gitlab-examples/maven\"\", \"\"gitlab_url\"\": \"\"\"\"}\",t,,,,,\"2026-01-01 00:00:00+00\",\"2026-09-01 12:34:56.123456+00\",,bd58317e-542e-5b1b-b252-477b02598b88,,t)\n(209a8d27-f642-5b02-9c11-30a1009e5c29,84acea46-cb40-58fe-874c-1371ba891a42,gated,github,\"[\"\"git\"\", \"\"Incidents\"\"]\",{},t,,,,,\"2026-01-01 00:00:00+00\",\"2026-01-01 00:00:00+00\",,ab3f88b5-c0ec-5b90-a36b-9054332cd771,,t)\n(3dc8fdd8-48be-5010-9852-777e195a85b5,84acea46-cb40-58fe-874c-1371ba891a42,\"\",github,\"[\"\"git\"\"]\",\"{\"\"owner\"\": \"\"acme\"\"}\",t,,,,,\"2026-01-01 00:00:00+00\",\"2026-01-01 00:00:00+00\",,6fac614e-dfbf-56d8-8789-0950ec7ec339,,t)\n(43560180-a1f1-5f93-892f-e93bfa9080a5,84acea46-cb40-58fe-874c-1371ba891a42,gl-no-cred,gitlab,\"[\"\"git\"\"]\",\"{\"\"group\"\": \"\"gitlab-examples/maven\"\"}\",t,,,,,\"2026-01-01 00:00:00+00\",\"2026-09-01 12:34:56.123456+00\",,73ed272e-6412-52ac-9032-03254cc5a54e,,t)\n(43dcdc36-8108-5e1b-8c4d-702683eefd00,84acea46-cb40-58fe-874c-1371ba891a42,jira,jira,\"[\"\"work-items\"\"]\",{},t,,,,,\"2026-01-01 00:00:00+00\",\"2026-01-01 00:00:00+00\",,8256d370-54fc-5254-bdb6-6d980e9f40c2,,t)\n(482e0b15-7d34-53cf-b456-f840e528d584,84acea46-cb40-58fe-874c-1371ba891a42,pairs,github,\"[\"\"git\"\"]\",\"{\"\"owner\"\": \"\"old\"\"}\",t,,,,,\"2026-01-01 00:00:00+00\",\"2026-09-01 12:34:56.123456+00\",,9a6cc1f4-fcda-570e-957e-80a96982c6fb,,t)\n(5acfb72e-6faa-54be-8b63-73bdc548211e,84acea46-cb40-58fe-874c-1371ba891a42,gl-no-token,gitlab,\"[\"\"git\"\"]\",\"{\"\"group\"\": \"\"gitlab-examples/maven\"\"}\",t,,,,,\"2026-01-01 00:00:00+00\",\"2026-09-01 12:34:56.123456+00\",,796ee76e-b6b5-5862-9f8d-43eabffd867d,,t)\n(cd98437d-af9d-57bf-aea1-9c79dd5d7f1c,ed2b4457-a930-5ef8-99c4-72d506ca786e,b,github,\"[\"\"git\"\"]\",\"{\"\"owner\"\": \"\"acme\"\"}\",t,,,,,\"2026-01-01 00:00:00+00\",\"2026-01-01 00:00:00+00\",,e70a1ce3-c1f8-5c88-9ecc-593a32e6167b,,t)\n(cf90fc46-3c1c-5c91-80f1-3179301732e9,84acea46-cb40-58fe-874c-1371ba891a42,gl-config-url,GitLab,\"[\"\"git\"\"]\",\"{\"\"owner\"\": \"\"acme\"\", \"\"group\"\": \"\"gitlab-examples/maven\"\"}\",t,,,,,\"2026-01-01 00:00:00+00\",\"2026-09-01 12:34:56.123456+00\",,dbded811-bf71-56ae-9dbd-611d1c63a4be,,t)\n(d084cecc-c390-53f7-bd89-1de11e71a4f1,84acea46-cb40-58fe-874c-1371ba891a42,gl-broken,gitlab,\"[\"\"git\"\"]\",{},t,,,,,\"2026-01-01 00:00:00+00\",\"2026-01-01 00:00:00+00\",,6f344ecc-8df7-5d3e-bf6d-45da30e8102a,,t)\n(d5fca7f2-c261-58c6-98b2-bc1ea72c4f95,84acea46-cb40-58fe-874c-1371ba891a42,legacy,github,\"[\"\"git\"\"]\",\"{\"\"owner\"\": \"\"acme\"\"}\",t,,,,,\"2026-01-01 00:00:00+00\",\"2026-01-01 00:00:00+00\",,,,f)\n(d878155b-6f02-5af5-9da0-f5d10da2357d,84acea46-cb40-58fe-874c-1371ba891a42,infinity,github,\"[\"\"git\"\"]\",\"{\"\"owner\"\": \"\"acme\"\", \"\"limit\"\": 1e400}\",t,,,,,\"2026-01-01 00:00:00+00\",\"2026-01-01 00:00:00+00\",,4113a44d-40e2-504a-80a2-5ced16be1caf,,t)\n(da038436-41e2-5cab-ace9-2d6d08a1c62c,84acea46-cb40-58fe-874c-1371ba891a42,gh,github,\"[\"\"git\"\", \"\"prs\"\"]\",\"{\"\"owner\"\": \"\"other\"\", \"\"x\"\": 1}\",t,,,,,\"2026-01-01 00:00:00+00\",\"2026-09-01 12:34:56.123456+00\",,f823f777-0abf-5282-ad84-1edb0d38b1d0,,t)\n(fd87d012-29c4-5d42-9374-55855af34598,84acea46-cb40-58fe-874c-1371ba891a42,bad-targets,github,\"[\"\"git\"\", 1]\",{},t,,,,,\"2026-01-01 00:00:00+00\",\"2026-01-01 00:00:00+00\",,ab3f88b5-c0ec-5b90-a36b-9054332cd771,,t)"
+    },
+    "rows:sync_coverage_projections": {
+      "rows": "02803bc7-507b-515a-bbe5-39c2f391be81 | 84acea46-cb40-58fe-874c-1371ba891a42 | da038436-41e2-5cab-ace9-2d6d08a1c62c | {} | invalidated | 2026-01-01 00:00:00+00 | moved\n76b156c9-1905-5858-aaba-999b967df516 | 84acea46-cb40-58fe-874c-1371ba891a42 | d5fca7f2-c261-58c6-98b2-bc1ea72c4f95 | {} | valid | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00\n8131241b-3f28-5da4-92b7-23d3d107ec57 | 84acea46-cb40-58fe-874c-1371ba891a42 | 1b228806-da0e-5772-870a-68d4c45aa50b | {} | invalidated | 2026-01-01 00:00:00+00 | moved"
+    }
+  }
+}

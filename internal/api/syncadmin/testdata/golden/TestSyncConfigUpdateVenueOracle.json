@@ -1,0 +1,751 @@
+{
+  "header": {
+    "test": "TestSyncConfigUpdateVenueOracle",
+    "python_build": "758a8d9fbb1f7548bef84df452597f9e7ddf145a",
+    "producer_digest": "53028fde43de410ecb5704202be163d92617d6794f5d2108513c8868e2607e80",
+    "recipe": "git worktree add --detach \u003cdir\u003e 758a8d9fbb1f7548bef84df452597f9e7ddf145a; from internal/api/syncadmin: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestSyncConfigUpdateVenueOracle$' ."
+  },
+  "requests": [
+    {
+      "name": "no token",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0fd0fea9-bdcb-493a-a8ef-84053a83de6b"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "12f641a87b5468588086b6d5b823eb370417fa87c5bd79407377d1ba02d3a002",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "41c8df3b-d08e-4f58-b7de-a8e6414f7831"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "invalid json",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "344c7f9f298493f94b10599d32b3a4d35dcc863603d353b1b332c09254fd9a15",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 422,
+      "headers": {
+        "content-length": "125",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b0ee4020-d287-472c-8a80-465c973ada27"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",16],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
+    },
+    {
+      "name": "not an object",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a171746b-b4d6-4e99-9309-5400b63bd113"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "wrong field types",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "edee825db78ce645dfaf4e775c518cf35acac7ca106b06448b8d6d9598eda9c9",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 422,
+      "headers": {
+        "content-length": "706",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b10143cf-7ec0-46e4-98f7-1605fe3f7f5e"
+      },
+      "body": "{\"detail\":[{\"type\":\"list_type\",\"loc\":[\"body\",\"sync_targets\"],\"msg\":\"Input should be a valid list\",\"input\":\"git\"},{\"type\":\"dict_type\",\"loc\":[\"body\",\"sync_options\"],\"msg\":\"Input should be a valid dictionary\",\"input\":[]},{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"is_active\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"},{\"type\":\"string_type\",\"loc\":[\"body\",\"schedule_cron\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"string_type\",\"loc\":[\"body\",\"timezone\"],\"msg\":\"Input should be a valid string\",\"input\":[]},{\"type\":\"int_parsing\",\"loc\":[\"body\",\"initial_sync_depth\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"abc\"}]}"
+    },
+    {
+      "name": "unknown config",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/f8a78dd0-c8e8-5a47-8741-ec15353c590c",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "eb808a2d-928a-4c6d-bac8-1c0fa580ca79"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "config id not a uuid",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/not-a-uuid",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ec08ad6e-68dc-4b3e-8565-6cbfc89506ae"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "other org's config",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/5e2cbffa-3eb3-5ba3-b17e-3eea8a135056",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2f73e127-5196-4fe8-875e-07e045426548"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "empty body",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "441",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e81aa264-26cd-4d59-b337-a33e47d77b6c"
+      },
+      "body": "{\"id\":\"e61d41c5-640c-505b-b3c7-f403c1a84868\",\"name\":\"gh\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"fetch_comments\":false,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "gated new targets",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "24714bddbd892fb825bb48679697e2088c645d3b02da6dd23aaf974589856de4",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 403,
+      "headers": {
+        "content-length": "95",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "338c5885-459b-4df9-a988-6471071bbf0c"
+      },
+      "body": "{\"detail\":\"feature_disabled: canonical incident ingestion is disabled (org_override_disabled)\"}"
+    },
+    {
+      "name": "gated stored targets",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/48814bba-1d13-57e4-a700-5ee78386d019",
+      "body_sha256": "f869ae85a26479915e8b904a7a46ef8b50edacd476d5c48c16c3fc09f2fc4564",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 403,
+      "headers": {
+        "content-length": "95",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ffd95d34-1d11-42ba-91bd-c15c1c7ad31d"
+      },
+      "body": "{\"detail\":\"feature_disabled: canonical incident ingestion is disabled (org_override_disabled)\"}"
+    },
+    {
+      "name": "github targets",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "b851a6a43b34be4fc1012a3adcfde33876b93f702a9584165812791acdf05006",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "460",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "77e5854a-fafd-4750-a90c-9e492a9fe458"
+      },
+      "body": "{\"id\":\"e61d41c5-640c-505b-b3c7-f403c1a84868\",\"name\":\"gh\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"fetch_comments\":false,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "github runtime options",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "6b69b5f181e1c5be8b7224001c4fa99da2dc6ca9d766e5e87b48e541f1a39bd9",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "458",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "de1a1588-7d99-42ea-ad98-5994e3768ecc"
+      },
+      "body": "{\"id\":\"e61d41c5-640c-505b-b3c7-f403c1a84868\",\"name\":\"gh\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"fetch_comments\":false,\"fetch_milestones\":true,\"comments_limit\":7},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "github schedule",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "d1cd1fb1f8ea48a1fcc122742dcb2f2368a99a294c4b2120a0d2e30aa92731dd",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "542",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "69959f47-9dbe-4f40-8c85-341fa264f17b"
+      },
+      "body": "{\"id\":\"e61d41c5-640c-505b-b3c7-f403c1a84868\",\"name\":\"gh\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"fetch_comments\":false,\"fetch_milestones\":true,\"comments_limit\":7,\"schedule_cron\":\"0 */6 * * *\",\"timezone\":\"Europe/Paris\",\"initial_sync_depth\":999999},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "github schedule cleared",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "af607c01162a6a375183d310cd271fa240106b1140277ec61c35602b0996987d",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "486",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "05a87c44-7709-410b-864e-50a95d9cfb51"
+      },
+      "body": "{\"id\":\"e61d41c5-640c-505b-b3c7-f403c1a84868\",\"name\":\"gh\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"fetch_comments\":false,\"fetch_milestones\":true,\"comments_limit\":7,\"initial_sync_depth\":999999},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "github stale nested schedule",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "7acc101bf3000643d20438d6dfb9598ab2b62e20547c91e3cbd6a88166ed682b",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "486",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c67c3654-ab61-4d1c-a70d-1e365a295d68"
+      },
+      "body": "{\"id\":\"e61d41c5-640c-505b-b3c7-f403c1a84868\",\"name\":\"gh\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"fetch_comments\":false,\"fetch_milestones\":true,\"comments_limit\":7,\"initial_sync_depth\":999999},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "github no work-items dataset",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/245ac56f-73c2-5d42-a1c5-6cead07447ea",
+      "body_sha256": "8c1e651044cd7ae971b83a8ccb4ff00383afdeda3a93c6458b713da71781ec80",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "437",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "985dea2b-c3ec-47dc-94ac-376eb3533276"
+      },
+      "body": "{\"id\":\"245ac56f-73c2-5d42-a1c5-6cead07447ea\",\"name\":\"gh no dataset\",\"provider\":\"GitHub\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"all_repos\":true,\"fetch_milestones\":false,\"fetch_comments\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "cron refused",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "e24c62e88e5345d4d6ae983917576636d00374a1efc3eb846f1498870a2d4992",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c88499b8-e20d-4d89-aa04-b2b07ff46a3e"
+      },
+      "body": "{\"detail\":\"Invalid cron expression: [60 * * * *] is not acceptable, out of range\"}"
+    },
+    {
+      "name": "timezone refused",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "75986b2d46b7a504723e0cc64950b468957419b1180f06033a1cfea7f3dbd641",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 422,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "55f4c11c-3cd5-40dd-95dc-af8c0c9b9e18"
+      },
+      "body": "{\"detail\":\"Invalid timezone: 'Mars/Base'\"}"
+    },
+    {
+      "name": "nested cron refused",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "8171be2e7db5c6ff267a1e80db41b6c0b9afac98bf07914dccff610aadf913b0",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 422,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "980f7a1e-c364-4e6a-abb0-4b30cb0c664c"
+      },
+      "body": "{\"detail\":\"Invalid timezone: 'Nope/Zone'\"}"
+    },
+    {
+      "name": "malformed auto-import",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "31c1c1fd1a813c8fbd5a8b9b69c8dd3497c5242171ed0a11acb09c4cf0c43d14",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 422,
+      "headers": {
+        "content-length": "141",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bf127760-43f7-4459-9ad2-d5cf8177285b"
+      },
+      "body": "{\"detail\":{\"message\":\"auto-import category flags must be true or false\",\"malformed_auto_import_category_values\":{\"auto_import_teams\":\"yes\"}}}"
+    },
+    {
+      "name": "unsupported auto-import",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "9898552a2f579c05be3b80f02dbacc19cab681bde52a81f924eb67a8bd517c8d",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 422,
+      "headers": {
+        "content-length": "190",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f077694e-c53c-4f08-a6c7-002d5ae37761"
+      },
+      "body": "{\"detail\":{\"message\":\"github does not support the requested auto-import categories\",\"unsupported_auto_import_categories\":{\"projects\":\"GitHub attributes ownership via repos, not projects.\"}}}"
+    },
+    {
+      "name": "lax is_active",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "e3091a65c9da19b78f6635bde37d494010563e738c831d420843bb3889eea3d7",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "487",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "680068a3-fda2-4ee0-b3d1-b32b6f893794"
+      },
+      "body": "{\"id\":\"e61d41c5-640c-505b-b3c7-f403c1a84868\",\"name\":\"gh\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"fetch_comments\":false,\"fetch_milestones\":true,\"comments_limit\":7,\"initial_sync_depth\":999999},\"is_active\":false,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "reactivate",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "f72594576de212e10ea40ba3061637e81341c6832633c7d9633d5bdc148cde5a",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "486",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "87a2b335-a8e2-430d-ad95-d289d44d8e7f"
+      },
+      "body": "{\"id\":\"e61d41c5-640c-505b-b3c7-f403c1a84868\",\"name\":\"gh\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"fetch_comments\":false,\"fetch_milestones\":true,\"comments_limit\":7,\"initial_sync_depth\":999999},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "source-scoped child targets",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/48158d14-671f-589d-8d1d-549eeb912629",
+      "body_sha256": "c19bd245ac2570d90dba58a40ae1832dbfa722755708b2a060cc0fb8b2d66ce7",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "414",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3b2a1c69-4883-4f1f-9301-640c4e84bb36"
+      },
+      "body": "{\"id\":\"48158d14-671f-589d-8d1d-549eeb912629\",\"name\":\"gh child\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"cicd\"],\"sync_options\":{\"fetch_comments\":false,\"fetch_milestones\":true,\"comments_limit\":7},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "github integration already canonical",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/6a64021b-a891-574f-a6d6-cce8acd4accd",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "435",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ccae544b-5797-4903-a585-3f491180b701"
+      },
+      "body": "{\"id\":\"6a64021b-a891-574f-a6d6-cce8acd4accd\",\"name\":\"gh canonical\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"all_repos\":true,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "no-op body",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/2b429965-a6ea-5423-b938-6a442184153a",
+      "body_sha256": "562434518ee40bedf642ff5863fae12bb4c1ea319b3171b0d6f1b63355a2384e",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "358",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cfe32417-7489-4dc1-ad82-261828a806ab"
+      },
+      "body": "{\"id\":\"2b429965-a6ea-5423-b938-6a442184153a\",\"name\":\"no-op\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"team_id\":\"t\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-01-01T00:00:00Z\"}"
+    },
+    {
+      "name": "pagerduty mappings",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/2a20d153-b683-5ece-b196-e2efa4f43900",
+      "body_sha256": "30b4b50e89317a6f43a316c10c822630df60ff32d53923f10d5df388ca8b6439",
+      "request_headers_sha256": "1e1778c553f21b6c212c49bd893ef5feb5257e6f7e27217775faf824bf926c9b",
+      "status": 200,
+      "headers": {
+        "content-length": "401",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a3ce1c04-9f49-416e-bda4-7cb5d02dac7a"
+      },
+      "body": "{\"id\":\"2a20d153-b683-5ece-b196-e2efa4f43900\",\"name\":\"pd\",\"provider\":\"pagerduty\",\"credential_id\":null,\"sync_targets\":[\"operational\"],\"sync_options\":{\"service_repository_mappings\":{\"svc\":[\"acme/r\"]}},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "pagerduty mappings not a dict",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/2a20d153-b683-5ece-b196-e2efa4f43900",
+      "body_sha256": "77c8b99db8849918b90686058c108212897065e19ff2e4a651c15ac5ef1505f8",
+      "request_headers_sha256": "1e1778c553f21b6c212c49bd893ef5feb5257e6f7e27217775faf824bf926c9b",
+      "status": 200,
+      "headers": {
+        "content-length": "388",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7525fd79-f365-4d26-b437-b00ac7412e71"
+      },
+      "body": "{\"id\":\"2a20d153-b683-5ece-b196-e2efa4f43900\",\"name\":\"pd\",\"provider\":\"pagerduty\",\"credential_id\":null,\"sync_targets\":[\"operational\"],\"sync_options\":{\"service_repository_mappings\":[\"x\"]},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "pagerduty targets refused by the planner",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/2a20d153-b683-5ece-b196-e2efa4f43900",
+      "body_sha256": "2a393abb1a261fe093fd3ad4ccb75e920e8ecb38b9f1a6d4f7c5e9425ca9e13c",
+      "request_headers_sha256": "1e1778c553f21b6c212c49bd893ef5feb5257e6f7e27217775faf824bf926c9b",
+      "status": 200,
+      "headers": {
+        "content-length": "400",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "27effd50-60b6-4d25-a903-25c4f405d71e"
+      },
+      "body": "{\"id\":\"2a20d153-b683-5ece-b196-e2efa4f43900\",\"name\":\"pd\",\"provider\":\"pagerduty\",\"credential_id\":null,\"sync_targets\":[\"operational\",\"incidents\"],\"sync_options\":{\"service_repository_mappings\":[\"x\"]},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "legacy parent cascade",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/bb478011-d712-5f14-b2f1-d56e7f4d1d42",
+      "body_sha256": "1e9e2567cf506496365e5520ed42013810ab55b73c6f1a2918594dd6ab5386be",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "389",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fc6821b0-99df-4662-954a-d93a605c14b3"
+      },
+      "body": "{\"id\":\"bb478011-d712-5f14-b2f1-d56e7f4d1d42\",\"name\":\"legacy\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"schedule_cron\":\"0 3 * * *\"},\"is_active\":false,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "no integration",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/d91a73c6-d54c-5ed7-b9df-4a0dd15b5c24",
+      "body_sha256": "5e35420c963d481354003b6eaf1b63d9e5da6fa0d786f34897be0d5b4375f501",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "366",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "863a64e2-19cb-4e3b-9dc3-df0a99fdd45c"
+      },
+      "body": "{\"id\":\"d91a73c6-d54c-5ed7-b9df-4a0dd15b5c24\",\"name\":\"no integration\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"x\":1},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "jira scope change",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/add1efaa-7d46-5b52-b4e4-411cc9f2051a",
+      "body_sha256": "a6def621559fcc1d1db1b84fb3c9bc7e7749dadacbeb96de8ddf5b1e0769f97b",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "402",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6566749c-9919-4288-9b56-c64431523bf5"
+      },
+      "body": "{\"id\":\"add1efaa-7d46-5b52-b4e4-411cc9f2051a\",\"name\":\"jira\",\"provider\":\"jira\",\"credential_id\":\"26e0e642-9020-58d5-8eee-d1c819fb1170\",\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"ACM\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "jira reactivate",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/89e540ff-616e-5c4f-a24b-843e5cab7e55",
+      "body_sha256": "562434518ee40bedf642ff5863fae12bb4c1ea319b3171b0d6f1b63355a2384e",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "407",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8b4d7817-2e43-4f99-8fe9-459f56fe5e59"
+      },
+      "body": "{\"id\":\"89e540ff-616e-5c4f-a24b-843e5cab7e55\",\"name\":\"jira off\",\"provider\":\"Jira\",\"credential_id\":\"26e0e642-9020-58d5-8eee-d1c819fb1170\",\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"AESH\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    },
+    {
+      "name": "community schedule",
+      "method": "PATCH",
+      "path": "/api/v1/admin/sync-configs/5e2cbffa-3eb3-5ba3-b17e-3eea8a135056",
+      "body_sha256": "8be0b4ba90cdc063647d187a981e0c542d933c6e6b361c9446cfef9cc8f122ae",
+      "request_headers_sha256": "516ee335e60b39cf7e490d45d585c63f3b3bfe38ddac570a9fb010129dc4ea60",
+      "status": 403,
+      "headers": {
+        "content-length": "64",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9974a475-a007-4177-a18f-2c1b55210472"
+      },
+      "body": "{\"detail\":\"scheduled_jobs feature requires Team tier or higher\"}"
+    },
+    {
+      "name": "github after",
+      "method": "GET",
+      "path": "/api/v1/admin/sync-configs/e61d41c5-640c-505b-b3c7-f403c1a84868",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "37a79f294cb671e2c3a0fdbcc692557087a229b0cbdf66b5e4427965b5692692",
+      "status": 200,
+      "headers": {
+        "content-length": "486",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "855c5b1f-7dc5-46d9-afe7-0efadc8c5f17"
+      },
+      "body": "{\"id\":\"e61d41c5-640c-505b-b3c7-f403c1a84868\",\"name\":\"gh\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"fetch_comments\":false,\"fetch_milestones\":true,\"comments_limit\":7,\"initial_sync_depth\":999999},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":\"2026-09-25T08:15:30.654321Z\"}"
+    }
+  ],
+  "rows": {
+    "rows:integration_datasets": {
+      "rows": "3353de81-a294-57c4-9511-5b1af41a0fad | pd | services | t | {\"legacy_targets\": [\"operational\"], \"service_repository_mappings\": {\"svc\": [\"acme/r\"]}} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | blame | t | {} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | commit-stats | t | {} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | commits | t | {} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | files | t | {} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | pr-comments | t | {} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | pr-reviews | t | {} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | prs | t | {} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | repo-metadata | t | {} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | work-item-comments | t | {} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | work-item-history | t | {} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | work-item-labels | t | {} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | work-item-projects | t | {} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | work-items | t | {\"fetch_comments\": false, \"legacy\": 1, \"fetch_milestones\": true, \"comments_limit\": 7} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e"
+    },
+    "rows:integration_sources": {
+      "rows": "63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | github | repository | acme/r | r | acme/r | {} | t | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | jira off | jira | project | AESH | Aesh | AESH | {\"project_type_key\": \"software\", \"discovered_project\": true, \"jira_project_id\": \"10631\", \"planner_managed_sync_config_id\": \"CFG:jira off\"} | t | 2026-09-25 08:15:30.654321+00 | 2026-09-25 08:15:30.654321+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | jira | jira | project | ACM | Red Hat Advanced Cluster Management | ACM | {\"project_type_key\": \"software\", \"discovered_project\": true, \"jira_project_id\": \"10625\", \"planner_managed_sync_config_id\": \"CFG:jira\"} | t | 2026-09-25 08:15:30.654321+00 | 2026-09-25 08:15:30.654321+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e"
+    },
+    "rows:integrations": {
+      "rows": "3353de81-a294-57c4-9511-5b1af41a0fad | pagerduty | \u003cnull\u003e | pd | {} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | github | \u003cnull\u003e | gh canonical | {\"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | github | \u003cnull\u003e | gh gated | {} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | github | \u003cnull\u003e | gh no dataset | {\"fetch_comments\": true, \"fetch_milestones\": false, \"comments_limit\": 500} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | github | \u003cnull\u003e | gh | {\"owner\": \"acme\", \"fetch_comments\": false, \"fetch_milestones\": true, \"comments_limit\": 7} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | jira | 26e0e642-9020-58d5-8eee-d1c819fb1170 | jira off | {} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | jira | 26e0e642-9020-58d5-8eee-d1c819fb1170 | jira | {} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00"
+    },
+    "rows:scheduled_jobs": {
+      "rows": "3353de81-a294-57c4-9511-5b1af41a0fad | sync-config-CFG:pd | sync | pagerduty | 0 * * * * | UTC | {\"provider\": \"pagerduty\", \"sync_config_id\": \"CFG:pd\"} | pd | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-25 08:15:30.654321+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | sync-config-CFG:gh canonical | sync | github | 0 * * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:gh canonical\"} | gh canonical | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-25 08:15:30.654321+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | sync-config-CFG:gh child | sync | github | 0 * * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:gh child\"} | gh child | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-25 08:15:30.654321+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | sync-config-CFG:gh no dataset | sync | github | 0 * * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:gh no dataset\"} | gh no dataset | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-25 08:15:30.654321+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | sync-config-CFG:gh | sync | github | 0 * * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:gh\"} | gh | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | sync-config-CFG:jira off | sync | jira | 0 * * * * | UTC | {\"provider\": \"jira\", \"sync_config_id\": \"CFG:jira off\"} | jira off | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-25 08:15:30.654321+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | sync-config-CFG:jira | sync | jira | 0 * * * * | UTC | {\"provider\": \"jira\", \"sync_config_id\": \"CFG:jira\"} | jira | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-25 08:15:30.654321+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | sync-config-CFG:legacy child 1 | sync | github | 0 3 * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:legacy child 1\"} | legacy child 1 | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | sync-config-CFG:legacy child 2 | sync | github | 0 3 * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:legacy child 2\"} | legacy child 2 | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-25 08:15:30.654321+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | sync-config-CFG:legacy | sync | github | 0 3 * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:legacy\"} | legacy | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | sync-config-CFG:no integration | sync | linear | 0 * * * * | UTC | {\"provider\": \"linear\", \"sync_config_id\": \"CFG:no integration\"} | no integration | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-25 08:15:30.654321+00 | 2026-09-25 08:15:30.654321+00\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | sync-config-CFG:no-op | sync | linear | 0 * * * * | UTC | {\"provider\": \"linear\", \"sync_config_id\": \"CFG:no-op\"} | no-op | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-25 08:15:30.654321+00 | 2026-09-25 08:15:30.654321+00"
+    },
+    "rows:sync_configurations": {
+      "rows": "3353de81-a294-57c4-9511-5b1af41a0fad | pd | pagerduty | [\"operational\", \"incidents\"] | {\"service_repository_mappings\": [\"x\"]} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00 | \u003cnull\u003e | pd | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh canonical | github | [\"git\"] | {\"all_repos\": true, \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00 | \u003cnull\u003e | gh canonical | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh child | github | [\"cicd\"] | {\"fetch_comments\": false, \"fetch_milestones\": true, \"comments_limit\": 7} | t | f | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00 | \u003cnull\u003e | gh | 5d48ec3a-8056-51ac-bc90-154be48ff5c5\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh gated | github | [\"git\", \"Incidents\"] | {} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00 | \u003cnull\u003e | gh gated | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh no dataset | GitHub | [\"git\"] | {\"all_repos\": true, \"fetch_milestones\": false, \"fetch_comments\": true, \"comments_limit\": 500} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00 | \u003cnull\u003e | gh no dataset | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | github | [\"git\", \"prs\", \"work-items\"] | {\"owner\": \"acme\", \"all_repos\": true, \"fetch_comments\": false, \"fetch_milestones\": true, \"comments_limit\": 7, \"initial_sync_depth\": 999999} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00 | \u003cnull\u003e | gh | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | jira off | Jira | [\"work-items\"] | {\"project_key\": \"AESH\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00 | \u003cnull\u003e | jira off | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | jira | jira | [\"work-items\"] | {\"project_key\": \"ACM\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00 | \u003cnull\u003e | jira | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | legacy child 1 | github | [\"git\"] | {\"repo\": \"acme/a\", \"schedule_cron\": \"0 3 * * *\"} | f | f | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00 | legacy | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | legacy child 2 | github | [\"git\"] | {\"repo\": \"acme/b\", \"schedule_cron\": \"0 3 * * *\"} | f | f | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00 | legacy | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | legacy | github | [\"git\"] | {\"owner\": \"acme\", \"schedule_cron\": \"0 3 * * *\"} | f | f | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | no integration | linear | [\"work-items\"] | {\"x\": 1} | t | f | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-09-25 08:15:30.654321+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | no-op | linear | [\"work-items\"] | {\"team_id\": \"t\"} | t | f | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nbfa282bb-1a8e-5f8c-bb6f-93164bc01be4 | b | github | [\"git\"] | {\"all_repos\": true} | t | f | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e"
+    },
+    "rows:sync_coverage_projections": {
+      "rows": "3353de81-a294-57c4-9511-5b1af41a0fad | pd | {} | invalidated | moved\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | gh | {} | invalidated | moved\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | legacy | {} | invalidated | moved\n63b5b828-2fe7-5952-a0f6-d9ac12ad2fe0 | no integration | {} | invalidated | moved"
+    }
+  }
+}

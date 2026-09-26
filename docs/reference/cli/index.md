@@ -587,6 +587,8 @@ dev-hops fixtures product-telemetry \
 | `--sessions-per-day` | — | Average synthetic sessions per day per org |
 | `--seed` | random | Deterministic seed (mixed with org_id) for repeatable runs |
 
+> **`dho fixtures product-telemetry` (Go):** the same flags and defaults (`--orgs 5`, `--days 30`, `--sessions-per-day 50`, no seed = seed 0 mixed with the org id), the same rows: a differential test runs the real `ProductTelemetryGenerator` and the real `persist_product_telemetry_events` row builder and compares every column of every row with the Go generator, over the random stream (`getrandbits`, `randrange`, `randint`, `choice`, `random`), the days ceiling (the table's 180-day TTL minus the 30-day shelf-life margin minus one day: `--days` above 149 seeds 149) and empty inputs. It reads `CLICKHOUSE_URI` and, without `--org`, the first `--orgs` rows of `organizations` through `POSTGRES_URI` (or the `DEV_HEALTH_PG_DOMAIN_*` component form), falling back to the synthetic ids `uuid5(NAMESPACE_URL, "seed-org-<i>")` with a warning when Postgres cannot be read. Differences to know: a JSON summary (`orgs`, `rows` per org, `total`) goes to stdout and the log lines are JSON on stderr; `--seed` must be an integer that fits 64 bits; a positional argument is a usage error (exit 2).
+
 ---
 
 ### `fixtures world-snapshot` / `fixtures world-restore`

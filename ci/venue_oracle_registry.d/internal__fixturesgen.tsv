@@ -1,0 +1,3 @@
+internal/fixturesgen	TestProductTelemetryMatchesLivePython	run
+internal/fixturesgen	TestRandMatchesLivePython	run
+internal/fixturesgen	TestSyntheticOrgIDsMatchThePythonFallback	run

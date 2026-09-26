@@ -145,7 +145,7 @@ async def run_batch(request):
 def run(request):
     try:
         asyncio.run(run_batch(request))
-    except BaseException as exc:  # an uncaught traceback: exit 1
+    except (Exception, SystemExit) as exc:  # an uncaught traceback: exit 1
         return {
             "events": EVENTS,
             "stage": tag("error"),

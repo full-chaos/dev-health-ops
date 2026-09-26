@@ -100,23 +100,20 @@ the side-loaded local/kind case, where a registry pull would fail outright
 (no registry ever publishes ":local") and the node's own local image is the
 intended target.
 */}}
-{{- $operatorImageIsDigestPinned := and $operatorImage (contains "@sha256:" $operatorImage) }}
-{{- $operatorImageIsImmutableTag := and $operatorImage (regexMatch "^.+:sha-[0-9a-f]{12}$" $operatorImage) }}
-{{- $operatorImageIsSideloadedLocal := and $operatorImage (regexMatch "^.+:local$" $operatorImage) (or (eq $operatorPullPolicy "Never") (eq $operatorPullPolicy "IfNotPresent")) }}
-{{- if not (or $operatorImageIsDigestPinned $operatorImageIsImmutableTag $operatorImageIsSideloadedLocal) }}
-{{- fail (printf "migrations.hook.routeActivate.image=%q is not pinned. This is the failure class that took down production revision 14: a floating/default operator image ran the node's stale local binary against a database the migrate Job had just migrated, and it exited runtime_role_unauthorized with no diagnostics. Set migrations.hook.routeActivate.image to repo@sha256:<digest> or repo:sha-<12 hex> (pinned to the same commit as image.repository/image.tag); repo:local is accepted only with pullPolicy Never or IfNotPresent." $operatorImage) }}
-{{- end }}
 {{- /*
-Lockstep check: this operator image and the api/migrate image
-(dev-health.image, image.repository/image.tag) must come from the SAME
-commit, since the operator's posture manifest has to match the schema the
-migrate Job just applied -- the exact mismatch that produced
-runtime_role_unauthorized on production revision 14. Shared with
-river-hooks.yaml's identical check on its own hook image -- see
-dev-health.lockstepImageCheck (_helpers.tpl) for the one place this
-calculation, and its digest-pin exemption, live.
+CHAOS-6958: this used to be its own inline shape-only check (accepted a
+malformed digest like `@sha256:not-a-digest`, and any repository name, retired
+Python images included) plus a separate dev-health.lockstepImageCheck call. Both
+now live in dev-health.pinnedOperatorImageCheck (_helpers.tpl), shared with
+river-hooks.yaml's two hooks and migrate-job.yaml's migrate Job -- see that
+definition's own comment for what each check closes. The pin-format acceptance
+(digest, this repo's sha-<12 hex> tag, or a sideloaded :local) and the lockstep
+comparison are unchanged; this is the SAME failure class that took down
+production revision 14 (a floating/default operator image ran a node's stale
+local binary against a database the migrate Job had just migrated, exiting
+runtime_role_unauthorized with no diagnostics).
 */}}
-{{- include "dev-health.lockstepImageCheck" (dict "context" . "image" $operatorImage "labelWithValue" (printf "migrations.hook.routeActivate.image (%s)" $operatorImage) "reason" "the operator's posture manifest must match the database the migrate Job just migrated.") }}
+{{- include "dev-health.pinnedOperatorImageCheck" (dict "context" . "image" $operatorImage "pullPolicy" $operatorPullPolicy "flagLabel" "migrations.hook.routeActivate.image" "verb" "the route-activate steps") }}
 {{- $routeKinds := list "dispatch_sync_run" "finalize_sync_run" "post_sync" "reference_discovery" }}
 {{- if $poolerSecret.create }}
 ---

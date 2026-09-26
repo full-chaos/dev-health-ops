@@ -448,3 +448,109 @@ pin on its own, just not one this specific comparison can use).
 {{- fail (printf "%s and image.repository/image.tag (%s) are pinned to different commits (%s vs %s) -- %s" .labelWithValue (include "dev-health.image" .context) $hookImageTag $apiImageTag .reason) -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Pinned operator (dho) image check — call with (dict "context" $ "image" <resolved
+image> "pullPolicy" <resolved pull policy, already defaulted to "IfNotPresent" by
+the CALLER, never to .Values.image.pullPolicy -- see below> "flagLabel" <the
+precedence description, e.g. "migrations.hook.provisionRoles.image, else
+migrations.hook.riverMigrate.image, else migrations.hook.routeActivate.image">
+"verb" <the dho verb this image must run, e.g. "`dho migrate roles`">).
+
+CHAOS-6958: river-hooks.yaml's provision-roles hook, its River hook,
+migrate-job.yaml's migrate Job and route-activate-hooks.yaml each grew their OWN
+copy of "is this image pinned" — three gaps found by the CHAOS-6951 r1 round, all
+pre-existing (reproduced against the already-merged River hook), now fixed ONCE
+here instead of at each call site:
+
+  1. IDENTITY, not just shape (D2684: this needed an argued exception, not a
+     silent denylist -- the argument and the EXECUTED evidence for it are here,
+     and are also posted to the CHAOS-6958 Linear comment thread). A
+     digest-pinned or sha-<12 hex>-tagged image used to be accepted whatever
+     repository it named -- a pinned Python api image
+     (ghcr.io/full-chaos/dev-hops-api:sha-<12 hex>) with a matching image.tag
+     rendered clean and then failed at runtime with an unrecognized-argument
+     error.
+
+     D2684 asked for a cross-check against "the chart's configured operator
+     repository, default or override" (a repository-part match, not a name
+     allowlist), with a denylist as at most a second layer, UNLESS that
+     cross-check is tautological here -- argued and shown, not asserted:
+
+     TRIED that cross-check (every OTHER hook's image already falls back to
+     migrations.hook.routeActivate.image when unset -- river-hooks.yaml:102,
+     :291, migrate-job.yaml:71 -- so it is the only candidate for "the chart's
+     one configured operator repository"), and it FAILED two EXISTING tests,
+     not a hypothetical:
+       - test_provisioning_image_prefers_its_own_then_the_river_then_the_route_image
+         and test_river_migrate_takes_its_own_pinned_image
+         (test_helm_migration_hook_chain.py) both pin a hook's OWN image
+         WINNING over migrations.hook.routeActivate.image's, from a DIFFERENT
+         repository (dev-health-go-dho vs. dev-health-go-operator) and a
+         DIFFERENT commit -- by design, per this file's own comment at
+         river-hooks.yaml:93-96 ("provisionRoles.image, else riverMigrate.image,
+         else routeActivate.image -- the operator image the rest of the chain
+         ALREADY requires") and query-api-deployment.yaml:11-13
+         ("dev-health-go-dho or dev-health-go-operator, matched on the last
+         path element"): this chart treats the two repository names as
+         interchangeable dho images, each hook independently pinned to
+         whatever commit THAT step needs, not required to share a repository
+         or a commit with any other hook.
+     A repository-part cross-check is therefore not tautological here -- it is
+     WRONG: it would refuse a legitimately independent per-hook pin the chart
+     already supports and tests. Reverted; the executed failing-test evidence
+     above is the argued exception D2684 allows for.
+
+     What is left, and its residual: a DENYLIST of the retired/wrong images
+     this repo actually publishes under a name a dho verb could otherwise reach
+     by mistake (dev-hops-api, the Python edge; the retired
+     dev-health-query-api and dev-health-go-worker images) -- the same shape of
+     check migrate-job.yaml already ran for dev-hops-api alone, now shared and
+     covering the other two retired names too. It closes the r1 round's actual
+     reproduction (a Python image pinned in place of a dho one). It does NOT
+     close a hook pinned to some OTHER, unlisted wrong image that happens to
+     share the pin-shape rule -- Helm has no oracle for "the right image"
+     beyond what the operator configures and this chart's own KNOWN retired
+     names, and there is no single "chart's configured operator repository"
+     this chart's own design lets every hook be cross-checked against.
+
+     A positive name ALLOWLIST (the stricter check query-api-deployment.yaml and
+     go-workers.yaml use) is also deliberately NOT used here:
+     test_route_activate_operator_image_override_is_honoured
+     (test_helm_route_activate_hooks.py) pins a CUSTOM repository name
+     (ghcr.io/example/custom-operator) as a supported, deliberate override,
+     which an allowlist would regress the same way the cross-check did.
+  2. A REAL digest, not a substring. `contains "@sha256:"` treated
+     `repo@sha256:not-a-digest` as pinned; a real puller rejects the malformed
+     reference. The digest must now be a well-formed 64 lowercase-hex-digit
+     sha256.
+  3. Pull policy. This helper does not choose a pull policy -- it only checks the
+     one the caller already resolved. The caller must default it to
+     "IfNotPresent", NEVER to .Values.image.pullPolicy (the APPLICATION image's
+     policy): a local dev value of image.pullPolicy=Never used to leak onto a
+     PINNED REGISTRY operator image, which then could not be pulled at all.
+     route-activate-hooks.yaml already got this right (its own r2 P2 codex-review
+     fix); provision-roles, river-migrate and migrate did not.
+
+The lockstep check (this image pinned to the SAME commit as
+image.repository/image.tag) still runs at the end, unchanged.
+*/}}
+{{- define "dev-health.pinnedOperatorImageCheck" -}}
+{{- $image := .image -}}
+{{- if regexMatch "(^|/)dev-hops-api([:@]|$)" $image -}}
+{{- fail (printf "%s (%s) is not a pinned dho image: it is the Python api image, which has no dho entrypoint. It runs %s, which needs the dho (operator) image." .flagLabel $image .verb) -}}
+{{- end -}}
+{{- if regexMatch "(^|/)dev-health-query-api([:@]|$)" $image -}}
+{{- fail (printf "%s (%s) is not a pinned dho image: it is the retired dev-health-query-api image, which has no dho entrypoint. It runs %s, which needs the dho (operator) image." .flagLabel $image .verb) -}}
+{{- end -}}
+{{- if regexMatch "(^|/)dev-health-go-worker([:@]|$)" $image -}}
+{{- fail (printf "%s (%s) is not a pinned dho image: it is the retired dev-health-go-worker image, which has no dho entrypoint. It runs %s, which needs the dho (operator) image." .flagLabel $image .verb) -}}
+{{- end -}}
+{{- $digestPinned := regexMatch "@sha256:[0-9a-f]{64}$" $image -}}
+{{- $immutableTag := regexMatch "^.+:sha-[0-9a-f]{12}$" $image -}}
+{{- $sideloadedLocal := and (regexMatch "^.+:local$" $image) (or (eq .pullPolicy "Never") (eq .pullPolicy "IfNotPresent")) -}}
+{{- if not (or $digestPinned $immutableTag $sideloadedLocal) -}}
+{{- fail (printf "%s (%s) is not a pinned dho image. It runs %s: set it to repo@sha256:<64 lowercase-hex-digit digest> or repo:sha-<12 hex>; repo:local is accepted only with pullPolicy Never or IfNotPresent." .flagLabel $image .verb) -}}
+{{- end -}}
+{{- include "dev-health.lockstepImageCheck" (dict "context" .context "image" $image "labelWithValue" (printf "%s (%s)" .flagLabel $image) "reason" (printf "%s must run the same build as the application it is targeting." .verb)) -}}
+{{- end }}

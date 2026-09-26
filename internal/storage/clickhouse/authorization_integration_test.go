@@ -135,6 +135,8 @@ const (
 	// outcomes (CHAOS-6667).
 	grantLLMUsageExact       = "GRANT SELECT ON default.llm_token_usage"
 	grantWorkUnitInvestExact = "GRANT SELECT ON default.work_unit_investments"
+	// The sync configuration trigger's work items count (CHAOS-6871).
+	grantWorkItemsExact = "GRANT SELECT ON default.work_items"
 )
 
 // grantMetricsExact are the read-only metric-table grants of the manifest
@@ -153,7 +155,7 @@ var grantMetricsExact = []string{
 // the whole manifest is met.
 func importGrants() []string {
 	return append([]string{grantSyncPoliciesExact, grantObservationsExact, grantDriftChangesExact, grantMembershipsExact, grantFallbacksExact,
-		grantRepoComplexityExact, grantCompoundingExact, grantTelemetryExact, grantLLMUsageExact, grantWorkUnitInvestExact}, grantMetricsExact...)
+		grantRepoComplexityExact, grantCompoundingExact, grantTelemetryExact, grantLLMUsageExact, grantWorkUnitInvestExact, grantWorkItemsExact}, grantMetricsExact...)
 }
 
 // TestCheckPostureAcceptsExactMatch proves the happy path: a user granted
@@ -177,6 +179,23 @@ func TestCheckPostureRejectsMissingPrivilege(t *testing.T) {
 	}
 	if !errors.Is(err, ErrPostureMismatch) {
 		t.Fatalf("want ErrPostureMismatch, got: %v", err)
+	}
+}
+
+// TestCheckPostureRejectsAWithheldWorkItemsGrant withholds the one grant
+// CHAOS-6871 added: without SELECT on work_items the trigger's tier check could
+// not count, so the api must refuse to start rather than run with the cap off.
+func TestCheckPostureRejectsAWithheldWorkItemsGrant(t *testing.T) {
+	h := startPostureHarness(t)
+	var grants []string
+	for _, grant := range append([]string{grantTeamsExact, grantIdentitiesExact}, importGrants()...) {
+		if grant != grantWorkItemsExact {
+			grants = append(grants, grant)
+		}
+	}
+	err := CheckAPIClickHouseAuthorization(h.ctx, h.newUser(t, grants...))
+	if !errors.Is(err, ErrPostureMismatch) || !strings.Contains(err.Error(), "work_items") {
+		t.Fatalf("a login without SELECT on work_items must fail the posture check naming the table, got: %v", err)
 	}
 }
 

@@ -141,11 +141,14 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 	result, err := UpgradeLogged(ctx, conn, baseline, chain, logging.NewJSON(env.Stderr, slog.LevelInfo))
 	if err != nil {
 		var below BelowHeadError
+		var ahead AheadOfBuildError
 		var foreign ForeignDatabaseError
 		var mismatch SchemaMismatchError
 		switch {
 		case errors.As(err, &mismatch):
 			return writeError(env.Stderr, "schema_mismatch", err.Error())
+		case errors.As(err, &ahead):
+			return writeError(env.Stderr, "ahead_of_build", err.Error())
 		case errors.As(err, &below):
 			return writeError(env.Stderr, "below_head", err.Error())
 		case errors.As(err, &foreign):

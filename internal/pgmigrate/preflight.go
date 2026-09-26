@@ -82,8 +82,8 @@ type PreflightReport struct {
 	MigratorActive bool `json:"migrator_active"`
 }
 
-// KnownRevisions is every revision this build knows: the Alembic walk, the chain
-// after the baseline, and the baseline's heads.
+// KnownRevisions is every revision this build knows: the Alembic walk (WithChain adds
+// every chain revision the walk lacks) and the baseline's heads.
 func KnownRevisions(history []HistoryEntry, baseline Baseline, chain []ChainFile) map[string]bool {
 	known := map[string]bool{}
 	for _, entry := range WithChain(history, baseline, chain) {
@@ -91,9 +91,6 @@ func KnownRevisions(history []HistoryEntry, baseline Baseline, chain []ChainFile
 	}
 	for _, head := range baseline.Heads {
 		known[head] = true
-	}
-	for _, file := range chain {
-		known[file.Revision] = true
 	}
 	return known
 }
@@ -112,7 +109,7 @@ func Classify(observation Observation, settings Settings, baseline Baseline, cha
 		report.Verdict, report.Reason = VerdictNeedsManual, ReasonSettingsMismatch
 		return report
 	}
-	plan := Decide(observation, baseline, chain)
+	plan := Decide(observation, baseline, chain, known)
 	report.Missing = nonNil(plan.Missing)
 	switch plan.State {
 	case StateEmpty:
@@ -127,16 +124,15 @@ func Classify(observation Observation, settings Settings, baseline Baseline, cha
 		}
 	case StateBelowHead:
 		report.Verdict = VerdictNeedsManual
-		switch {
-		case hasUnknown(observation.Versions, known):
-			// A revision this build has never heard of: the image was rolled back
-			// under a database a newer build migrated. dho never downgrades.
-			report.Reason = ReasonAheadOfBuild
-		case len(plan.Missing) == 1 && plan.Missing[0] == cutoverRevision:
+		if len(plan.Missing) == 1 && plan.Missing[0] == cutoverRevision {
 			report.Reason = ReasonCutoverMissing
-		default:
+		} else {
 			report.Reason = ReasonBelowBaseline
 		}
+	case StateAheadOfBuild:
+		// A revision this build does not know: a newer build migrated the database
+		// (an image rolled back). The hook refuses it, so does the preflight.
+		report.Verdict, report.Reason = VerdictNeedsManual, ReasonAheadOfBuild
 	case StateForeign:
 		report.Verdict, report.Reason = VerdictNeedsManual, ReasonForeignDatabase
 	case StateSchemaMismatch:
@@ -158,15 +154,6 @@ func pendingRevisions(files []ChainFile) []string {
 		revisions = append(revisions, file.Revision)
 	}
 	return revisions
-}
-
-func hasUnknown(recorded []string, known map[string]bool) bool {
-	for _, revision := range recorded {
-		if !known[revision] {
-			return true
-		}
-	}
-	return false
 }
 
 // ExitCode is the exit code of a report; strict makes applies_cleanly a failure

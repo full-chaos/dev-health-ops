@@ -35,17 +35,19 @@ func TestClassify(t *testing.T) {
 		missing     []string
 		exit        int
 	}{
-		"empty":                {Observation{}, production, VerdictAppliesCleanly, ReasonEmptyDatabase, []string{"0139", "0140"}, nil, ExitAppliesCleanly},
-		"at the baseline":      {at("0066", "0138"), production, VerdictAppliesCleanly, ReasonPendingRevs, []string{"0139", "0140"}, nil, ExitAppliesCleanly},
-		"part of the chain":    {at("0066", "0139"), production, VerdictAppliesCleanly, ReasonPendingRevs, []string{"0140"}, nil, ExitAppliesCleanly},
-		"at the head":          {at("0066", "0140"), production, VerdictAtHead, ReasonUpToDate, nil, nil, cli.ExitOK},
-		"the cutover missing":  {at("0138"), production, VerdictNeedsManual, ReasonCutoverMissing, nil, []string{"0066"}, cli.ExitFailure},
-		"below the baseline":   {at("0066", "0137"), production, VerdictNeedsManual, ReasonBelowBaseline, nil, []string{"0138"}, cli.ExitFailure},
-		"both missing":         {at("0137"), production, VerdictNeedsManual, ReasonBelowBaseline, nil, []string{"0066", "0138"}, cli.ExitFailure},
-		"a revision not known": {at("0066", "9999"), production, VerdictNeedsManual, ReasonAheadOfBuild, nil, []string{"0138"}, cli.ExitFailure},
-		"foreign":              {Observation{Objects: 3}, production, VerdictNeedsManual, ReasonForeignDatabase, nil, nil, cli.ExitFailure},
-		"a table gone":         {Observation{HasVersionTable: true, Versions: []string{"0066", "0138"}, PublicTables: []string{"alembic_version"}}, production, VerdictNeedsManual, ReasonSchemaMismatch, nil, nil, cli.ExitFailure},
-		"the settings differ":  {at("0066", "0140"), Settings{Cutover: false, RiverSchema: "river"}, VerdictNeedsManual, ReasonSettingsMismatch, nil, nil, cli.ExitFailure},
+		"empty":                         {Observation{}, production, VerdictAppliesCleanly, ReasonEmptyDatabase, []string{"0139", "0140"}, nil, ExitAppliesCleanly},
+		"at the baseline":               {at("0066", "0138"), production, VerdictAppliesCleanly, ReasonPendingRevs, []string{"0139", "0140"}, nil, ExitAppliesCleanly},
+		"part of the chain":             {at("0066", "0139"), production, VerdictAppliesCleanly, ReasonPendingRevs, []string{"0140"}, nil, ExitAppliesCleanly},
+		"at the head":                   {at("0066", "0140"), production, VerdictAtHead, ReasonUpToDate, nil, nil, cli.ExitOK},
+		"the cutover missing":           {at("0138"), production, VerdictNeedsManual, ReasonCutoverMissing, nil, []string{"0066"}, cli.ExitFailure},
+		"below the baseline":            {at("0066", "0137"), production, VerdictNeedsManual, ReasonBelowBaseline, nil, []string{"0138"}, cli.ExitFailure},
+		"both missing":                  {at("0137"), production, VerdictNeedsManual, ReasonBelowBaseline, nil, []string{"0066", "0138"}, cli.ExitFailure},
+		"a revision not known":          {at("0066", "9999"), production, VerdictNeedsManual, ReasonAheadOfBuild, nil, nil, cli.ExitFailure},
+		"unknown beside baseline heads": {at("0066", "0138", "9999"), production, VerdictNeedsManual, ReasonAheadOfBuild, nil, nil, cli.ExitFailure},
+		"unknown beside the head":       {at("0066", "0140", "9999"), production, VerdictNeedsManual, ReasonAheadOfBuild, nil, nil, cli.ExitFailure},
+		"foreign":                       {Observation{Objects: 3}, production, VerdictNeedsManual, ReasonForeignDatabase, nil, nil, cli.ExitFailure},
+		"a table gone":                  {Observation{HasVersionTable: true, Versions: []string{"0066", "0138"}, PublicTables: []string{"alembic_version"}}, production, VerdictNeedsManual, ReasonSchemaMismatch, nil, nil, cli.ExitFailure},
+		"the settings differ":           {at("0066", "0140"), Settings{Cutover: false, RiverSchema: "river"}, VerdictNeedsManual, ReasonSettingsMismatch, nil, nil, cli.ExitFailure},
 	} {
 		t.Run(name, func(t *testing.T) {
 			report := Classify(tc.observation, tc.settings, baseline, chain, known)
@@ -189,5 +191,22 @@ func TestBuildHeadsAreTheOldScriptsHeads(t *testing.T) {
 	}
 	if got := Heads(baseline, chain); !reflect.DeepEqual(got, derived) {
 		t.Fatalf("the old script derived the heads %v, the preflight's build_heads are %v", derived, got)
+	}
+}
+
+// A chain revision the Alembic walk does not carry (a release with no Alembic script)
+// is still a revision this build knows.
+func TestKnownRevisionsIncludeAChainRevisionTheWalkLacks(t *testing.T) {
+	baseline := Baseline{Heads: []string{"0066", "0138"}}
+	chain := []ChainFile{{Revision: "0139", Name: "0139_a.sql"}, {Revision: "0999", Name: "0999_scriptless.sql"}}
+	history := []HistoryEntry{{Revision: "0138", Down: "0137", RealHead: true, Head: true}, {Revision: "0066", Down: "0065", RealHead: true, Head: true}}
+	known := KnownRevisions(history, baseline, chain)
+	for _, revision := range []string{"0066", "0138", "0139", "0999"} {
+		if !known[revision] {
+			t.Errorf("%s is not known: %v", revision, known)
+		}
+	}
+	if known["9999"] {
+		t.Error("an unrelated revision is known")
 	}
 }

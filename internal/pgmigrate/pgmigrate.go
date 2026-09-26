@@ -34,6 +34,11 @@
 //   - alembic_version holds every baseline head (or a chain revision that
 //     continues it): apply the .sql revisions after the one it holds (sql/), each
 //     in its own transaction together with the alembic_version update;
+//   - alembic_version records a revision this build does not know (its embedded
+//     Alembic walk, its baseline heads and its chain are the ones it knows), however
+//     many baseline heads it also records: refused as ahead of the build, naming the
+//     unknown revisions, before anything else is decided. A newer build migrated the
+//     database (an image was rolled back onto it), and dho never downgrades;
 //   - alembic_version without every baseline head (below the baseline revision):
 //     refused as below the head, naming what the database holds and what is
 //     required;
@@ -190,6 +195,9 @@ const (
 	// StateSchemaMismatch: alembic_version records the baseline heads and no
 	// later revision, but tables the baseline creates are absent.
 	StateSchemaMismatch
+	// StateAheadOfBuild: alembic_version records a revision this build does not
+	// know: a newer build migrated the database (an image was rolled back onto it).
+	StateAheadOfBuild
 )
 
 // Observation is what Decide needs to know about a database.
@@ -213,6 +221,9 @@ type Plan struct {
 	// ApplicationHead is the revision the chain continues from.
 	ApplicationHead string
 	Pending         []ChainFile
+	// Unknown are the recorded revisions this build does not know
+	// (StateAheadOfBuild), sorted.
+	Unknown []string
 }
 
 // applicationHead is the baseline head the chain continues: the one that is
@@ -230,13 +241,19 @@ func applicationHead(baseline Baseline) string {
 // second head.
 const cutoverRevision = "0066"
 
-// Decide classifies a database.
-func Decide(observation Observation, baseline Baseline, chain []ChainFile) Plan {
+// Decide classifies a database. known is every revision this build knows (see
+// KnownRevisions); a recorded revision outside it makes the database ahead of this
+// build and is refused before anything else is decided: dho never downgrades, and
+// applying the chain over a database a newer build migrated is not an upgrade.
+func Decide(observation Observation, baseline Baseline, chain []ChainFile, known map[string]bool) Plan {
 	if !observation.HasVersionTable {
 		if observation.Objects == 0 {
 			return Plan{State: StateEmpty, ApplicationHead: applicationHead(baseline), Pending: chain}
 		}
 		return Plan{State: StateForeign}
+	}
+	if unknown := unknownRevisions(observation.Versions, known); len(unknown) > 0 {
+		return Plan{State: StateAheadOfBuild, Unknown: unknown}
 	}
 	recorded := map[string]bool{}
 	for _, version := range observation.Versions {
@@ -283,6 +300,36 @@ func Decide(observation Observation, baseline Baseline, chain []ChainFile) Plan 
 		}
 	}
 	return Plan{State: StateAtHead, ApplicationHead: current, Pending: chain[position+1:]}
+}
+
+// unknownRevisions are the recorded revisions outside known, sorted. A nil known
+// is a programming error, not "everything is known": it would silently switch the
+// refusal off.
+func unknownRevisions(recorded []string, known map[string]bool) []string {
+	if known == nil {
+		panic("pgmigrate: Decide needs the set of revisions this build knows")
+	}
+	var unknown []string
+	for _, revision := range recorded {
+		if !known[revision] {
+			unknown = append(unknown, revision)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
+}
+
+// AheadOfBuildError is the refusal for a database that records a revision this build
+// does not know.
+type AheadOfBuildError struct {
+	Recorded []string
+	Unknown  []string
+}
+
+func (e AheadOfBuildError) Error() string {
+	return fmt.Sprintf("the database records revision(s) %v that this build does not know (alembic_version holds %v): "+
+		"it was migrated by a newer build (an image rolled back?). dho never downgrades: run the build that knows them, "+
+		"or restore the database from a backup. Nothing was changed", e.Unknown, e.Recorded)
 }
 
 // BelowHeadError is the refusal for a database below the head.

@@ -22,6 +22,7 @@ func TestDecide(t *testing.T) {
 	cutover := Baseline{Cutover: true, Heads: []string{"0066", "0138"}, Schema: schema}
 	tables := []string{"alembic_version", "users"}
 	chain := []ChainFile{{Revision: "0139", Name: "0139_a.sql"}, {Revision: "0140", Name: "0140_b.sql"}}
+	known := map[string]bool{"0066": true, "0137": true, "0138": true, "0139": true, "0140": true}
 	for name, testCase := range map[string]struct {
 		observation Observation
 		baseline    Baseline
@@ -45,9 +46,19 @@ func TestDecide(t *testing.T) {
 			Plan{State: StateAtHead, ApplicationHead: "0139", Pending: chain[1:]}},
 		"the whole chain applied": {Observation{HasVersionTable: true, Versions: []string{"0140"}}, application,
 			Plan{State: StateAtHead, ApplicationHead: "0140", Pending: []ChainFile{}}},
+		// CHAOS-6878: a revision this build does not know is refused before anything else
+		// is decided, whatever else the database records.
+		"an unknown revision beside the baseline heads": {Observation{HasVersionTable: true, Versions: []string{"0066", "0138", "9999"}, PublicTables: tables}, cutover,
+			Plan{State: StateAheadOfBuild, Unknown: []string{"9999"}}},
+		"an unknown revision beside the head": {Observation{HasVersionTable: true, Versions: []string{"0066", "0140", "9999"}, PublicTables: tables}, cutover,
+			Plan{State: StateAheadOfBuild, Unknown: []string{"9999"}}},
+		"an unknown revision in place of the application head": {Observation{HasVersionTable: true, Versions: []string{"0066", "0141"}}, cutover,
+			Plan{State: StateAheadOfBuild, Unknown: []string{"0141"}}},
+		"two unknown revisions, sorted": {Observation{HasVersionTable: true, Versions: []string{"0138", "9999", "0900"}}, application,
+			Plan{State: StateAheadOfBuild, Unknown: []string{"0900", "9999"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := Decide(testCase.observation, testCase.baseline, chain)
+			got := Decide(testCase.observation, testCase.baseline, chain, known)
 			if len(got.Pending) == 0 && len(testCase.want.Pending) == 0 {
 				got.Pending, testCase.want.Pending = nil, nil
 			}
@@ -227,5 +238,26 @@ func TestCommandRefusesBeforeConnecting(t *testing.T) {
 		return secrets.Value{}, "", false
 	}), env); code != cli.ExitFailure || !strings.Contains(stderr.String(), "settings_mismatch") {
 		t.Fatalf("a mismatching environment exited %d with %q", code, stderr.String())
+	}
+}
+
+func TestDecideRefusesToRunWithoutTheKnownSet(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Decide with a nil known set returned: the refusal would be silently off")
+		}
+	}()
+	Decide(Observation{HasVersionTable: true, Versions: []string{"0138"}}, Baseline{Heads: []string{"0138"}}, nil, nil)
+}
+
+func TestAheadOfBuildErrorNamesTheRevisionsAndTheWayOut(t *testing.T) {
+	message := AheadOfBuildError{Recorded: []string{"0066", "0141"}, Unknown: []string{"0141"}}.Error()
+	for _, want := range []string{"[0141]", "does not know", "migrated by a newer build", "dho never downgrades", "restore", "Nothing was changed"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the refusal %q does not say %q", message, want)
+		}
+	}
+	if strings.Contains(message, "below the head") || strings.Contains(message, "Python upgrade") {
+		t.Errorf("the refusal gives the below-the-head advice for a database that is ahead: %q", message)
 	}
 }

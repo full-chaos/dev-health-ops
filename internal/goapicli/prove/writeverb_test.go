@@ -92,3 +92,24 @@ func TestTheWriteVerbHelpNamesTheRealViaValues(t *testing.T) {
 		t.Fatalf("expected the -via flag rendered as a string flag:\n%s", help)
 	}
 }
+
+// A parse refusal never carries the DSN, and returns no half-parsed flags.
+func TestTheWriteVerbFlagRefusalsRedactTheDSNAndReturnNoFlags(t *testing.T) {
+	const dsn = "postgres://user:hunter2secret@db.internal/prod"
+	for name, args := range map[string][]string{
+		"missing flags": {"-postgres-uri=" + dsn},
+		"bad via":       {"-postgres-uri=" + dsn, "-documents=d", "-org=o", "-case=c", "-recorded-by=r", "-review-evidence=e", "-via=proof"},
+		"unknown flag":  {"-postgres-uri=" + dsn, "-no-such-flag"},
+	} {
+		f, err := parseWriteFlags(args)
+		if err == nil {
+			t.Fatalf("%s: expected a refusal", name)
+		}
+		if strings.Contains(err.Error(), "hunter2secret") {
+			t.Errorf("%s: the refusal carries the DSN password: %v", name, err)
+		}
+		if f != (writeFlags{}) {
+			t.Errorf("%s: a refusal must return the zero flags, got %+v", name, f)
+		}
+	}
+}

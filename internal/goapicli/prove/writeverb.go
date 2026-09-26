@@ -102,10 +102,12 @@ func registerWriteFlags() (*flag.FlagSet, *writeFlags) {
 	return fs, f
 }
 
+// parseWriteFlags returns the parsed flags, or the zero value and an error that
+// already has the DSN redacted: a caller never reads a half-parsed struct.
 func parseWriteFlags(args []string) (writeFlags, error) {
 	fs, fp := registerWriteFlags()
 	if err := fs.Parse(args); err != nil {
-		return *fp, cli.WrapFlagParseError(err)
+		return writeFlags{}, secrets.NewBoundary(fp.postgresURI).Redact(cli.WrapFlagParseError(err))
 	}
 	f := *fp
 	secrets.ResolveFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar)
@@ -120,10 +122,10 @@ func parseWriteFlags(args []string) (writeFlags, error) {
 		}
 	}
 	if len(absent) > 0 {
-		return f, fmt.Errorf("required flags are missing: %v", absent)
+		return writeFlags{}, secrets.NewBoundary(f.postgresURI).Redact(fmt.Errorf("required flags are missing: %v", absent))
 	}
 	if f.via != viaQueryAPI && f.via != viaEdge {
-		return f, fmt.Errorf("-via must be %q or %q, got %q", viaQueryAPI, viaEdge, f.via)
+		return writeFlags{}, secrets.NewBoundary(f.postgresURI).Redact(fmt.Errorf("-via must be %q or %q, got %q", viaQueryAPI, viaEdge, f.via))
 	}
 	return f, nil
 }
@@ -143,7 +145,7 @@ func requireFixtureOrg(org string) error {
 func runWrite(args []string) (err error) {
 	f, parseErr := parseWriteFlags(args)
 	if parseErr != nil {
-		return secrets.NewBoundary(f.postgresURI).Redact(parseErr)
+		return parseErr // already redacted; f is not read on this path
 	}
 	boundary := secrets.NewBoundary(f.postgresURI)
 	defer func() { err = boundary.Redact(err) }()

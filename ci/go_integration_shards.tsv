@@ -58,7 +58,7 @@
 # file is otherwise touched.
 shards	6
 internal/reconcilerservice	5
-internal/workerservice	246
+internal/workerservice	320
 internal/goapicli/prove	15
 internal/goapicli/routing	100
 internal/workersctl	40

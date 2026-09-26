@@ -39,13 +39,13 @@ func mustReadyzOutcomeCounter() metric.Int64Counter {
 	return counter
 }
 
-// recordReadyzOutcome increments the /readyz outcome counter. outcome is
+// recordReadyzOutcome increments the /readyz outcome counter, per readiness check. outcome is
 // one of "healthy" (dependencies checked and reachable), "unhealthy"
 // (a dependency check failed or timed out -- readyzHandler's response
 // was 503), or "not_configured" (/query is not mounted in this
 // deployment; readyzHandler's response was 200, but there was nothing
 // to check -- see that handler's doc comment for why that is not the
 // same claim as "healthy").
-func recordReadyzOutcome(outcome string) {
-	readyzOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+func recordReadyzOutcome(outcome, check string) {
+	readyzOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome), attribute.String("check", check)))
 }

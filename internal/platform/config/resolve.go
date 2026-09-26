@@ -49,6 +49,9 @@ func validateOverrides(overrides map[string]string) error {
 				key,
 			)
 		}
+		if option.EnvOnly {
+			return fmt.Errorf("%s is read from the process environment and has no flag", key)
+		}
 	}
 	return nil
 }
@@ -69,7 +72,7 @@ func settingConfigured(lookup secrets.LookupEnv, key string) bool {
 func envOnlySettings(spec Spec, environment secrets.LookupEnv) []string {
 	names := make([]string, 0, 8)
 	for _, option := range optionRegistry {
-		if option.Secret || option.Env == "" || option.Flag == "" {
+		if option.Secret || option.EnvOnly || option.Env == "" || option.Flag == "" {
 			continue
 		}
 		if !option.AppliesTo(spec.Service, spec.RequireQueues) {
@@ -84,4 +87,16 @@ func envOnlySettings(spec Spec, environment secrets.LookupEnv) []string {
 	}
 	slices.Sort(names)
 	return slices.Compact(names)
+}
+
+// declaredSetting is lookup restricted to the settings the registry declares for
+// service (or for every service): the fail-closed read of Config.Setting.
+func declaredSetting(service string, lookup secrets.LookupEnv) func(string) (string, bool) {
+	return func(name string) (string, bool) {
+		option, declared := optionByEnv[name]
+		if !declared || !option.AppliesTo(service, false) {
+			return "", false
+		}
+		return lookup(name)
+	}
 }

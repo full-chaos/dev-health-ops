@@ -129,9 +129,12 @@ func TestRootFlagsAreNeverDroppedSilentlyByAnyVertical(t *testing.T) {
 			t.Errorf("%s: lists RootModel but its help does not name --model", l.name())
 		}
 	}
-	if ignoring == 0 {
-		t.Error("no command declares IgnoresArguments: the tree changed, so this test no longer covers the refusal it exists for")
-	}
+	// No command ignores its arguments today (dho query-api was the last, until it
+	// moved onto the shell, CHAOS-6447: an unknown flag or a positional argument is
+	// exit 2 there). The dispatcher's refusal for one that does is pinned by
+	// internal/cli's TestACommandThatIgnoresArgumentsRefusesAWhereItActsRootFlag; if a
+	// command declares it again, the loop above covers it here.
+	_ = ignoring
 }
 
 // TestEveryRootLogLevelIsAcceptedByTheServices links the two halves: the value

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -74,9 +73,50 @@ func TestBuildQueryRouteWiresThePostureCheckIntoReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const call = "readinessCheck(chClient, pgPool, verifier, queryAPIPostureCheck(getenv, pgPool))"
-	if strings.Count(string(src), call) != 1 {
-		t.Fatalf("query_route.go must build its readiness check exactly once, with %q", call)
+	// One posture check per process (it proves the role in the background from its
+	// construction), handed to BOTH the combined check and the per-class probes dho
+	// query-api registers.
+	for _, call := range []string{
+		"posture := queryAPIPostureCheck(getenv, pgPool)",
+		"readinessCheck(chClient, pgPool, verifier, posture)",
+		"Probes:    readinessProbes(chClient, pgPool, verifier, posture),",
+	} {
+		if strings.Count(string(src), call) != 1 {
+			t.Fatalf("query_route.go must contain %q exactly once", call)
+		}
+	}
+}
+
+// The per-class probes dho query-api registers (one required readiness check each) are
+// the checks readinessCheck runs, in its order: clickhouse, postgres, jwks, and the
+// role-posture one only when the deployment named a role. Their names are the only thing
+// an unauthenticated /readyz says about a failure.
+func TestReadinessProbesAreTheCheckedDependenciesByClass(t *testing.T) {
+	t.Parallel()
+	names := func(probes []ReadinessProbe) string {
+		var out []string
+		for _, probe := range probes {
+			out = append(out, probe.Name)
+		}
+		return strings.Join(out, ",")
+	}
+	if got, want := names(readinessProbes(fakePinger{}, fakePinger{}, fakeJWKS{}, nil)), "query_clickhouse,query_postgres,query_jwks"; got != want {
+		t.Fatalf("probes = %s, want %s", got, want)
+	}
+	posture := errors.New("saved_reports: missing [INSERT] for role")
+	withPosture := readinessProbes(fakePinger{}, fakePinger{}, fakeJWKS{}, func(context.Context) error { return posture })
+	if got, want := names(withPosture), "query_clickhouse,query_postgres,query_jwks,query_role_posture"; got != want {
+		t.Fatalf("probes with a role posture check = %s, want %s", got, want)
+	}
+	if err := withPosture[3].Check(context.Background()); err == nil || readyzDependencyClass(err) != readyzClassPosture {
+		t.Fatalf("role-posture probe error = %v, class %q", err, readyzDependencyClass(err))
+	}
+	// Each probe fails with its own class when its dependency does.
+	failing := readinessProbes(fakePinger{errors.New("ch")}, fakePinger{errors.New("pg")}, fakeJWKS{errors.New("jwks")}, nil)
+	for i, want := range []string{readyzClassClickHouse, readyzClassPostgres, readyzClassJWKS} {
+		if err := failing[i].Check(context.Background()); err == nil || readyzDependencyClass(err) != want {
+			t.Errorf("probe %s: error %v, class %q, want %q", failing[i].Name, err, readyzDependencyClass(err), want)
+		}
 	}
 }
 
@@ -174,7 +214,7 @@ func silentPostgresPool(t *testing.T) (*pgxpool.Pool, *atomic.Int32) {
 
 // The readiness contract (D2549/D2588): the probe answers within its budget and
 // NEVER waits on a live expensive check. With a posture query that cannot
-// answer, /readyz must fail closed at once ("postgres_posture"), not hold the
+// answer, /readyz must fail closed at once (the query_role_posture check), not hold the
 // probe until the handler's own 3 s bound (longer than the kubelet's 2 s probe
 // timeout). It answers again, ready, only once the background run has proven
 // the role -- which a silent server never does, so it must stay unready.
@@ -186,20 +226,18 @@ func TestReadyzAnswersWithinTheProbeBudgetWhileThePostureQueryIsSlow(t *testing.
 		}
 		return ""
 	}
-	ready := readinessCheck(fakePinger{}, fakePinger{}, fakeJWKS{}, queryAPIPostureCheck(env, pool))
-	handler := readyzHandler(ready)
+	probes := readinessProbes(fakePinger{}, fakePinger{}, fakeJWKS{}, queryAPIPostureCheck(env, pool))
 
 	const budget = 500 * time.Millisecond
 	for probe := 1; probe <= 3; probe++ {
-		recorder := httptest.NewRecorder()
 		started := time.Now()
-		handler(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		code, body := operatorReadyz(t, probes...)
 		if elapsed := time.Since(started); elapsed > budget {
 			t.Fatalf("probe %d took %v (> %v): /readyz waited on the posture query", probe, elapsed, budget)
 		}
-		if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), readyzClassPosture) {
-			t.Fatalf("probe %d: status %d body %q, want 503 naming %q (an unproven role is not ready)",
-				probe, recorder.Code, recorder.Body.String(), readyzClassPosture)
+		if code != http.StatusServiceUnavailable || body != `{"failed_checks":["query_role_posture"],"status":"not_ready"}` {
+			t.Fatalf("probe %d: status %d body %q, want 503 naming query_role_posture only (an unproven role is not ready)",
+				probe, code, body)
 		}
 	}
 }

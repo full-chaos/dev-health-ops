@@ -8,7 +8,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -24,23 +23,9 @@ import (
 // individual test would silently lose that instrument.
 var driftMeterReader *sdkmetric.ManualReader
 
-// metricsRegistryForTests is the same Prometheus registry production's
-// newPrometheusMeterProvider mounts at /metrics, built here (once, on the
-// ONE provider every instrument in this test binary delegates to) so a
-// /metrics-shaped test can scrape exactly what the drift/readyz/routeswitch
-// recorders wrote -- a second, independently constructed provider would
-// bind no instruments at all, for the same one-time-delegation reason
-// driftMeterReader's comment above describes.
-var metricsRegistryForTests *prometheus.Registry
-
 func TestMain(m *testing.M) {
 	driftMeterReader = sdkmetric.NewManualReader()
-	meterProvider, promRegistry, err := newPrometheusMeterProvider(driftMeterReader)
-	if err != nil {
-		panic(err)
-	}
-	metricsRegistryForTests = promRegistry
-	otel.SetMeterProvider(meterProvider)
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(driftMeterReader)))
 	os.Exit(m.Run())
 }
 

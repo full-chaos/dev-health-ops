@@ -184,3 +184,4 @@ internal/testsupport/pgseed	8
 internal/testsupport/venueoracle	4
 internal/synchandoff	12
 internal/schedulerservice	12
+internal/queryapiservice	25

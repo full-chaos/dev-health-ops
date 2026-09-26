@@ -38,6 +38,7 @@ import (
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/grpc"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
@@ -105,7 +106,7 @@ func spanAttr(span *tracepb.Span, key string) (string, bool) {
 
 // TestOrgScopingDenialSpanReachesARealOTLPCollector installs the SDK
 // TracerProvider the EXACT way main() does (tracing.InitWithServiceName,
-// the identical call main() makes with the identical otelServiceName
+// the identical call the shell makes for dho query-api (shell.Spec.TraceServiceName) with the identical config.QueryAPIServiceName
 // constant), fires one org-mismatch FeatureFlags call through the real
 // graph.Resolver (nil ClickHouse -- the auth guard must short-circuit
 // before it is ever touched, same discipline the unit tests already use),
@@ -124,7 +125,7 @@ func TestOrgScopingDenialSpanReachesARealOTLPCollector(t *testing.T) {
 	defer server.Stop()
 
 	// OTEL_SERVICE_NAME deliberately left UNSET: proves InitWithServiceName's
-	// fallback-name argument (otelServiceName, "dev-health-query-api") is what
+	// fallback-name argument (config.QueryAPIServiceName, "dev-health-query-api") is what
 	// actually takes effect when the env var is absent, matching production
 	// today (deploy/go-api/compose-query-api.yml sets none of the three
 	// OTEL_* vars at all -- see the PR body / context file for that finding).
@@ -133,7 +134,7 @@ func TestOrgScopingDenialSpanReachesARealOTLPCollector(t *testing.T) {
 	t.Setenv("OTEL_SAMPLE_RATE", "1")                            // AlwaysSample, deterministic
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	component := tracing.InitWithServiceName(logger, otelServiceName)
+	component := tracing.InitWithServiceName(logger, config.QueryAPIServiceName)
 	t.Cleanup(func() { _ = component.Shutdown(context.Background()) })
 
 	// Proof part (1) of team-lead's ask, inline: InitWithServiceName must
@@ -189,10 +190,10 @@ func TestOrgScopingDenialSpanReachesARealOTLPCollector(t *testing.T) {
 
 	// r1 review finding 3 (PR #2369): OTEL_SERVICE_NAME was deliberately
 	// left unset above -- this proves InitWithServiceName's fallback name
-	// argument (otelServiceName) genuinely reaches the resource attributes
+	// argument (config.QueryAPIServiceName) genuinely reaches the resource attributes
 	// of a real exported ResourceSpans, not just that *some* provider got
 	// installed.
-	if serviceName, _ := collector.receivedResourceAttr("service.name"); serviceName != otelServiceName {
-		t.Errorf("resource service.name attribute = %q, want %q", serviceName, otelServiceName)
+	if serviceName, _ := collector.receivedResourceAttr("service.name"); serviceName != config.QueryAPIServiceName {
+		t.Errorf("resource service.name attribute = %q, want %q", serviceName, config.QueryAPIServiceName)
 	}
 }

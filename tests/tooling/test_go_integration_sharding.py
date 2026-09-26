@@ -17,7 +17,9 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "go.yml"
 CHECK_GO = ROOT / "ci" / "check_go.sh"
-MANIFEST = ROOT / "ci" / "go_integration_shards.d"  # a directory of one-row files (CHAOS-6926)
+MANIFEST = (
+    ROOT / "ci" / "go_integration_shards.d"
+)  # a directory of one-row files (CHAOS-6926)
 
 
 def _manifest_text() -> str:
@@ -25,6 +27,7 @@ def _manifest_text() -> str:
     return "".join(
         path.read_text(encoding="utf-8") for path in sorted(MANIFEST.glob("*.tsv"))
     )
+
 
 PROVIDER_MANIFEST = ROOT / "ci" / "go_providersync_test_shards.tsv"
 PROVIDER_PACKAGE = "internal/providersync"

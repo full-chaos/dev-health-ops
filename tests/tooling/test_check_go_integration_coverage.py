@@ -7,7 +7,9 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MANIFEST = ROOT / "ci" / "go_integration_shards.d"  # a directory of one-row files (CHAOS-6926)
+MANIFEST = (
+    ROOT / "ci" / "go_integration_shards.d"
+)  # a directory of one-row files (CHAOS-6926)
 
 
 def _manifest_packages() -> set[str]:

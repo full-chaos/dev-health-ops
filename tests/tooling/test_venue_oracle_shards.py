@@ -352,7 +352,9 @@ def test_the_receipt_artifact_is_per_shard() -> None:
 # Cost-balanced legs (CHAOS-6891).
 # ---------------------------------------------------------------------------
 
-WEIGHTS_FILE = ROOT / "ci" / "venue_oracle_weights.d"  # per-package row files (CHAOS-6926)
+WEIGHTS_FILE = (
+    ROOT / "ci" / "venue_oracle_weights.d"
+)  # per-package row files (CHAOS-6926)
 JOB_SETUP_SECONDS = 200  # measured: leg wall time minus its test time, 192-212 s
 DRIFT_SECONDS = 200  # room for a slow runner beyond the planned seconds
 

@@ -30,16 +30,24 @@ import (
 // of the three secrets (set, unset) and postgres (reachable, not), and, with
 // everything configured, the webhook (a signed event, a bad and a missing
 // signature) and the 404 grid over paths x the catch-all's methods.
+//
+// The Python plane's answers are a frozen golden executed on pythonBuild (the
+// last build that carries billing_edge.py), so this oracle survives that
+// file's deletion. The webhook signatures are stamped from the recorded clock,
+// and the Go edge runs on it, so a frozen run sends the bytes the recording
+// sent and both planes judge the signature at the same instant.
 func TestVenueOracleBillingEdge(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
+	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name(), goldenDigest(t.Name())))
+	start := time.Now().UTC()
 	env := webhookEnv()
 	pythonEnv := []string{"VENUE_PY_APP=dev_health_ops.api.billing_edge:app"}
 	for key, value := range env {
 		pythonEnv = append(pythonEnv, key+"="+value)
 	}
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			return billingSeed(t, ctx, admin).tokenSpecs()
 		},
@@ -56,10 +64,15 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 	}
 	t.Cleanup(downPool.Close)
 
+	// The Go edge's clock: the recorded instant, read back once the health grid
+	// has run (the recording holds it), so the webhook signatures below are
+	// judged at the time they were stamped for on both planes.
+	goNow := start
 	// The Go edge, configured like a scenario: the three secrets and the pool.
 	edge := func(stripeKey, webhookSecret, licenseKey string, pool *pgxpool.Pool) string {
 		cfg := config.Config{APIBillingEdgeAddress: "127.0.0.1:0"}
 		routes := billing.EdgeRoutes(billing.Deps{
+			Now:  func() time.Time { return goNow },
 			Pool: pool, Stripe: stripeclient.New(stripeclient.Options{Key: stripeKey}), Logger: quietLogger(),
 			WebhookSecret: secrets.NewValue(webhookSecret), LicensePrivateKey: secrets.NewValue(licenseKey), StripeKey: secrets.NewValue(stripeKey),
 		})
@@ -98,15 +111,18 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 				{Name: name + " GET /health", Method: "GET", Path: "/health", Headers: map[string]string{}},
 				{Name: name + " HEAD /health", Method: "HEAD", Path: "/health", Headers: map[string]string{}},
 			}
-			python := venue.ServePythonWithEnv(t, extra, requests)
-			receipt += venueoracle.Diff(t, edge(stripeKey, webhookSecret, licenseKey, pool), requests, python, venueoracle.DiffOptions{})
+			python := golden.PythonWithEnv(t, venue, extra, requests)
+			receipt += venueoracle.Diff(t, edge(stripeKey, webhookSecret, licenseKey, pool), requests, python, venueoracle.DiffOptions{Golden: golden})
 			scenarios++
 		}
 	}
 
-	// Fully configured: the webhook and the 404 grid.
+	// Fully configured: the webhook and the 404 grid. The stamp is an hour
+	// ahead of the recorded instant: a signature timestamp is refused only when
+	// it is too old, on both planes, and the recording runs for minutes.
+	goNow = recordedAt(t, golden, start)
 	base := edge(env["STRIPE_SECRET_KEY"], env["STRIPE_WEBHOOK_SECRET"], env["LICENSE_PRIVATE_KEY"], upPool)
-	stamp := time.Now().Unix() + 300
+	stamp := goNow.Unix() + 3600
 	eventBody := []byte(`{"id": "evt_edge_probe", "object": "event", "type": "customer.created", "data": {"object": {}}}`)
 	signed := map[string]string{"Stripe-Signature": webhookSignature(webhookVenueSecret, stamp, eventBody), "Content-Type": "application/json"}
 	var requests []venueoracle.Request
@@ -134,8 +150,8 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 			requests = append(requests, venueoracle.Request{Name: method + " " + path, Method: method, Path: path, Headers: map[string]string{"Content-Type": "application/json"}, Body: body})
 		}
 	}
-	python := venue.ServePython(t, requests)
-	receipt += venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{})
+	python := golden.Python(t, venue, requests)
+	receipt += venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{Golden: golden})
 
 	// NAMED LIMITS (CHAOS-6520 r1, ruled): the Go edge keeps the main
 	// listener's transport bounds, which are stricter than the in-process
@@ -163,7 +179,8 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = edgeServer.Shutdown(context.Background()) })
 	limitBase := "http://" + edgeServer.Address()
-	limitPython := venue.ServePython(t, limits)
+	limitPython := golden.Python(t, venue, limits)
+	golden.Consumed(t, limitPython...) // compared below against the two planes' own named answers
 	wantPython := []struct {
 		status int
 		body   string
@@ -201,5 +218,6 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 			t.Errorf("%s: go %d %q, want %d %q", request.Name, response.StatusCode, text, wantGo[index].status, wantGo[index].body)
 		}
 	}
+	golden.Finish(t)
 	t.Logf("health scenarios %d (x GET and HEAD), grid requests %d, SAME %d\n%s", scenarios, len(requests), strings.Count(receipt, "SAME"), receipt)
 }

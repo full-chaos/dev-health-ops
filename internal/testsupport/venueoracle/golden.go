@@ -494,13 +494,34 @@ func (g *Golden) step(t *testing.T, call string, allowed ...goldenState) {
 // by Diff or declared inspected (Consumed).
 func (g *Golden) Python(t *testing.T, v *Venue, requests []Request) []Response {
 	t.Helper()
-	g.step(t, "Python", stateOpen, statePython, stateDiffed)
+	return g.python(t, v, "Python", nil, requests)
+}
+
+// PythonWithEnv is Python for requests the Python plane answers under another
+// configuration (Venue.ServePythonWithEnv: each entry KEY=value, later entries
+// winning over the venue's own), for example the same probe with a secret
+// unset. The environment is executed only while recording and is not part of
+// the frozen file's key, so the test must put what distinguishes a scenario
+// into each request's Name: a frozen run then refuses a scenario whose name
+// drifted, and two scenarios of one request cannot be told apart otherwise.
+func (g *Golden) PythonWithEnv(t *testing.T, v *Venue, extra []string, requests []Request) []Response {
+	t.Helper()
+	return g.python(t, v, "PythonWithEnv", extra, requests)
+}
+
+func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, requests []Request) []Response {
+	t.Helper()
+	g.step(t, call, stateOpen, statePython, stateDiffed)
 	var answers []Response
 	if g.recording {
 		if err := g.recordingRootErr(v); err != nil {
 			t.Fatal(err)
 		}
-		answers = v.ServePython(t, requests)
+		if extra == nil {
+			answers = v.ServePython(t, requests)
+		} else {
+			answers = v.ServePythonWithEnv(t, extra, requests)
+		}
 		for index, request := range requests {
 			entry := requestKey(request)
 			entry.Status, entry.Headers, entry.Body = answers[index].Status, answers[index].Headers, answers[index].Body

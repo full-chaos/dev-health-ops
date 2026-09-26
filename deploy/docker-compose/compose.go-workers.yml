@@ -98,38 +98,35 @@ services:
   # role provisioning only after it completes so guarded grants see every
   # current semantic table, including an already-initialized local volume.
   go-river-provision:
-    # The Ops runtime image, not a bare postgres client image: it carries both
-    # psql and the provisioning SQL, so this step needs no source checkout.
-    image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/dev-health-ops:latest}
+    # CHAOS-6904: the Go operator image (entrypoint dho, no shell): `dho migrate
+    # roles` creates and bootstraps the same unprivileged logins the psql script
+    # did (executed parity, CHAOS-6901), in one transaction, and NEVER prints a
+    # role name or password: the psql script echoed a failing CREATE ROLE
+    # statement, and this file's defaults set each password equal to its role
+    # name. Same image and DSN rules as go-river-migrate below.
+    build:
+      context: ../..
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
     profiles: [go-workers]
     restart: "no"
     read_only: true
+    user: "65532:65532"
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
+    command: [migrate, roles]
     environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      DEV_HEALTH_MIGRATION_PG_HOST: ${POSTGRES_HOST:-postgres}
+      DEV_HEALTH_MIGRATION_PG_USER: ${POSTGRES_USER:-devhealth}
+      DEV_HEALTH_MIGRATION_PG_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      DEV_HEALTH_MIGRATION_PG_DB: ${POSTGRES_DB:-devhealth}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
       RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
       RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
       RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
       RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
-    entrypoint:
-      - /bin/sh
-      - -ec
-      - |
-        exec psql \
-          --host="${POSTGRES_HOST:-postgres}" \
-          --username="${POSTGRES_USER:-devhealth}" \
-          --dbname="${POSTGRES_DB:-devhealth}" \
-          --set=domain_role="$$RIVER_DOMAIN_DATABASE_ROLE" \
-          --set=queue_role="$$RIVER_QUEUE_DATABASE_ROLE" \
-          --set=coordinator_role="$$RIVER_COORDINATOR_DATABASE_ROLE" \
-          --set=domain_password="$$RIVER_DOMAIN_DATABASE_PASSWORD" \
-          --set=queue_password="$$RIVER_QUEUE_DATABASE_PASSWORD" \
-          --set=coordinator_password="$$RIVER_COORDINATOR_DATABASE_PASSWORD" \
-          --file=/usr/local/share/dev-health/provision_river_roles.sql
     networks: [dev-health]
     depends_on:
       migrate:

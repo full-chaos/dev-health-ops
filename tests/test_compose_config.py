@@ -1422,12 +1422,15 @@ def test_go_river_provision_chain_uses_this_files_postgres_identity() -> None:
     # choosable -- one source of truth, same var everywhere.
     assert postgres_env["POSTGRES_DB"] == "${POSTGRES_DB:-postgres}"
 
-    provision_entrypoint = _container_command_string(services["go-river-provision"])
-    assert '--username="${POSTGRES_USER:-postgres}"' in provision_entrypoint
-    assert '--dbname="${POSTGRES_DB:-postgres}"' in provision_entrypoint
-    assert services["go-river-provision"]["environment"]["PGPASSWORD"] == (
+    # CHAOS-6904: go-river-provision is `dho migrate roles` on the Go operator
+    # image, with the SAME component-form DSN as go-river-migrate.
+    provision_env = services["go-river-provision"]["environment"]
+    assert provision_env["DEV_HEALTH_MIGRATION_PG_HOST"] == "${POSTGRES_HOST:-postgres}"
+    assert provision_env["DEV_HEALTH_MIGRATION_PG_USER"] == "${POSTGRES_USER:-postgres}"
+    assert provision_env["DEV_HEALTH_MIGRATION_PG_PASSWORD"] == (
         "${POSTGRES_PASSWORD:-postgres}"
     )
+    assert provision_env["DEV_HEALTH_MIGRATION_PG_DB"] == "${POSTGRES_DB:-postgres}"
 
     migrate_env = services["go-river-migrate"]["environment"]
     assert migrate_env["DEV_HEALTH_MIGRATION_PG_HOST"] == "${POSTGRES_HOST:-postgres}"
@@ -1785,6 +1788,11 @@ def test_go_operator_target_services_declare_a_nonempty_command() -> None:
         # below is only for the route-activate services.
         if name == "go-river-migrate":
             assert command == ["migrate", "river", "--apply-and-check"], command
+            continue
+        # CHAOS-6904: go-river-provision is `dho migrate roles` (the Go leg that
+        # replaced the psql script) on the same image.
+        if name == "go-river-provision":
+            assert command == ["migrate", "roles"], command
             continue
         # The operator image's entrypoint is dho; `workers` selects the
         # operator verbs (spec S2).

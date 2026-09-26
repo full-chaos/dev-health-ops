@@ -111,7 +111,8 @@ Every step in this chain runs raw DDL, so all of them must reach PostgreSQL
 
 Provisioning connects by parts when the Secret supplies them
 (`POSTGRES_HOST`, `POSTGRES_USER`, `POSTGRES_DB`, with `PGPASSWORD` out of band),
-which is what Compose's `go-river-provision` does. Parts avoid the question of
+which Compose's `go-river-provision` also did before it moved to `dho migrate roles`
+(CHAOS-6904, component-form `DEV_HEALTH_MIGRATION_PG_*`). Parts avoid the question of
 which URL dialect a configured value is written in. When only a DSN exists, it is
 selected in the same order the migrate Job uses and its scheme is normalised —
 `postgresql+asyncpg://` is a SQLAlchemy URL that libpq cannot consume. With

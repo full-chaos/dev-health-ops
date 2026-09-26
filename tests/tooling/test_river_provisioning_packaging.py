@@ -62,12 +62,15 @@ def test_the_overlay_does_not_bind_mount_the_provisioning_sql() -> None:
     )
 
 
-def test_the_overlay_reads_the_packaged_path() -> None:
-    # The path drifting between Dockerfile and overlay is how this breaks
-    # silently again: the mount is gone, so a wrong path is a bare psql error.
-    entrypoint = _provision_service()["entrypoint"]
-    script = entrypoint[-1] if isinstance(entrypoint, list) else str(entrypoint)
-    assert f"--file={_packaged_path()}" in script
+def test_the_overlay_provisions_with_the_go_leg_not_the_packaged_sql() -> None:
+    # CHAOS-6904: go-river-provision is `dho migrate roles` on the Go operator
+    # image (no shell, no psql, no SQL path to drift). The packaged SQL stays in
+    # the runtime image only for the callers that have not moved yet (the chart's
+    # provision-roles Job, ci/lib/go_worker_fixture.sh).
+    service = _provision_service()
+    assert "entrypoint" not in service
+    assert service["command"] == ["migrate", "roles"]
+    assert service["build"]["target"] == "operator"
 
 
 def test_provisioning_runs_before_the_river_schema_migration() -> None:

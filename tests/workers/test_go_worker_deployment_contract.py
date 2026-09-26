@@ -770,22 +770,31 @@ def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> N
         provision["depends_on"]["migrate"]["condition"]
         == "service_completed_successfully"
     )
-    provision_command = _command_string(provision)
-    assert "psql" in provision_command
-    assert "provision_river_roles.sql" in provision_command
-    assert "--set=coordinator_role" in provision_command
-    assert "--set=coordinator_password" in provision_command
-    assert "RIVER_COORDINATOR_DATABASE_PASSWORD" in provision["environment"]
-    # The SQL travels in the image, not from the host. A relative bind-mount
-    # source is unproduceable on a pull-only host, and Docker answers a missing
-    # one by creating an empty DIRECTORY rather than failing -- which is how
-    # this reached production as `psql: ... Is a directory` (CHAOS-3925).
+    # CHAOS-6904: `dho migrate roles` on the Go operator image (args only, no
+    # shell), with the same component-form DSN as go-river-migrate. The psql
+    # script and its packaged path are no longer this service's business.
+    assert "entrypoint" not in provision
+    assert provision["command"] == ["migrate", "roles"]
+    assert provision["build"]["target"] == "operator"
+    for key in (
+        "DEV_HEALTH_MIGRATION_PG_HOST",
+        "DEV_HEALTH_MIGRATION_PG_USER",
+        "DEV_HEALTH_MIGRATION_PG_PASSWORD",
+        "DEV_HEALTH_MIGRATION_PG_DB",
+        "RIVER_DOMAIN_DATABASE_ROLE",
+        "RIVER_QUEUE_DATABASE_ROLE",
+        "RIVER_COORDINATOR_DATABASE_ROLE",
+        "RIVER_DOMAIN_DATABASE_PASSWORD",
+        "RIVER_QUEUE_DATABASE_PASSWORD",
+        "RIVER_COORDINATOR_DATABASE_PASSWORD",
+    ):
+        assert key in provision["environment"], key
+    assert "PGPASSWORD" not in provision["environment"]
     assert not [
         volume
         for volume in (provision.get("volumes") or [])
         if "provision_river_roles.sql" in str(volume)
     ]
-    assert "/usr/local/share/dev-health/provision_river_roles.sql" in provision_command
 
     river_migrate = services["go-river-migrate"]
     assert river_migrate["profiles"] == ["go-workers"]

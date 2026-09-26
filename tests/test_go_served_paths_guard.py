@@ -52,7 +52,15 @@ def test_the_real_tree_passes(real_routes):
     # each family deleted after them adds its own routes, pinned by that
     # family's own sentinel test, so the floor is not edited per family).
     assert len(stubs) >= 55
-    assert {checker.normalize(route["path"]) for route in stubs} <= set(manifest)
+    # Covered the way the ingress covers: a template row also covers a static
+    # sibling (`/retention-policies/{}` covers `/retention-policies/resource-types`).
+    assert all(
+        any(
+            checker.covers(template, checker.normalize(route["path"]))
+            for template in manifest
+        )
+        for route in stubs
+    )
 
 
 def test_a_stub_whose_path_leaves_the_manifest_fails(real_routes):

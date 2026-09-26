@@ -34,15 +34,12 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 	for key, value := range env {
 		pythonEnv = append(pythonEnv, key+"="+value)
 	}
-	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
-			seed = billingSeed(t, ctx, admin)
-			return seed.tokenSpecs()
+			return billingSeed(t, ctx, admin).tokenSpecs()
 		},
 	})
-	_ = seed
 	upPool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {
 		t.Fatal(err)

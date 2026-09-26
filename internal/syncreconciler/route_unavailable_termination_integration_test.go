@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -41,9 +42,10 @@ func seedRouteFaultRun(
 ) {
 	t.Helper()
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO public.sync_runs (id, org_id, status, total_units, created_at)
-		 VALUES ($1, $2, 'dispatching', $3, $4)`,
-		id, sweepOrg, totalUnits, plannedAt); err != nil {
+		`INSERT INTO public.sync_runs (id, org_id, integration_id, triggered_by, mode, status,
+			total_units, completed_units, failed_units, created_at)
+		 VALUES ($1, $2, $5::uuid, 'manual', 'incremental', 'dispatching', $3, 0, 0, $4)`,
+		id, sweepOrg, totalUnits, plannedAt, pgseed.DefaultSyncIntegrationID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -55,10 +57,11 @@ func seedRouteFaultUnit(
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_run_units (
-			id, org_id, sync_run_id, provider, dataset_key, cost_class, mode,
+			id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode,
 			status, attempts, created_at, updated_at
-		) VALUES ($1, $2, $3, 'github', $4, 'heavy', 'incremental', $5, 0, $6, $6)`,
-		unitID, sweepOrg, runID, dataset, status, now.Add(-time.Minute)); err != nil {
+		) VALUES ($1, $2, $3, $7::uuid, $8::uuid, 'github', $4, 'heavy', 'incremental', $5, 0, $6, $6)`,
+		unitID, sweepOrg, runID, dataset, status, now.Add(-time.Minute),
+		pgseed.DefaultSyncIntegrationID, pgseed.DefaultSyncSourceID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -72,11 +75,12 @@ func publishRouteFaultUnit(
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.worker_job_outbox (
-			dedupe_key, job_kind, contract_version, args, payload_hash, queue,
-			priority, max_attempts, scheduled_at, status, next_attempt_at, attempt_count
-		) VALUES ($1, 'sync.provider_unit', 1, '{}'::jsonb, 'sha256:0', 'default',
-			1, 5, $2, 'pending', $2, 0)`,
-		"sync.provider_unit:"+unitID, now); err != nil {
+			id, dedupe_key, job_kind, contract_version, args, payload_hash, queue,
+			priority, max_attempts, scheduled_at, status, next_attempt_at, attempt_count,
+			created_at, updated_at
+		) VALUES (gen_random_uuid(), $1, 'sync.provider_unit', 1, '{}'::json, $3, 'default',
+			1, 5, $2, 'pending', $2, 0, $2, $2)`,
+		"sync.provider_unit:"+unitID, now, "sha256:"+strings.Repeat("0", 64)); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -13,6 +13,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -64,179 +66,6 @@ type splitRoleNames struct {
 	domain      string
 	coordinator string
 	queue       string
-}
-
-// splitSchemaDDL is derived from the alembic migrations column for column,
-// NOT invented for this test. CHAOS-3997 is the standing lesson: an
-// integration suite that hand-writes a convenient schema tests its own
-// fixture rather than production, and it hid a nonexistent-column defect
-// through a full green gate.
-//
-//   - sync_runs: 0015, plus 0030's credential stamp and 0105's trace_parent.
-//   - sync_run_units: 0015, plus 0019 (lease), 0022 (rate-limit deferrals),
-//     0028 (expired-lease retry), 0085 (budget deferrals).
-//   - worker_job_routes: 0055, including its transport and generation check
-//     constraints.
-//   - worker_job_outbox: 0046.
-//
-// `result` and `processor_flags` are sa.JSON(), which is PostgreSQL `json`
-// and NOT `jsonb`. That distinction is load-bearing rather than pedantic:
-// terminalizeUnreclaimableSQL binds `result = $4::jsonb`, so only the real
-// column type proves the assignment cast production depends on actually
-// exists.
-func splitSchemaDDL() []string {
-	return []string{
-		// FK anchors only. The sweep never reads either table; they exist so
-		// the real foreign keys on sync_runs/sync_run_units can too, because
-		// dropping a constraint to simplify a fixture is how a test stops
-		// describing production.
-		"CREATE TABLE public.integrations (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
-		// The finalizer's wakeup row. Every terminal-status write in this
-		// package now re-arms it in the same transaction
-		// (syncrunrollup.ArmFinalize) so a run whose LAST non-terminal unit a
-		// recovery path terminalizes still reaches the finalizer -- without
-		// this table the write is a 42P01 and the whole pass fails closed,
-		// which is how the gap was found. Shape copied from this package's
-		// materializer fixture, which derives it from alembic.
-		`CREATE TABLE public.sync_dispatch_outbox (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			sync_run_id uuid NOT NULL,
-			kind text NOT NULL,
-			status text NOT NULL,
-			available_at timestamptz NOT NULL,
-			attempts integer NOT NULL,
-			last_error text,
-			dispatched_at timestamptz,
-			claim_token text,
-			claim_expires_at timestamptz,
-			claim_transport text,
-			claim_route_generation bigint,
-			dispatched_transport text,
-			dispatched_route_generation bigint,
-			transport_job_id text,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL,
-			UNIQUE (sync_run_id, kind)
-		)`,
-		`CREATE TABLE public.sync_runs (
-			id uuid NOT NULL,
-			org_id text NOT NULL,
-			integration_id uuid NOT NULL,
-			triggered_by text NOT NULL,
-			mode varchar NOT NULL,
-			status varchar NOT NULL,
-			total_units integer NOT NULL,
-			completed_units integer NOT NULL,
-			failed_units integer NOT NULL,
-			started_at timestamptz,
-			completed_at timestamptz,
-			result json,
-			error text,
-			created_at timestamptz NOT NULL,
-			credential_id uuid,
-			credential_fingerprint text,
-			auth_source text,
-			trace_parent text,
-			CONSTRAINT sync_runs_pkey PRIMARY KEY (id),
-			CONSTRAINT fk_sync_runs_integration_id
-				FOREIGN KEY (integration_id) REFERENCES public.integrations (id)
-		)`,
-		`CREATE TABLE public.sync_run_units (
-			id uuid NOT NULL,
-			org_id text NOT NULL,
-			sync_run_id uuid NOT NULL,
-			integration_id uuid NOT NULL,
-			source_id uuid NOT NULL,
-			provider text NOT NULL,
-			dataset_key varchar NOT NULL,
-			cost_class varchar NOT NULL,
-			mode varchar NOT NULL,
-			since_at timestamptz,
-			before_at timestamptz,
-			status varchar NOT NULL,
-			attempts integer NOT NULL,
-			duration_seconds integer,
-			error text,
-			result json,
-			processor_flags json,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL,
-			lease_owner text,
-			lease_expires_at timestamptz,
-			last_heartbeat_at timestamptz,
-			available_at timestamptz,
-			rate_limit_deferrals integer NOT NULL DEFAULT 0,
-			rate_limit_first_seen_at timestamptz,
-			expired_lease_retry_count integer NOT NULL DEFAULT 0,
-			last_retry_reason text,
-			retry_exhausted_at timestamptz,
-			budget_deferrals integer NOT NULL DEFAULT 0,
-			budget_first_deferred_at timestamptz,
-			first_blocked_at timestamptz,
-			CONSTRAINT sync_run_units_pkey PRIMARY KEY (id),
-			CONSTRAINT fk_sync_run_units_source_id
-				FOREIGN KEY (source_id) REFERENCES public.integration_sources (id),
-			CONSTRAINT fk_sync_run_units_sync_run_id
-				FOREIGN KEY (sync_run_id) REFERENCES public.sync_runs (id)
-		)`,
-		// CHAOS-4114: the maintained executed-proof projection. It is in
-		// domainPosture's manifest, and the scheduler/worker write paths stamp
-		// it inside the same transaction that writes sync_run_units, so a venue
-		// without it fails those writes outright.
-		`CREATE TABLE public.sync_executed_proof_ledger (
-			provider text NOT NULL,
-			dataset_key text NOT NULL,
-			attempted_at timestamptz NOT NULL,
-			proven_at timestamptz,
-			PRIMARY KEY (provider, dataset_key),
-			CONSTRAINT ck_sync_executed_proof_ledger_provider_normalized
-				CHECK (provider = lower(provider) AND btrim(provider) <> ''),
-			CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
-				CHECK (dataset_key = lower(dataset_key) AND btrim(dataset_key) <> '')
-		)`,
-		`CREATE TABLE public.worker_job_routes (
-			job_kind varchar(96) NOT NULL,
-			transport varchar(16) NOT NULL,
-			paused boolean NOT NULL DEFAULT false,
-			generation bigint NOT NULL DEFAULT 1,
-			updated_at timestamptz NOT NULL,
-			CONSTRAINT ck_worker_job_route_transport
-				CHECK (transport IN ('celery', 'shadow', 'river_canary', 'river')),
-			CONSTRAINT ck_worker_job_route_generation CHECK (generation >= 1),
-			CONSTRAINT worker_job_routes_pkey PRIMARY KEY (job_kind)
-		)`,
-		`CREATE TABLE public.worker_job_outbox (
-			id uuid NOT NULL,
-			dedupe_key varchar(256) NOT NULL,
-			job_kind varchar(96) NOT NULL,
-			contract_version integer NOT NULL,
-			args json NOT NULL,
-			payload_hash varchar(71) NOT NULL,
-			queue varchar(96) NOT NULL,
-			priority smallint NOT NULL,
-			max_attempts smallint NOT NULL,
-			scheduled_at timestamptz NOT NULL,
-			status varchar(16) NOT NULL,
-			claim_token uuid,
-			claimed_at timestamptz,
-			claim_expires_at timestamptz,
-			attempt_count integer NOT NULL,
-			first_attempt_at timestamptz,
-			last_attempt_at timestamptz,
-			next_attempt_at timestamptz NOT NULL,
-			last_error_code varchar(64),
-			last_error_detail varchar(256),
-			last_error_at timestamptz,
-			river_job_id bigint,
-			delivered_at timestamptz,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL,
-			CONSTRAINT worker_job_outbox_pkey PRIMARY KEY (id),
-			CONSTRAINT uq_worker_job_outbox_dedupe_key UNIQUE (dedupe_key)
-		)`,
-	}
 }
 
 // splitGrantStatements derives the GRANTs for one role straight from its own
@@ -302,9 +131,9 @@ func splitTablesPresent() map[string]bool {
 	}
 }
 
-// startRoleSplitHarness provisions the production role shape: two
-// least-privilege logins, each granted exactly its own posture, on a schema
-// derived from the alembic migrations.
+// startRoleSplitHarness provisions the production role shape: three
+// least-privilege logins, each granted exactly its own posture, on the migrated
+// schema (pgschema.Apply).
 func startRoleSplitHarness(t *testing.T, ctx context.Context) (admin *pgxpool.Pool, uri string, roles splitRoleNames) {
 	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
@@ -323,6 +152,8 @@ func startRoleSplitHarness(t *testing.T, ctx context.Context) (admin *pgxpool.Po
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
+	// The migrated schema, before any role or River object exists (Apply wants an empty database).
+	pgschema.Apply(ctx, t, admin)
 
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
@@ -361,7 +192,6 @@ func startRoleSplitHarness(t *testing.T, ctx context.Context) (admin *pgxpool.Po
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 	}
-	statements = append(statements, splitSchemaDDL()...)
 	statements = append(statements, splitRiverSchemaDDL()...)
 	present := splitTablesPresent()
 	statements = append(statements,
@@ -438,12 +268,12 @@ func isDeniedByPrivilege(err error) bool {
 // never published, no lease, no heartbeat, no attempt, long-lived and idle.
 func seedSplitStrand(t *testing.T, ctx context.Context, admin *pgxpool.Pool, now time.Time) {
 	t.Helper()
+	// The migrated foreign keys need a real integration and source under the run and unit.
+	pgseed.EnsureSyncIntegration(ctx, t, admin, splitOrg, splitIntgr, splitSource)
 	for _, seed := range []struct {
 		sql  string
 		args []any
 	}{
-		{"INSERT INTO public.integrations (id) VALUES ($1)", []any{splitIntgr}},
-		{"INSERT INTO public.integration_sources (id) VALUES ($1)", []any{splitSource}},
 		{`INSERT INTO public.sync_runs (
 			id, org_id, integration_id, triggered_by, mode, status,
 			total_units, completed_units, failed_units, created_at
@@ -457,7 +287,8 @@ func seedSplitStrand(t *testing.T, ctx context.Context, admin *pgxpool.Pool, now
 			[]any{splitUnit, splitOrg, splitRun, splitIntgr, splitSource,
 				now.Add(-16 * time.Hour), now.Add(-90 * time.Minute)}},
 		{`INSERT INTO public.worker_job_routes (job_kind, transport, updated_at)
-			VALUES ($1, 'river_canary', $2)`,
+			VALUES ($1, 'river_canary', $2)
+			ON CONFLICT (job_kind) DO UPDATE SET transport = 'river_canary', updated_at = $2`,
 			[]any{unreclaimableProviderUnitID, now}},
 	} {
 		if _, err := admin.Exec(ctx, seed.sql, seed.args...); err != nil {

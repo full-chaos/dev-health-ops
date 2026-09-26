@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -45,138 +47,22 @@ func startSweepPostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	return pool
 }
 
-// createSweepFixture mirrors the columns this sweep reads and writes.
-//
-// Hand-rolled DDL matching the sibling integration fixtures in this package,
-// rather than running the real migrations. The columns that matter here are
-// the ones the predicate turns on -- created_at, updated_at,
-// last_heartbeat_at, attempts, lease_owner, lease_expires_at -- plus the
-// terminal-write targets and the outbox dedupe key.
+// createSweepFixture builds the migrated schema (pgschema.Apply), so the sweep's reads and writes run
+// against the real columns, constraints, indexes and the production route-fence trigger. The one
+// hand-made relation is river.river_job: River's own schema is not part of the platform migrations.
 func createSweepFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
+	pgschema.Apply(ctx, t, pool)
+	// The parents every run and unit references (foreign keys).
+	pgseed.EnsureSyncIntegration(ctx, t, pool, sweepOrg, "", "")
+	// The migrations seed worker_job_routes; this sweep is proven against the canary route.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.worker_job_routes (job_kind, transport, updated_at)
+		VALUES ('sync.provider_unit', 'river_canary', now())
+		ON CONFLICT (job_kind) DO UPDATE SET transport = 'river_canary'`); err != nil {
+		t.Fatal(err)
+	}
 	for _, statement := range []string{
-		// created_at carries the instant the run was planned. The
-		// route-unavailable branch bounds a parked run against it, so the
-		// column has to exist here as it does in production; the DEFAULT is
-		// fixture convenience, since production stamps every insert.
-		`CREATE TABLE public.sync_runs (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			status text NOT NULL,
-			completed_units int NOT NULL DEFAULT 0,
-			failed_units int NOT NULL DEFAULT 0,
-			total_units int NOT NULL DEFAULT 0,
-			created_at timestamptz NOT NULL DEFAULT now()
-		)`,
-		// The finalizer's wakeup row. Shape copied from this package's
-		// materializer fixture (materializer_integration_test.go:685), which
-		// derives it from alembic; the production route-fence TRIGGER is
-		// deliberately absent here for the same reason it is absent there --
-		// its only branch fires on a claim_token transition, and nothing the
-		// sweep writes takes a claim.
-		`CREATE TABLE public.sync_dispatch_outbox (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			sync_run_id uuid NOT NULL REFERENCES public.sync_runs(id),
-			kind text NOT NULL,
-			status text NOT NULL,
-			available_at timestamptz NOT NULL,
-			attempts integer NOT NULL,
-			last_error text,
-			dispatched_at timestamptz,
-			claim_token text,
-			claim_expires_at timestamptz,
-			claim_transport text,
-			claim_route_generation bigint,
-			dispatched_transport text,
-			dispatched_route_generation bigint,
-			transport_job_id text,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL,
-			UNIQUE (sync_run_id, kind)
-		)`,
-		`CREATE TABLE public.sync_run_units (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			sync_run_id uuid NOT NULL REFERENCES public.sync_runs(id),
-			provider text NOT NULL,
-			dataset_key text NOT NULL,
-			cost_class text NOT NULL,
-			mode text NOT NULL,
-			status text NOT NULL,
-			attempts integer NOT NULL DEFAULT 0,
-			available_at timestamptz,
-			last_retry_reason text,
-			error text,
-			result jsonb,
-			lease_owner text,
-			lease_expires_at timestamptz,
-			last_heartbeat_at timestamptz,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL
-		)`,
-		// CHAOS-4114: the maintained executed-proof projection. It is in
-		// domainPosture's manifest, and the scheduler/worker write paths stamp
-		// it inside the same transaction that writes sync_run_units, so a venue
-		// without it fails those writes outright.
-		`CREATE TABLE public.sync_executed_proof_ledger (
-			provider text NOT NULL,
-			dataset_key text NOT NULL,
-			attempted_at timestamptz NOT NULL,
-			proven_at timestamptz,
-			PRIMARY KEY (provider, dataset_key),
-			CONSTRAINT ck_sync_executed_proof_ledger_provider_normalized
-				CHECK (provider = lower(provider) AND btrim(provider) <> ''),
-			CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
-				CHECK (dataset_key = lower(dataset_key) AND btrim(dataset_key) <> '')
-		)`,
-		// Alembic 0055, column for column. The hand-rolled two-column version
-		// this replaces omitted `generation`, which the CHAOS-4035 route fence
-		// reads: the invented schema turned a real read into a 42703 and would
-		// have hidden any predicate that depended on the missing columns.
-		`CREATE TABLE public.worker_job_routes (
-			job_kind varchar(96) NOT NULL,
-			transport varchar(16) NOT NULL,
-			paused boolean NOT NULL DEFAULT false,
-			generation bigint NOT NULL DEFAULT 1,
-			updated_at timestamptz NOT NULL DEFAULT now(),
-			CONSTRAINT ck_worker_job_route_transport
-				CHECK (transport IN ('celery', 'shadow', 'river_canary', 'river')),
-			CONSTRAINT ck_worker_job_route_generation CHECK (generation >= 1),
-			CONSTRAINT worker_job_routes_pkey PRIMARY KEY (job_kind)
-		)`,
-		`INSERT INTO public.worker_job_routes (job_kind, transport)
-			VALUES ('sync.provider_unit', 'river_canary')`,
-		// river_job_id, delivered_at and ck_worker_job_outbox_delivery_state
-		// are copied from the production table (\d public.worker_job_outbox),
-		// not invented. The constraint is the load-bearing part: it is what
-		// makes "status = 'delivered'" and "river_job_id IS NOT NULL" the same
-		// statement, which is why CHAOS-4097's liveness read needs none of the
-		// text-cast defensiveness the sibling coordinator-plane repair carries.
-		// A fixture without it would let a test seed a shape production cannot
-		// hold and prove nothing.
-		`CREATE TABLE public.worker_job_outbox (
-			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-			dedupe_key text NOT NULL UNIQUE,
-			job_kind text NOT NULL,
-			contract_version integer NOT NULL,
-			args jsonb NOT NULL,
-			payload_hash text NOT NULL,
-			queue text NOT NULL,
-			priority smallint NOT NULL,
-			max_attempts smallint NOT NULL,
-			scheduled_at timestamptz NOT NULL,
-			status text NOT NULL,
-			next_attempt_at timestamptz NOT NULL,
-			attempt_count integer NOT NULL DEFAULT 0,
-			river_job_id bigint,
-			delivered_at timestamptz,
-			CONSTRAINT uq_worker_job_outbox_river_job_id UNIQUE (river_job_id),
-			CONSTRAINT ck_worker_job_outbox_delivery_state CHECK (
-				status = 'delivered' AND river_job_id IS NOT NULL AND delivered_at IS NOT NULL
-				OR status <> 'delivered' AND river_job_id IS NULL AND delivered_at IS NULL
-			)
-		)`,
 		`CREATE SCHEMA river`,
 		// The state column is a real enum, as it is in River's own migration,
 		// so `state::text` in the sweep is exercised as the cast it actually
@@ -206,8 +92,10 @@ func createSweepFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 func seedSweepRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, status string) {
 	t.Helper()
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO public.sync_runs (id, org_id, status) VALUES ($1, $2, $3)`,
-		id, sweepOrg, status); err != nil {
+		`INSERT INTO public.sync_runs (id, org_id, integration_id, triggered_by, mode, status,
+			total_units, completed_units, failed_units, created_at)
+		VALUES ($1, $2, $4::uuid, 'manual', 'incremental', $3, 0, 0, 0, now())`,
+		id, sweepOrg, status, pgseed.DefaultSyncIntegrationID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -229,14 +117,14 @@ func seedSweepUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, spec s
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_run_units (
-			id, org_id, sync_run_id, provider, dataset_key, cost_class, mode, status,
+			id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status,
 			attempts, lease_owner, lease_expires_at, last_heartbeat_at,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, 'github', $4, $5, 'incremental', $6,
+		) VALUES ($1, $2, $3, $13::uuid, $14::uuid, 'github', $4, $5, 'incremental', $6,
 			$7, $8, $9, $10, $11, $12)`,
 		spec.id, sweepOrg, sweepRun, spec.dataset, spec.costClass, spec.status,
 		spec.attempts, spec.leaseOwner, spec.leaseExpires, spec.heartbeat,
-		spec.createdAt, spec.updatedAt); err != nil {
+		spec.createdAt, spec.updatedAt, pgseed.DefaultSyncIntegrationID, pgseed.DefaultSyncSourceID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -415,10 +303,11 @@ func TestUnreclaimableSweepSparesAUnitWithAnOutboxRow(t *testing.T) {
 	seedSweepUnit(t, ctx, pool, strandedSpec(sweepUnitID(30), "tests", "heavy", now))
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.worker_job_outbox (
-			dedupe_key, job_kind, contract_version, args, payload_hash, queue,
-			priority, max_attempts, scheduled_at, status, next_attempt_at, attempt_count
-		) VALUES ($1, 'sync.provider_unit', 1, '{}'::jsonb, $2, 'sync',
-			1, 5, now(), 'pending', now(), 0)`,
+			id, dedupe_key, job_kind, contract_version, args, payload_hash, queue,
+			priority, max_attempts, scheduled_at, status, next_attempt_at, attempt_count,
+			created_at, updated_at
+		) VALUES (gen_random_uuid(), $1, 'sync.provider_unit', 1, '{}'::json, $2, 'sync',
+			1, 5, now(), 'pending', now(), 0, now(), now())`,
 		unreclaimableDedupeKey(sweepUnitID(30)), "sha256:"+strings.Repeat("0", 64),
 	); err != nil {
 		t.Fatal(err)
@@ -821,11 +710,11 @@ func seedSweepDeliveryWithBudget(
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.worker_job_outbox (
-			dedupe_key, job_kind, contract_version, args, payload_hash, queue,
+			id, dedupe_key, job_kind, contract_version, args, payload_hash, queue,
 			priority, max_attempts, scheduled_at, status, next_attempt_at,
-			attempt_count, river_job_id, delivered_at
-		) VALUES ($1, 'sync.provider_unit', 1, '{}'::jsonb, $2, 'sync',
-			1, 5, now(), 'delivered', now(), $4, $3, now())`,
+			attempt_count, river_job_id, delivered_at, created_at, updated_at
+		) VALUES (gen_random_uuid(), $1, 'sync.provider_unit', 1, '{}'::json, $2, 'sync',
+			1, 5, now(), 'delivered', now(), $4, $3, now(), now(), now())`,
 		unreclaimableDedupeKey(unitID), "sha256:"+strings.Repeat("0", 64), jobID,
 		outboxAttemptCount,
 	); err != nil {

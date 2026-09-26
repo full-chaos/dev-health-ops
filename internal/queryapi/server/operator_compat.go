@@ -2,7 +2,6 @@ package server
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -75,7 +74,7 @@ func OperatorCompat(registry *health.Registry, operator *health.Server, serviceN
 		tracked := &statusTracker{ResponseWriter: w}
 		metrics.ServeHTTP(tracked, r)
 		if tracked.status == http.StatusOK {
-			_, _ = io.WriteString(w, targetInfo(serviceName))
+			tracked.appendSeries(targetInfo(serviceName))
 		}
 	})
 	return mux
@@ -128,4 +127,17 @@ type statusTracker struct {
 func (t *statusTracker) WriteHeader(status int) {
 	t.status = status
 	t.ResponseWriter.WriteHeader(status)
+}
+
+// appendSeries adds Prometheus exposition text after the operator's own. The text is
+// built by targetInfo from the service name and the SDK version, never from a request.
+func (t *statusTracker) appendSeries(text string) {
+	_, _ = t.Write([]byte(text))
+}
+
+func (t *statusTracker) Write(p []byte) (int, error) {
+	if t.status == 0 {
+		t.status = http.StatusOK // a handler that never calls WriteHeader answers 200
+	}
+	return t.ResponseWriter.Write(p)
 }

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
 )
 
 // ErrPostureRefused reports that rolePostureQuery RAN SUCCESSFULLY and
@@ -152,9 +154,7 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 	SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user
 )
 SELECT
-	session_user = $1
-	AND current_user = $1
-	AND (SELECT usename FROM pg_catalog.pg_stat_activity WHERE pid = pg_backend_pid()) = $1
+	` + roleacl.IdentityPredicateSQL + `
 	AND EXISTS (
 		SELECT 1
 		FROM pg_catalog.pg_roles
@@ -1285,37 +1285,6 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 	}
 }
 
-// loginIdentityMismatch names the cause when the pool's login is not the expected
-// runtime role, or "" when it is (or the identity could not be read). CHAOS-6862:
-// the posture queries bind THREE identities to the expected role: the
-// AUTHENTICATED user (pg_stat_activity.usename of this backend: the credential the
-// DSN carries, which SET SESSION AUTHORIZATION and SET ROLE do not change),
-// session_user (which SET SESSION AUTHORIZATION rewrites) and current_user (who the
-// session acts as, which SET ROLE and a startup `-c role=...` rewrite). A session
-// that merely ACTS as the role on a wider credential therefore reads as refused,
-// and the cause is named here. Role names are checked-in runtime identifiers,
-// never connection material.
-func loginIdentityMismatch(ctx context.Context, pool *pgxpool.Pool, expectedRole string) string {
-	identityCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postureDiagnoseTimeout)
-	defer cancel()
-	var sessionUser, currentUser string
-	var authenticated *string
-	if err := pool.QueryRow(identityCtx,
-		"SELECT session_user::text, current_user::text, (SELECT usename::text FROM pg_catalog.pg_stat_activity WHERE pid = pg_backend_pid())",
-	).Scan(&sessionUser, &currentUser, &authenticated); err != nil {
-		return ""
-	}
-	authenticatedName := ""
-	if authenticated != nil {
-		authenticatedName = *authenticated
-	}
-	if sessionUser == expectedRole && currentUser == expectedRole && authenticatedName == expectedRole {
-		return ""
-	}
-	return fmt.Sprintf("the pool authenticated as %q, has session_user %q and acts as %q (current_user), not the expected role: the login itself must be the role",
-		authenticatedName, sessionUser, currentUser)
-}
-
 // postureDiagnoseTimeout bounds the diagnostic pass that names the first
 // mismatched privilege once rolePostureQuery has refused. The caller's own
 // context may already be spent by the slow refusing query, so the pass runs
@@ -1333,7 +1302,7 @@ const postureDiagnoseTimeout = 5 * time.Second
 func firstPostureMismatch(ctx context.Context, pool *pgxpool.Pool, expectedRole string, posture RolePosture) string {
 	diagnoseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postureDiagnoseTimeout)
 	defer cancel()
-	if mismatch := loginIdentityMismatch(ctx, pool, expectedRole); mismatch != "" {
+	if mismatch := identityMismatchForDiagnosis(ctx, pool, expectedRole); mismatch != "" {
 		return mismatch
 	}
 	gaps, err := DiagnoseRolePosture(diagnoseCtx, pool, expectedRole, posture)

@@ -831,7 +831,7 @@ func TestNativeDispatchSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	admin, domain, denials, _ := startDomainRoleHarness(t, ctx, createDispatchTables)
-	seedDispatchRoute(t, ctx, admin)
+	seedDispatchRouteLegacy(t, ctx, admin)
 	markReferenceDiscoverySucceeded(t, ctx, admin)
 
 	if _, err := admin.Exec(ctx,
@@ -864,7 +864,7 @@ VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','plan
 		t.Fatal(err)
 	}
 
-	dispatchErr := service.Dispatch(ctx, dispatchTestArgs())
+	dispatchErr := service.Dispatch(ctx, dispatchTestArgsLegacy())
 	denials.assertNone(t, "NativeDispatchSyncRunService success path (CHAOS-4175 family 3)")
 	if dispatchErr != nil {
 		t.Fatalf("Dispatch (success path): %v", dispatchErr)
@@ -918,7 +918,7 @@ VALUES ($1,$2,$3,'pagerduty','incidents','00000000-0000-4000-8000-0000000000ed',
 		}
 	}
 
-	gateErr := service.Dispatch(ctx, dispatchTestArgs())
+	gateErr := service.Dispatch(ctx, dispatchTestArgsLegacy())
 	denials.assertNone(t, "NativeDispatchSyncRunService feature-disabled path (CHAOS-4175 family 3)")
 	if gateErr != nil {
 		t.Fatalf("Dispatch (feature-disabled path): %v", gateErr)
@@ -1178,4 +1178,33 @@ func seedDiscoveryRouteLegacy(t *testing.T, ctx context.Context, pool *pgxpool.P
 			t.Fatal(err)
 		}
 	}
+}
+
+// seedDispatchRouteLegacy and dispatchTestArgsLegacy serve this privilege harness, whose hand-built
+// probe tables carry route generation 1 (the migrated-schema tests use dispatchRouteGeneration).
+func seedDispatchRouteLegacy(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	statements := []string{
+		`INSERT INTO sync_dispatch_transport_routes (kind,transport,generation,paused,rollback_transport)
+		 VALUES ('dispatch_sync_run','river',1,false,'celery')`,
+		`INSERT INTO sync_dispatch_outbox
+		    (id,sync_run_id,org_id,kind,status,available_at,dispatched_transport,dispatched_route_generation,created_at,updated_at)
+		 VALUES ('` + dispatchServiceTestOutbox + `','` + discoveryTestRun + `','` + discoveryTestOrg + `',
+		         'dispatch_sync_run','dispatched',now(),'river',1,now(),now())`,
+		`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ('` + discoveryTestRun + `','` +
+			discoveryTestOrg + `','` + discoveryTestIntegration + `')`,
+		`INSERT INTO integrations (id,org_id,provider) VALUES ('` + discoveryTestIntegration + `','` + discoveryTestOrg + `','github')`,
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func dispatchTestArgsLegacy() DispatchSyncRunArgs {
+	return DispatchSyncRunArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: discoveryTestRun,
+		DispatchOutbox: dispatchServiceTestOutbox, RouteGeneration: 1,
+	}}
 }

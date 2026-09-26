@@ -225,43 +225,122 @@ def test_container_confirmed_absent_is_still_a_hard_failure_not_a_silent_skip(
     assert "probe FAILED" not in combined, combined
 
 
-def test_devhops_missing_is_a_distinct_hard_failure(tmp_path):
-    """Container reachable, but the dev-hops CLI this stage shells out to is
-    missing from the venv -- also a hard failure (CHAOS-3571 (a): 'missing
-    dependency'), with its own distinguishing message."""
+def test_dho_missing_is_a_distinct_hard_failure(tmp_path):
+    """Container reachable, but the dho binary this stage shells out to is missing --
+    also a hard failure (CHAOS-3571 (a): 'missing dependency'), with its own
+    distinguishing message. A caller-supplied DHO is never replaced by a build."""
     _write_fake_docker(
         tmp_path, ps_exit=0, ps_stdout="dev-health-clickhouse-1\n", ps_stderr=""
     )
+    # A `go` that WOULD build the binary if asked: a probe that built a caller-supplied
+    # DHO would turn this hard failure into a pass (and the test would see the file).
+    go_calls = tmp_path / "go-calls"
+    go = tmp_path / "go"
+    go.write_text(
+        "#!/bin/bash\n"
+        f'echo "$*" >> {go_calls}\n'
+        'while [ "$#" -gt 0 ]; do\n'
+        '  if [ "$1" = "-o" ]; then printf "#!/bin/sh\\n" > "$2"; chmod +x "$2"; fi\n'
+        "  shift\n"
+        "done\n"
+    )
+    go.chmod(0o755)
     result = _run_ch_probe_only(
         tmp_path,
         extra_env={
             "CH_CONTAINER": "dev-health-clickhouse-1",
-            "DEVHOPS": str(tmp_path / "no-such-dev-hops"),
+            "DHO": str(tmp_path / "no-such-dho"),
         },
     )
     combined = result.stdout + result.stderr
 
     assert result.returncode == 4, combined
-    assert "dev-hops CLI missing" in combined, combined
+    assert f"dho missing at {tmp_path / 'no-such-dho'}" in combined, combined
+    assert not go_calls.exists(), f"the probe ran go: {go_calls.read_text()}"
+    assert not (tmp_path / "no-such-dho").exists(), "a caller-supplied DHO was built"
 
 
 def test_container_reachable_probe_succeeds(tmp_path):
     """Sanity check for the tests above: a genuinely healthy probe (container
-    present, dev-hops present) returns 0 -- the stub harness itself is not
+    present, dho present) returns 0 -- the stub harness itself is not
     what is forcing every other test's failure."""
     _write_fake_docker(
         tmp_path, ps_exit=0, ps_stdout="dev-health-clickhouse-1\n", ps_stderr=""
     )
-    devhops = tmp_path / "dev-hops"
-    devhops.write_text("#!/bin/bash\nexit 0\n")
-    devhops.chmod(0o755)
+    dho = tmp_path / "dho"
+    dho.write_text("#!/bin/bash\nexit 0\n")
+    dho.chmod(0o755)
     result = _run_ch_probe_only(
         tmp_path,
-        extra_env={"CH_CONTAINER": "dev-health-clickhouse-1", "DEVHOPS": str(devhops)},
+        extra_env={"CH_CONTAINER": "dev-health-clickhouse-1", "DHO": str(dho)},
     )
     combined = result.stdout + result.stderr
     assert result.returncode == 0, combined
     assert "rc=0" in combined, combined
+
+
+def test_an_https_clickhouse_is_refused_by_the_probe_before_any_ddl(tmp_path):
+    """dho migrates over the native protocol and this gate has no TLS native leg, so
+    CH_HTTP_SCHEME=https must fail LOUD in the probe -- with the mechanism named --
+    even though a dho binary is present and the container is up."""
+    _write_fake_docker(
+        tmp_path, ps_exit=0, ps_stdout="dev-health-clickhouse-1\n", ps_stderr=""
+    )
+    dho = tmp_path / "dho"
+    dho.write_text("#!/bin/bash\nexit 0\n")
+    dho.chmod(0o755)
+    result = _run_ch_probe_only(
+        tmp_path,
+        extra_env={
+            "CH_CONTAINER": "dev-health-clickhouse-1",
+            "DHO": str(dho),
+            "CH_HTTP_SCHEME": "https",
+        },
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 4, combined
+    assert "CH_HTTP_SCHEME=https is not supported" in combined, combined
+    assert "native protocol" in combined, combined
+
+
+def test_ch_migrate_runs_the_two_dho_verbs_against_the_native_port(tmp_path):
+    """The REAL ch_migrate(), with a stub dho that records what it was run with."""
+    log = tmp_path / "dho.log"
+    dho = tmp_path / "dho"
+    dho.write_text(
+        "#!/bin/bash\n"
+        f'printf "%s|%s|%s|%s\\n" "$*" "${{CLICKHOUSE_URI:-}}" '
+        f'"${{DATABASE_URI:-unset}}" "${{OPERATIONAL_ORDERING_CONTRACT:-}}" >> {log}\n'
+    )
+    dho.chmod(0o755)
+    env = {
+        "PATH": f"{tmp_path}:{_BASE_PATH}",
+        "DHO": str(dho),
+        "CH_HOST": "ch.lane.example",
+        "CH_NATIVE_PORT": "9123",
+        "CH_HTTP_PORT": "8123",
+    }
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--ch-migrate-probe"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=_TIMEOUT,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = [line.split("|") for line in log.read_text().splitlines()]
+    assert [call[0] for call in calls] == [
+        "migrate clickhouse upgrade",
+        "migrate clickhouse status --check",
+    ], calls
+    for _, uri, database_uri, contract in calls:
+        # The NATIVE port, not the HTTP one SCRATCH_URI carries, on the same host and
+        # scratch database; no Python-era DATABASE_URI; the contract dho requires.
+        assert uri.startswith("clickhouse://ch:ch@ch.lane.example:9123/"), uri
+        assert ":8123" not in uri, uri
+        assert database_uri == "unset", database_uri
+        assert contract == "2", contract
 
 
 # --- (ii) The stage manifest: executed must equal declared, structurally. ----------

@@ -141,7 +141,7 @@ cluster, they do not apply to you:
   ignores the scheme in the DSN — so a TLS endpoint on any other port gets a
   plaintext connection from those legs while `curl` speaks TLS, and the two
   halves of one gate run disagree about the transport. Terminate TLS on
-  443/8443 for a lane, or keep the lane plaintext. Tracked in CHAOS-4469. Point `DEV_HEALTH_POSTGRES_TEST_URI` at the
+  443/8443 for a lane, or keep the lane plaintext. Tracked in CHAOS-4469. The migration stage runs `dho migrate clickhouse` (built on demand into `.build/dho`, or `DHO=<path>`), which speaks the **native** protocol: set `CH_NATIVE_PORT` (default 9000) to the lane's native port; `CH_HTTP_SCHEME=https` is refused by the probe (there is no TLS native leg), so a lane needs a plaintext endpoint or `SKIP_CLICKHOUSE=1`. Point `DEV_HEALTH_POSTGRES_TEST_URI` at the
   lane's Postgres using the **asyncpg** dialect (`postgresql+asyncpg://`), and
   at a **scratch** database — several opt-in tests assume an empty
   `worker_job_outbox` and fail against a `backups/`-restored one.

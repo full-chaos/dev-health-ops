@@ -17,6 +17,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -151,13 +153,11 @@ func startOrphanHarness(t *testing.T, ctx context.Context) *orphanHarness {
 	}
 }
 
-// createOrphanFixture builds the three public tables this repair reads and
-// writes, and the REAL River schema via rivermigrate.
+// createOrphanFixture builds the migrated schema (pgschema.Apply) -- sync_runs, sync_run_units and
+// worker_job_outbox with every real column, constraint and foreign key -- and the REAL River schema via
+// rivermigrate.
 //
-// worker_job_outbox is copied from src/dev_health_ops/models/worker_job_outbox.py
-// constraint for constraint, not trimmed to the columns the predicate happens
-// to touch. Two of those constraints are load-bearing here and a fixture
-// without them would prove nothing:
+// Two of the real worker_job_outbox constraints are load-bearing here:
 //
 //   - ck_worker_job_outbox_delivery_state makes status='delivered' and
 //     river_job_id IS NOT NULL the same statement, which is what lets the
@@ -167,97 +167,14 @@ func startOrphanHarness(t *testing.T, ctx context.Context) *orphanHarness {
 //     at all. A fixture without it would happily accept a second row under the
 //     same key and the whole design would look unnecessary.
 //
-// CREATE SCHEMA river comes BEFORE rivermigrate: rivermigrate does not create a
-// non-default schema and fails with SQLSTATE 3F000 without it, which is a
-// harness failure masquerading as product RED (the 09-08 invalid repro 5456
-// recorded).
+// Apply runs first (it wants an empty database); CREATE SCHEMA river comes BEFORE rivermigrate:
+// rivermigrate does not create a non-default schema and fails with SQLSTATE 3F000 without it, which is
+// a harness failure masquerading as product RED (the 09-08 invalid repro 5456 recorded).
 func createOrphanFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	for _, statement := range []string{
-		`CREATE TABLE public.sync_runs (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			status text NOT NULL,
-			total_units int NOT NULL DEFAULT 0,
-			completed_units int NOT NULL DEFAULT 0,
-			failed_units int NOT NULL DEFAULT 0,
-			created_at timestamptz NOT NULL DEFAULT now()
-		)`,
-		`CREATE TABLE public.sync_run_units (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			sync_run_id uuid NOT NULL REFERENCES public.sync_runs(id),
-			provider text NOT NULL,
-			dataset_key text NOT NULL,
-			cost_class text NOT NULL,
-			mode text NOT NULL,
-			status text NOT NULL,
-			attempts integer NOT NULL DEFAULT 0,
-			available_at timestamptz,
-			error text,
-			lease_owner text,
-			lease_expires_at timestamptz,
-			last_heartbeat_at timestamptz,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL
-		)`,
-		`CREATE TABLE public.worker_job_outbox (
-			id uuid PRIMARY KEY,
-			dedupe_key varchar(256) NOT NULL,
-			job_kind varchar(96) NOT NULL,
-			contract_version integer NOT NULL,
-			args json NOT NULL,
-			payload_hash varchar(71) NOT NULL,
-			queue varchar(96) NOT NULL,
-			priority smallint NOT NULL,
-			max_attempts smallint NOT NULL,
-			scheduled_at timestamptz NOT NULL,
-			status varchar(16) NOT NULL,
-			claim_token uuid,
-			claimed_at timestamptz,
-			claim_expires_at timestamptz,
-			attempt_count integer NOT NULL DEFAULT 0,
-			first_attempt_at timestamptz,
-			last_attempt_at timestamptz,
-			next_attempt_at timestamptz NOT NULL,
-			last_error_code varchar(64),
-			last_error_detail varchar(256),
-			last_error_at timestamptz,
-			river_job_id bigint,
-			delivered_at timestamptz,
-			prerequisite_completion_key varchar(256),
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL,
-			CONSTRAINT uq_worker_job_outbox_dedupe_key UNIQUE (dedupe_key),
-			CONSTRAINT uq_worker_job_outbox_river_job_id UNIQUE (river_job_id),
-			CONSTRAINT ck_worker_job_outbox_status
-				CHECK (status IN ('pending', 'claimed', 'delivered', 'dead')),
-			CONSTRAINT ck_worker_job_outbox_contract_version CHECK (contract_version > 0),
-			CONSTRAINT ck_worker_job_outbox_priority CHECK (priority BETWEEN 1 AND 4),
-			CONSTRAINT ck_worker_job_outbox_max_attempts CHECK (max_attempts BETWEEN 1 AND 25),
-			CONSTRAINT ck_worker_job_outbox_attempt_count CHECK (attempt_count >= 0),
-			CONSTRAINT ck_worker_job_outbox_payload_hash
-				CHECK (length(payload_hash) = 71 AND payload_hash LIKE 'sha256:%'),
-			CONSTRAINT ck_worker_job_outbox_args_size
-				CHECK (length(CAST(args AS TEXT)) <= 16384),
-			CONSTRAINT ck_worker_job_outbox_claim_state CHECK (
-				(status = 'claimed' AND claim_token IS NOT NULL AND claimed_at IS NOT NULL
-					AND claim_expires_at IS NOT NULL)
-				OR (status <> 'claimed' AND claim_token IS NULL AND claimed_at IS NULL
-					AND claim_expires_at IS NULL)),
-			CONSTRAINT ck_worker_job_outbox_delivery_state CHECK (
-				(status = 'delivered' AND river_job_id IS NOT NULL AND delivered_at IS NOT NULL)
-				OR (status <> 'delivered' AND river_job_id IS NULL AND delivered_at IS NULL)),
-			CONSTRAINT ck_worker_job_outbox_error_state CHECK (
-				(last_error_code IS NULL AND last_error_detail IS NULL AND last_error_at IS NULL)
-				OR (last_error_code IS NOT NULL AND last_error_detail IS NOT NULL
-					AND last_error_at IS NOT NULL))
-		)`,
-		`CREATE SCHEMA river`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatalf("%s: %v", statement, err)
-		}
+	pgschema.Apply(ctx, t, pool)
+	if _, err := pool.Exec(ctx, `CREATE SCHEMA river`); err != nil {
+		t.Fatal(err)
 	}
 	migrator, err := rivermigrate.New(riverpgxv5.New(pool), &rivermigrate.Config{Schema: "river"})
 	if err != nil {
@@ -407,10 +324,13 @@ func (h *orphanHarness) seed(t *testing.T, ctx context.Context, now time.Time, s
 		DELETE FROM river.river_job;`); err != nil {
 		t.Fatal(err)
 	}
+	// The migrated foreign keys need a real integration and source under the run and its units.
+	pgseed.EnsureSyncIntegration(ctx, t, h.admin, liveOrgID, "", "")
 	if _, err := h.admin.Exec(ctx,
-		`INSERT INTO public.sync_runs (id, org_id, status, total_units, completed_units, failed_units, created_at)
-		 VALUES ($1, $2, $3, 63, 62, 0, $4)`,
-		liveRunID, liveOrgID, shape.runStatus, now.Add(-10*24*time.Hour)); err != nil {
+		`INSERT INTO public.sync_runs (id, org_id, integration_id, triggered_by, mode, status,
+			total_units, completed_units, failed_units, created_at)
+		 VALUES ($1, $2, $5::uuid, 'manual', 'incremental', $3, 63, 62, 0, $4)`,
+		liveRunID, liveOrgID, shape.runStatus, now.Add(-10*24*time.Hour), pgseed.DefaultSyncIntegrationID); err != nil {
 		t.Fatal(err)
 	}
 	// Two of the 62 successful siblings. They are not read by any predicate;
@@ -419,24 +339,26 @@ func (h *orphanHarness) seed(t *testing.T, ctx context.Context, now time.Time, s
 	for _, sibling := range []string{liveSiblingOne, liveSiblingTwo} {
 		if _, err := h.admin.Exec(ctx, `
 			INSERT INTO public.sync_run_units
-				(id, org_id, sync_run_id, provider, dataset_key, cost_class, mode, status,
+				(id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status,
 				 attempts, created_at, updated_at)
-			VALUES ($1, $2, $3, 'github', 'repositories', 'standard', 'incremental', 'success',
+			VALUES ($1, $2, $3, $5::uuid, $6::uuid, 'github', 'repositories', 'standard', 'incremental', 'success',
 				1, $4, $4)`,
-			sibling, liveOrgID, liveRunID, now.Add(-10*24*time.Hour)); err != nil {
+			sibling, liveOrgID, liveRunID, now.Add(-10*24*time.Hour),
+			pgseed.DefaultSyncIntegrationID, pgseed.DefaultSyncSourceID); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := h.admin.Exec(ctx, `
 		INSERT INTO public.sync_run_units
-			(id, org_id, sync_run_id, provider, dataset_key, cost_class, mode, status,
+			(id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status,
 			 attempts, available_at, error, lease_owner, lease_expires_at, last_heartbeat_at,
 			 created_at, updated_at)
-		VALUES ($1, $2, $3, 'github', 'cicd', 'standard', 'incremental', $4,
+		VALUES ($1, $2, $3, $12::uuid, $13::uuid, 'github', 'cicd', 'standard', 'incremental', $4,
 			$5, $6, 'provider_unit_retryable', $7, $8, $9, $10, $11)`,
 		liveUnitID, shape.unitOrgID, liveRunID, shape.unitStatus,
 		shape.unitAttempts, shape.unitAvailableAt, shape.unitLeaseOwner, shape.unitLeaseExpiry,
-		shape.unitHeartbeat, shape.unitCreatedAt, shape.unitUpdatedAt); err != nil {
+		shape.unitHeartbeat, shape.unitCreatedAt, shape.unitUpdatedAt,
+		pgseed.DefaultSyncIntegrationID, pgseed.DefaultSyncSourceID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1245,8 +1167,10 @@ func TestOrphanedUnitRepairGuardMatrix(t *testing.T) {
 		{
 			name:   "source_row_carries_a_prerequisite_fence",
 			clause: "the prerequisite_completion_key refusal",
-			mutate: func(s *liveShape) { s.outboxPrerequisit = "metrics.daily_finalize:done" },
-			want:   wantCounters(1, 0, func(r OrphanedUnitRepairResult) int { return r.SkippedPrerequisite }, "SkippedPrerequisite"),
+			mutate: func(s *liveShape) {
+				s.outboxPrerequisit = "metrics_daily_finalize:00000000-0000-4000-8000-000000005458"
+			},
+			want: wantCounters(1, 0, func(r OrphanedUnitRepairResult) int { return r.SkippedPrerequisite }, "SkippedPrerequisite"),
 		},
 		{
 			name:   "the_replacement_key_already_exists",

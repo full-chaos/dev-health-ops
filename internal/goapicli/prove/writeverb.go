@@ -231,10 +231,21 @@ func runWrite(args []string) (err error) {
 	post := func(ctx context.Context, doc, variablesJSON string) (writeproof.Response, error) {
 		return postMutation(ctx, client, target, credential, doc, variablesJSON, f.timeout)
 	}
-	result, execErr := writeproof.Execute(ctx, pool, f.orgID, c, run, document, post, writeproof.WithRequiredBuild(registry.BuildIdentity))
+	result, execErr := writeproof.Execute(ctx, pool, f.orgID, c, run, document, post, writeproof.WithRequiredBuild(registry.BuildIdentity), writeproof.WithDeferredTeardown())
 	if execErr != nil {
 		return execErr
 	}
+
+	// Teardown is irreversible and every step below can still demote a match (the
+	// build moving, the receipt not being recorded): the dataset is torn down only
+	// by Settle, LAST, and any early return keeps it.
+	settled := false
+	defer func() {
+		if !settled {
+			result.Demote("the run ended before its receipt was recorded")
+			fmt.Printf("go-api-prove-write: dataset KEPT for forensics: org=%s run=%s (the run ended before its receipt was recorded)\n", f.orgID, run)
+		}
+	}()
 
 	binding := goapiproof.EdgeBuildAbsent
 	if result.ServedBuild != "" && result.ServedBuild == registry.BuildIdentity {
@@ -246,8 +257,7 @@ func runWrite(args []string) (err error) {
 	if stabilityErr != nil {
 		// The build moved under the run: what was measured is not evidence for
 		// the build the receipt would name.
-		result.TerminalState = writeproof.StateProofFailed
-		result.Detail = strings.TrimPrefix(result.Detail+"; build not stable: "+stabilityErr.Error(), "; ")
+		result.Demote("build not stable: " + stabilityErr.Error())
 	}
 
 	identity, err := goapiproof.RequestIdentity(f.orgID, goapiproof.AuthContext{PrincipalKind: f.principalKind, Audience: f.audience, KeyID: f.keyID},
@@ -270,6 +280,10 @@ func runWrite(args []string) (err error) {
 		}
 		written = true
 	}
+	// The receipt is durable (or this is a dry run): only now may a match's
+	// dataset go.
+	result.Settle(ctx, pool)
+	settled = true
 	fmt.Printf("go-api-prove-write: %s posts=%d state=%s digest=%s baseline=%s build_binding=%s route=%s receipt_written=%t kept=%t\n",
 		c.Name, result.Posts, result.TerminalState, result.Digest, result.BaselineDigest, binding, route, written, result.Kept != nil)
 	if result.Kept != nil {

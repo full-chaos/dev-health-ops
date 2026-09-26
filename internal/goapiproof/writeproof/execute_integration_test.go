@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -381,4 +382,62 @@ func TestAResponseWithoutTheCandidateBuildIsNeverAMatchAndKeepsTheDataset(t *tes
 	if err != nil || result.TerminalState != StateMatch {
 		t.Fatalf("the control must match: %v %+v", err, result)
 	}
+}
+
+// r2 P1: with a deferred teardown the dataset of a match stays until Settle, and
+// Settle tears down only a result that is STILL a match.
+func TestDeferredTeardownSettlesOnlyAStillMatchingRun(t *testing.T) {
+	raw, _ := os.ReadFile("testdata/synthetic_baseline.json")
+	var committed struct {
+		Digest string `json:"digest"`
+	}
+	_ = json.Unmarshal(raw, &committed)
+
+	run := func(t *testing.T, pool *pgxpool.Pool, tag RunTag) Result {
+		t.Helper()
+		calls := 0
+		result, err := Execute(context.Background(), pool, "org-fixture", syntheticCase(committed.Digest), tag, "mutation M { x }",
+			posterInserting(t, pool, "org-fixture", tag, "", &calls), WithDeferredTeardown())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.TerminalState != StateMatch || result.Pending == nil || result.Kept != nil || rowsFor(t, pool, "org-fixture", tag) == 0 {
+			t.Fatalf("a deferred match must leave its dataset pending: %+v", result)
+		}
+		return result
+	}
+
+	t.Run("settle after a match tears down and is idempotent", func(t *testing.T) {
+		pool := startPool(t)
+		result := run(t, pool, "gwc-wp-defer-a")
+		result.Settle(context.Background(), pool)
+		result.Settle(context.Background(), pool)
+		if n := rowsFor(t, pool, "org-fixture", "gwc-wp-defer-a"); n != 0 || result.Kept != nil || result.Pending != nil || result.TeardownErr != nil {
+			t.Fatalf("a still-matching run must be torn down by Settle: rows=%d %+v", n, result)
+		}
+	})
+	t.Run("demote then settle keeps the dataset", func(t *testing.T) {
+		pool := startPool(t)
+		result := run(t, pool, "gwc-wp-defer-b")
+		result.Demote("the build moved")
+		result.Settle(context.Background(), pool)
+		if result.TerminalState != StateProofFailed || result.Kept == nil || result.Kept.Run != "gwc-wp-defer-b" || rowsFor(t, pool, "org-fixture", "gwc-wp-defer-b") == 0 || !strings.Contains(result.Detail, "the build moved") {
+			t.Fatalf("a demoted run must keep and name its dataset: %+v", result)
+		}
+	})
+	t.Run("a failing teardown is reported and the dataset named", func(t *testing.T) {
+		pool := startPool(t)
+		result := run(t, pool, "gwc-wp-defer-c")
+		result.seeder = failingTeardown{}
+		result.Settle(context.Background(), pool)
+		if result.TeardownErr == nil || result.Kept == nil {
+			t.Fatalf("a failed teardown must be reported with the dataset named: %+v", result)
+		}
+	})
+}
+
+type failingTeardown struct{ noSeeder }
+
+func (failingTeardown) Teardown(context.Context, goapiproof.Querier, string, RunTag) error {
+	return errors.New("teardown refused")
 }

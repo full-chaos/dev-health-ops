@@ -23,7 +23,10 @@ const (
 // Option adjusts one Execute call.
 type Option func(*settings)
 
-type settings struct{ requiredBuild string }
+type settings struct {
+	requiredBuild string
+	deferTeardown bool
+}
 
 // WithRequiredBuild requires the mutation's response to carry exactly this build
 // in its x-dev-health-build header (the build of the process that served it). A
@@ -31,6 +34,16 @@ type settings struct{ requiredBuild string }
 // dataset is KEPT, because nothing has tied the write to the candidate build.
 func WithRequiredBuild(build string) Option {
 	return func(s *settings) { s.requiredBuild = build }
+}
+
+// WithDeferredTeardown leaves the dataset of a MATCH in place, the decision
+// pending: teardown is irreversible, so a caller that can still demote the match
+// after Execute (a build-stability check, a receipt write) must not have it torn
+// down first. The caller ends the run with Result.Settle, which tears down only
+// if the result is STILL a match; Result.Demote turns a match into a failure and
+// keeps the dataset. Without this option Execute tears down a match itself.
+func WithDeferredTeardown() Option {
+	return func(s *settings) { s.deferTeardown = true }
 }
 
 // Response is what the posted mutation answered.
@@ -77,9 +90,49 @@ type Result struct {
 	Posts int
 	// Kept is set when the dataset was left in place (any outcome but a match).
 	Kept *Forensics
+	// Pending is set when a match's dataset is still in place awaiting Settle
+	// (WithDeferredTeardown).
+	Pending *Forensics
 	// TeardownErr is a failed cleanup after a match; the receipt stands.
 	TeardownErr error
 	Effects     Effects
+	seeder      Seeder
+}
+
+// Demote turns a still-pending match into proof_failed for a reason found after
+// Execute (the build moved under the run, the receipt could not be written): the
+// dataset is KEPT and named, never torn down. A result that is not a pending
+// match only gains the detail.
+func (r *Result) Demote(detail string) {
+	r.TerminalState = StateProofFailed
+	if r.Detail == "" {
+		r.Detail = detail
+	} else {
+		r.Detail += "; " + detail
+	}
+	if r.Pending != nil {
+		r.Kept, r.Pending = r.Pending, nil
+	}
+}
+
+// Settle ends a run whose teardown was deferred: a result that is STILL a match
+// has its dataset torn down (a failure is recorded in TeardownErr and the dataset
+// is then named in Kept); anything else keeps it. Safe to call on any Result and
+// more than once.
+func (r *Result) Settle(ctx context.Context, db goapiproof.Querier) {
+	if r.Pending == nil {
+		return
+	}
+	pending := r.Pending
+	r.Pending = nil
+	if r.TerminalState != StateMatch || r.seeder == nil {
+		r.Kept = pending
+		return
+	}
+	if err := r.seeder.Teardown(ctx, db, pending.Org, pending.Run); err != nil {
+		r.TeardownErr = err
+		r.Kept = pending
+	}
 }
 
 // Execute proves one case: seed inside org, post the mutation once, read and
@@ -178,6 +231,11 @@ func Execute(ctx context.Context, db goapiproof.Querier, org string, c Case, run
 	result.Detail = strings.Join(detail, "; ")
 
 	if result.TerminalState == StateMatch {
+		if settings.deferTeardown {
+			result.Pending = &Forensics{Org: org, Run: run}
+			result.seeder = c.Seeder
+			return result, nil
+		}
 		if err := c.Seeder.Teardown(ctx, db, org, run); err != nil {
 			result.TeardownErr = err
 			result.Kept = &Forensics{Org: org, Run: run}

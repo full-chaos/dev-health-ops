@@ -640,12 +640,14 @@ func constructProviderSyncWorkerWithDependencies(
 	}
 	decryptor, err := newWorkerCredentialCipher(cfg)
 	if err != nil {
+		repository.Close()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	clickhouseConnection, err := clickhousestore.Open(
 		ctx, clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
 	)
 	if err != nil {
+		repository.Close()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	valkeyClient, err := valkeystore.Open(
@@ -653,6 +655,7 @@ func constructProviderSyncWorkerWithDependencies(
 	)
 	if err != nil {
 		_ = clickhouseConnection.Close()
+		repository.Close()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	// Opened on the first usage write, never here: an unreachable usage
@@ -672,6 +675,7 @@ func constructProviderSyncWorkerWithDependencies(
 		_ = closeRequestUsage()
 		valkeyClient.Close()
 		_ = clickhouseConnection.Close()
+		repository.Close()
 	}
 	// The observer passed in is the process's one *jobruntime.MetricsCollector
 	// in production, but as of CHAOS-4029 it arrives wrapped in
@@ -753,6 +757,10 @@ func constructProviderSyncWorkerWithDependencies(
 		// Cleanups run in reverse: the request-usage writer drains and its
 		// connection closes before the shared connections go.
 		cleanups: []func() error{
+			func() error {
+				repository.Close()
+				return nil
+			},
 			clickhouseConnection.Close,
 			func() error {
 				valkeyClient.Close()

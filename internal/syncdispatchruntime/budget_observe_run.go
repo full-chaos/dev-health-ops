@@ -74,7 +74,7 @@ func observeRun(
 	// than just missing them for this pass.
 	estimatesByUnit := map[string][]budgetEstimate{}
 	for _, chunk := range chunkUnitIDs(unitIDs) {
-		chunkEstimates, bridgeErr := bridge.DispatchBudgetEstimate(ctx, orgID, syncRunID, chunk)
+		chunkEstimates, bridgeErr := estimateChunk(ctx, tx, bridge, orgID, syncRunID, chunk)
 		if bridgeErr != nil {
 			// Same choice as before chunking existed: Python's per-unit
 			// try/except has no precedent for a batched failure, so every

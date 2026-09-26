@@ -473,12 +473,11 @@ func BucketAdvisoryLockKeyForTest(orgID, provider, costClass string) int64 {
 // Error classification: a bare query execution failure, retryable (same
 // reasoning as loadDispatchGuardUnits).
 func acquireBucketAdvisoryLocks(ctx context.Context, tx pgx.Tx, buckets []dispatchBucket) error {
-	for _, bucket := range buckets {
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, bucketAdvisoryLockKey(bucket)); err != nil {
-			return fmt.Errorf("%w: acquire bucket advisory lock: %w", ErrDiscoveryTransientFailure, err)
-		}
+	keys := make([]int64, len(buckets))
+	for index, bucket := range buckets {
+		keys[index] = bucketAdvisoryLockKey(bucket)
 	}
-	return nil
+	return acquireAdvisoryLocksBounded(ctx, tx, keys, "bucket", dispatchLockWaitBudget)
 }
 
 // emitBucketDecision ports _emit_bucket_decision: a structured log line

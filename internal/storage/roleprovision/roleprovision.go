@@ -19,7 +19,13 @@
 //   - CONNECT on the application database; TEMPORARY revoked (from PUBLIC too, for
 //     the mandatory block and the api and query-api blocks); USAGE and no CREATE on
 //     schema public, for the role only;
-//   - KEDA: USAGE on the River schema and SELECT on river_job, nothing else.
+//   - KEDA: USAGE on the River schema, SELECT on river_job and (CHAOS-6946) USAGE on
+//     schema public plus SELECT on public.sync_run_units -- the go-sync ScaledObject's
+//     planned-backlog trigger reads it -- nothing else. The psql script never granted
+//     the last two: every OTHER role gets an EXPLICIT USAGE on schema public (never
+//     relying on PUBLIC's own default), and KEDA now reads a table there too, so it
+//     gets the same explicit grant rather than the ambient PUBLIC default a hardened
+//     database may have revoked.
 //
 // One deliberate difference from the script: Apply runs in ONE transaction, so a
 // failure part-way leaves nothing half-applied (psql ran each statement on its own).
@@ -47,6 +53,12 @@ const MaxIdentifierBytes = 63
 // kedaLabel is the label (never the name) the KEDA login carries in errors and Verify.
 const kedaLabel = "keda"
 
+// kedaSyncRunUnits is the application table the go-sync KEDA trigger counts planned
+// units in (CHAOS-6946). It is Alembic's, in schema public, so it exists before this
+// command runs in the chart and in Compose; the KEDA login gets SELECT on it and on
+// nothing else in public.
+const kedaSyncRunUnits = "public.sync_run_units"
+
 // Role is one login to provision.
 type Role struct {
 	Name     string
@@ -61,8 +73,9 @@ type Options struct {
 	Coordinator Role
 	API         Role
 	QueryAPI    Role
-	// Keda is the KEDA postgresql scaler's read-only login. RiverSchema names the
-	// schema it may read (default "river").
+	// Keda is the KEDA postgresql scaler's read-only login: it reads river_job in
+	// RiverSchema (default "river") for the queue-backlog trigger, and (CHAOS-6946)
+	// public.sync_run_units for the go-sync planned-backlog trigger.
 	Keda        Role
 	RiverSchema string
 	// Authenticate, when set, is asked to log in as a role with the password it was
@@ -300,6 +313,8 @@ func Apply(ctx context.Context, pool interface {
 			{"revoke temporary", "REVOKE TEMPORARY ON DATABASE " + db + " FROM " + name},
 			{"river schema usage", "GRANT USAGE ON SCHEMA " + schema + " TO " + name},
 			{"river_job select", "GRANT SELECT ON " + schema + ".river_job TO " + name},
+			{"public schema usage", "GRANT USAGE ON SCHEMA public TO " + name},
+			{"sync_run_units select", "GRANT SELECT ON " + kedaSyncRunUnits + " TO " + name},
 		} {
 			if err := step(item.what, run.exec(ctx, item.statement)); err != nil {
 				return err
@@ -328,7 +343,7 @@ func (p Problem) String() string { return p.Role + ": " + p.Detail }
 // is green both right after Apply and after `dho migrate river` has granted the
 // table posture: the role exists as an unprivileged login (roleacl's own
 // definition), can CONNECT, holds no TEMPORARY, holds USAGE and no CREATE on
-// schema public, and -- KEDA -- can read river_job. A CREATE on schema public that
+// schema public, and -- KEDA -- can read river_job and public.sync_run_units. A CREATE on schema public that
 // arrives only through PUBLIC (the PostgreSQL default before v15) is a warning, not
 // a failure: revoking it would strip every other role of it, and the readiness
 // checks refuse the role for it loudly (the script's stated position).
@@ -423,6 +438,25 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 			if !readsJobs {
 				problems = append(problems, Problem{entry.label, "cannot SELECT river_job"})
 			}
+			// to_regclass is NULL for a missing table, and has_table_privilege(NULL) is
+			// NULL: a missing table is a NAMED problem, never a query error or a pass.
+			// has_table_privilege alone is not enough: it is a pure ACL check, blind to
+			// schema visibility. The role must ALSO hold effective USAGE on schema
+			// public (own grant or through PUBLIC) -- otherwise the query the table
+			// grant exists to serve fails to resolve the name at all ("permission
+			// denied for schema public"), even though this login holds a real SELECT
+			// grant on the table (r1 finding, CHAOS-6946).
+			var readsUnits, publicUsage bool
+			if err := q.QueryRow(ctx, `SELECT COALESCE(has_table_privilege($1::name, to_regclass($2), 'SELECT'), false)`,
+				entry.role.Name, kedaSyncRunUnits).Scan(&readsUnits); err != nil {
+				return nil, nil, fmt.Errorf("%w: cannot read the KEDA role's sync_run_units privilege", ErrProvisioning)
+			}
+			if err := q.QueryRow(ctx, `SELECT has_schema_privilege($1::name, 'public', 'USAGE')`, entry.role.Name).Scan(&publicUsage); err != nil {
+				return nil, nil, fmt.Errorf("%w: cannot read the KEDA role's schema public privilege", ErrProvisioning)
+			}
+			if !readsUnits || !publicUsage {
+				problems = append(problems, Problem{entry.label, "cannot SELECT sync_run_units"})
+			}
 			continue
 		}
 		if !usage {
@@ -437,7 +471,7 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 	return problems, warnings, nil
 }
 
-// kedaGrantExpected is true for the three grants Apply gives the KEDA login.
+// kedaGrantExpected is true for the five grants Apply gives the KEDA login.
 func kedaGrantExpected(grant roleacl.Grant, database, schema string) bool {
 	switch {
 	case grant.Class == "database" && grant.Object == database && grant.Privilege == "CONNECT":
@@ -445,6 +479,10 @@ func kedaGrantExpected(grant roleacl.Grant, database, schema string) bool {
 	case grant.Class == "schema" && grant.Object == schema && grant.Privilege == "USAGE":
 		return true
 	case grant.Class == "relation" && grant.Object == schema+".river_job" && grant.Privilege == "SELECT":
+		return true
+	case grant.Class == "relation" && grant.Object == kedaSyncRunUnits && grant.Privilege == "SELECT":
+		return true
+	case grant.Class == "schema" && grant.Object == "public" && grant.Privilege == "USAGE":
 		return true
 	}
 	return false
@@ -482,8 +520,9 @@ func publicAmbient(grant roleacl.Grant, database string) bool {
 
 // judgeGrant is the per-role judgement of one enumerated grant; "" means acceptable.
 //
-//   - KEDA holds exactly CONNECT here, USAGE on the River schema and SELECT on
-//     river_job. It has no later readiness check, so PUBLIC-derived grants count
+//   - KEDA holds exactly CONNECT here, USAGE on the River schema, USAGE on schema
+//     public, SELECT on river_job and SELECT on public.sync_run_units. It has no
+//     later readiness check, so PUBLIC-derived grants count
 //     (ambient CONNECT and USAGE on public excepted; CREATE on public through PUBLIC
 //     is the target-wide default the other roles warn about, not a KEDA problem).
 //   - The runtime roles: what neither command grants (runtimeGrantOutOfScope), in

@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 func TestMigrateRolesRefusesWhatWouldBeAmbiguousBeforeTouchingTheDatabase(t *testing.T) {
@@ -175,6 +176,9 @@ func TestMigrateRolesUsesRoleNamesExactlyAsConfiguredAndRefusesWhatRiverWouldRef
 	}
 
 	// The River schema exists (KEDA reads it); the runtime roles are valid; KEDA is odd.
+	// The KEDA login also reads public.sync_run_units (CHAOS-6946): the real migrated
+	// schema, applied first as the chart and Compose do (Alembic before provisioning).
+	pgschema.Apply(ctx, t, admin)
 	if _, err := admin.Exec(ctx, "CREATE SCHEMA river"); err != nil {
 		t.Fatal(err)
 	}

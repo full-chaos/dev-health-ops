@@ -50,6 +50,13 @@ const (
 	// every row it has just written is PENDING -- reporting those STALE
 	// tells the operator the carry failed when it in fact succeeded.
 	DigestPending = "PENDING"
+	// DigestUnregistered: a live row (at the live schema digest) of an operation
+	// the catalog does not register. Nothing can dispatch to it -- the edge
+	// resolves an operation through the catalog -- and nothing else names it, so
+	// it is listed as an entry of its own, with the row's own document digest, or
+	// it is invisible (missing is not healthy). Python's status lists these rows
+	// under the same word.
+	DigestUnregistered = "UNREGISTERED"
 )
 
 // OperationStatus is one row of `status`.
@@ -299,6 +306,7 @@ func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDiges
 	// same way a stale schema digest is dead, so it is collected, not
 	// promoted (r2 R2-03).
 	liveByOperation := map[string]routingStateRow{}
+	var unregistered []routingStateRow
 	unreachable := map[string][]string{}
 	staleDigests := map[string]map[string]bool{}
 	pendingDigests := map[string]map[string]bool{}
@@ -316,6 +324,12 @@ func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDiges
 				bucket[row.operation] = map[string]bool{}
 			}
 			bucket[row.operation][row.schemaDigest] = true
+			continue
+		}
+		// A live row of an operation the catalog does not register has no catalog
+		// row to hang off, so it becomes an entry of its own below.
+		if _, registered := catalog[row.operation]; !registered {
+			unregistered = append(unregistered, row)
 			continue
 		}
 		if row.documentDigest != catalog[row.operation] {
@@ -440,6 +454,31 @@ func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDiges
 			status.DigestState = DigestMissing
 		}
 		statuses = append(statuses, status)
+	}
+	// Every live row nobody registered, one entry per row, in a fixed order. Proven is
+	// false: a receipt proves a catalog operation's document, and there is none here.
+	sort.Slice(unregistered, func(i, j int) bool {
+		if unregistered[i].operation != unregistered[j].operation {
+			return unregistered[i].operation < unregistered[j].operation
+		}
+		return unregistered[i].documentDigest < unregistered[j].documentDigest
+	})
+	for _, row := range unregistered {
+		rollout := row.rollout
+		updatedAt := row.updatedAt
+		statuses = append(statuses, OperationStatus{
+			Operation:             row.operation,
+			DocumentDigest:        row.documentDigest,
+			DigestState:           DigestUnregistered,
+			Mode:                  row.mode,
+			CurrentCandidateBuild: row.candidateBuild,
+			RolloutPercentage:     &rollout,
+			EligibleOrgs:          row.eligibleOrgs,
+			Owner:                 row.owner,
+			UpdatedAt:             &updatedAt,
+			ReviewEvidence:        row.reviewEvidence,
+			RecordedBy:            row.recordedBy,
+		})
 	}
 	return statuses, nil
 }

@@ -2397,3 +2397,102 @@ func TestEnableBeforeStateLogNamesTheCorrectRowNotADeadOne(t *testing.T) {
 		t.Fatalf("the log must NOT name the dead row's state:\n%s", errOut)
 	}
 }
+
+// A live routing row of an operation the catalog does not register must appear in `status`
+// (CHAOS-6933): a row nobody registered is otherwise invisible, only counted in
+// rows_by_schema_digest, and "missing is not healthy". Python lists each such row as an
+// UNREGISTERED entry of its own; so does dho now, with the row's own document digest, mode,
+// build and provenance. A row of the same operation at another schema digest is not live and is
+// not listed.
+func TestStatusListsEveryLiveRowAnUnregisteredOneFlagged(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	catalogDigest := "6666666666666666666666666666666666666666666666666666666666666666"
+	first := "sha256:" + strings.Repeat("a", 64)
+	second := "sha256:" + strings.Repeat("b", 64)
+	stale := "sha256:" + strings.Repeat("7", 64)
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: catalogDigest})
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: catalogDigest})
+
+	seed := func(schema, document, operation, mode string, rollout int, evidence string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+			VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`, schema, document, operation, verbTestBuild); err != nil {
+			t.Fatalf("seed candidate build: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO public.go_api_routing_state
+				(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+			VALUES ($1, $2, $3, $4, 'go', $5, $6, $7, 'seeded')`, schema, document, operation, verbTestBuild, mode, rollout, evidence); err != nil {
+			t.Fatalf("seed routing row: %v", err)
+		}
+	}
+	seed(localSchemaDigest(), catalogDigest, verbTestOperation, "canary", 100, "the registered operation")
+	seed(localSchemaDigest(), first, "unregisteredOperation", "primary", 100, "nobody registered this")
+	seed(localSchemaDigest(), second, "unregisteredOperation", "shadow", 0, "a second document")
+	seed(stale, first, "otherUnregisteredOperation", "primary", 100, "at a stale schema digest")
+
+	out, _, err := captureVerb(t, "status", "-json", "-registry-url", server.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath)
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	var report struct {
+		Operations []map[string]any `json:"operations"`
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("status -json is not JSON: %v\n%s", err, out)
+	}
+	find := func(operation, document string) map[string]any {
+		for _, entry := range report.Operations {
+			if entry["operation"] == operation && entry["document_digest"] == document {
+				return entry
+			}
+		}
+		return nil
+	}
+	for document, want := range map[string]struct {
+		mode    string
+		rollout float64
+		reason  string
+	}{first: {"primary", 100, "nobody registered this"}, second: {"shadow", 0, "a second document"}} {
+		entry := find("unregisteredOperation", document)
+		if entry == nil {
+			t.Fatalf("the live row of an unregistered operation at document %s is not listed:\n%s", document, out)
+		}
+		if entry["digest_state"] != "UNREGISTERED" || entry["mode"] != want.mode || entry["rollout_percentage"] != want.rollout ||
+			entry["current_candidate_build"] != verbTestBuild || entry["owner"] != "go" || entry["review_evidence"] != want.reason ||
+			entry["recorded_by"] != "seeded" || entry["reachable"] != false || entry["proven"] != false {
+			t.Fatalf("the unregistered row at %s is listed wrongly: %v", document, entry)
+		}
+	}
+	if find("otherUnregisteredOperation", first) != nil {
+		t.Fatalf("a row at a stale schema digest is not live and must not be listed:\n%s", out)
+	}
+	registered := find(verbTestOperation, catalogDigest)
+	if registered == nil || registered["digest_state"] != "MATCH" {
+		t.Fatalf("the registered operation is listed wrongly: %v", registered)
+	}
+	if len(report.Operations) != 3 {
+		t.Fatalf("status lists %d entries, want the registered operation and the two unregistered rows:\n%s", len(report.Operations), out)
+	}
+	// The catalog's operations first, then the unregistered rows by operation and document digest.
+	if report.Operations[0]["operation"] != verbTestOperation || report.Operations[1]["document_digest"] != first || report.Operations[2]["document_digest"] != second {
+		t.Fatalf("the entries are not in the fixed order (catalog first, then unregistered by document digest):\n%s", out)
+	}
+
+	text, _, err := captureVerb(t, "status", "-registry-url", server.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath)
+	if err != nil {
+		t.Fatalf("status text must never refuse: %v", err)
+	}
+	lines := 0
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "unregisteredOperation") && strings.Contains(line, "UNREGISTERED") {
+			lines++
+		}
+	}
+	if lines != 2 || !strings.Contains(text, "serving document "+first+" -- the catalog does not register this operation at all") ||
+		!strings.Contains(text, "serving document "+second+" -- the catalog does not register this operation at all") {
+		t.Fatalf("the text report does not flag the two unregistered rows (%d lines):\n%s", lines, text)
+	}
+}

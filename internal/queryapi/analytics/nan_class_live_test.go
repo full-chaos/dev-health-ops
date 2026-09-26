@@ -17,7 +17,7 @@
 // divergence) the standing NaN-class ruling requires -- neither file
 // alone is the proof.
 //
-// CHAOS-4643: this file used to be enrolled in ci/go_integration_shards.tsv
+// CHAOS-4643: this file used to be enrolled in ci/go_integration_shards.d/
 // even though .github/workflows/go.yml never sets CLICKHOUSE_URI for the
 // integration-shard job -- CI ran the package, the guard below fired on
 // every run, and the resulting skip reported as a pass, silently, forever.
@@ -136,7 +136,7 @@ import (
 // requireLiveEnv is the single opt-in that turns a missing CLICKHOUSE_URI
 // from a silent skip into a loud failure. Whoever runs this file as a slot
 // proof sets it; CI's deterministic integration shard never does, because
-// this package is not enrolled there -- see ci/go_integration_shards.tsv's
+// this package is not enrolled there -- see ci/go_integration_shards.d/'s
 // INTEGRATION_DENYLIST entry and this file's own header. Deliberately the
 // SAME variable both tests below funnel through nanClassClickHouseURI,
 // rather than a second, easily-forgotten flag.

@@ -129,6 +129,8 @@ on:
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
       - 'ci/venue_oracle_registry.d/**'
+      # CHAOS-6926: the per-package venue weights the legs are balanced by.
+      - 'ci/venue_oracle_weights.d/**'
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
       - 'ci/go_race_shard.awk'
@@ -138,7 +140,7 @@ on:
       - 'ci/venue_oracle_proof.awk'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
-      - 'ci/go_integration_shards.tsv'
+      - 'ci/go_integration_shards.d/**'
       - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-live-python-oracles.txt'
       - 'ci/requirements-clickhouse-migrations.txt'
@@ -298,6 +300,8 @@ on:
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
       - 'ci/venue_oracle_registry.d/**'
+      # CHAOS-6926: the per-package venue weights the legs are balanced by.
+      - 'ci/venue_oracle_weights.d/**'
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
       - 'ci/go_race_shard.awk'
@@ -307,7 +311,7 @@ on:
       - 'ci/venue_oracle_proof.awk'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
-      - 'ci/go_integration_shards.tsv'
+      - 'ci/go_integration_shards.d/**'
       - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-live-python-oracles.txt'
       - 'ci/requirements-clickhouse-migrations.txt'

@@ -392,7 +392,7 @@ func writeProof(t *testing.T, marker string) {
 	if dir == "" {
 		// Optional here, unlike the live-python oracles. This test runs in the
 		// INTEGRATION stage, whose registration proof is its row in
-		// ci/go_integration_shards.tsv rather than a marker file: the shard
+		// ci/go_integration_shards.d/ rather than a marker file: the shard
 		// planner fails on an unlisted package, so an unregistered test cannot
 		// silently not-run. The marker is still written when a proof dir is
 		// supplied, so a live-oracle-style invocation keeps working.

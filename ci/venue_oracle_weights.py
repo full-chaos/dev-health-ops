@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Regenerate ci/venue_oracle_weights.tsv from saved venue-oracles run logs (CHAOS-6891).
+"""Regenerate ci/venue_oracle_weights.d/ from saved venue-oracles run logs (CHAOS-6891).
 
     gh run view <RUN_ID> --repo <owner>/<repo> --log > run.log
-    python3 ci/venue_oracle_weights.py run.log [more.log ...] > /tmp/weights.tsv
-    mv /tmp/weights.tsv ci/venue_oracle_weights.tsv
+    python3 ci/venue_oracle_weights.py run.log [more.log ...]
+
+It rewrites the per-package files of ci/venue_oracle_weights.d/ in place (CHAOS-6926:
+one file per package, named like the registry's, so PRs that add venue rows in
+different packages never conflict) and drops the file of a package that has no
+registry run row left.
 
 ci/venue_oracle_shard.awk balances the venue-oracles legs by the seconds this
 file records for each registry `run` row. Input: the `go test -v` output of the
@@ -27,7 +31,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-WEIGHTS = ROOT / "ci" / "venue_oracle_weights.tsv"
+WEIGHTS = ROOT / "ci" / "venue_oracle_weights.d"
 REGISTRY_DIR = ROOT / "ci" / "venue_oracle_registry.d"
 # A registry row nobody has measured yet (a new test: venue oracles only run on
 # main, so its author cannot measure it) is planned PESSIMISTICALLY and flagged
@@ -41,7 +45,8 @@ UNMEASURED = "unmeasured"
 HEADER = """\
 # Measured seconds of one venue-oracles registry `run` row (CHAOS-6891): the weight
 # ci/venue_oracle_shard.awk balances the venue legs by (longest-processing-time
-# assignment). Columns: package dir, test, seconds. Regenerate from a saved run log:
+# assignment). Columns: package dir, test, seconds. One file per package in
+# ci/venue_oracle_weights.d/ (CHAOS-6926). Regenerate from a saved run log:
 #   gh run view <RUN_ID> --log > run.log && python3 ci/venue_oracle_weights.py run.log
 # A stale weight costs balance, never coverage (the legs always partition the run
 # rows); tests/tooling/test_venue_oracle_shards.py fails a PR whose registry has a run
@@ -87,11 +92,18 @@ def registry_run_rows() -> list[tuple[str, str]]:
     return sorted(rows)
 
 
+def weight_files(path: Path) -> list[Path]:
+    """The *.tsv row files of a weights directory (C-locale order), or the one file."""
+    if path.is_dir():
+        return sorted(path.glob("*.tsv"), key=lambda p: p.name.encode())
+    return [path] if path.exists() else []
+
+
 def read_weights(path: Path) -> dict[tuple[str, str], tuple[int, bool]]:
-    """{(package, test): (seconds, marked unmeasured)}."""
+    """{(package, test): (seconds, marked unmeasured)} from a directory or one file."""
     weights: dict[tuple[str, str], tuple[int, bool]] = {}
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
+    for file in weight_files(path):
+        for line in file.read_text(encoding="utf-8").splitlines():
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
             fields = line.split("\t")
@@ -100,6 +112,32 @@ def read_weights(path: Path) -> dict[tuple[str, str], tuple[int, bool]]:
                 len(fields) > 3 and fields[3] == UNMEASURED,
             )
     return weights
+
+
+def file_name(package: str) -> str:
+    """The row file of a package: the registry's spelling, "/" written "__"."""
+    return package.replace("/", "__") + ".tsv"
+
+
+def split_by_package(text: str) -> dict[str, str]:
+    """{file name: rows} of a build() text: the header stays in README.md."""
+    files: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        files.setdefault(file_name(line.split("\t")[0]), []).append(line + "\n")
+    return {name: "".join(rows) for name, rows in files.items()}
+
+
+def write_weights(directory: Path, text: str) -> None:
+    """Replace the directory's row files with the rows of `text`, one file per package."""
+    directory.mkdir(parents=True, exist_ok=True)
+    files = split_by_package(text)
+    for old in directory.glob("*.tsv"):
+        if old.name not in files:
+            old.unlink()
+    for name, rows in files.items():
+        (directory / name).write_text(rows, encoding="utf-8")
 
 
 def build(
@@ -136,7 +174,7 @@ def main(argv: list[str]) -> int:
         "--weights",
         type=Path,
         default=WEIGHTS,
-        help="the existing file (kept for unmeasured rows)",
+        help="the weights directory (or one file): read for the unmeasured rows, rewritten in place",
     )
     args = parser.parse_args(argv)
     seen: dict[tuple[str, str], float] = {}
@@ -144,7 +182,7 @@ def main(argv: list[str]) -> int:
         parse_log(log.read_text(encoding="utf-8", errors="replace").splitlines(), seen)
     rows = registry_run_rows()
     text, unmeasured = build(rows, seen, read_weights(args.weights))
-    sys.stdout.write(text)
+    write_weights(args.weights, text)
     measured = sum(1 for row in rows if row in seen)
     print(
         f"venue_oracle_weights: {measured} of {len(rows)} run rows measured from {len(args.logs)} log(s); "

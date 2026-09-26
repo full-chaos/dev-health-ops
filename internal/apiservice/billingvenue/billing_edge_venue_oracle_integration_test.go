@@ -116,12 +116,15 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 	paths := []string{"/health", "/health/", "/healthz", "/HEALTH", "/", "/api/v1/billing/webhooks/stripe", "/api/v1/billing/webhooks/stripe/",
 		"/api/v1/billing/plans", "/api/v1/billing/checkout", "/x/y", "/health/x", "/docs", "/openapi.json", "/metrics"}
 	for _, path := range paths {
-		for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"} {
+		// The catch-all's seven methods answer its 404; any other method keeps
+		// Starlette's partial-match 405 (the first route whose path matches, else
+		// the catch-all's own list).
+		for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "TRACE", "PROPFIND", "PURGE"} {
 			if (path == "/health" && (method == "GET" || method == "HEAD")) || (path == "/api/v1/billing/webhooks/stripe" && method == "POST") {
 				continue // the health grid and the webhook cases above
 			}
 			body := (*string)(nil)
-			if method == "POST" || method == "PUT" || method == "PATCH" {
+			if method == "POST" || method == "PUT" || method == "PATCH" || method == "PROPFIND" {
 				body = venueoracle.B64("{}")
 			}
 			requests = append(requests, venueoracle.Request{Name: method + " " + path, Method: method, Path: path, Headers: map[string]string{"Content-Type": "application/json"}, Body: body})

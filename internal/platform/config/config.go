@@ -894,8 +894,9 @@ func Load(spec Spec) (Config, error) {
 			)
 		}
 		// The billing-edge listener is opt-in: an empty value leaves it off;
-		// a set one must be a host:port that differs from the api and
-		// operator addresses (two ":0" addresses never collide).
+		// a set one must be a host:port that does not overlap the api or
+		// operator listener (the same port on a shared interface: ":8010"
+		// and "127.0.0.1:8010" collide; port 0 never does).
 		cfg.APIBillingEdgeAddress = strings.TrimSpace(envOrDefault(lookup, "DEV_HEALTH_API_BILLING_EDGE_ADDR", ""))
 		if cfg.APIBillingEdgeAddress != "" {
 			if _, _, splitErr := net.SplitHostPort(cfg.APIBillingEdgeAddress); splitErr != nil {
@@ -903,14 +904,12 @@ func Load(spec Spec) (Config, error) {
 					"%s must be a host:port address", settingLabel("DEV_HEALTH_API_BILLING_EDGE_ADDR"),
 				)
 			}
-			if !strings.HasSuffix(cfg.APIBillingEdgeAddress, ":0") {
-				for _, other := range []struct{ value, name string }{{cfg.APIAddress, "DEV_HEALTH_API_ADDR"}, {cfg.HTTPAddress, "DEV_HEALTH_HTTP_ADDR"}} {
-					if cfg.APIBillingEdgeAddress == other.value {
-						return Config{}, fmt.Errorf(
-							"%s must differ from %s: each listener has its own address",
-							settingLabel("DEV_HEALTH_API_BILLING_EDGE_ADDR"), settingLabel(other.name),
-						)
-					}
+			for _, other := range []struct{ value, name string }{{cfg.APIAddress, "DEV_HEALTH_API_ADDR"}, {cfg.HTTPAddress, "DEV_HEALTH_HTTP_ADDR"}} {
+				if listenAddressesOverlap(cfg.APIBillingEdgeAddress, other.value) {
+					return Config{}, fmt.Errorf(
+						"%s must differ from %s: each listener has its own address",
+						settingLabel("DEV_HEALTH_API_BILLING_EDGE_ADDR"), settingLabel(other.name),
+					)
 				}
 			}
 		}

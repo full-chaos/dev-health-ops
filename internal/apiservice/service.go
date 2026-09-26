@@ -481,23 +481,28 @@ func NewServer(
 // (dev_health_ops.api.billing_edge:app) is a bare FastAPI app, with none of
 // the main app's middleware, so this server carries none of its origin check,
 // security headers or CORS, and redirects no slash.
+//
+// Its transport bounds are the main listener's (maxBodyBytes and the header
+// limits, which are uvicorn's and the ingress's): the venue serves the Python
+// edge in-process (no uvicorn layer), so it cannot judge an over-limit body or
+// head; both listeners refuse them the same way (a named limit of CHAOS-6520).
 func NewEdgeServer(cfg config.Config, logger *slog.Logger, routes []httpapi.Route) (*httpapi.Server, error) {
 	return httpapi.NewServer(httpapi.ServerOptions{
-		Name:                 "billing-edge-http",
-		Address:              cfg.APIBillingEdgeAddress,
-		Logger:               logger,
-		Routes:               routes,
-		RequestTimeout:       requestTimeout,
-		MaxBodyBytes:         maxBodyBytes,
-		ErrorWriter:          WriteError,
-		StrictPaths:          true,
-		MaxHeaderBytes:       maxHeaderBytes,
-		MaxHeaderValueCount:  maxHeaderValueCount,
-		IdleTimeout:          idleTimeout,
-		ExplicitHead:         true,
-		NotAllowedIsNotFound: true,
-		ForwardedAllowIPs:    forwardedAllowIPs(),
-		Middleware:           []func(http.Handler) http.Handler{EdgeUnhandledErrorShape, CloseHTTP10, DecodedPathRouting},
+		Name:                "billing-edge-http",
+		Address:             cfg.APIBillingEdgeAddress,
+		Logger:              logger,
+		Routes:              routes,
+		RequestTimeout:      requestTimeout,
+		MaxBodyBytes:        maxBodyBytes,
+		ErrorWriter:         WriteError,
+		StrictPaths:         true,
+		MaxHeaderBytes:      maxHeaderBytes,
+		MaxHeaderValueCount: maxHeaderValueCount,
+		IdleTimeout:         idleTimeout,
+		ExplicitHead:        true,
+		CatchAllMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions, http.MethodHead},
+		ForwardedAllowIPs:   forwardedAllowIPs(),
+		Middleware:          []func(http.Handler) http.Handler{EdgeUnhandledErrorShape, CloseHTTP10, DecodedPathRouting},
 	})
 }
 

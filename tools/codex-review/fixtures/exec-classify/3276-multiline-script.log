@@ -1,0 +1,31 @@
+codex
+The isolated PostgreSQL is ready on this round’s labeled container, and the tests will use per-test scratch databases there. I’m running the named-package build/vet checks and unit coverage first, then the same packages’ integration-tagged tests.
+exec
+/bin/bash -lc "set -euo pipefail
+printf '== go build named packages ==\\n'
+go build ./internal/rivermigrate ./internal/storage/roleprovision
+printf '== go vet named packages ==\\n'
+go vet ./internal/rivermigrate ./internal/storage/roleprovision
+printf '== go vet named integration packages ==\\n'
+go vet -tags=integration ./internal/rivermigrate ./internal/storage/roleprovision
+printf '== unit tests with coverage: roleprovision ==\\n'
+go test -count=1 -coverprofile=/tmp/roleprovision-unit.cover ./internal/storage/roleprovision
+printf '== roleprovision unit coverage ==\\n'
+go tool cover -func=/tmp/roleprovision-unit.cover
+printf '== unit tests with coverage: rivermigrate ==\\n'
+go test -count=1 -coverprofile=/tmp/rivermigrate-unit.cover ./internal/rivermigrate
+printf '== rivermigrate unit coverage ==\\n'
+go tool cover -func=/tmp/rivermigrate-unit.cover" in <round-dir>
+ succeeded in 3627ms:
+== go build named packages ==
+== go vet named packages ==
+== go vet named integration packages ==
+== unit tests with coverage: roleprovision ==
+ok  	github.com/full-chaos/dev-health-ops/internal/storage/roleprovision	0.011s	coverage: 22.3% of statements
+== roleprovision unit coverage ==
+github.com/full-chaos/dev-health-ops/internal/storage/roleprovision/roleprovision.go:77:	configured	100.0%
+github.com/full-chaos/dev-health-ops/internal/storage/roleprovision/roleprovision.go:93:	schema		100.0%
+github.com/full-chaos/dev-health-ops/internal/storage/roleprovision/roleprovision.go:106:	Validate	100.0%
+github.com/full-chaos/dev-health-ops/internal/storage/roleprovision/roleprovision.go:146:	ident		0.0%
+github.com/full-chaos/dev-health-ops/internal/storage/roleprovision/roleprovision.go:151:	exec		0.0%
+github.com/full-chaos/dev-health-ops/internal/storage/roleprovision/roleprovision.go:158:	generated	0.0%

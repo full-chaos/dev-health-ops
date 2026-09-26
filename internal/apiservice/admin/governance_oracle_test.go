@@ -22,30 +22,32 @@ import (
 // compared byte for byte, and the rows the writes touched are compared after.
 func TestGovernanceRoutesVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, governanceGolden("governance", "TestGovernanceRoutesVenueOracle", "ce4a09035f77c931dacb5c67ca7a133b3e7248520edf618d21101d7734aa771f"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("gov")
 	const jwtKey = "venue-oracle-test-secret-key-for-governance-flow-32-bytes!!"
 
-	orgEnterprise := uuid.New() // org_licenses tier enterprise
-	orgCommunity := uuid.New()  // org_licenses tier community
-	orgOverride := uuid.New()   // community license with features_override audit_log
-	orgTierOnly := uuid.New()   // no license row, organizations.tier enterprise
-	orgBogus := uuid.New()      // org_licenses tier outside LicenseTier
-	orgAnyNoLicense := uuid.New()
-	superID, superOrgID := uuid.New(), uuid.New()
-	adminEnt, adminComm, adminOvr, adminTier, adminBogus, memberEnt := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	adminNoLicense := uuid.New()
+	orgEnterprise := nextID() // org_licenses tier enterprise
+	orgCommunity := nextID()  // org_licenses tier community
+	orgOverride := nextID()   // community license with features_override audit_log
+	orgTierOnly := nextID()   // no license row, organizations.tier enterprise
+	orgBogus := nextID()      // org_licenses tier outside LicenseTier
+	orgAnyNoLicense := nextID()
+	superID, superOrgID := nextID(), nextID()
+	adminEnt, adminComm, adminOvr, adminTier, adminBogus, memberEnt := nextID(), nextID(), nextID(), nextID(), nextID(), nextID()
+	adminNoLicense := nextID()
 
 	auditIDs := make([]uuid.UUID, 8)
 	for i := range auditIDs {
-		auditIDs[i] = uuid.New()
+		auditIDs[i] = nextID()
 	}
-	badShapeAuditID := uuid.New()
-	otherOrgAuditID := uuid.New()
+	badShapeAuditID := nextID()
+	otherOrgAuditID := nextID()
 	ipRows := map[string]uuid.UUID{}
 	for _, name := range []string{"v4", "cidr", "v6", "expired", "inactive"} {
-		ipRows[name] = uuid.New()
+		ipRows[name] = nextID()
 	}
-	overrideSeedID := uuid.New()
+	overrideSeedID := nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   root,
@@ -64,7 +66,7 @@ VALUES ($1, $2, $2, $3, 'stripe', true, now(), now())`, id, slug, tier)
 			}
 			license := func(orgID uuid.UUID, tier, overrides string) {
 				exec(`INSERT INTO org_licenses (id, org_id, tier, is_valid, license_type, managed_by, features_override, created_at, updated_at)
-VALUES ($1, $2, $3, true, 'saas', 'stripe', $4::json, now(), now())`, uuid.New(), orgID, tier, overrides)
+VALUES ($1, $2, $3, true, 'saas', 'stripe', $4::json, now(), now())`, nextID(), orgID, tier, overrides)
 			}
 			org(orgEnterprise, "gov-ent", "enterprise")
 			license(orgEnterprise, "enterprise", "{}")
@@ -126,6 +128,9 @@ VALUES ($1, $2, $3, $4, $5, NULL, $6::timestamptz, $6::timestamptz, $7::timestam
 			ip("inactive", "203.0.113.7", "off", false, nil, "2026-02-05T00:00:00+00:00")
 
 			exec(`UPDATE feature_flags SET created_at = '2020-01-01T00:00:00+00:00', updated_at = '2020-01-01T00:00:00+00:00'`)
+			// The migration gives every flag a random id, and a flag's id is part of
+			// the requests a golden records: make it a function of the key.
+			exec(`UPDATE feature_flags SET id = md5('dho-golden-flag-' || key)::uuid`)
 			exec(`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, expires_at, config, reason, created_by, created_at, updated_at)
 VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL, '{"b": 1, "a": 2}'::json, 'seed', NULL, '2026-03-01T00:00:00+00:00', '2026-03-01T00:00:00+00:00')`,
 				overrideSeedID, orgEnterprise)
@@ -221,7 +226,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		get("audit get", "/audit-logs/"+auditIDs[0].String(), "ent"),
 		get("audit get empty json", "/audit-logs/"+auditIDs[3].String(), "ent"),
 		get("audit get null json", "/audit-logs/"+auditIDs[2].String(), "ent"),
-		get("audit get unknown", "/audit-logs/"+uuid.New().String(), "ent"),
+		get("audit get unknown", "/audit-logs/"+nextID().String(), "ent"),
 		get("audit get other org", "/audit-logs/"+auditIDs[6].String(), "ent"),
 		get("audit get malformed id", "/audit-logs/not-a-uuid", "ent"),
 		get("audit get bad shape", "/audit-logs/"+badShapeAuditID.String(), "tier"),
@@ -235,7 +240,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		get("audit user activity", "/audit-logs/user/"+adminEnt.String(), "ent"),
 		get("audit user activity limit", "/audit-logs/user/"+adminEnt.String()+"?limit=2", "ent"),
 		get("audit user activity malformed", "/audit-logs/user/not-a-uuid", "ent"),
-		get("audit user activity unknown", "/audit-logs/user/"+uuid.New().String(), "ent"),
+		get("audit user activity unknown", "/audit-logs/user/"+nextID().String(), "ent"),
 		get("platform audit list", "/platform/audit-logs", "super"),
 		get("platform audit filtered", "/platform/audit-logs?status=failure&limit=1", "super"),
 		get("platform audit user malformed", "/platform/audit-logs?user_id=zzz", "super"),
@@ -248,7 +253,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		get("flags list non-superuser", "/feature-flags", "ent"),
 		get("overrides list", "/orgs/"+orgEnterprise.String()+"/feature-overrides", "super"),
 		get("overrides list empty org", "/orgs/"+orgCommunity.String()+"/feature-overrides", "super"),
-		get("overrides list unknown org", "/orgs/"+uuid.New().String()+"/feature-overrides", "super"),
+		get("overrides list unknown org", "/orgs/"+nextID().String()+"/feature-overrides", "super"),
 		get("overrides list malformed org", "/orgs/not-a-uuid/feature-overrides", "super"),
 		get("overrides list non-superuser", "/orgs/"+orgEnterprise.String()+"/feature-overrides", "ent"),
 
@@ -268,7 +273,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		get("ip list member refused", "/ip-allowlist", "member"),
 		get("ip get", "/ip-allowlist/"+ipRows["cidr"].String(), "ent"),
 		get("ip get null description", "/ip-allowlist/"+ipRows["cidr"].String(), "ent"),
-		get("ip get unknown", "/ip-allowlist/"+uuid.New().String(), "ent"),
+		get("ip get unknown", "/ip-allowlist/"+nextID().String(), "ent"),
 		get("ip get malformed", "/ip-allowlist/xyz", "ent"),
 		get("ip get community", "/ip-allowlist/"+ipRows["cidr"].String(), "comm"),
 	}
@@ -336,7 +341,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		venueoracle.Request{Name: "W ip create with non-hex 32-char X-User-Id", Method: "POST", Path: admin + "/ip-allowlist",
 			Headers: jsonAuthWithUser("ent", strings.Repeat("z", 32)), Body: venueoracle.B64(`{"ip_range":"100.64.0.14"}`)},
 		venueoracle.Request{Name: "W ip create with unknown X-User-Id", Method: "POST", Path: admin + "/ip-allowlist",
-			Headers: jsonAuthWithUser("ent", uuid.New().String()), Body: venueoracle.B64(`{"ip_range":"100.64.0.15"}`)},
+			Headers: jsonAuthWithUser("ent", nextID().String()), Body: venueoracle.B64(`{"ip_range":"100.64.0.15"}`)},
 		venueoracle.Request{Name: "W ip create with braced X-User-Id", Method: "POST", Path: admin + "/ip-allowlist",
 			Headers: jsonAuthWithUser("ent", "{"+adminEnt.String()+"}"), Body: venueoracle.B64(`{"ip_range":"100.64.0.16"}`)},
 		// updates
@@ -350,7 +355,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		send("W ip patch empty body", "PATCH", "/ip-allowlist/"+ipRows["cidr"].String(), "ent", `{}`),
 		send("W ip patch nulls", "PATCH", "/ip-allowlist/"+ipRows["cidr"].String(), "ent", `{"ip_range":null,"description":null,"is_active":null,"expires_at":null}`),
 		send("W ip patch bad bool", "PATCH", "/ip-allowlist/"+ipRows["cidr"].String(), "ent", `{"is_active":"perhaps"}`),
-		send("W ip patch unknown entry", "PATCH", "/ip-allowlist/"+uuid.New().String(), "ent", `{"ip_range":"nope"}`),
+		send("W ip patch unknown entry", "PATCH", "/ip-allowlist/"+nextID().String(), "ent", `{"ip_range":"nope"}`),
 		send("W ip patch malformed id", "PATCH", "/ip-allowlist/xyz", "ent", `{}`),
 		send("W ip patch community refused", "PATCH", "/ip-allowlist/"+ipRows["cidr"].String(), "comm", `{}`),
 		// list after writes (ids and timestamps of created rows redacted)
@@ -381,10 +386,10 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		send("W override create bad expiry", "POST", ov(orgEnterprise), "super", fmt.Sprintf(`{"feature_id":%q,"expires_at":"x"}`, flagIDs[7])),
 		send("W override create duplicate", "POST", ov(orgEnterprise), "super", fmt.Sprintf(`{"feature_id":%q}`, flagIDs[1])),
 		send("W override create seeded duplicate", "POST", ov(orgEnterprise), "super", fmt.Sprintf(`{"feature_id":%q}`, flagIDs[0])),
-		send("W override create unknown flag", "POST", ov(orgEnterprise), "super", fmt.Sprintf(`{"feature_id":%q}`, uuid.New())),
+		send("W override create unknown flag", "POST", ov(orgEnterprise), "super", fmt.Sprintf(`{"feature_id":%q}`, nextID())),
 		send("W override create malformed flag id", "POST", ov(orgEnterprise), "super", `{"feature_id":"nope"}`),
 		send("W override create missing feature", "POST", ov(orgEnterprise), "super", `{}`),
-		send("W override create unknown org", "POST", ov(uuid.New()), "super", fmt.Sprintf(`{"feature_id":%q}`, flagIDs[8])),
+		send("W override create unknown org", "POST", ov(nextID()), "super", fmt.Sprintf(`{"feature_id":%q}`, flagIDs[8])),
 		send("W override create malformed org", "POST", "/orgs/nope/feature-overrides", "super", fmt.Sprintf(`{"feature_id":%q}`, flagIDs[8])),
 		send("W override create non-superuser", "POST", ov(orgEnterprise), "ent", fmt.Sprintf(`{"feature_id":%q}`, flagIDs[9])),
 		get("W overrides list after creates", "/orgs/"+orgEnterprise.String()+"/feature-overrides", "super"),
@@ -398,7 +403,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		send("W override patch empty reason", "PATCH", ov(orgEnterprise)+"/"+overrideSeedID.String(), "super", `{"reason":""}`),
 		send("W override patch bad config", "PATCH", ov(orgEnterprise)+"/"+overrideSeedID.String(), "super", `{"config":5}`),
 		send("W override patch wrong org", "PATCH", ov(orgCommunity)+"/"+overrideSeedID.String(), "super", `{}`),
-		send("W override patch unknown", "PATCH", ov(orgEnterprise)+"/"+uuid.New().String(), "super", `{}`),
+		send("W override patch unknown", "PATCH", ov(orgEnterprise)+"/"+nextID().String(), "super", `{}`),
 		send("W override patch malformed id", "PATCH", ov(orgEnterprise)+"/nope", "super", `{}`),
 		send("W override patch non-superuser", "PATCH", ov(orgEnterprise)+"/"+overrideSeedID.String(), "ent", `{}`),
 		send("W flag patch enabled", "PATCH", "/feature-flags/"+flagIDs[10], "super", `{"is_enabled":false}`),
@@ -407,7 +412,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		send("W flag patch empty", "PATCH", "/feature-flags/"+flagIDs[12], "super", `{}`),
 		send("W flag patch nulls", "PATCH", "/feature-flags/"+flagIDs[12], "super", `{"is_enabled":null,"is_beta":null,"is_deprecated":null}`),
 		send("W flag patch bad bool", "PATCH", "/feature-flags/"+flagIDs[12], "super", `{"is_beta":"perhaps"}`),
-		send("W flag patch unknown", "PATCH", "/feature-flags/"+uuid.New().String(), "super", `{}`),
+		send("W flag patch unknown", "PATCH", "/feature-flags/"+nextID().String(), "super", `{}`),
 		send("W flag patch malformed", "PATCH", "/feature-flags/nope", "super", `{}`),
 		send("W flag patch non-superuser", "PATCH", "/feature-flags/"+flagIDs[12], "ent", `{}`),
 		get("W flags list after patches", "/feature-flags", "super"),
@@ -417,10 +422,11 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		venueoracle.Request{Name: "W override delete non-superuser", Method: "DELETE", Path: admin + ov(orgEnterprise) + "/" + overrideSeedID.String(), Headers: auth("ent")},
 	)
 
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, goPool := startGoServer(t, ctx, venue, jwtKey)
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		// Ids are redacted from the comparison, so a created row's id is
 		// checked here instead: the Go response must carry a valid UUID that
 		// names the row it inserted.
@@ -464,7 +470,9 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 
 	compare := func(name, query string) {
 		t.Helper()
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		source := golden.Rows(t, name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		})
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
 		if source == "" {
 			t.Errorf("%s: the query matched no rows on the Python plane; the comparison proves nothing", name)
@@ -478,4 +486,5 @@ FROM org_ip_allowlist ORDER BY ip_range`)
 	compare("org_feature_overrides rows", `SELECT feature_id::text, is_enabled, expires_at::text, config::text, reason, created_by::text, updated_by::text
 FROM org_feature_overrides ORDER BY feature_id::text, org_id::text`)
 	compare("feature_flags rows", `SELECT key, is_enabled, is_beta, is_deprecated, (updated_at > '2020-01-02')::text FROM feature_flags ORDER BY key`)
+	golden.Finish(t)
 }

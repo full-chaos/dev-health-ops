@@ -50,14 +50,22 @@ const ingestAPIKey = "venue-metrics-ingest-key"
 // then proves nothing.
 func TestCounterParityVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	orgID, ownerID, otherOrgID := uuid.New(), uuid.New(), uuid.New()
+	golden := venueoracle.OpenGolden(t, goldenSpec("counter_parity", "TestCounterParityVenueOracle", "2cf8fb4199eea784509e5394ab8b2b9c927e08f1c0bb52a10b40a7bb746e5320"))
+	nextID := func() func() uuid.UUID {
+		next := 0
+		return func() uuid.UUID {
+			next++
+			return uuid.MustParse(venueoracle.StableUUID("metrics-" + strconv.Itoa(next)))
+		}
+	}()
+	orgID, ownerID, otherOrgID := nextID(), nextID(), nextID()
 	// A community-tier org at its max_repos (3 active sync configs) with a
 	// disabled Jira source: enabling it is refused at the repo limit.
-	cappedOrg, cappedOwner, jiraIntegration, jiraSource := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	garbled, notJSON, emptyList, oddProvider := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	jwtKey := uuid.NewString() + uuid.NewString()
+	cappedOrg, cappedOwner, jiraIntegration, jiraSource := nextID(), nextID(), nextID(), nextID()
+	garbled, notJSON, emptyList, oddProvider := nextID(), nextID(), nextID(), nextID()
+	jwtKey := nextID().String() + nextID().String()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:      venueRoot(),
+		Root:      golden.PythonRoot(t, venueRoot()),
 		JWTKey:    jwtKey,
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + encryptionKey, "INGEST_API_KEYS=" + ingestAPIKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
@@ -92,7 +100,7 @@ VALUES ($1, 'venue-metrics-capped', 'Venue Metrics Capped', 'community', 'stripe
 				{`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'venue-metrics-capped@example.com', true, true, false, 0, now(), now())`, []any{cappedOwner}},
 				{`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'owner', now(), now(), now())`, []any{uuid.New(), cappedOrg, cappedOwner}},
+VALUES ($1, $2, $3, 'owner', now(), now(), now())`, []any{nextID(), cappedOrg, cappedOwner}},
 				{`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
 VALUES ($1, $2, 'jira', NULL, 'capped-jira', '{}'::json, true, now(), now())`, []any{jiraIntegration, cappedOrg.String()}},
 				{`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name,
@@ -105,7 +113,7 @@ VALUES (gen_random_uuid(), $1, 'c1', 'github', '[]'::json, '{}'::json, true, fal
 				{`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'venue-metrics-owner@example.com', true, true, false, 0, now(), now())`, []any{ownerID}},
 				{`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'owner', now(), now(), now())`, []any{uuid.New(), orgID, ownerID}},
+VALUES ($1, $2, $3, 'owner', now(), now(), now())`, []any{nextID(), orgID, ownerID}},
 				{`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
 VALUES ($1, $2, 'github', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::json, now(), now())`, []any{garbled, orgID.String()}},
 				{`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
@@ -173,7 +181,7 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 	}
 	scrape := venueoracle.Request{Name: "metrics", Method: http.MethodGet, Path: "/metrics"}
 
-	python := venue.ServePython(t, append(append([]venueoracle.Request{}, requests...), scrape))
+	python := golden.Python(t, venue, append(append([]venueoracle.Request{}, requests...), scrape))
 	pythonMetrics := python[len(python)-1]
 	if pythonMetrics.Status != http.StatusOK {
 		t.Fatalf("python /metrics answered %d", pythonMetrics.Status)
@@ -181,7 +189,7 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 
 	t.Setenv("INGEST_API_KEYS", ingestAPIKey)
 	goBase, operator := startGoAPI(t, ctx, venue, jwtKey)
-	receipt := venueoracle.Diff(t, goBase, requests, python[:len(requests)], venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python[:len(requests)], venueoracle.DiffOptions{Golden: golden})
 	t.Log("\n" + receipt)
 	goMetrics := operator()
 
@@ -200,7 +208,7 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 		}
 		t.Logf("%s (%s): SAME %v", counter.metric, counter.route, goSamples)
 	}
-	venueoracle.WriteProof(t)
+	golden.Finish(t)
 }
 
 // routeCounters are the counters this oracle drives, with the route whose

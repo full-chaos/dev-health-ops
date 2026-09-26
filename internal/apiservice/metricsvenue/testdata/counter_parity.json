@@ -1,0 +1,307 @@
+{
+  "header": {
+    "test": "TestCounterParityVenueOracle",
+    "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=$DIR DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestCounterParityVenueOracle$' ./internal/apiservice/metricsvenue/ (it fails once by design and prints the digest to pin)"
+  },
+  "requests": [
+    {
+      "name": "test a garbled stored credential",
+      "method": "POST",
+      "path": "/api/v1/admin/credentials/test",
+      "body_sha256": "67d0da050ebb2dc149aee4b813039fc84f46f66ff2022409aa5b0b1bfa6058fa",
+      "status": 422,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b49b3d98-6907-4c36-8e08-8041a7fd6b42"
+      },
+      "body": "{\"detail\":{\"message\":\"Stored credential exists but cannot be used for a test connection\",\"reason_code\":\"credential_unreadable\"}}"
+    },
+    {
+      "name": "test it again",
+      "method": "POST",
+      "path": "/api/v1/admin/credentials/test",
+      "body_sha256": "67d0da050ebb2dc149aee4b813039fc84f46f66ff2022409aa5b0b1bfa6058fa",
+      "status": 422,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3090b30e-609e-4c1f-a5bf-34f5381e11bf"
+      },
+      "body": "{\"detail\":{\"message\":\"Stored credential exists but cannot be used for a test connection\",\"reason_code\":\"credential_unreadable\"}}"
+    },
+    {
+      "name": "test a stored credential that is not JSON",
+      "method": "POST",
+      "path": "/api/v1/admin/credentials/test",
+      "body_sha256": "b1ba0004d1a8aa80548277928deca2530521900693ae7fb08d8bcba1ea50b9a7",
+      "status": 422,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1973a82f-2d22-4f03-b44b-154986493a99"
+      },
+      "body": "{\"detail\":{\"message\":\"Stored credential exists but cannot be used for a test connection\",\"reason_code\":\"credential_unreadable\"}}"
+    },
+    {
+      "name": "test a stored credential that is an empty JSON list",
+      "method": "POST",
+      "path": "/api/v1/admin/credentials/test",
+      "body_sha256": "31ad2b5032374e575f734a961921d04c55c988eda8d207fecb4667bf149a094b",
+      "status": 404,
+      "headers": {
+        "content-length": "33",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e5416a55-cc1f-414e-9804-e4dc45991251"
+      },
+      "body": "{\"detail\":\"Credential not found\"}"
+    },
+    {
+      "name": "test a garbled credential with an odd provider",
+      "method": "POST",
+      "path": "/api/v1/admin/credentials/test",
+      "body_sha256": "452c735e8f6b8d98cd4762644a00aa0639be6cd0d6b80f4d412b96f0bb595fc2",
+      "status": 422,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ed5bd528-d2cb-4ef8-88aa-b0151073fbd1"
+      },
+      "body": "{\"detail\":{\"message\":\"Stored credential exists but cannot be used for a test connection\",\"reason_code\":\"credential_unreadable\"}}"
+    },
+    {
+      "name": "jira without any required field",
+      "method": "POST",
+      "path": "/api/v1/admin/credentials/test",
+      "body_sha256": "5b9c448f28c915b843dd28455cf6e765c11c820a9360dbd4a98bb38991c1ce6b",
+      "status": 200,
+      "headers": {
+        "content-length": "110",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8b0706e8-1600-4446-bb96-a3d2c97ce7b4"
+      },
+      "body": "{\"success\":false,\"error\":null,\"details\":{\"error\":\"Missing required credentials (email, api_token, base_url)\"}}"
+    },
+    {
+      "name": "jira with only a token",
+      "method": "POST",
+      "path": "/api/v1/admin/credentials/test",
+      "body_sha256": "260412070a376c1c0ba44aab6ddfcceb169fe76d1f66b19e137187bbc7b45d00",
+      "status": 200,
+      "headers": {
+        "content-length": "110",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ff39e19f-ad57-493c-9765-8ceff724060d"
+      },
+      "body": "{\"success\":false,\"error\":null,\"details\":{\"error\":\"Missing required credentials (email, api_token, base_url)\"}}"
+    },
+    {
+      "name": "jira with a token and an email",
+      "method": "POST",
+      "path": "/api/v1/admin/credentials/test",
+      "body_sha256": "7a72e2572bed8f03e7408c1af9e628151bd60dcdb5d3e859847723a05552e7a8",
+      "status": 200,
+      "headers": {
+        "content-length": "110",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "457add97-f573-44c0-9287-e08a0db84bf1"
+      },
+      "body": "{\"success\":false,\"error\":null,\"details\":{\"error\":\"Missing required credentials (email, api_token, base_url)\"}}"
+    },
+    {
+      "name": "jira with an email and a base url",
+      "method": "POST",
+      "path": "/api/v1/admin/credentials/test",
+      "body_sha256": "16f6f2d1f706f8695b961997d7f7eed593c52a3a4625e7d57b13b35a83c5b8ac",
+      "status": 200,
+      "headers": {
+        "content-length": "110",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "549552e0-e119-46ae-ae93-d9500f8bdc57"
+      },
+      "body": "{\"success\":false,\"error\":null,\"details\":{\"error\":\"Missing required credentials (email, api_token, base_url)\"}}"
+    },
+    {
+      "name": "jira with only a base url",
+      "method": "POST",
+      "path": "/api/v1/admin/credentials/test",
+      "body_sha256": "da425958e8167cc79d37dd190daa26a4643d52b1e468f2c0140fe126aeed4369",
+      "status": 200,
+      "headers": {
+        "content-length": "110",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "30db87b4-6b88-4968-9bff-96dcaf838545"
+      },
+      "body": "{\"success\":false,\"error\":null,\"details\":{\"error\":\"Missing required credentials (email, api_token, base_url)\"}}"
+    },
+    {
+      "name": "jira again without any required field",
+      "method": "POST",
+      "path": "/api/v1/admin/credentials/test",
+      "body_sha256": "47525bb2ed983ff81cc3725ea34bf8875f5b8ff7956a1848b510bc3b437cdc6d",
+      "status": 200,
+      "headers": {
+        "content-length": "110",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b6e6c3dc-ffed-4c49-b3b6-01855a7cdcff"
+      },
+      "body": "{\"success\":false,\"error\":null,\"details\":{\"error\":\"Missing required credentials (email, api_token, base_url)\"}}"
+    },
+    {
+      "name": "telemetry status for another org",
+      "method": "GET",
+      "path": "/api/v1/telemetry/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 403,
+      "headers": {
+        "content-length": "50",
+        "content-type": "application/json",
+        "x-request-id": "ec2a3ee1-06da-4099-bf2e-4a61e7522b76"
+      },
+      "body": "{\"detail\": \"X-Org-Id not permitted for this user\"}"
+    },
+    {
+      "name": "telemetry report without a platform role",
+      "method": "POST",
+      "path": "/api/v1/telemetry/report",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 403,
+      "headers": {
+        "content-length": "71",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4838dadd-2f44-444a-bb7f-297f506a0eee"
+      },
+      "body": "{\"detail\":\"Instance-wide telemetry statistics require a platform role\"}"
+    },
+    {
+      "name": "enable a jira source past the repo limit",
+      "method": "PATCH",
+      "path": "/api/v1/admin/integrations/d8d880f8-dd40-5dfd-a1c7-ec962dcb2790/sources/b2e2ae43-ee03-522f-8eb2-eb5062201153",
+      "body_sha256": "a8793e108fbe9d6d6d32351da03b9ea5bfd836f36b880f1ea9346687a07f47f2",
+      "status": 403,
+      "headers": {
+        "content-length": "71",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ee8ef38f-b3a2-48b9-b5d1-936e55e5fecd"
+      },
+      "body": "{\"detail\":\"Enabling this source would exceed the org's repo limit (3)\"}"
+    },
+    {
+      "name": "legacy ingest with a wrong key",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "449a810af6b140948dd08aaa2f6aa5d3724123c1209d30c009d0b56f47be15cf",
+      "status": 401,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "48d8650d-33d9-42fd-a8cb-e90e4c2fa42b"
+      },
+      "body": "{\"detail\":\"Invalid API key\"}"
+    },
+    {
+      "name": "metrics",
+      "method": "GET",
+      "path": "/metrics",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "37715",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "text/plain; version=1.0.0; charset=utf-8",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f784994e-71ff-4659-8715-b33fd761cc68"
+      },
+      "body": "# HELP python_gc_objects_collected_total Objects collected during gc\n# TYPE python_gc_objects_collected_total counter\npython_gc_objects_collected_total{generation=\"0\"} 9447.0\npython_gc_objects_collected_total{generation=\"1\"} 1635.0\npython_gc_objects_collected_total{generation=\"2\"} 105.0\n# HELP python_gc_objects_uncollectable_total Uncollectable objects found during GC\n# TYPE python_gc_objects_uncollectable_total counter\npython_gc_objects_uncollectable_total{generation=\"0\"} 0.0\npython_gc_objects_uncollectable_total{generation=\"1\"} 0.0\npython_gc_objects_uncollectable_total{generation=\"2\"} 0.0\n# HELP python_gc_collections_total Number of times this generation was collected\n# TYPE python_gc_collections_total counter\npython_gc_collections_total{generation=\"0\"} 379.0\npython_gc_collections_total{generation=\"1\"} 34.0\npython_gc_collections_total{generation=\"2\"} 3.0\n# HELP python_info Python platform information\n# TYPE python_info gauge\npython_info{implementation=\"CPython\",major=\"3\",minor=\"14\",patchlevel=\"7\",version=\"3.14.7\"} 1.0\n# HELP process_virtual_memory_bytes Virtual memory size in bytes.\n# TYPE process_virtual_memory_bytes gauge\nprocess_virtual_memory_bytes 2.034794496e+09\n# HELP process_resident_memory_bytes Resident memory size in bytes.\n# TYPE process_resident_memory_bytes gauge\nprocess_resident_memory_bytes 2.65199616e+08\n# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.\n# TYPE process_start_time_seconds gauge\nprocess_start_time_seconds 1.79038352899e+09\n# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.\n# TYPE process_cpu_seconds_total counter\nprocess_cpu_seconds_total 8.14\n# HELP process_open_fds Number of open file descriptors.\n# TYPE process_open_fds gauge\nprocess_open_fds 12.0\n# HELP process_max_fds Maximum number of open file descriptors.\n# TYPE process_max_fds gauge\nprocess_max_fds 1.048576e+06\n# HELP devhealth_celery_tasks_total Total number of Celery task executions\n# TYPE devhealth_celery_tasks_total counter\n# HELP devhealth_celery_task_duration_seconds Celery task execution duration in seconds\n# TYPE devhealth_celery_task_duration_seconds histogram\n# HELP worker_report_run_lease_expired_total Expired report execution leases by bounded durable result\n# TYPE worker_report_run_lease_expired_total counter\n# HELP sync_coverage_datasets_excluded_by_intent_total Datasets dropped from a sync coverage scope because their integration_datasets row is disabled\n# TYPE sync_coverage_datasets_excluded_by_intent_total counter\n# HELP sync_coverage_folded_key_resolutions_total Coverage windows attributed to a folded child dataset key via a canonical composite unit's family_dataset_* flags (CHAOS-4393)\n# TYPE sync_coverage_folded_key_resolutions_total counter\n# HELP sync_target_dataset_drift_repaired_total IntegrationDataset rows disabled because the config's sync_targets could not account for them (CHAOS-4106 drift repair)\n# TYPE sync_target_dataset_drift_repaired_total counter\n# HELP sync_zero_unit_plan_credential_stamped_total Zero-unit plan_sync_run plans that still stamped run-level credentials because the provider's reference discovery is strict and runs unconditionally regardless of unit count (CHAOS-4593)\n# TYPE sync_zero_unit_plan_credential_stamped_total counter\n# HELP jira_project_discovery_total Jira per-project integration_sources discovery outcomes (CHAOS-4584): discovered/created/existing/capped_by_repo_limit/recovered_from_repo_limit_cap/superseded_by_scope_change rows per run, or a run finding zero projects or no owning planner-managed config to tag. rejected_at_enable_repo_limit (gate round 3): an operator's own manual re-enable of a Jira source was rejected because it would exceed max_repos, from either enable-time entry point (sync/discovery.py::set_source_enabled or api/services/integrations.py::IntegrationSourceService.set_enabled)\n# TYPE jira_project_discovery_total counter\njira_project_discovery_total{outcome=\"rejected_at_enable_repo_limit\"} 1.0\n# HELP jira_project_discovery_created Jira per-project integration_sources discovery outcomes (CHAOS-4584): discovered/created/existing/capped_by_repo_limit/recovered_from_repo_limit_cap/superseded_by_scope_change rows per run, or a run finding zero projects or no owning planner-managed config to tag. rejected_at_enable_repo_limit (gate round 3): an operator's own manual re-enable of a Jira source was rejected because it would exceed max_repos, from either enable-time entry point (sync/discovery.py::set_source_enabled or api/services/integrations.py::IntegrationSourceService.set_enabled)\n# TYPE jira_project_discovery_created gauge\njira_project_discovery_created{outcome=\"rejected_at_enable_repo_limit\"} 1.7903835381076477e+09\n# HELP credential_mapping_rejected_total Stored credentials a provider resolver refused to build, by the field it could not find. The resolver returns None and the sync reports only that the mapping was invalid, so without this the failure is indistinguishable from having no credential at all (CHAOS-4224)\n# TYPE credential_mapping_rejected_total counter\ncredential_mapping_rejected_total{missing_field=\"api_token\",provider=\"jira\"} 4.0\ncredential_mapping_rejected_total{missing_field=\"email\",provider=\"jira\"} 1.0\ncredential_mapping_rejected_total{missing_field=\"base_url\",provider=\"jira\"} 1.0\n# HELP credential_mapping_rejected_created Stored credentials a provider resolver refused to build, by the field it could not find. The resolver returns None and the sync reports only that the mapping was invalid, so without this the failure is indistinguishable from having no credential at all (CHAOS-4224)\n# TYPE credential_mapping_rejected_created gauge\ncredential_mapping_rejected_created{missing_field=\"api_token\",provider=\"jira\"} 1.7903835370587811e+09\ncredential_mapping_rejected_created{missing_field=\"email\",provider=\"jira\"} 1.7903835371914234e+09\ncredential_mapping_rejected_created{missing_field=\"base_url\",provider=\"jira\"} 1.7903835373180525e+09\n# HELP dev_health_team_autoimport_roster_preservation_failed_total A members-off team-autoimport run could not confirm a team's currently persisted roster (ClickHouse unavailable, a query error, or a sink incapable of a raw read) and skipped the team-dimension write rather than risk overwriting it with an empty one (CHAOS-4323). The skip is correct and prevents data loss, but it also means that team's name/description/repo_patterns silently stop refreshing until a later run succeeds -- run_team_autoimport still reports status=success, so this counter is the only signal a degraded run happened. Alert wiring is a follow-up (see CHAOS-4184's alert pattern).\n# TYPE dev_health_team_autoimport_roster_preservation_failed_total counter\n# HELP dev_health_team_autoimport_reference_subitem_skipped_total A team-autoimport populate skipped one reference sub-item (e.g. a single Jira board's sprint listing) after it raised, instead of failing the whole provider populate (CHAOS-4357). A single board without sprint support, or a transient 4xx/timeout on one sub-item, must not fail strict reference discovery for the entire run -- this counter is the signal that data for that one sub-item is incomplete, even though the populate as a whole still reports success.\n# TYPE dev_health_team_autoimport_reference_subitem_skipped_total counter\n# HELP dev_health_team_autoimport_reference_category_outcome_total Per-provider, per-CHAOS-4323-category GATE outcome of strict reference discovery, recorded before the populate() call runs (CHAOS-4437): 'written' means the org selected that category (teams/projects/members) so the gate let it through to the populator -- NOT a confirmation the populator actually persisted rows this run (see the populate summary's *_imported counts, or DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL, for that). 'skipped_selection' means the org disabled it and reference discovery honoured that selection instead of writing it unconditionally, which IS a hard guarantee -- a skipped category is never written. Before CHAOS-4437 this path always wrote every category regardless of the org's sync-config selection; this counter is the signal that the gate is active.\n# TYPE dev_health_team_autoimport_reference_category_outcome_total counter\n# HELP devhealth_clickhouse_query_duration_seconds ClickHouse query latency in seconds\n# TYPE devhealth_clickhouse_query_duration_seconds histogram\n# HELP devhealth_clickhouse_queries_total Total ClickHouse queries executed\n# TYPE devhealth_clickhouse_queries_total counter\n# HELP devhealth_clickhouse_org_scope_rows_filtered_total Rows excluded from a ClickHouseDataLoader read by its org_id scope -- i.e. rows that matched the query's time/repo predicate but belong to a different tenant (CHAOS-4324). Computed as the delta between a same-predicate count without the org filter and the actual org-scoped row count. A near-zero rate on a busy multi-org deployment is the leak-guard signal: the previous unparenthesized OR in the PR query silently dropped org scoping for any row whose created_at matched the window, which this counter would have made visible as filtered_count == 0 despite other tenants having matching rows.\n# TYPE devhealth_clickhouse_org_scope_rows_filtered_total counter\n# HELP devhealth_llm_requests_total Total LLM API requests\n# TYPE devhealth_llm_requests_total counter\n# HELP devhealth_llm_tokens_total Total LLM tokens consumed\n# TYPE devhealth_llm_tokens_total counter\n# HELP devhealth_llm_request_duration_seconds LLM API request latency in seconds\n# TYPE devhealth_llm_request_duration_seconds histogram\n# HELP devhealth_byo_llm_base_url_fallback_total Org BYO LLM base_url fallbacks by provider and reason\n# TYPE devhealth_byo_llm_base_url_fallback_total counter\n# HELP devhealth_byo_llm_base_url_fallback_alert_total Sustained org BYO LLM base_url fallback alert signals\n# TYPE devhealth_byo_llm_base_url_fallback_alert_total counter\n# HELP devhealth_github_api_requests_total Total GitHub API requests by endpoint and status code\n# TYPE devhealth_github_api_requests_total counter\n# HELP devhealth_github_rate_limit_remaining GitHub API rate limit remaining calls by resource type\n# TYPE devhealth_github_rate_limit_remaining gauge\n# HELP devhealth_investment_membership_scope_stale_total Investment reads that fell back to unscoped results due to stale membership projection\n# TYPE devhealth_investment_membership_scope_stale_total counter\n# HELP devhealth_investment_membership_scope_lag_seconds Lag between latest work_unit_investments row and latest membership run when stale\n# TYPE devhealth_investment_membership_scope_lag_seconds gauge\n# HELP devhealth_ask_dev_unregistered_terminal_code_total Ask Dev orchestrator terminal error codes outside terminal_frames.ORCHESTRATOR_ERROR_CODES, falling back to the internal_error frame bucket (a closed-registry drift bug, not a transient failure)\n# TYPE devhealth_ask_dev_unregistered_terminal_code_total counter\n# HELP devhealth_ask_dev_tool_executor_fault_total Ask Dev tool executors that raised outside their declared contract (not a rejection, timeout, or cancellation) and were degraded to one failed tool result instead of terminating the run\n# TYPE devhealth_ask_dev_tool_executor_fault_total counter\n# HELP devhealth_ask_dev_unhandled_run_fault_total Ask Dev runs terminated by the orchestrator's catch-all internal_error handler (every increment is an unclassified server defect)\n# TYPE devhealth_ask_dev_unhandled_run_fault_total counter\n# HELP devhealth_ask_dev_internal_token_leak_total Ask Dev terminals rejected at the boundary because a user-visible string carried an internal vocabulary token (CHAOS-3367). Every increment is a producer defect that would otherwise have reached a customer; this must stay at zero.\n# TYPE devhealth_ask_dev_internal_token_leak_total counter\n# HELP devhealth_ask_dev_plan_registry_gap_total Ask Dev requests for an intent preflight_outcomes.PLAN_ID_BY_INTENT names a real plan for, that fell back to the legacy model-tool-choice loop because this runtime's plan_registry does not carry that plan yet (CHAOS-3300 finding: a silent capability downgrade unless observed here)\n# TYPE devhealth_ask_dev_plan_registry_gap_total counter\n# HELP devhealth_ask_dev_narrative_fallback_total Ask Dev narrative provider calls that fell back to the deterministic narrative built from the frame alone, by safe failure code (CHAOS-3297 stack #4: answer_frames.narrative_fallback). The 'provider_unknown_failure' code labels a provider exception outside the closed classification table -- a classifier gap, not a genuine unclassifiable failure, and should trend to zero.\n# TYPE devhealth_ask_dev_narrative_fallback_total counter\n# HELP devhealth_ask_dev_qua_shadow_total Ask Dev QUA shadow evaluations by outcome status (qua_shadow.QUAShadowStatus, content-free) and the deterministic preflight decision (proceed/terminate) it ran alongside. Every increment is shadow-only telemetry -- it never affects any live run.\n# TYPE devhealth_ask_dev_qua_shadow_total counter\n# HELP devhealth_ask_dev_qua_commit_total Ask Dev subjects committed from a verified QUA proposal, by entity kind. Increments only where the deterministic layer declined and the proposal passed the commit-time authorization re-check.\n# TYPE devhealth_ask_dev_qua_commit_total counter\n# HELP devhealth_ask_dev_qua_shadow_latency_seconds Ask Dev QUA shadow provider-call latency, by outcome status. Feeds the future probe-certification's latency budget evidence -- recorded, never gated on.\n# TYPE devhealth_ask_dev_qua_shadow_latency_seconds histogram\n# HELP devhealth_ask_dev_platform_model_unpriced_total Ask Dev platform providers constructed with an OpenAI model that has no entry in _PLATFORM_MODEL_PRICES. Every such run books the worst-case admission reservation as its cost instead of a real figure, so allowance usage for this organization is an overstatement -- CHAOS-3552 measured 222x on gpt-5-nano. Non-zero means an operator must price the model or change LLM_MODEL; it is a configuration defect, not a provider fault.\n# TYPE devhealth_ask_dev_platform_model_unpriced_total counter\n# HELP devhealth_ask_dev_qua_shadow_fault_total Ask Dev QUA shadow evaluations or shadow-record writes that raised outside qua_shadow.py's own defensive handling, caught at the orchestrator call site so a shadow-mode bug can never fail or roll back the live run it shadows. Every increment is a shadow-path defect, not a live-path one.\n# TYPE devhealth_ask_dev_qua_shadow_fault_total counter\n# HELP devhealth_ask_dev_qua_shadow_cardinality_uncorroborated_total Ask Dev QUA shadow proposals with cardinality=organization_wide that the deterministic interpreter did NOT independently reach the same cardinality for (CHAOS-3389 adversarial critique hardening condition: an org-wide proposal is a model-proposed widening channel and must never be trusted without deterministic corroboration -- shadow mode records this but never acts on it).\n# TYPE devhealth_ask_dev_qua_shadow_cardinality_uncorroborated_total counter\n# HELP devhealth_recommendations_readiness_gate_fail_open_total _daily_metrics_ready reads (daily_metrics_runs / fixed_schedule_occurrences) that raised, so the gate fell open and let recommendations proceed with no positive completion evidence for the day. OWNER RULING (CHAOS-4073 item 2): fail-open stays -- fail-closed would wire an unknown gate-error rate directly to an org-wide recommendations wedge with no tombstones (CHAOS-2373) -- but every occurrence must be loud and alertable here, not merely a logger line, so a sustained outage or schema drift cannot sit silently vacuous the way the CHAOS-4066 dead checkpoint did.\n# TYPE devhealth_recommendations_readiness_gate_fail_open_total counter\n# HELP devhealth_integration_credential_decrypt_failed_total Stored integration credential rows whose credentials_encrypted payload existed but decrypt_value/json.loads raised when read -- a key-mismatch class of failure (e.g. a rotated SETTINGS_ENCRYPTION_KEY that can no longer decrypt rows written under the old one). Every increment means a real credential a caller believed was configured is now unusable; this must trend to zero, never merely be a grep-able log line.\n# TYPE devhealth_integration_credential_decrypt_failed_total counter\ndevhealth_integration_credential_decrypt_failed_total{provider=\"github\"} 2.0\ndevhealth_integration_credential_decrypt_failed_total{provider=\"gitlab\"} 1.0\ndevhealth_integration_credential_decrypt_failed_total{provider=\"odd},\\\"x\"} 1.0\n# HELP devhealth_integration_credential_decrypt_failed_created Stored integration credential rows whose credentials_encrypted payload existed but decrypt_value/json.loads raised when read -- a key-mismatch class of failure (e.g. a rotated SETTINGS_ENCRYPTION_KEY that can no longer decrypt rows written under the old one). Every increment means a real credential a caller believed was configured is now unusable; this must trend to zero, never merely be a grep-able log line.\n# TYPE devhealth_integration_credential_decrypt_failed_created gauge\ndevhealth_integration_credential_decrypt_failed_created{provider=\"github\"} 1.7903835362258956e+09\ndevhealth_integration_credential_decrypt_failed_created{provider=\"gitlab\"} 1.7903835365969043e+09\ndevhealth_integration_credential_decrypt_failed_created{provider=\"odd},\\\"x\"} 1.7903835369619858e+09\n# HELP dev_health_metrics_family_failures_total job_daily.py sub-families (cicd/deploy/incident/testops_risk) that computed zero rows for a (org, repo, day) the partition otherwise reported succeeded for. Zero rows can be a legitimate day (no CI activity) or a genuine gap (upstream sync lag, unmapped join) -- this counter does not distinguish the two, it only makes the silence visible (CHAOS-4246: cicd/deploy/testops_risk went stale for 16 days with every partition reporting success).\n# TYPE dev_health_metrics_family_failures_total counter\n# HELP dev_health_work_item_team_attributions_written_total work_item_team_attributions rows written, by provider and winning source (CHAOS-4244). source='unassigned' is the residual: sum(...{source='unassigned'}) / sum(...) is chris's \u003c=2% target, readable per provider without a ClickHouse query.\n# TYPE dev_health_work_item_team_attributions_written_total counter\n# HELP dev_health_team_attribution_membership_layer_total assignee_membership/author_membership resolutions by which layer resolved them (CHAOS-4321, chris 2026-08-26 10:39 PT: 'admin is an override, not a default'). layer='admin_override' means identities.team_ids or teams.manual_members had a single-team answer; layer='provider_fallback' means the admin layer had zero candidates and team_memberships or teams.members (the unreviewed auto-import roster) resolved it instead. Incremented at resolution time in _resolve_membership, not derived post-hoc from the written row, since specificity alone cannot reliably distinguish a real team_memberships row's arbitrary specificity from the fixed values this ticket's two synthetic untyped-facet pools use.\n# TYPE dev_health_team_attribution_membership_layer_total counter\n# HELP dev_health_metric_compat_child_silence_seconds Seconds since the last progress line (or process start, if none was ever seen) at the moment the CHAOS-4316 liveness watchdog decided to kill the runner subprocess. High values with reason='stalled' point at a genuinely hung child; the same metric for 'timeout' shows how close trickling progress came to dodging the interval check before the hard ceiling won.\n# TYPE dev_health_metric_compat_child_silence_seconds histogram\n# HELP dev_health_otel_init_failures_total OpenTelemetry tracer initialisation failures (tracing.py init_tracing), by attempt. Before CHAOS-4317 a failure here (e.g. pthread_create hitting the same pids ceiling metric-bridge spawning does) was a bare logger.warning that never surfaced anywhere else -- tracing silently stayed off for the rest of the process. 'final' means the retry was also exhausted: the process is still running (a disabled tracer is not worth crashing the api over) but this counter is the durable, alertable signal that it is.\n# TYPE dev_health_otel_init_failures_total counter\n# HELP sync_manual_trigger_await_outcome_total Terminal outcomes of the bounded await on a Go-owned scheduled_sync_occurrences row materializing a manual Sync Now or Backfill trigger (CHAOS-4602 fork 2): materialized, pending (deadline elapsed, never an error), or quarantined (a client-visible failure).\n# TYPE sync_manual_trigger_await_outcome_total counter\n# HELP sync_manual_trigger_await_latency_seconds Wall-clock time await_sync_execution_trigger_materialized spent polling before reaching a terminal outcome (CHAOS-4602 fork 2), labeled by that outcome.\n# TYPE sync_manual_trigger_await_latency_seconds histogram\n# HELP devhealth_ingest_legacy_auth_rejected_total validate_ingest_auth rejections for the legacy /api/v1/ingest/* routes, by reason. reason=no_credential_configured is the CHAOS-4720 fail-closed branch: the request was rejected because NEITHER INGEST_API_KEYS NOR INGEST_SIGNING_SECRET was set outside a development environment, where the pre-fix code returned a permissive success context instead (either one alone configured is unaffected and keeps working as before). reason=invalid_api_key/invalid_signature are ordinary rejections of a presented-but-wrong credential and existed before this fix. A nonzero rate of no_credential_configured in production means both secrets are missing there right now.\n# TYPE devhealth_ingest_legacy_auth_rejected_total counter\ndevhealth_ingest_legacy_auth_rejected_total{reason=\"invalid_api_key\"} 1.0\n# HELP devhealth_ingest_legacy_auth_rejected_created validate_ingest_auth rejections for the legacy /api/v1/ingest/* routes, by reason. reason=no_credential_configured is the CHAOS-4720 fail-closed branch: the request was rejected because NEITHER INGEST_API_KEYS NOR INGEST_SIGNING_SECRET was set outside a development environment, where the pre-fix code returned a permissive success context instead (either one alone configured is unaffected and keeps working as before). reason=invalid_api_key/invalid_signature are ordinary rejections of a presented-but-wrong credential and existed before this fix. A nonzero rate of no_credential_configured in production means both secrets are missing there right now.\n# TYPE devhealth_ingest_legacy_auth_rejected_created gauge\ndevhealth_ingest_legacy_auth_rejected_created{reason=\"invalid_api_key\"} 1.790383538122884e+09\n# HELP devhealth_telemetry_org_id_rejected_total get_org_id rejections on the /api/v1/telemetry/* routes, by reason. Before CHAOS-4722 these routes trusted a raw, unverified X-Org-Id header as identity; org_id is now resolved from the authenticated caller and verified (own org, an existing Membership row, or superuser) before any telemetry state is read or mutated. reason=not_a_member is the CHAOS-4722 IDOR rejection (authenticated but the caller is not a member of the requested org); reason=no_org_context is an authenticated caller with neither a header nor a JWT org_id; reason=report_not_platform_role is the /report platform-role gate (G-32: instance-wide aggregates are not an org-level capability). A 401 (no/invalid credential at all) never reaches this counter -- that is FastAPI's own dependency rejection, before get_org_id runs.\n# TYPE devhealth_telemetry_org_id_rejected_total counter\ndevhealth_telemetry_org_id_rejected_total{reason=\"report_not_platform_role\"} 1.0\n# HELP devhealth_telemetry_org_id_rejected_created get_org_id rejections on the /api/v1/telemetry/* routes, by reason. Before CHAOS-4722 these routes trusted a raw, unverified X-Org-Id header as identity; org_id is now resolved from the authenticated caller and verified (own org, an existing Membership row, or superuser) before any telemetry state is read or mutated. reason=not_a_member is the CHAOS-4722 IDOR rejection (authenticated but the caller is not a member of the requested org); reason=no_org_context is an authenticated caller with neither a header nor a JWT org_id; reason=report_not_platform_role is the /report platform-role gate (G-32: instance-wide aggregates are not an org-level capability). A 401 (no/invalid credential at all) never reaches this counter -- that is FastAPI's own dependency rejection, before get_org_id runs.\n# TYPE devhealth_telemetry_org_id_rejected_created gauge\ndevhealth_telemetry_org_id_rejected_created{reason=\"report_not_platform_role\"} 1.7903835379370954e+09\n# HELP devhealth_org_tier_resolved_async_total Async tier resolutions at the GraphQL edge seam, by resolved tier\n# TYPE devhealth_org_tier_resolved_async_total counter\n# HELP devhealth_licensed_features_resolved_total licensed_features lookups at the GraphQL edge seam, by outcome\n# TYPE devhealth_licensed_features_resolved_total counter\n# HELP devhealth_go_api_dispatch_attempted_total GraphQL requests whose document digest matched a Go-eligible operation\n# TYPE devhealth_go_api_dispatch_attempted_total counter\n# HELP devhealth_go_api_dispatch_served_go_total GraphQL requests actually served by query-api\n# TYPE devhealth_go_api_dispatch_served_go_total counter\n# HELP devhealth_go_api_dispatch_fallback_total GraphQL requests that fell back to Python, by operation and reason\n# TYPE devhealth_go_api_dispatch_fallback_total counter\n# HELP devhealth_go_api_dispatch_go_failed_total GraphQL requests query-api was asked to serve and did not, by operation and reason\n# TYPE devhealth_go_api_dispatch_go_failed_total counter\n# HELP devhealth_go_api_dispatch_digest_miss_total query-api 404s despite a local operation-catalog match -- digest drift\n# TYPE devhealth_go_api_dispatch_digest_miss_total counter\n# HELP devhealth_go_api_dispatch_latency_seconds Dispatch latency by plane actually served and outcome\n# TYPE devhealth_go_api_dispatch_latency_seconds histogram\n# HELP devhealth_go_api_registry_lookup_total Go API operation rollout registry lookups, by result\n# TYPE devhealth_go_api_registry_lookup_total counter\n# HELP devhealth_go_api_candidate_build_registered_total Go API candidate-build registrations, by outcome\n# TYPE devhealth_go_api_candidate_build_registered_total counter\n# HELP devhealth_go_api_proof_run_recorded_total Go API proof-gate runs recorded, by stage and terminal state\n# TYPE devhealth_go_api_proof_run_recorded_total counter\n# HELP devhealth_go_api_routing_digest_drift_total Go API routing-state schema-digest drift checks at startup, by result\n# TYPE devhealth_go_api_routing_digest_drift_total counter\n# HELP devhealth_go_api_envelope_issued_total Effective-principal envelopes issued by the Python edge, by outcome\n# TYPE devhealth_go_api_envelope_issued_total counter\n# HELP http_requests_total Total number of requests by method, status and handler.\n# TYPE http_requests_total counter\nhttp_requests_total{handler=\"/api/v1/admin/credentials/test\",method=\"POST\",status=\"4xx\"} 5.0\nhttp_requests_total{handler=\"/api/v1/admin/credentials/test\",method=\"POST\",status=\"2xx\"} 6.0\nhttp_requests_total{handler=\"/api/v1/telemetry/status\",method=\"GET\",status=\"4xx\"} 1.0\nhttp_requests_total{handler=\"/api/v1/telemetry/report\",method=\"POST\",status=\"4xx\"} 1.0\nhttp_requests_total{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\",method=\"PATCH\",status=\"4xx\"} 1.0\nhttp_requests_total{handler=\"/api/v1/ingest/commits\",method=\"POST\",status=\"4xx\"} 1.0\n# HELP http_requests_created Total number of requests by method, status and handler.\n# TYPE http_requests_created gauge\nhttp_requests_created{handler=\"/api/v1/admin/credentials/test\",method=\"POST\",status=\"4xx\"} 1.7903835362313943e+09\nhttp_requests_created{handler=\"/api/v1/admin/credentials/test\",method=\"POST\",status=\"2xx\"} 1.7903835371028132e+09\nhttp_requests_created{handler=\"/api/v1/telemetry/status\",method=\"GET\",status=\"4xx\"} 1.7903835378429089e+09\nhttp_requests_created{handler=\"/api/v1/telemetry/report\",method=\"POST\",status=\"4xx\"} 1.7903835379376938e+09\nhttp_requests_created{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\",method=\"PATCH\",status=\"4xx\"} 1.7903835381142218e+09\nhttp_requests_created{handler=\"/api/v1/ingest/commits\",method=\"POST\",status=\"4xx\"} 1.790383538123818e+09\n# HELP http_request_size_bytes Content length of incoming requests by handler. Only value of header is respected. Otherwise ignored. No percentile calculated. \n# TYPE http_request_size_bytes summary\nhttp_request_size_bytes_count{handler=\"/api/v1/admin/credentials/test\"} 11.0\nhttp_request_size_bytes_sum{handler=\"/api/v1/admin/credentials/test\"} 766.0\nhttp_request_size_bytes_count{handler=\"/api/v1/telemetry/status\"} 1.0\nhttp_request_size_bytes_sum{handler=\"/api/v1/telemetry/status\"} 0.0\nhttp_request_size_bytes_count{handler=\"/api/v1/telemetry/report\"} 1.0\nhttp_request_size_bytes_sum{handler=\"/api/v1/telemetry/report\"} 0.0\nhttp_request_size_bytes_count{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\"} 1.0\nhttp_request_size_bytes_sum{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\"} 19.0\nhttp_request_size_bytes_count{handler=\"/api/v1/ingest/commits\"} 1.0\nhttp_request_size_bytes_sum{handler=\"/api/v1/ingest/commits\"} 32.0\n# HELP http_request_size_bytes_created Content length of incoming requests by handler. Only value of header is respected. Otherwise ignored. No percentile calculated. \n# TYPE http_request_size_bytes_created gauge\nhttp_request_size_bytes_created{handler=\"/api/v1/admin/credentials/test\"} 1.7903835362314234e+09\nhttp_request_size_bytes_created{handler=\"/api/v1/telemetry/status\"} 1.7903835378429353e+09\nhttp_request_size_bytes_created{handler=\"/api/v1/telemetry/report\"} 1.790383537937715e+09\nhttp_request_size_bytes_created{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\"} 1.7903835381142485e+09\nhttp_request_size_bytes_created{handler=\"/api/v1/ingest/commits\"} 1.7903835381238418e+09\n# HELP http_response_size_bytes Content length of outgoing responses by handler. Only value of header is respected. Otherwise ignored. No percentile calculated. \n# TYPE http_response_size_bytes summary\nhttp_response_size_bytes_count{handler=\"/api/v1/admin/credentials/test\"} 11.0\nhttp_response_size_bytes_sum{handler=\"/api/v1/admin/credentials/test\"} 1205.0\nhttp_response_size_bytes_count{handler=\"/api/v1/telemetry/status\"} 1.0\nhttp_response_size_bytes_sum{handler=\"/api/v1/telemetry/status\"} 50.0\nhttp_response_size_bytes_count{handler=\"/api/v1/telemetry/report\"} 1.0\nhttp_response_size_bytes_sum{handler=\"/api/v1/telemetry/report\"} 71.0\nhttp_response_size_bytes_count{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\"} 1.0\nhttp_response_size_bytes_sum{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\"} 71.0\nhttp_response_size_bytes_count{handler=\"/api/v1/ingest/commits\"} 1.0\nhttp_response_size_bytes_sum{handler=\"/api/v1/ingest/commits\"} 28.0\n# HELP http_response_size_bytes_created Content length of outgoing responses by handler. Only value of header is respected. Otherwise ignored. No percentile calculated. \n# TYPE http_response_size_bytes_created gauge\nhttp_response_size_bytes_created{handler=\"/api/v1/admin/credentials/test\"} 1.790383536231476e+09\nhttp_response_size_bytes_created{handler=\"/api/v1/telemetry/status\"} 1.790383537842965e+09\nhttp_response_size_bytes_created{handler=\"/api/v1/telemetry/report\"} 1.7903835379377353e+09\nhttp_response_size_bytes_created{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\"} 1.7903835381142836e+09\nhttp_response_size_bytes_created{handler=\"/api/v1/ingest/commits\"} 1.7903835381238618e+09\n# HELP http_request_duration_highr_seconds Latency with many buckets but no API specific labels. Made for more accurate percentile calculations. \n# TYPE http_request_duration_highr_seconds histogram\nhttp_request_duration_highr_seconds_bucket{le=\"0.01\"} 1.0\nhttp_request_duration_highr_seconds_bucket{le=\"0.025\"} 1.0\nhttp_request_duration_highr_seconds_bucket{le=\"0.05\"} 1.0\nhttp_request_duration_highr_seconds_bucket{le=\"0.075\"} 1.0\nhttp_request_duration_highr_seconds_bucket{le=\"0.1\"} 3.0\nhttp_request_duration_highr_seconds_bucket{le=\"0.25\"} 14.0\nhttp_request_duration_highr_seconds_bucket{le=\"0.5\"} 14.0\nhttp_request_duration_highr_seconds_bucket{le=\"0.75\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"1.0\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"1.5\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"2.0\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"2.5\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"3.0\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"3.5\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"4.0\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"4.5\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"5.0\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"7.5\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"10.0\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"30.0\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"60.0\"} 15.0\nhttp_request_duration_highr_seconds_bucket{le=\"+Inf\"} 15.0\nhttp_request_duration_highr_seconds_count 15.0\nhttp_request_duration_highr_seconds_sum 2.5845388488378376\n# HELP http_request_duration_highr_seconds_created Latency with many buckets but no API specific labels. Made for more accurate percentile calculations. \n# TYPE http_request_duration_highr_seconds_created gauge\nhttp_request_duration_highr_seconds_created 1.7903835354837842e+09\n# HELP http_request_duration_seconds Latency with only few buckets by handler. Made to be only used if aggregation by handler is important. \n# TYPE http_request_duration_seconds histogram\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/admin/credentials/test\",le=\"0.1\",method=\"POST\"} 0.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/admin/credentials/test\",le=\"0.5\",method=\"POST\"} 10.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/admin/credentials/test\",le=\"1.0\",method=\"POST\"} 11.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/admin/credentials/test\",le=\"+Inf\",method=\"POST\"} 11.0\nhttp_request_duration_seconds_count{handler=\"/api/v1/admin/credentials/test\",method=\"POST\"} 11.0\nhttp_request_duration_seconds_sum{handler=\"/api/v1/admin/credentials/test\",method=\"POST\"} 2.2329095990862697\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/telemetry/status\",le=\"0.1\",method=\"GET\"} 1.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/telemetry/status\",le=\"0.5\",method=\"GET\"} 1.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/telemetry/status\",le=\"1.0\",method=\"GET\"} 1.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/telemetry/status\",le=\"+Inf\",method=\"GET\"} 1.0\nhttp_request_duration_seconds_count{handler=\"/api/v1/telemetry/status\",method=\"GET\"} 1.0\nhttp_request_duration_seconds_sum{handler=\"/api/v1/telemetry/status\",method=\"GET\"} 0.08297210186719894\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/telemetry/report\",le=\"0.1\",method=\"POST\"} 1.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/telemetry/report\",le=\"0.5\",method=\"POST\"} 1.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/telemetry/report\",le=\"1.0\",method=\"POST\"} 1.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/telemetry/report\",le=\"+Inf\",method=\"POST\"} 1.0\nhttp_request_duration_seconds_count{handler=\"/api/v1/telemetry/report\",method=\"POST\"} 1.0\nhttp_request_duration_seconds_sum{handler=\"/api/v1/telemetry/report\",method=\"POST\"} 0.09099555900320411\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\",le=\"0.1\",method=\"PATCH\"} 0.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\",le=\"0.5\",method=\"PATCH\"} 1.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\",le=\"1.0\",method=\"PATCH\"} 1.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\",le=\"+Inf\",method=\"PATCH\"} 1.0\nhttp_request_duration_seconds_count{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\",method=\"PATCH\"} 1.0\nhttp_request_duration_seconds_sum{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\",method=\"PATCH\"} 0.17274357797577977\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/ingest/commits\",le=\"0.1\",method=\"POST\"} 1.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/ingest/commits\",le=\"0.5\",method=\"POST\"} 1.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/ingest/commits\",le=\"1.0\",method=\"POST\"} 1.0\nhttp_request_duration_seconds_bucket{handler=\"/api/v1/ingest/commits\",le=\"+Inf\",method=\"POST\"} 1.0\nhttp_request_duration_seconds_count{handler=\"/api/v1/ingest/commits\",method=\"POST\"} 1.0\nhttp_request_duration_seconds_sum{handler=\"/api/v1/ingest/commits\",method=\"POST\"} 0.004918010905385017\n# HELP http_request_duration_seconds_created Latency with only few buckets by handler. Made to be only used if aggregation by handler is important. \n# TYPE http_request_duration_seconds_created gauge\nhttp_request_duration_seconds_created{handler=\"/api/v1/admin/credentials/test\",method=\"POST\"} 1.7903835362315154e+09\nhttp_request_duration_seconds_created{handler=\"/api/v1/telemetry/status\",method=\"GET\"} 1.790383537843001e+09\nhttp_request_duration_seconds_created{handler=\"/api/v1/telemetry/report\",method=\"POST\"} 1.7903835379377673e+09\nhttp_request_duration_seconds_created{handler=\"/api/v1/admin/integrations/{integration_id}/sources/{source_id}\",method=\"PATCH\"} 1.790383538114317e+09\nhttp_request_duration_seconds_created{handler=\"/api/v1/ingest/commits\",method=\"POST\"} 1.7903835381238925e+09\n"
+    }
+  ]
+}

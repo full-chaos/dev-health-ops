@@ -568,6 +568,20 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 			slog.Int("terminal_delivery_publishes", terminalDeliveryPublishes),
 			slog.Int("queued_units", riverQueued),
 		)
+		if riverQueued == 0 {
+			// CHAOS-6890: a pass that reclaimed a unit and put NO delivery in front of any
+			// unit made no progress, and it would otherwise end as a quiet nil return that
+			// the run's next re-arm repeats (prod run dbb92927: 7 609 passes over 33 hours,
+			// its bucket slot held throughout). Recovery is the reconciler's
+			// OrphanedUnitRepair (a replacement delivery, then, once its bounded budget is
+			// spent, a failed unit with a reason); this line is what makes a run that is
+			// waiting on it visible.
+			service.logger.ErrorContext(ctx, "dispatch_sync_run.no_progress",
+				slog.String("sync_run_id", run.id),
+				slog.Int("terminal_delivery_publishes", terminalDeliveryPublishes),
+				slog.String("reason", "reclaimed units whose deliveries are already terminal; nothing was delivered"),
+			)
+		}
 	}
 
 	if riverQueued > 0 {

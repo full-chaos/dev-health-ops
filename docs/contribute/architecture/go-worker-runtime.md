@@ -588,8 +588,8 @@ None covers another's ground.
 | River rescuer | River maintenance, on the elected leader | A job still present in `running` past `max(RescueStuckJobsAfter, kind timeout)` |
 | Lease repair | `internal/syncreconciler/lease_repair.go` | A sync unit `running` with an expired lease |
 | Terminal delivery repair | `internal/joboutbox/terminal_delivery_repair.go` | A `sync.provider_unit` delivery that ended terminal with work unfinished |
-| Unreclaimable sweep | `internal/syncreconciler/unreclaimable_sweep.go` | A sync unit stuck in `dispatching` with no lease, no heartbeat and no attempts, whose pair the capability matrix declines (no outbox row) **or** whose River delivery is provably dead *and* whose outbox delivery budget is spent (CHAOS-4097) |
-| Strand repair | `internal/joboutbox/strand_repair.go` | A daily-metrics or work-graph outbox row whose delivery ended terminal while the domain row proves the work never finished (CHAOS-3997), **or** a `sync.provider_unit` row whose delivery died in transport while the unit never held a lease |
+| Unreclaimable sweep | `internal/syncreconciler/unreclaimable_sweep.go` | A sync unit stuck in `dispatching` with no lease and no recent worker heartbeat, whose pair the capability matrix declines (no outbox row, no attempts) **or** whose River delivery is provably dead *and* whose outbox delivery budget is spent (CHAOS-4097), whether or not a handler ran it before (CHAOS-6890) |
+| Strand repair | `internal/joboutbox/strand_repair.go` | A daily-metrics or work-graph outbox row whose delivery ended terminal while the domain row proves the work never finished (CHAOS-3997), **or** a `sync.provider_unit` row whose delivery died in transport while the unit holds no lease, whether or not a handler ran it before (CHAOS-6890) |
 | Ready-finalizer backstop | `internal/syncreconciler/ready_finalize_repair.go` | A `finalize_sync_run` outbox row stuck `dispatched` because River's delivery ended **completed** (or its row was reaped) while the run itself never reached a terminal status and every unit is finished (CHAOS-5456) |
 | Orphaned-unit repair | `internal/syncreconciler/orphaned_unit_repair.go` | A `sync.provider_unit` unit stuck `dispatching` whose `worker_job_outbox` row is terminal (`delivered`) and whose River job **completed** or was reaped — recovered by minting a NEW outbox row under a reclaim key, never by re-arming the terminal one (CHAOS-5453) |
 
@@ -622,7 +622,7 @@ rather than an unbounded rearm loop the sweep could never break into.
 The provider-unit shape exists because of the restore-window strand measured on
 sync run `115e6246`: a Postgres restore burned all five River attempts for 17
 units inside a 77-second window, leaving `delivered` outbox rows pointing at
-discarded jobs and units `dispatching` with `attempts = 0` and no lease. Lease
+discarded jobs and units `dispatching` with no lease (`attempts = 0` there; the shape is no longer gated on it, see below). Lease
 repair cannot see them (there is no lease to expire), the dispatcher's
 republishes are silent no-ops, and before this shape existed the sweep's
 terminalization was the only outcome available — turning a transport blip into
@@ -692,9 +692,17 @@ admits exactly two River verdicts, and neither is reachable by any of them:
 `skipped_other_repair`. They belong to the strand repair and the sweep, which
 are already separated between themselves by `attempt_count`; a third claimant
 layered on top of that split is how the overlap documented above arose in the
-first place. Where such a row is unreachable because `sync_run_units.attempts >
-0`, that is CHAOS-5453 remedy 2 — widening the sweep's `attempts = 0` guard — a
-different change to a different query.
+first place. The strand repair and the sweep used to require
+`sync_run_units.attempts = 0` ("no handler ever claimed it"); CHAOS-6890 removed
+that guard from both (CHAOS-5453 remedy 2). Prod unit `22488b42` had attempts 4,
+a worker heartbeat 33 hours old and no lease, and its `delivered` row's River job
+was `discarded` 5/5 (budget-contention deferrals burn River attempts without
+bumping the unit's own counter): every path refused it, the dispatcher reclaimed
+it every stale window into `ErrDeliveryAlreadyTerminal`, and it held a bucket slot
+and its run open for 33 hours. What licenses the recovery is the dead delivery,
+the outbox budget and the absence of a lease (strand repair) or of a recent worker
+heartbeat (sweep, which additionally requires the outbox budget spent); the
+never-published branch of the sweep still requires `attempts = 0`.
 
 **Why this one mints a NEW outbox row instead of re-arming the terminal one.**
 Every other repair here returns a terminal row to `pending`. This one must not,

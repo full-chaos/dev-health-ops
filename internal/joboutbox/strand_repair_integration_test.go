@@ -771,11 +771,13 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				reason: "a completed delivery means the handler ACKed; the SyncRunUnit CAS owns what happens next, and the refusal is COUNTED rather than filtered away",
 			},
 			{
-				name:       "the unit already ran once",
+				name:       "the unit already ran and its river delivery is dead",
 				riverState: "discarded", riverAttempt: 5, outboxAttempts: 1,
-				unitStatus: "dispatching", unitAttempts: 1, runStatus: "dispatching",
-				wantRearmed: 0,
-				reason:      "attempts > 0 means a handler did claim this unit; its own retry ladder owns it, not this repair",
+				unitStatus: "dispatching", unitAttempts: 4, runStatus: "dispatching",
+				wantRearmed: 1,
+				reason: "CHAOS-6890 (prod run dbb92927, unit 22488b42: attempts 4, River discarded 5/5, outbox 1 of 5, no lease, " +
+					"worker silent for 33 h): the retry ladder does not own a unit whose delivery River has finished with -- " +
+					"without this rearm nothing ever does, and the unit holds a bucket slot and its run open for ever",
 			},
 			{
 				name:       "the unit holds a lease",

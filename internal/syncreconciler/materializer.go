@@ -528,6 +528,15 @@ func readRunawayDispatchWakeups(
 // staleDispatchCutoff ($2), the operator-tunable grace window
 // (SYNC_UNIT_DISPATCH_STALE_SECONDS) a delivery gets to actually be claimed
 // and start executing before the materializer will touch it again.
+//
+// CHAOS-6890: the same gate now covers the 'dispatching' and 'retrying' disjuncts.
+// Their own clocks (unit.updated_at, unit.available_at) only move when a dispatch
+// job EXECUTES, so while the job the relay just published sits queued -- busy or
+// wedged workers -- the unit stays stale and, without the row-level gate, EVERY
+// tick re-armed the row, the relay published again, and one run grew the queue by
+// a job a second (prod 2026-09-26 08:14-08:23Z: 480 jobs, delivery_attempt 7 170).
+// TestMaterializerDoesNotRepublishAStaleUnitsRunEveryTickWhileItsJobIsQueued closes
+// that loop the way the relay does.
 const materializeDispatchSQL = `
 WITH candidates AS (
 	SELECT DISTINCT run.id, run.org_id
@@ -650,11 +659,15 @@ WHERE sync_dispatch_outbox.status <> 'pending'
 			FROM public.sync_run_units AS unit
 			WHERE unit.sync_run_id = sync_dispatch_outbox.sync_run_id
 				AND (
-					(unit.status = 'dispatching' AND unit.updated_at <= $2)
+					(
+						unit.status = 'dispatching' AND unit.updated_at <= $2
+						AND (sync_dispatch_outbox.dispatched_at IS NULL OR sync_dispatch_outbox.dispatched_at <= $2)
+					)
 					OR (
 						unit.status = 'retrying'
 						AND unit.available_at IS NOT NULL
 						AND unit.available_at <= $1
+						AND (sync_dispatch_outbox.dispatched_at IS NULL OR sync_dispatch_outbox.dispatched_at <= $2)
 					)
 					OR (
 						unit.status = 'planned'

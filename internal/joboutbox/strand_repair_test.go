@@ -262,7 +262,6 @@ func TestStrandRepairQueriesCarryTheirLoadBearingGuards(t *testing.T) {
 	// ladder), or a rolled-up run (nothing is waiting on it).
 	for _, predicate := range []string{
 		"unit.status = 'dispatching'",
-		"unit.attempts = 0",
 		"unit.lease_owner IS NULL",
 		"unit.lease_expires_at IS NULL",
 		"run.status IN ('planned', 'dispatching', 'running')",
@@ -270,6 +269,13 @@ func TestStrandRepairQueriesCarryTheirLoadBearingGuards(t *testing.T) {
 		if !strings.Contains(providerUnit, predicate) {
 			t.Fatalf("the provider_unit query lost its %q guard", predicate)
 		}
+	}
+	// CHAOS-6890: the unit's own attempt count is deliberately NOT a guard. A unit a handler
+	// ran once (or four times) whose River job is dead and whose lease is gone is exactly
+	// as stranded as one no handler ever claimed.
+	if strings.Contains(providerUnit, "unit.attempts") {
+		t.Fatal("the provider_unit query gates on unit.attempts again: a unit a handler already ran " +
+			"but whose River delivery is dead is stranded for good (CHAOS-6890)")
 	}
 	// The uuid cast must be on the ARGUMENT, never on unit.id. CHAOS-4092:
 	// casting a bigint/uuid primary key to text is not sargable and turned a

@@ -1062,6 +1062,21 @@ const repairStrandedWorkGraphSQL = `
 // also the fail-closed direction: a completed delivery means the handler ACKed
 // the job, and the SyncRunUnit CAS -- not this repair -- owns what happens
 // next.
+// # CHAOS-6890: the unit's own attempt count is not part of the proof
+//
+// This shape used to require `unit.attempts = 0` ("no handler ever claimed it").
+// Prod run dbb92927 showed why that is not a proof of anything: unit 22488b42 had
+// attempts 4, a worker heartbeat 33 hours old, no lease, and a `delivered` outbox
+// row (attempt_count 1 of 5) whose River job was `discarded` 5/5 -- River's budget
+// spent (provider budget-contention deferrals burn River attempts without bumping
+// the unit's own counter), so the handler never reached its own exhaustion check. It
+// sat `dispatching` for 33 hours: this repair refused it, the sweep refused it, the
+// dispatcher reclaimed it every stale window into ErrDeliveryAlreadyTerminal, and the
+// orphaned-unit repair counted it skipped_other_repair on every pass. What makes a
+// delivery re-armable is that it is DEAD (cancelled, or discarded with River's budget
+// spent), that the outbox delivery budget has not been spent, and that no lease
+// exists; whether a handler ran once before does not change any of those. The lease
+// predicate below is what protects a unit a live handler holds.
 const repairStrandedProviderUnitSQL = `
 	SELECT outbox.id::text, job.id, outbox.job_kind, outbox.dedupe_key,
 		CASE
@@ -1094,7 +1109,6 @@ const repairStrandedProviderUnitSQL = `
 			OR job.attempt >= job.max_attempts
 		)
 		AND unit.status = 'dispatching'
-		AND unit.attempts = 0
 		AND unit.lease_owner IS NULL
 		AND unit.lease_expires_at IS NULL
 		AND (unit.available_at IS NULL OR unit.available_at <= $1)

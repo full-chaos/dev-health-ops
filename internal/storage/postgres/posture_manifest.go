@@ -123,6 +123,27 @@ func writePostureDigestInput(hash io.Writer, posture RolePosture) {
 //     missing-grant check already refuses readiness for that case). There is
 //     no proof this binary is the STALE one, so it is not refused here.
 //     Lockstep=true.
+//
+// lockstepUnavailableError is CheckPostureManifestLockstep's own bounded wrap of a query failure:
+// %w of the cause ONLY when that cause is the caller's own DEADLINE (health.Registry and the
+// worker's preclaim-readiness retry classify a retryable timeout by
+// errors.Is(err, context.DeadlineExceeded), CHAOS-6955 -- a check that waited on the busy readiness
+// pool until its deadline is a slow check, not a hard failure). Every other cause, cancellation
+// included, keeps its driver text (as this package's checks already do elsewhere) but never wraps
+// context.Canceled: health.Registry classifies that as retryable too, and a check that was
+// canceled -- for whatever OTHER reason -- has not merely run out of time on a busy pool, so
+// treating it as one would let a completed cancellation retry for the whole preclaim budget
+// instead of failing fast like any other genuine problem (r1 P1, fixed).
+func lockstepUnavailableError(step string, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %s: %w", ErrUnavailable, step, context.DeadlineExceeded)
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%w: %s: canceled", ErrUnavailable, step)
+	}
+	return fmt.Errorf("%w: %s: %w", ErrUnavailable, step, err)
+}
+
 func CheckPostureManifestLockstep(ctx context.Context, pool *pgxpool.Pool, binaryDigest string) (PostureManifestLockstepResult, error) {
 	if pool == nil || binaryDigest == "" {
 		return PostureManifestLockstepResult{}, ErrUnavailable
@@ -132,11 +153,7 @@ func CheckPostureManifestLockstep(ctx context.Context, pool *pgxpool.Pool, binar
 	if err := pool.QueryRow(
 		ctx, `SELECT to_regclass('public.`+PostureManifestAppliedTable+`') IS NOT NULL`,
 	).Scan(&tableExists); err != nil {
-		// %w of the cause, not a bare ErrUnavailable: health.Registry and the worker's
-		// preclaim-readiness retry classify a timeout by errors.Is(err, context.DeadlineExceeded)
-		// (CHAOS-6955), and a check that waited on the busy readiness pool until its deadline is a
-		// slow check, not a hard failure.
-		return PostureManifestLockstepResult{}, fmt.Errorf("%w: reading the applied-manifest table: %w", ErrUnavailable, err)
+		return PostureManifestLockstepResult{}, lockstepUnavailableError("reading the applied-manifest table", err)
 	}
 	if !tableExists {
 		return PostureManifestLockstepResult{BinaryDigest: binaryDigest, Lockstep: true}, nil
@@ -172,7 +189,7 @@ FROM latest`
 		return PostureManifestLockstepResult{BinaryDigest: binaryDigest, Lockstep: true}, nil
 	}
 	if err != nil {
-		return PostureManifestLockstepResult{}, fmt.Errorf("%w: reading the applied manifest: %w", ErrUnavailable, err)
+		return PostureManifestLockstepResult{}, lockstepUnavailableError("reading the applied manifest", err)
 	}
 	if latestDigest == binaryDigest {
 		return PostureManifestLockstepResult{

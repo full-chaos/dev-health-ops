@@ -57,3 +57,35 @@ func TestPostureManifestLockstepOnABusyPoolKeepsItsDeadlineClass(t *testing.T) {
 			"registry reports a slow check as a hard failure and preclaim-readiness exits instead of retrying", err)
 	}
 }
+
+// r1 P1 (fixed): a query that returns because it was CANCELED -- not because it ran into its own
+// deadline -- must never be classified as the same retryable timeout a deadline is. Canceling the
+// caller's own context (rather than letting a deadline expire) reproduces that class directly.
+func TestPostureManifestLockstepNeverClassifiesCancellationAsARetryableTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	checkCtx, checkCancel := context.WithCancel(ctx)
+	checkCancel()
+	_, err = CheckPostureManifestLockstep(checkCtx, pool, "some-digest")
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("CheckPostureManifestLockstep(canceled ctx) = %v, want ErrUnavailable", err)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CheckPostureManifestLockstep(canceled ctx) = %v: a cancellation must not read as a retryable timeout", err)
+	}
+}

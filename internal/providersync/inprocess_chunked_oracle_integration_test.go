@@ -96,15 +96,28 @@ func TestInProcessChunkLedgerMatchesPostgres(t *testing.T) {
 			if generator.rng.Intn(20) == 0 {
 				useClaim = stranger
 			}
-			label := fmt.Sprintf("seed %d step %d %s (claim=%v)", seed, step, operation.name, useClaim.Owner == claim.Owner)
-			wantValue, wantErr := operation.run(ctx, repository, useClaim, clock)
-			gotValue, gotErr := operation.run(ctx, memory, useClaim, clock)
+			// A call with a context that is already cancelled: PostgreSQL fails it (a
+			// transaction cannot begin, a query fails), and so must the in-process store,
+			// without touching its state.
+			callContext, cancelled := ctx, false
+			if generator.rng.Intn(12) == 0 {
+				var stop context.CancelFunc
+				callContext, stop = context.WithCancel(ctx)
+				stop()
+				cancelled = true
+			}
+			label := fmt.Sprintf("seed %d step %d %s (claim=%v cancelled=%v)", seed, step, operation.name, useClaim.Owner == claim.Owner, cancelled)
+			wantValue, wantErr := operation.run(callContext, repository, useClaim, clock)
+			gotValue, gotErr := operation.run(callContext, memory, useClaim, clock)
 			if wantClass, gotClass := errorClass(wantErr), errorClass(gotErr); wantClass != gotClass {
 				t.Fatalf("%s: postgres error %q (%v), in-process error %q (%v)", label, wantClass, wantErr, gotClass, gotErr)
 			}
 			kind := strings.Fields(operation.name)[0]
 			if strings.HasPrefix(operation.name, "commit chunk") {
 				kind = "commit-chunk"
+			}
+			if cancelled {
+				kind = "cancelled " + kind
 			}
 			outcomes[kind+" -> "+errorClass(wantErr)]++
 			if want, got := canonicalJSON(t, wantValue), canonicalJSON(t, gotValue); want != got {
@@ -136,7 +149,9 @@ func TestInProcessChunkLedgerMatchesPostgres(t *testing.T) {
 	// lease, invalid input) on the same calls.
 	if sequences >= 100 {
 		for _, required := range []string{"commit-chunk -> ok", "mark -> ok", "prepare -> ok", "prepare -> " + ErrChunkCheckpointConflict.Error(),
-			"begin -> ok", "commit -> ok", "resolve -> ok", "prepare -> " + ErrLeaseLost.Error()} {
+			"begin -> ok", "commit -> ok", "resolve -> ok", "prepare -> " + ErrLeaseLost.Error(),
+			"cancelled prepare -> " + ErrInvalidConfiguration.Error(), "cancelled load -> " + ErrChunkCheckpointConflict.Error(),
+			"cancelled begin -> " + ErrInvalidConfiguration.Error(), "cancelled mark -> " + ErrInvalidConfiguration.Error()} {
 			if outcomes[required] == 0 {
 				t.Errorf("no sequence reached %q: the generator does not cover it", required)
 			}

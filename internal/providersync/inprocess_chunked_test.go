@@ -130,3 +130,37 @@ func TestInProcessChunkLedgerRunsAChunkThroughItsLife(t *testing.T) {
 		t.Fatalf("checkpoint after completion = %+v", checkpoint)
 	}
 }
+
+// A cancelled context fails the call and leaves the state alone, as it does against
+// PostgreSQL (a transaction cannot begin, a query fails): the r1 defect of #3252.
+func TestInProcessChunkLedgerRefusesACancelledContextWithoutChangingState(t *testing.T) {
+	claim := nativeTestClaim("github", "tests")
+	store := NewInProcessChunkLedger(claim)
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	effect := effectBatchFixture(t, "ci_pipeline_runs", EffectReadbackRequired, `{"org_id":"org-acme","run_id":"1"}`)
+	chunk := PreparedProviderChunk{
+		SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
+		Ordinal: 0, CursorAfter: "c1", Effects: []EffectBatch{effect},
+	}
+	cancelled, stop := context.WithCancel(context.Background())
+	stop()
+	if _, err := store.PrepareChunk(cancelled, claim, chunk, now); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("a cancelled prepare: %v", err)
+	}
+	if _, err := store.LoadChunkCheckpoint(context.Background(), claim, now); !errors.Is(err, ErrChunkCheckpointNotFound) {
+		t.Fatalf("a cancelled prepare left a checkpoint: %v", err)
+	}
+	if _, err := store.PrepareChunk(context.Background(), claim, chunk, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadChunkCheckpoint(cancelled, claim, now); !errors.Is(err, ErrChunkCheckpointConflict) {
+		t.Fatalf("a cancelled load: %v", err)
+	}
+	if err := store.BeginChunkEffect(cancelled, claim, 0, 0, effect.ContentDigest, now); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("a cancelled begin: %v", err)
+	}
+	loaded, err := store.LoadPreparedChunk(context.Background(), claim, 0, now)
+	if err != nil || loaded.Ledger.Effects[0].Status != GenerationBlockPending {
+		t.Fatalf("a cancelled begin changed the ledger: %+v %v", loaded.Ledger.Effects, err)
+	}
+}

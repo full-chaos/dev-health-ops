@@ -90,10 +90,14 @@ func copyCheckpoint(source *ChunkCheckpoint) (ChunkCheckpoint, error) {
 }
 
 func (store *InProcessChunkLedger) LoadChunkCheckpoint(
-	_ context.Context, claim Claim, now time.Time,
+	ctx context.Context, claim Claim, now time.Time,
 ) (ChunkCheckpoint, error) {
-	if claim.Validate() != nil || now.IsZero() {
+	if ctx == nil || claim.Validate() != nil || now.IsZero() {
 		return ChunkCheckpoint{}, ErrInvalidConfiguration
+	}
+	if ctx.Err() != nil {
+		// The Postgres query fails and every scan failure is a conflict.
+		return ChunkCheckpoint{}, ErrChunkCheckpointConflict
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -133,9 +137,9 @@ func (store *InProcessChunkLedger) PrepareChunk(
 // it (CHAOS-3821): the work is done on a copy of the state and swapped in on
 // success, the way one transaction commits or rolls back.
 func (store *InProcessChunkLedger) PrepareChunkGroup(
-	_ context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time,
+	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time,
 ) ([]PreparedProviderChunk, error) {
-	if claim.Validate() != nil || now.IsZero() || len(chunks) == 0 {
+	if ctx == nil || claim.Validate() != nil || now.IsZero() || len(chunks) == 0 {
 		return nil, ErrInvalidConfiguration
 	}
 	materials := make([]preparedChunkMaterial, 0, len(chunks))
@@ -145,6 +149,9 @@ func (store *InProcessChunkLedger) PrepareChunkGroup(
 			return nil, err
 		}
 		materials = append(materials, material)
+	}
+	if ctx.Err() != nil {
+		return nil, ErrInvalidConfiguration // Pool.Begin fails on a cancelled context
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -289,10 +296,13 @@ func (state *inProcessChunkState) loadRow(claim Claim, ordinal int) (PreparedPro
 }
 
 func (store *InProcessChunkLedger) LoadPreparedChunk(
-	_ context.Context, claim Claim, ordinal int, now time.Time,
+	ctx context.Context, claim Claim, ordinal int, now time.Time,
 ) (PreparedProviderChunk, error) {
-	if claim.Validate() != nil || ordinal < 0 || now.IsZero() {
+	if ctx == nil || claim.Validate() != nil || ordinal < 0 || now.IsZero() {
 		return PreparedProviderChunk{}, ErrInvalidConfiguration
+	}
+	if ctx.Err() != nil {
+		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -303,26 +313,29 @@ func (store *InProcessChunkLedger) LoadPreparedChunk(
 }
 
 func (store *InProcessChunkLedger) BeginChunkEffect(
-	_ context.Context, claim Claim, ordinal, index int, digest string, now time.Time,
+	ctx context.Context, claim Claim, ordinal, index int, digest string, now time.Time,
 ) error {
-	return store.mutateEffect(claim, ordinal, index, digest, now, GenerationBlockPending, GenerationBlockWriting)
+	return store.mutateEffect(ctx, claim, ordinal, index, digest, now, GenerationBlockPending, GenerationBlockWriting)
 }
 
 func (store *InProcessChunkLedger) CommitChunkEffect(
-	_ context.Context, claim Claim, ordinal, index int, digest string, now time.Time,
+	ctx context.Context, claim Claim, ordinal, index int, digest string, now time.Time,
 ) error {
-	return store.mutateEffect(claim, ordinal, index, digest, now, GenerationBlockWriting, GenerationBlockCommitted)
+	return store.mutateEffect(ctx, claim, ordinal, index, digest, now, GenerationBlockWriting, GenerationBlockCommitted)
 }
 
 func (store *InProcessChunkLedger) ResolveChunkEffect(
-	_ context.Context, claim Claim, ordinal, index int, digest string,
+	ctx context.Context, claim Claim, ordinal, index int, digest string,
 	resolution GenerationBlockResolution, now time.Time,
 ) error {
 	if resolution != GenerationBlockMarkCommitted && resolution != GenerationBlockRetryPending {
 		return ErrInvalidConfiguration
 	}
-	if claim.Validate() != nil || ordinal < 0 || index < 0 || now.IsZero() {
+	if ctx == nil || claim.Validate() != nil || ordinal < 0 || index < 0 || now.IsZero() {
 		return ErrInvalidConfiguration
+	}
+	if ctx.Err() != nil {
+		return ErrInvalidConfiguration // Pool.Begin fails on a cancelled context
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -368,10 +381,13 @@ func (store *InProcessChunkLedger) ResolveChunkEffect(
 
 // mutateEffect is mutateChunkEffect.
 func (store *InProcessChunkLedger) mutateEffect(
-	claim Claim, ordinal, index int, digest string, now time.Time, from, to GenerationBlockStatus,
+	ctx context.Context, claim Claim, ordinal, index int, digest string, now time.Time, from, to GenerationBlockStatus,
 ) error {
-	if claim.Validate() != nil || ordinal < 0 || index < 0 || now.IsZero() {
+	if ctx == nil || claim.Validate() != nil || ordinal < 0 || index < 0 || now.IsZero() {
 		return ErrInvalidConfiguration
+	}
+	if ctx.Err() != nil {
+		return ErrInvalidConfiguration // Pool.Begin fails on a cancelled context
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -418,10 +434,13 @@ func (store *InProcessChunkLedger) mutateEffect(
 }
 
 func (store *InProcessChunkLedger) MarkChunkCommitted(
-	_ context.Context, claim Claim, ordinal int, digest string, now time.Time,
+	ctx context.Context, claim Claim, ordinal int, digest string, now time.Time,
 ) error {
-	if claim.Validate() != nil || ordinal < 0 || now.IsZero() {
+	if ctx == nil || claim.Validate() != nil || ordinal < 0 || now.IsZero() {
 		return ErrInvalidConfiguration
+	}
+	if ctx.Err() != nil {
+		return ErrInvalidConfiguration // Pool.Begin fails on a cancelled context
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -470,10 +489,13 @@ func (store *InProcessChunkLedger) MarkChunkCommitted(
 }
 
 func (store *InProcessChunkLedger) MarkInventoryComplete(
-	_ context.Context, claim Claim, now time.Time,
+	ctx context.Context, claim Claim, now time.Time,
 ) error {
-	if claim.Validate() != nil || now.IsZero() {
+	if ctx == nil || claim.Validate() != nil || now.IsZero() {
 		return ErrInvalidConfiguration
+	}
+	if ctx.Err() != nil {
+		return ErrInvalidConfiguration // Pool.Begin fails on a cancelled context
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()

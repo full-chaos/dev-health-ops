@@ -76,6 +76,9 @@ than silently ignore a values override that tries to enable it.
 {{- if and $group.autoscaling.enabled (has $group.name (list "reconciler" "scheduler")) }}
 {{- fail (printf "goWorkers.groups[%s].autoscaling.enabled=true is not allowed -- %s is a coordinator singleton and must never be autoscaled (canonical-deployment.md Autoscaling contract)." $group.name $group.name) }}
 {{- end }}
+{{- if and (not $group.autoscaling.enabled) $group.autoscaling.extraTriggers }}
+{{- fail (printf "goWorkers.groups[%s].autoscaling.extraTriggers is set but autoscaling.enabled is false -- no ScaledObject is rendered for this group, so the triggers would be silently ignored." $group.name) }}
+{{- end }}
 {{- if $group.autoscaling.enabled }}
 {{- /*
 CHAOS-4984 (kept): the HorizontalPodAutoscaler the ScaledObject generates
@@ -87,6 +90,29 @@ still rejects minReplicaCount < 1 with no scale-to-zero feature gate assumed
 {{- end }}
 {{- if not $group.queues }}
 {{- fail (printf "goWorkers.groups[%s].autoscaling.enabled=true but this group has no queues -- KEDA's postgresql scaler has no backlog signal to read. Stream-runner groups are event consumers, not queue consumers: size them by fixed replicas, not autoscaling." $group.name) }}
+{{- end }}
+{{- /*
+CHAOS-6938: optional extra postgresql triggers on this group's ScaledObject (KEDA scales to the max
+across triggers). They connect exactly like the river_job trigger (same pooler, login, TriggerAuthentication),
+so a query may read only what devhealth_keda_readonly holds SELECT on (river_job, and public.sync_run_units
+via `dho migrate roles`). Fail closed on a shape that would render a trigger KEDA cannot evaluate.
+*/}}
+{{- $extraTriggers := $group.autoscaling.extraTriggers | default (list) }}
+{{- $extraNames := dict }}
+{{- range $trigger := $extraTriggers }}
+{{- if not $trigger.name }}
+{{- fail (printf "goWorkers.groups[%s].autoscaling.extraTriggers: every trigger needs a name" $group.name) }}
+{{- end }}
+{{- if hasKey $extraNames $trigger.name }}
+{{- fail (printf "goWorkers.groups[%s].autoscaling.extraTriggers: trigger name %q is used twice" $group.name $trigger.name) }}
+{{- end }}
+{{- $_ := set $extraNames $trigger.name true }}
+{{- if not $trigger.query }}
+{{- fail (printf "goWorkers.groups[%s].autoscaling.extraTriggers[%s]: query is required" $group.name $trigger.name) }}
+{{- end }}
+{{- if lt (int $trigger.targetQueryValue) 1 }}
+{{- fail (printf "goWorkers.groups[%s].autoscaling.extraTriggers[%s]: targetQueryValue must be at least 1" $group.name $trigger.name) }}
+{{- end }}
 {{- end }}
 {{- $queueList := join "','" $group.queues }}
 {{- $riverSchema := $.Values.config.RIVER_DATABASE_SCHEMA | default "river" }}
@@ -152,6 +178,21 @@ spec:
         targetQueryValue: {{ $group.autoscaling.queueDepthPerReplica | quote }}
       authenticationRef:
         name: {{ include "dev-health.fullname" $ }}-go-worker-river-ro
+{{- range $trigger := $extraTriggers }}
+    - type: postgresql
+      name: {{ $trigger.name | quote }}
+      metadata:
+        host: {{ include "dev-health.fullname" $ }}-go-pgbouncer-transaction.{{ include "dev-health.namespace" $ }}.svc.cluster.local
+        port: {{ $.Values.goWorkers.pgbouncer.transaction.port | quote }}
+        userName: {{ $kedaRole | quote }}
+        dbName: {{ $postgresDatabase | quote }}
+        sslmode: disable
+        query: >-
+          {{ $trigger.query }}
+        targetQueryValue: {{ $trigger.targetQueryValue | quote }}
+      authenticationRef:
+        name: {{ include "dev-health.fullname" $ }}-go-worker-river-ro
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

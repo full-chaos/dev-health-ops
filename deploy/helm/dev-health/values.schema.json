@@ -184,7 +184,20 @@
                   "maxReplicas": { "type": "integer", "minimum": 1 },
                   "queueDepthPerReplica": { "type": "integer", "minimum": 1 },
                   "cooldownPeriod": { "type": "integer", "minimum": 300 },
-                  "pollingInterval": { "type": "integer", "minimum": 1 }
+                  "pollingInterval": { "type": "integer", "minimum": 1 },
+                  "extraTriggers": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["name", "query", "targetQueryValue"],
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": { "type": "string", "minLength": 1 },
+                        "query": { "type": "string", "minLength": 1 },
+                        "targetQueryValue": { "type": "integer", "minimum": 1 }
+                      }
+                    }
+                  }
                 }
               },
               "livenessProbe": { "type": "object" },

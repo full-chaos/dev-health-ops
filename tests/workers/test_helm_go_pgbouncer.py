@@ -405,7 +405,11 @@ def test_helm_river_workers_select_manifest_queues_and_queue_metrics() -> None:
             and doc["spec"]["scaleTargetRef"]["name"] == deployment["metadata"]["name"]
         )
         triggers = scaler["spec"]["triggers"]
-        assert len(triggers) == 1
+        # The queue-scoped river_job trigger is always first; a group may carry NAMED
+        # extra triggers after it (autoscaling.extraTriggers, CHAOS-6938), which are
+        # pinned by tests/test_helm_go_worker_keda_extra_triggers.py.
+        assert triggers, "a scaled group renders at least its queue-scoped trigger"
+        assert all(extra.get("name") for extra in triggers[1:]), triggers[1:]
         trigger = triggers[0]
         assert trigger["type"] == "postgresql"
         # CHAOS-5594 prod smoke: keda-operator evaluates this trigger from

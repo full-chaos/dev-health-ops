@@ -12,7 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/localgit"
 )
 
-// runLocalRepo is sync_local_target for git and prs (CHAOS-6775): main()'s
+// runLocalRepo is sync_local_target for git and prs (CHAOS-6775) and blame (CHAOS-6776): main()'s
 // first-organization lookup when no organization was given (a database that has
 // none, or none configured, leaves the store with no org_id, as in Python), then
 // the local repository sync through localgit.
@@ -53,7 +53,12 @@ func syncLocal(ctx context.Context, plan Plan, conn driver.Conn, env cli.Env, no
 	if plan.Org != nil {
 		org = *plan.Org
 	}
-	return localgit.Sync(ctx, repo, localgit.Writer{Conn: conn, OrgID: org, Now: func() time.Time { return now }}, localgit.Options{
+	writer := localgit.Writer{Conn: conn, OrgID: org, Now: func() time.Time { return now }}
+	options := localgit.Options{
 		Since: plan.Since, SyncGit: plan.SyncGit, SyncPRs: plan.SyncPrs, Lookup: env.Lookup, Now: func() time.Time { return now },
-	})
+	}
+	if plan.Call == CallLocalBlame {
+		return localgit.SyncBlame(ctx, repo, writer, options)
+	}
+	return localgit.Sync(ctx, repo, writer, options)
 }

@@ -196,7 +196,15 @@ func parseActorAndDate(line string) (name, email *string, epoch epochValue) {
 	} else {
 		actor = line
 	}
-	first, _, _ := strings.Cut(actor, "\n")
+	name, email = actorFromString(actor)
+	return name, email, epoch
+}
+
+// actorFromString is Actor.from_string (GitPython 3.1.62): the first line, a
+// name before the first `<` (right-stripped) and an email up to the next `>`;
+// without both brackets the whole string is the name and the email is None.
+func actorFromString(text string) (name, email *string) {
+	first, _, _ := strings.Cut(text, "\n")
 	left := strings.Index(first, "<")
 	right := -1
 	if left >= 0 {
@@ -206,9 +214,9 @@ func parseActorAndDate(line string) (name, email *string, epoch epochValue) {
 	}
 	if left >= 0 && right >= 0 {
 		n, e := pythonparity.RStrip(first[:left]), first[left+1:right]
-		return &n, &e, epoch
+		return &n, &e
 	}
-	return &actor, nil, epoch
+	return &text, nil
 }
 
 // unicodeDigitsToInt64 is int() of a run of Unicode decimal digits.

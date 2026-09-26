@@ -32,14 +32,14 @@ const llmVenueOperatorMax = "10000000"
 // responses are compared byte for byte, and the settings rows the writes
 // touched are compared after.
 func TestLLMSettingsRoutesVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, true, "keyed", "0018dc86e305e80325f119c9626795c0b2a9960a724aa2416926300e403b7807")
+	runLLMSettingsOracle(t, true, "keyed", "35a7b8c5a64b9ab4ddcf97d59ecbb787eb2be349191176df02fd3d731e6b75c0")
 }
 
 // TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle runs the same routes on
 // planes with no SETTINGS_ENCRYPTION_KEY: encrypting or decrypting raises in
 // Python, an unhandled 500.
 func TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, false, "nokey", "6e603a8eca0548dac071fefde8cf0bd6b82e505a638ca272751700f9fb2c55b0")
+	runLLMSettingsOracle(t, false, "nokey", "180f0262b7d7da2f56590c2b4f00ed46306c26dfd9e0f94783e9037d6acfc431")
 }
 
 func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest string) {

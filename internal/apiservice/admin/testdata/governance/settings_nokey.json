@@ -2,7 +2,8 @@
   "header": {
     "test": "TestSettingsRoutesWithoutEncryptionKeyVenueOracle",
     "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
-    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=$DIR DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestSettingsRoutesWithoutEncryptionKeyVenueOracle$' ./internal/apiservice/admin/ (it fails once by design and prints the digest to pin)"
+    "producer_digest": "c0f6de73e34fa0583fea646a33b5f133309c1639cf5fc59dd5ebe0f439faed19",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestSettingsRoutesWithoutEncryptionKeyVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
   },
   "requests": [
     {
@@ -10,7 +11,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/categories",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 200,
       "headers": {
         "content-length": "108",
@@ -21,7 +22,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "27e57b18-2a01-474b-958e-b1cab6e32439"
+        "x-request-id": "b24b66f3-d1e6-4a2f-a829-48b8f596def2"
       },
       "body": "[\"general\",\"github\",\"gitlab\",\"jira\",\"linear\",\"atlassian\",\"llm\",\"ask_dev\",\"sync\",\"notifications\",\"retention\"]"
     },
@@ -30,7 +31,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/categories",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "76fa4ae1d1cec639f369817b15166e922eca07c183240579eaa95111edb16cd4",
+      "request_headers_sha256": "b8df39bff1fecacc1583af34c98eba6f61106f9182987bc38f05cf77862b034a",
       "status": 200,
       "headers": {
         "content-length": "108",
@@ -41,7 +42,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ff44e91c-9e8b-421e-81be-9e27c400f5de"
+        "x-request-id": "926a765c-2c7d-4a74-ac64-66d3d8601b48"
       },
       "body": "[\"general\",\"github\",\"gitlab\",\"jira\",\"linear\",\"atlassian\",\"llm\",\"ask_dev\",\"sync\",\"notifications\",\"retention\"]"
     },
@@ -50,7 +51,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/categories",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "17c64ef662ac017a62a498dc615c771a182b3fadbef02e49d738b3ea4873e514",
+      "request_headers_sha256": "93749beb4a8514d64827f267315ce06b37cb72669cda60520b0fc60af0aa6760",
       "status": 403,
       "headers": {
         "content-length": "34",
@@ -61,7 +62,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d8a79d39-0ef7-4927-88c6-8d490909cedd"
+        "x-request-id": "d104beea-1d59-4166-957a-552dbdf87826"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -82,7 +83,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3947b107-bbc7-49a5-856f-2f9cbb81cf03"
+        "x-request-id": "f884aaee-b084-49b4-a475-2bbbaba1eba0"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     },
@@ -91,7 +92,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings/categories",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 405,
       "headers": {
         "allow": "GET",
@@ -103,7 +104,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "86af260f-c626-42ce-b14f-b942822461b0"
+        "x-request-id": "3d103e06-49b7-4c55-98bd-8b4826e61ca4"
       },
       "body": "{\"detail\":\"Method Not Allowed\"}"
     },
@@ -112,7 +113,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/settings/categories",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 405,
       "headers": {
         "allow": "GET",
@@ -124,7 +125,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "c54ce3a4-49af-4525-bae6-db6a0b9b1759"
+        "x-request-id": "873ce2a5-ddb0-48e7-90a3-225b7a0684e2"
       },
       "body": "{\"detail\":\"Method Not Allowed\"}"
     },
@@ -133,7 +134,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/categories",
       "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 405,
       "headers": {
         "allow": "GET",
@@ -145,7 +146,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ded2eaed-91ee-4d45-a836-d892a84c209d"
+        "x-request-id": "5c465043-50df-4e64-8fdd-3d7e8a5a0e1f"
       },
       "body": "{\"detail\":\"Method Not Allowed\"}"
     },
@@ -154,7 +155,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -167,7 +168,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/github",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -180,7 +181,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/notifications",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -193,7 +194,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/jira",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 200,
       "headers": {
         "content-length": "33",
@@ -204,7 +205,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "af30fd7c-ca8a-4c0b-b4b0-f4b3661c44ab"
+        "x-request-id": "51c6eb44-fedd-4ff9-a92b-088c8883ef27"
       },
       "body": "{\"category\":\"jira\",\"settings\":[]}"
     },
@@ -213,7 +214,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/nope",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 200,
       "headers": {
         "content-length": "33",
@@ -224,7 +225,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8871b7b7-fb5c-46ee-bb2c-ff8649c24050"
+        "x-request-id": "6a9a2e74-7bb8-4292-a150-e17aec2a6a28"
       },
       "body": "{\"category\":\"nope\",\"settings\":[]}"
     },
@@ -233,7 +234,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/a%20b",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 200,
       "headers": {
         "content-length": "32",
@@ -244,7 +245,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7cef2ade-59b7-4f90-aedc-4f28c8b14265"
+        "x-request-id": "944b24d5-ff93-430e-8e9a-f9f12135db21"
       },
       "body": "{\"category\":\"a b\",\"settings\":[]}"
     },
@@ -253,7 +254,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "1157588570c1bfae34f40080f3f05fc4fa18e99b39469086a976088bd0845def",
+      "request_headers_sha256": "8b7315a3e9c8c1a1bbd8ecaedb9e346bdcc32736d004ca4e40a053887e0152db",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -266,7 +267,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/llm",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 403,
       "headers": {
         "content-length": "162",
@@ -277,7 +278,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "21fc85e9-8bad-4613-9a62-75d157293ba6"
+        "x-request-id": "2ca13609-6373-4d54-883d-acc910bdf52c"
       },
       "body": "{\"detail\":{\"error\":\"use_llm_settings_endpoint\",\"message\":\"LLM settings and budgets must be managed via /admin/llm-settings (tier-gated, validated, and masked).\"}}"
     },
@@ -286,7 +287,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/llm_budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 403,
       "headers": {
         "content-length": "162",
@@ -297,7 +298,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0ac15db2-7122-4a6d-9520-0ab4cad5e55c"
+        "x-request-id": "a25bf851-108b-4a47-beee-ebe9d08dddbb"
       },
       "body": "{\"detail\":{\"error\":\"use_llm_settings_endpoint\",\"message\":\"LLM settings and budgets must be managed via /admin/llm-settings (tier-gated, validated, and masked).\"}}"
     },
@@ -306,7 +307,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/ask_dev",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 403,
       "headers": {
         "content-length": "126",
@@ -317,7 +318,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2c0f0e02-936f-48c3-914c-f58b32bff029"
+        "x-request-id": "28eff4df-45b8-45ee-b4eb-1c117f632086"
       },
       "body": "{\"detail\":{\"error\":\"use_ask_dev_settings_endpoint\",\"message\":\"Ask Dev settings must be managed via /admin/ask-dev/settings.\"}}"
     },
@@ -326,7 +327,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "76fa4ae1d1cec639f369817b15166e922eca07c183240579eaa95111edb16cd4",
+      "request_headers_sha256": "b8df39bff1fecacc1583af34c98eba6f61106f9182987bc38f05cf77862b034a",
       "status": 403,
       "headers": {
         "content-length": "42",
@@ -337,7 +338,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "59c8f153-f426-4d49-bcf5-97cb9d72ac9c"
+        "x-request-id": "1658b5fa-92b9-4d7e-a765-3527a9381cbc"
       },
       "body": "{\"detail\":\"Organization context required\"}"
     },
@@ -346,7 +347,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "17c64ef662ac017a62a498dc615c771a182b3fadbef02e49d738b3ea4873e514",
+      "request_headers_sha256": "93749beb4a8514d64827f267315ce06b37cb72669cda60520b0fc60af0aa6760",
       "status": 403,
       "headers": {
         "content-length": "34",
@@ -357,7 +358,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6654e83d-41b6-46a9-abd4-bb9447666a5b"
+        "x-request-id": "25501f57-469e-4391-978b-9467e2bb83df"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -378,7 +379,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5f5eea00-e686-4be6-b9cd-03ed2bf630aa"
+        "x-request-id": "65c4c898-c27a-4c6f-8771-98e4dbf8c29c"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     },
@@ -387,7 +388,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general/site_name",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 200,
       "headers": {
         "content-length": "101",
@@ -398,7 +399,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "efce8014-5f0f-431b-a059-bc78628ea7d8"
+        "x-request-id": "3a6b8c6c-abc7-4015-85f2-f2db97b7fa9f"
       },
       "body": "{\"key\":\"site_name\",\"value\":\"Acme\",\"category\":\"general\",\"is_encrypted\":false,\"description\":\"the name\"}"
     },
@@ -407,7 +408,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general/empty_value",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 200,
       "headers": {
         "content-length": "93",
@@ -418,7 +419,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "25f9a6e2-b255-4229-af1d-024938242806"
+        "x-request-id": "74ce961c-aaa3-4aad-ad4e-7c4664285e36"
       },
       "body": "{\"key\":\"empty_value\",\"value\":\"\",\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -427,7 +428,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general/null_value",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 200,
       "headers": {
         "content-length": "100",
@@ -438,7 +439,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b278ef81-57c4-4180-9778-a91330c35504"
+        "x-request-id": "286361ba-261f-4fb4-9c18-548d56977f5f"
       },
       "body": "{\"key\":\"null_value\",\"value\":null,\"category\":\"general\",\"is_encrypted\":false,\"description\":\"no value\"}"
     },
@@ -447,7 +448,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general/unicode",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 200,
       "headers": {
         "content-length": "101",
@@ -458,7 +459,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "91108676-6fc9-4f7e-b583-6af941fe9f72"
+        "x-request-id": "cd6cc95b-7626-4dca-bc7d-89353462a0d4"
       },
       "body": "{\"key\":\"unicode\",\"value\":\"Café 東京\",\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -467,7 +468,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/github/token",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -480,7 +481,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/notifications/bad_cipher",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -493,7 +494,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/notifications/legacy_v2",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -506,7 +507,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/notifications/empty_encrypted",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -519,7 +520,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general/nope",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 404,
       "headers": {
         "content-length": "30",
@@ -530,7 +531,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a8ecb717-7ef7-4520-896e-2a9c10954dfb"
+        "x-request-id": "a49de587-8042-4e02-92a7-3e1f62d99e34"
       },
       "body": "{\"detail\":\"Setting not found\"}"
     },
@@ -539,7 +540,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/nope/site_name",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 404,
       "headers": {
         "content-length": "30",
@@ -550,7 +551,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "91162813-fd73-40d0-8c2f-876867162395"
+        "x-request-id": "91fa3a7c-4f8b-4ae2-aa24-790c5f9c11bb"
       },
       "body": "{\"detail\":\"Setting not found\"}"
     },
@@ -559,7 +560,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general/other_org",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 404,
       "headers": {
         "content-length": "30",
@@ -570,7 +571,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8bf8b02c-3ba6-4363-9b97-0bb398515ab0"
+        "x-request-id": "2ab740bd-ab0d-41fb-ae2c-b8d131cdf8fa"
       },
       "body": "{\"detail\":\"Setting not found\"}"
     },
@@ -579,7 +580,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/llm/api_key",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 403,
       "headers": {
         "content-length": "162",
@@ -590,7 +591,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6277a42e-3bfb-4bf9-8ace-7eaea63f4b07"
+        "x-request-id": "6f579f4d-1907-488b-89fc-40706e1c9fe3"
       },
       "body": "{\"detail\":{\"error\":\"use_llm_settings_endpoint\",\"message\":\"LLM settings and budgets must be managed via /admin/llm-settings (tier-gated, validated, and masked).\"}}"
     },
@@ -599,7 +600,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/ask_dev/x",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 403,
       "headers": {
         "content-length": "126",
@@ -610,7 +611,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "23c3bf6a-d9dc-4372-b6a7-a314b35536e6"
+        "x-request-id": "8f2ab0ca-92ef-430d-a87a-c97be50f7fe5"
       },
       "body": "{\"detail\":{\"error\":\"use_ask_dev_settings_endpoint\",\"message\":\"Ask Dev settings must be managed via /admin/ask-dev/settings.\"}}"
     },
@@ -619,7 +620,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general/site_name",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "76fa4ae1d1cec639f369817b15166e922eca07c183240579eaa95111edb16cd4",
+      "request_headers_sha256": "b8df39bff1fecacc1583af34c98eba6f61106f9182987bc38f05cf77862b034a",
       "status": 403,
       "headers": {
         "content-length": "42",
@@ -630,7 +631,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "377f9afe-1597-4338-af2e-5f908aecf724"
+        "x-request-id": "5b4cbc4b-54e6-49d0-b986-a07fe7d884fe"
       },
       "body": "{\"detail\":\"Organization context required\"}"
     },
@@ -639,7 +640,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general/site_name",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "17c64ef662ac017a62a498dc615c771a182b3fadbef02e49d738b3ea4873e514",
+      "request_headers_sha256": "93749beb4a8514d64827f267315ce06b37cb72669cda60520b0fc60af0aa6760",
       "status": 403,
       "headers": {
         "content-length": "34",
@@ -650,7 +651,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "cf62174f-411f-4aaa-aaa0-c656df6d4ff2"
+        "x-request-id": "0af358d1-f9a9-4a4f-a846-1b5b88608a33"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -659,7 +660,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings/general/site_name",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 405,
       "headers": {
         "allow": "GET",
@@ -671,7 +672,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "55b57edc-c2ba-4c35-a870-7cda8c1b0b56"
+        "x-request-id": "6a38c760-ed9f-4e9c-90ca-6dd5ecdef1e8"
       },
       "body": "{\"detail\":\"Method Not Allowed\"}"
     },
@@ -680,7 +681,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 405,
       "headers": {
         "allow": "POST",
@@ -692,7 +693,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "c73999d9-dde2-4b33-b542-e81fa0197065"
+        "x-request-id": "c6b198ac-05e1-4101-b21a-5f4c161ed88d"
       },
       "body": "{\"detail\":\"Method Not Allowed\"}"
     },
@@ -701,7 +702,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/unicode",
       "body_sha256": "87dcae8265c4040e3e8edf356c9361453feb668bb58ba426308c5c82c6320e61",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "101",
@@ -712,7 +713,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "90a67d12-ad2d-41f0-9d35-1070a0d14706"
+        "x-request-id": "0fec8415-ffbc-4505-885e-3691b9007a4d"
       },
       "body": "{\"key\":\"unicode\",\"value\":\"Café 東京\",\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -721,7 +722,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_new",
       "body_sha256": "40fc8bdc0a332b57a3577185abd335d38babfd440e63377872cd903645698e65",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "91",
@@ -732,7 +733,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "c08f3486-8638-4ade-b13b-7d160807403d"
+        "x-request-id": "8473baa8-a284-46ac-873b-5facd2656d30"
       },
       "body": "{\"key\":\"put_new\",\"value\":\"v1\",\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -741,7 +742,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/site_name",
       "body_sha256": "948c3cc5413c5d169011bd236ff598ef8965949888174e4072630831e01880e7",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "101",
@@ -752,7 +753,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d1d195a2-03c2-4572-909f-1d3163da19da"
+        "x-request-id": "f46429e0-af0a-48a3-9def-0f7b3076b965"
       },
       "body": "{\"key\":\"site_name\",\"value\":\"Acme2\",\"category\":\"general\",\"is_encrypted\":false,\"description\":\"renamed\"}"
     },
@@ -761,7 +762,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/site_name",
       "body_sha256": "dd69ea8f6b1b7abec0e2419119e87451f831fa8d02ff8685bccec649074649b6",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "101",
@@ -772,7 +773,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a223f6f6-5356-45d0-b4c4-6c89d66550a4"
+        "x-request-id": "dfbf3b95-358a-4aa8-9663-c4f96334ef99"
       },
       "body": "{\"key\":\"site_name\",\"value\":\"Acme3\",\"category\":\"general\",\"is_encrypted\":false,\"description\":\"renamed\"}"
     },
@@ -781,7 +782,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/site_name",
       "body_sha256": "dd69ea8f6b1b7abec0e2419119e87451f831fa8d02ff8685bccec649074649b6",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "101",
@@ -792,7 +793,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f26ae453-e4cd-463c-aa30-7bfc85807b47"
+        "x-request-id": "c26174ed-18cf-4cb9-afa7-dc4b212b1a90"
       },
       "body": "{\"key\":\"site_name\",\"value\":\"Acme3\",\"category\":\"general\",\"is_encrypted\":false,\"description\":\"renamed\"}"
     },
@@ -801,7 +802,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/empty_body",
       "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "94",
@@ -812,7 +813,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d38176db-cecd-45b5-822a-7039f1e484be"
+        "x-request-id": "42e932c5-e165-46b7-b7f1-a3e9c55da0a7"
       },
       "body": "{\"key\":\"empty_body\",\"value\":null,\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -821,7 +822,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_null",
       "body_sha256": "4bdecb93568ee7a4bc43a59be909f363ea969afb75b382ee708ecd9bc08beaa3",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "92",
@@ -832,7 +833,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3824c7ce-c16e-4925-9fb7-a7a32cb24aab"
+        "x-request-id": "dd474916-0f49-4b5d-8bd5-9d2f620831f1"
       },
       "body": "{\"key\":\"put_null\",\"value\":null,\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -841,7 +842,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_empty",
       "body_sha256": "70f8461e7b28154e2dac4c5c38f7c5fc1a98248fd31687bf4483b2db9a69a916",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "91",
@@ -852,7 +853,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b2379824-0c2d-447d-9460-14e1513b71a5"
+        "x-request-id": "fbf6f66b-76dc-457b-a098-7ba5e7087506"
       },
       "body": "{\"key\":\"put_empty\",\"value\":\"\",\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -861,7 +862,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_unicode",
       "body_sha256": "c683c8527e7f94643675ab0cc5bdacd838dedb43ded7454954185873bc0ce0d0",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "108",
@@ -872,7 +873,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ff6f103f-3f66-47e1-9aaa-dbd8961272c7"
+        "x-request-id": "061a9d44-a519-4cdd-9d96-d861fa8ac796"
       },
       "body": "{\"key\":\"put_unicode\",\"value\":\"日本語 Café\",\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -881,7 +882,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_secret",
       "body_sha256": "4b8f91f0a83d4cc3f3b0271ab98a7fd629484fe736ce9f5d377fd85325154cde",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -894,7 +895,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_secret_empty",
       "body_sha256": "14e733f5dc5750a9cfd826d525a861565498336ab72922df77d2a8afcc4deef5",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "108",
@@ -905,7 +906,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9423d2d0-a756-489f-9bd5-fc6ec9ea8f68"
+        "x-request-id": "da1f2c79-ee0d-48b9-8ec3-0bce10420184"
       },
       "body": "{\"key\":\"put_secret_empty\",\"value\":\"[ENCRYPTED]\",\"category\":\"general\",\"is_encrypted\":true,\"description\":null}"
     },
@@ -914,7 +915,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_secret_null",
       "body_sha256": "94149c3af09cf1c30c1f7935c5ed54625b7cc4dea3fbc09a64b5d8084a06512b",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "107",
@@ -925,7 +926,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "29f2abf2-dc3c-46af-a6b6-ebe95d3dcc02"
+        "x-request-id": "1e41db75-f4de-4d23-a970-4835a24b32c6"
       },
       "body": "{\"key\":\"put_secret_null\",\"value\":\"[ENCRYPTED]\",\"category\":\"general\",\"is_encrypted\":true,\"description\":null}"
     },
@@ -934,7 +935,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/github/token",
       "body_sha256": "1f682ef8f6a91bbe89dbd0d7a63ba9d9c31920cf99999e45e930de9a7587cf27",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "101",
@@ -945,7 +946,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "efe70801-71a4-48e6-ae0a-39ef3fb538e2"
+        "x-request-id": "7a816eaa-422c-4b4d-a335-a37f8d3a5dcb"
       },
       "body": "{\"key\":\"token\",\"value\":\"now plain\",\"category\":\"github\",\"is_encrypted\":false,\"description\":\"a secret\"}"
     },
@@ -954,7 +955,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_flag_null",
       "body_sha256": "c2ad182e99bdf773e15ee972d62263819b02f9cba9e1436c25063adb8ed910a7",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "96",
@@ -965,7 +966,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ddb0a2fa-e3e8-4831-99f5-121d22d57e64"
+        "x-request-id": "6fc1207d-a245-49aa-a8d5-3c012a3697c4"
       },
       "body": "{\"key\":\"put_flag_null\",\"value\":\"x\",\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -974,7 +975,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_flag_yes",
       "body_sha256": "a8a501af4340f9b23fc53d5477b0bc2784930b8233e0b9e23db380edae0dfbf9",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -987,7 +988,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_flag_bad",
       "body_sha256": "944936948fe57d6954524290a9023d98d4009e67d3f43f6f63ab53c6274b59d3",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "144",
@@ -998,7 +999,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6fde8a72-c61e-458f-b358-d7adec496b86"
+        "x-request-id": "63213066-f1e4-4b43-a0d6-8982b41fc77d"
       },
       "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"encrypt\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"}]}"
     },
@@ -1007,7 +1008,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_num",
       "body_sha256": "f8ca1a81147b4bcd7dbc665860f161a2366f0fa753f5458bd3516d14ae936938",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "107",
@@ -1018,7 +1019,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a7ca3353-da7c-4e23-8f7f-1b008cadaf01"
+        "x-request-id": "fd67257d-f2c6-453d-9954-89687d578fea"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"value\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
     },
@@ -1027,7 +1028,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_desc",
       "body_sha256": "b4e2450e24d408cc66bc7156e235d6fbd2b4f6fcc76acf2281fd782a263a5689",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "113",
@@ -1038,7 +1039,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f26a3c90-0b4e-4138-9c2c-7729c0bc8567"
+        "x-request-id": "28ce3c02-8b20-472b-aa72-16ce08e47652"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"description\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
     },
@@ -1047,7 +1048,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_list",
       "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "147",
@@ -1058,7 +1059,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5f81d398-a511-4d3f-9f52-df74daa8fa15"
+        "x-request-id": "5e1420bf-462c-4c14-bfc5-9feb6025dda8"
       },
       "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
     },
@@ -1067,7 +1068,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_bnull",
       "body_sha256": "bb99e5bb3a756453730056b900774c14cb31358abd79a0903bf0e0349d0ade7a",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "82",
@@ -1078,7 +1079,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "18343412-e553-4e9c-9f33-9dd4e6d2bd59"
+        "x-request-id": "66b5098a-d9e0-4689-a237-2cb1d0cb300f"
       },
       "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
     },
@@ -1087,7 +1088,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_bad",
       "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "158",
@@ -1098,7 +1099,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7bb07a6a-ccad-4979-83fc-60fefe084981"
+        "x-request-id": "3c6fc36f-e5c5-4d42-9370-3b02bb3ded52"
       },
       "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
     },
@@ -1107,7 +1108,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/put_text",
       "body_sha256": "5e21d86b709b6aa2d5fff6d7cfed56ab73bf002020a6399a955c0b09791d4613",
-      "request_headers_sha256": "00c0424332216591c7f5e1d03c403bdbd995c6af45b2cda2a8b143cf10bad7d2",
+      "request_headers_sha256": "a1e122061a0d8be5783165e2b5aad8b572011376c647850ce11c9d919ca4f36f",
       "status": 422,
       "headers": {
         "content-length": "148",
@@ -1118,7 +1119,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6e547722-686d-494b-ad2f-882ddac9fe4c"
+        "x-request-id": "41341bc0-e6ce-4ebc-a492-22cbd7834d48"
       },
       "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":\"x\"}]}"
     },
@@ -1127,7 +1128,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/llm/api_key",
       "body_sha256": "e6e1cde280b142ae947cb4a768aa33822e3af72b57913da7252aaefe59ccca0b",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 403,
       "headers": {
         "content-length": "162",
@@ -1138,7 +1139,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b06fd2e5-fcac-4e1d-8384-25c5a7515a9b"
+        "x-request-id": "36811255-c3f1-4e39-aed3-8a0a58befe57"
       },
       "body": "{\"detail\":{\"error\":\"use_llm_settings_endpoint\",\"message\":\"LLM settings and budgets must be managed via /admin/llm-settings (tier-gated, validated, and masked).\"}}"
     },
@@ -1147,7 +1148,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/llm_budget/limit",
       "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 403,
       "headers": {
         "content-length": "162",
@@ -1158,7 +1159,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a7fc3e9b-845f-4b70-9afb-9a3490935a17"
+        "x-request-id": "9ef37a93-bd82-4095-bdef-e4c9b4c2689b"
       },
       "body": "{\"detail\":{\"error\":\"use_llm_settings_endpoint\",\"message\":\"LLM settings and budgets must be managed via /admin/llm-settings (tier-gated, validated, and masked).\"}}"
     },
@@ -1167,7 +1168,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/ask_dev/enabled",
       "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 403,
       "headers": {
         "content-length": "126",
@@ -1178,7 +1179,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "fe5855df-be30-4c71-8a2c-137c8d9200a6"
+        "x-request-id": "095dc8a0-2c2e-477c-a067-d5cd96c88318"
       },
       "body": "{\"detail\":{\"error\":\"use_ask_dev_settings_endpoint\",\"message\":\"Ask Dev settings must be managed via /admin/ask-dev/settings.\"}}"
     },
@@ -1187,7 +1188,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/llm/api_key",
       "body_sha256": "f8ca1a81147b4bcd7dbc665860f161a2366f0fa753f5458bd3516d14ae936938",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "107",
@@ -1198,7 +1199,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9742786d-3861-4690-9d93-f0a3ddaf6e60"
+        "x-request-id": "e8aa459f-32e3-4506-ab43-871b2dc1bad5"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"value\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
     },
@@ -1207,7 +1208,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/categories/x",
       "body_sha256": "1086114f76386f4391cfb9904d1cfa86584aeebbf34385be3287e515fd5be1b6",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "87",
@@ -1218,7 +1219,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "12904cb2-f3c0-4a48-a3a2-0ac05d253593"
+        "x-request-id": "2b0cf519-ed00-482e-938e-40484e244675"
       },
       "body": "{\"key\":\"x\",\"value\":\"c\",\"category\":\"categories\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -1227,7 +1228,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/caf%C3%A9/cl%C3%A9",
       "body_sha256": "48066de366e94b0da12df415cf7f54e17a657e182a301730c53a21a1b9820a9a",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "85",
@@ -1238,7 +1239,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b440de8e-2043-4358-8f80-c9bea86bf9d5"
+        "x-request-id": "cf975b14-4fa6-4d87-8189-d643b883e0eb"
       },
       "body": "{\"key\":\"clé\",\"value\":\"u\",\"category\":\"café\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -1247,7 +1248,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/su",
       "body_sha256": "eba5bf9f25c6c37e05a52119047da8a502371aaebd0195ccae6a7b39adf89c3a",
-      "request_headers_sha256": "3383b2e56de9073c22f1ee8d5b4eb7243850080881f3f51c22f991d982b4de99",
+      "request_headers_sha256": "ef9abf632c6cf3cb0383c7ee170e99797af64c2fd1500afb3e0968ecf7383118",
       "status": 403,
       "headers": {
         "content-length": "42",
@@ -1258,7 +1259,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "20f33bdf-8c5e-4706-b425-f2ac104772b0"
+        "x-request-id": "6ebb3129-c3f6-4b71-bdee-8656f4cdfb64"
       },
       "body": "{\"detail\":\"Organization context required\"}"
     },
@@ -1267,7 +1268,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/mem",
       "body_sha256": "875e8a431f0ebbdf7adb036d28952011bb4cf99411d53131d672aa7aaae9e3f7",
-      "request_headers_sha256": "aafc86859e78fecf278f66f48649e93c137df7f8515ad472cd03f1b772f3be1b",
+      "request_headers_sha256": "852830c1a34059a733f512fc425fd21fe83ff11cab6a8dd8781496ca24866c11",
       "status": 403,
       "headers": {
         "content-length": "34",
@@ -1278,7 +1279,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a9cd5266-e85e-434f-b57a-9b763a30ba7c"
+        "x-request-id": "e3a0e594-b1a9-4644-9abb-6cc9672af56d"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -1287,7 +1288,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/settings/general/site_name",
       "body_sha256": "cd5290103fd12f4aaca9c954ada55001169086276344bfed9047a7ed04cc6c1f",
-      "request_headers_sha256": "2a1160b60f2bb2168eb98d34070fd54538a02dbcb4d184317fe08ed5a87ea8d1",
+      "request_headers_sha256": "6e141b2326e722bb0f98d85d5ea1921d4c8a57d649c28db336ae129959328bba",
       "status": 200,
       "headers": {
         "content-length": "97",
@@ -1298,7 +1299,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "323c1d8c-bbd8-4eec-9188-23dcec5f6d35"
+        "x-request-id": "2c72ccd8-000d-4471-afc9-f50188317b18"
       },
       "body": "{\"key\":\"site_name\",\"value\":\"B site\",\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -1307,7 +1308,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "dd4ed8e606ac855850c43ffa82f57f8ec732185ad43f54b77a381d4cbdaca01c",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "92",
@@ -1318,7 +1319,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0ca86d63-84ec-4227-8839-459a326002e3"
+        "x-request-id": "ff71d086-97b5-466a-b139-08585e07ee52"
       },
       "body": "{\"key\":\"post_min\",\"value\":null,\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -1327,7 +1328,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "144ad2bd189a45081935e1e197858c55604c762454a9e13d322da7eef0c4aff9",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -1340,7 +1341,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "b5c7a2937801ab27dc6937bf9b4a58fb1b1d1c90f3aa39bad45a9608db0a29fe",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "102",
@@ -1351,7 +1352,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a2bb9003-30ad-40ca-81bf-86394d3cfffc"
+        "x-request-id": "4e327e50-1a63-4e44-9138-21c1566e30fb"
       },
       "body": "{\"key\":\"site_name\",\"value\":\"Posted\",\"category\":\"general\",\"is_encrypted\":false,\"description\":\"renamed\"}"
     },
@@ -1360,7 +1361,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "c1d238e55be6972b82d511aaa50faf84cecdc23ae205339503e090467ebf58ac",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "143",
@@ -1371,7 +1372,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d791b7d8-81a2-4b1f-88e9-0256a615ae60"
+        "x-request-id": "d29b61a6-3947-4b18-b9ea-5034c9b85231"
       },
       "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"key\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
     },
@@ -1380,7 +1381,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "ed49ff470c8a8f44f485bf0ea52456f5270e396f2ca17e4a366939d92d22b2b1",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "339",
@@ -1391,7 +1392,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a9bdbdb0-a4a2-4a91-8cd7-17777c0fc45b"
+        "x-request-id": "841ac2cc-0955-47bc-9395-ac10f62ec241"
       },
       "body": "{\"key\":\"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk\",\"value\":null,\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -1400,7 +1401,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "7f831a2defad24a7b2c5eb85072b6a2e20b1b5e023fb72dc2c98b1d6789d22be",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "402",
@@ -1411,7 +1412,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a65cacbc-4afd-4b04-9933-dfda346518d6"
+        "x-request-id": "3995a4f5-9d68-4e9a-9031-79af3a117d51"
       },
       "body": "{\"detail\":[{\"type\":\"string_too_long\",\"loc\":[\"body\",\"key\"],\"msg\":\"String should have at most 255 characters\",\"input\":\"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk\",\"ctx\":{\"max_length\":255}}]}"
     },
@@ -1420,7 +1421,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "86",
@@ -1431,7 +1432,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "83187972-94d4-43b9-a867-789678ac2a96"
+        "x-request-id": "e914b0c1-af1d-4859-bbee-93039bc4c648"
       },
       "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"key\"],\"msg\":\"Field required\",\"input\":{}}]}"
     },
@@ -1440,7 +1441,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "666629c52ffb8acc3466a70d0230e8e1b999ecff2a192509275e8d0272089391",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "108",
@@ -1451,7 +1452,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1b3c5092-ca67-4468-a1e8-4fd0234143d7"
+        "x-request-id": "08421895-0e5d-4d7c-97dc-21a477958004"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"key\"],\"msg\":\"Input should be a valid string\",\"input\":null}]}"
     },
@@ -1460,7 +1461,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "7b1d405cde4235c784c2a79fb6ce18c6c1391cf9b86f13d6c4ebd16609fc7996",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "105",
@@ -1471,7 +1472,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6eedd928-3ab7-49fc-90ec-9b5eb036b543"
+        "x-request-id": "c03f4487-bb94-4c4d-956c-83ef8c9177bd"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"key\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
     },
@@ -1480,7 +1481,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "89259369f388b68778e9dc5a94f67b29a863f886af12daef9d8fdbcb50569e7d",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "113",
@@ -1491,7 +1492,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9c0de65d-a764-46fc-a8bc-fcac7766effc"
+        "x-request-id": "6681b766-567a-4053-807c-a75e26c1fb6d"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"category\"],\"msg\":\"Input should be a valid string\",\"input\":null}]}"
     },
@@ -1500,7 +1501,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "d3c512a2fd72aa1c4f3ad8aa16281fe1a305768f07ed5cdcfb139914103fd1ed",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 200,
       "headers": {
         "content-length": "91",
@@ -1511,7 +1512,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d99cbbfc-b9ac-4234-a56d-ae3c48313ac3"
+        "x-request-id": "591b242e-0325-49ee-88f7-9fef7d1c43d8"
       },
       "body": "{\"key\":\"post_cat_empty\",\"value\":null,\"category\":\"\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -1520,7 +1521,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "8bdce26f82eca0dffa2f86cf0350b9d035d948a629e1f9fa95a84a235cb0c89e",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "111",
@@ -1531,7 +1532,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "60824fff-e68d-46b7-b770-75eb69d23038"
+        "x-request-id": "cdebfc59-a963-43d1-af20-f9d8ac573f4a"
       },
       "body": "{\"detail\":[{\"type\":\"bool_type\",\"loc\":[\"body\",\"encrypt\"],\"msg\":\"Input should be a valid boolean\",\"input\":null}]}"
     },
@@ -1540,7 +1541,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "bdf4fb4763865337e713849b607c965c591bde8832897dee1e2a2cf23c13a15f",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -1553,7 +1554,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "ad8942f47c807c9c8b33a0904ef86fc85eaad35add21bf71d2af4a7eab792c82",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "146",
@@ -1564,7 +1565,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "df256810-a6e1-44a6-9a94-78d824baa56a"
+        "x-request-id": "8416fdbe-1496-4c66-998e-08b46e0bb568"
       },
       "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"encrypt\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"perhaps\"}]}"
     },
@@ -1573,7 +1574,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "cdea7e5c69478cd8da801af12f23f2bafa3feb2afec854843b59637142aca3a6",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "107",
@@ -1584,7 +1585,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "fd41412b-6043-44ba-8510-ca4a55375a89"
+        "x-request-id": "b1746467-327e-4857-a4b1-24ffae4c9643"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"value\"],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
     },
@@ -1593,7 +1594,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "7cd06293c588cc5fa57ca71ae48ce2bdff5c7ccb0bf6cd5887247ae655ffdcfd",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 403,
       "headers": {
         "content-length": "162",
@@ -1604,7 +1605,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "36381ee7-5b9f-437d-84e6-460c52412422"
+        "x-request-id": "216d7da3-6d47-44d5-9f91-777d46a0cb09"
       },
       "body": "{\"detail\":{\"error\":\"use_llm_settings_endpoint\",\"message\":\"LLM settings and budgets must be managed via /admin/llm-settings (tier-gated, validated, and masked).\"}}"
     },
@@ -1613,7 +1614,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "3ff3948ed701295b854acce1f93309a56e6228b7b2b9cd230fb3437f8bbc17e1",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 403,
       "headers": {
         "content-length": "126",
@@ -1624,7 +1625,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "02c703ee-20c0-4893-9536-d7215169a8e4"
+        "x-request-id": "8a5f321f-04e4-46db-aae6-3b4bd0792bf4"
       },
       "body": "{\"detail\":{\"error\":\"use_ask_dev_settings_endpoint\",\"message\":\"Ask Dev settings must be managed via /admin/ask-dev/settings.\"}}"
     },
@@ -1633,7 +1634,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "9a0833b7c4e529c16948cd8e9664298c511c0b2751128ec381489fc86b40d449",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 403,
       "headers": {
         "content-length": "162",
@@ -1644,7 +1645,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ac8d4b78-b92e-4fd2-960f-9d51e46f511d"
+        "x-request-id": "cb72c0c9-b790-4e98-ac50-093fd7233f98"
       },
       "body": "{\"detail\":{\"error\":\"use_llm_settings_endpoint\",\"message\":\"LLM settings and budgets must be managed via /admin/llm-settings (tier-gated, validated, and masked).\"}}"
     },
@@ -1653,7 +1654,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "481bb8bbecc76bf543f525c877ca57b9d173b7ddf148b975c5c32c40c75959d6",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "102",
@@ -1664,7 +1665,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "aea5141f-15a4-48a2-87c9-3a511be032ec"
+        "x-request-id": "cde6ebf9-b8a6-4592-8970-0952dec101a4"
       },
       "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"key\"],\"msg\":\"Field required\",\"input\":{\"category\":\"llm\"}}]}"
     },
@@ -1673,7 +1674,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "147",
@@ -1684,7 +1685,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a439bd3a-163d-4c33-a203-5dfd65c83c6b"
+        "x-request-id": "31e2573c-5a9f-4b46-8b1a-932f1bb092b0"
       },
       "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
     },
@@ -1693,7 +1694,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
-      "request_headers_sha256": "9d41b26d970a552c9525f991f31e69a91f2545ab322ee65305c0f80ab1a6a074",
+      "request_headers_sha256": "6b3e033dc87f81483d419fd28f9b7fd6fb0653467305c30f4952c7d553fc2a14",
       "status": 422,
       "headers": {
         "content-length": "158",
@@ -1704,7 +1705,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "07b3c850-cc63-46b5-b497-0df2de88a1aa"
+        "x-request-id": "77ca4a59-ea61-4c8f-b826-0b815147aae7"
       },
       "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
     },
@@ -1713,7 +1714,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "57c03f4df29dce4f37e446cf9bb5df11a17b0788844b0603883411b33d04f2bd",
-      "request_headers_sha256": "aafc86859e78fecf278f66f48649e93c137df7f8515ad472cd03f1b772f3be1b",
+      "request_headers_sha256": "852830c1a34059a733f512fc425fd21fe83ff11cab6a8dd8781496ca24866c11",
       "status": 403,
       "headers": {
         "content-length": "34",
@@ -1724,7 +1725,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ad69e9ac-3f55-451c-9c15-dbdd4f87853d"
+        "x-request-id": "20e8eec4-2514-41f3-9472-922db770a938"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -1733,7 +1734,7 @@
       "method": "POST",
       "path": "/api/v1/admin/settings",
       "body_sha256": "9e2f7a177d44e2dda55362dfdc78b62f60e03cfbf9293e440cd477a515a4be0a",
-      "request_headers_sha256": "3383b2e56de9073c22f1ee8d5b4eb7243850080881f3f51c22f991d982b4de99",
+      "request_headers_sha256": "ef9abf632c6cf3cb0383c7ee170e99797af64c2fd1500afb3e0968ecf7383118",
       "status": 403,
       "headers": {
         "content-length": "42",
@@ -1744,7 +1745,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "143cf5cb-e946-499a-a08b-f4ca10754cfb"
+        "x-request-id": "202d99e1-cfb7-4d88-82fe-30efc64c3787"
       },
       "body": "{\"detail\":\"Organization context required\"}"
     },
@@ -1765,7 +1766,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0ad7f6c7-efda-44e3-b4e6-a8a5170dc1ab"
+        "x-request-id": "c9168945-ff62-4e57-bbff-64ea0e7fbd11"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     },
@@ -1774,7 +1775,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general/put_new",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 200,
       "headers": {
         "content-length": "91",
@@ -1785,7 +1786,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5319162e-6edd-4a1a-89ff-f789cca8db32"
+        "x-request-id": "d9248378-cf41-4814-979a-d567cac2950d"
       },
       "body": "{\"key\":\"put_new\",\"value\":\"v1\",\"category\":\"general\",\"is_encrypted\":false,\"description\":null}"
     },
@@ -1794,7 +1795,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general/put_secret",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 404,
       "headers": {
         "content-length": "30",
@@ -1805,7 +1806,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "19e74f28-4a42-41c3-9aca-65633bf800ae"
+        "x-request-id": "17e7b76c-37d9-4c55-aa23-b6df7c5215e6"
       },
       "body": "{\"detail\":\"Setting not found\"}"
     },
@@ -1814,7 +1815,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/github/token",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 200,
       "headers": {
         "content-length": "101",
@@ -1825,7 +1826,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7a638231-f72d-4f58-82d9-ccc1a8aacae6"
+        "x-request-id": "09b49e1d-22c0-419d-bc45-c8569f14b09b"
       },
       "body": "{\"key\":\"token\",\"value\":\"now plain\",\"category\":\"github\",\"is_encrypted\":false,\"description\":\"a secret\"}"
     },
@@ -1834,7 +1835,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/notifications/post_full",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -1847,7 +1848,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -1860,7 +1861,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/settings/general/put_new",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 200,
       "headers": {
         "content-length": "16",
@@ -1871,7 +1872,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "14b57cd5-ef7a-4dcf-869a-3c4ac6dd8f48"
+        "x-request-id": "6eab3a69-13e6-426c-90f6-c0a5e52ad8f3"
       },
       "body": "{\"deleted\":true}"
     },
@@ -1880,7 +1881,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/settings/general/put_new",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 404,
       "headers": {
         "content-length": "30",
@@ -1891,7 +1892,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "669bb16e-951a-42a6-a9ba-d9f83a842886"
+        "x-request-id": "87a27503-97fd-41fc-9c2a-98c6db9b1f39"
       },
       "body": "{\"detail\":\"Setting not found\"}"
     },
@@ -1900,7 +1901,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/settings/general/put_secret",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 404,
       "headers": {
         "content-length": "30",
@@ -1911,7 +1912,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "899a5805-d2c9-4fbe-bfaa-535f0eddc88b"
+        "x-request-id": "156de442-ef53-4226-9ade-a91cb4fcb18c"
       },
       "body": "{\"detail\":\"Setting not found\"}"
     },
@@ -1920,7 +1921,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/settings/nope/x",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 404,
       "headers": {
         "content-length": "30",
@@ -1931,7 +1932,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5c636cdd-d889-4675-aac0-ae62ba11b324"
+        "x-request-id": "7dddc17e-80eb-4ac4-bc42-635a272007de"
       },
       "body": "{\"detail\":\"Setting not found\"}"
     },
@@ -1940,7 +1941,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/settings/general/other_org",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 404,
       "headers": {
         "content-length": "30",
@@ -1951,7 +1952,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "4edb5727-3b90-4bcd-b144-5143e575f9c5"
+        "x-request-id": "18f51c7e-fb97-4d0a-b777-88a0fdafc344"
       },
       "body": "{\"detail\":\"Setting not found\"}"
     },
@@ -1960,7 +1961,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/settings/llm/api_key",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 403,
       "headers": {
         "content-length": "162",
@@ -1971,7 +1972,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a183b123-d10f-4da1-be0e-a4b3d841b0b5"
+        "x-request-id": "b3e9c3c9-ee0f-41a5-8b51-a8b40127cc11"
       },
       "body": "{\"detail\":{\"error\":\"use_llm_settings_endpoint\",\"message\":\"LLM settings and budgets must be managed via /admin/llm-settings (tier-gated, validated, and masked).\"}}"
     },
@@ -1980,7 +1981,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/settings/general/site_name",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "17c64ef662ac017a62a498dc615c771a182b3fadbef02e49d738b3ea4873e514",
+      "request_headers_sha256": "93749beb4a8514d64827f267315ce06b37cb72669cda60520b0fc60af0aa6760",
       "status": 403,
       "headers": {
         "content-length": "34",
@@ -1991,7 +1992,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9e447db8-95c3-42d3-8ccd-a2a1b6e1ddd6"
+        "x-request-id": "3d953422-d375-4424-ac52-ab274d64dbdf"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -2000,7 +2001,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/settings/general/site_name",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "76fa4ae1d1cec639f369817b15166e922eca07c183240579eaa95111edb16cd4",
+      "request_headers_sha256": "b8df39bff1fecacc1583af34c98eba6f61106f9182987bc38f05cf77862b034a",
       "status": 403,
       "headers": {
         "content-length": "42",
@@ -2011,7 +2012,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7c487f33-e0ad-4b81-b11d-16da3224a28a"
+        "x-request-id": "1c79a0b3-5697-460e-ac21-c5a00940d1a3"
       },
       "body": "{\"detail\":\"Organization context required\"}"
     },
@@ -2032,7 +2033,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "88d8624e-ac32-4692-ba89-1ebadce25e4a"
+        "x-request-id": "99565557-fb01-4c20-a42b-3893094adf50"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     },
@@ -2041,7 +2042,7 @@
       "method": "GET",
       "path": "/api/v1/admin/settings/general/site_name",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "471ee94ad9499d47305608b8a5c7566ee95eddee9c74bb0f8388ae25fa4c68b9",
+      "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 200,
       "headers": {
         "content-length": "102",
@@ -2052,7 +2053,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "87f94f1f-a533-4fbb-a41e-bb1136db6bd4"
+        "x-request-id": "4b57a58f-f228-4110-a18f-bdd5a68cadba"
       },
       "body": "{\"key\":\"site_name\",\"value\":\"Posted\",\"category\":\"general\",\"is_encrypted\":false,\"description\":\"renamed\"}"
     }

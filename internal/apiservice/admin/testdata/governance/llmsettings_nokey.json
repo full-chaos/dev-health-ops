@@ -2,7 +2,8 @@
   "header": {
     "test": "TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle",
     "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
-    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=$DIR DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle$' ./internal/apiservice/admin/ (it fails once by design and prints the digest to pin)"
+    "producer_digest": "c0f6de73e34fa0583fea646a33b5f133309c1639cf5fc59dd5ebe0f439faed19",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
   },
   "requests": [
     {
@@ -10,7 +11,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "e3caa0f7c55b400a44b3a077c5ae3619e7be768748279a333230fa4d37185b3a",
+      "request_headers_sha256": "0b421402383e97f316eedb8e0f8b74c7aba8d20082dcc17350113f1b27a209cf",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -23,7 +24,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "500de930660cd8fff4a6277297342e6935b538e3e4dfd924fc856c24199e5d62",
+      "request_headers_sha256": "a26b8e1af4dec59a101c1e6d9187c8226a49d413dcb3c235663a4bf5d36dfaa8",
       "status": 200,
       "headers": {
         "content-length": "2",
@@ -34,7 +35,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "def57ac5-238c-42b9-9588-e4ab780b87b3"
+        "x-request-id": "3b64255d-1d86-425c-b90f-bd898170fa13"
       },
       "body": "{}"
     },
@@ -43,7 +44,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "1f50ec145c2b24c843ebab9227faacdcc13cb8e3c79659ed2add80700597e328",
+      "request_headers_sha256": "033b8524ac254c1025daaaac7a6c107fd3f9d99cefbe1882191b9f53af7f383c",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -56,7 +57,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "6276bc0313e2fab7f6b01507e031dbfffe8fa5fe8d3b95fe4ba816254c2b4bfa",
+      "request_headers_sha256": "90a9575fc05f01b8f3e4b4e7573710d6cf6054362aaa230f48d4d0a0a832e3fb",
       "status": 200,
       "headers": {
         "content-length": "46",
@@ -67,7 +68,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2ef8a1bd-865d-4655-9a3e-95ae11ef2579"
+        "x-request-id": "e6f092ec-4f49-4b6e-b160-f988f6b5e19a"
       },
       "body": "{\"provider\":\"openai\",\"model\":\"\",\"base_url\":\"\"}"
     },
@@ -76,7 +77,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "93598525dcda8a1ca8fd96c39e085a59df6090cd2b1ebce410f09572c4a4c635",
+      "request_headers_sha256": "49cf6f56124730cf98e41e92692d61ba6492ce24a6f519bdad17c72dc73710ad",
       "status": 402,
       "headers": {
         "content-length": "113",
@@ -87,7 +88,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f6295737-b752-4053-9718-5c922c295233"
+        "x-request-id": "e9a14144-cf07-4f97-a8fa-45b5df6c6edf"
       },
       "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
     },
@@ -96,7 +97,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "59a02fbc2b46a8b02b8659191a44fd110c938579cf3d2677ae3e76ea4a0eb38b",
+      "request_headers_sha256": "0e2637c7f24f1af4ffb28249b71b4c589a75d9e2437afd0c162454dc7aa18dfd",
       "status": 403,
       "headers": {
         "content-length": "119",
@@ -107,7 +108,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "91b7ee1d-abb0-4717-bb9d-94a8407d441a"
+        "x-request-id": "5a452e77-bc70-49c0-a342-1dd148ad31a0"
       },
       "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"byo_llm\",\"message\":\"BYO LLM is not enabled for this organization\"}}"
     },
@@ -116,7 +117,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "d3ef10cb3c3f240f4d172cf0b4ebe5a9d45426cc54a1f82a865b32780c39576e",
+      "request_headers_sha256": "a10440682687f41784fcca93378d410aada61a524469e0148b75680e8fe98249",
       "status": 402,
       "headers": {
         "content-length": "113",
@@ -127,7 +128,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f7c053dc-1b62-40b1-bbbf-934503c35c52"
+        "x-request-id": "6eca756a-75ca-4db6-919e-ad6d7946ee4d"
       },
       "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
     },
@@ -136,7 +137,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "2b246cee37f64ce70c3637132987369cccdc4eb672bf628ff55bbf01ec7ea2e3",
+      "request_headers_sha256": "4aec7eeb0cb67ebef9a1f75002135bb0a160af5b60367e2edcf78f2d66f47e8e",
       "status": 402,
       "headers": {
         "content-length": "113",
@@ -147,7 +148,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8762ccfc-a507-4498-aa02-9a48ea712286"
+        "x-request-id": "31ec9267-e33c-46c3-bd27-96ee47b1f03b"
       },
       "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
     },
@@ -156,7 +157,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "612f953f03c63511f45781d153f4fb51bc14bc76fffd629af9adbad9267d216c",
+      "request_headers_sha256": "360228b2207aeeebc9ded435eaa2a522facbe1c7ff47cbd91905220720cf5881",
       "status": 404,
       "headers": {
         "content-length": "80",
@@ -167,7 +168,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8917d1af-62ab-40be-aee8-5589d70dcc9a"
+        "x-request-id": "7a3bec4c-167a-4f25-b167-e3f3758f9ccd"
       },
       "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
     },
@@ -176,7 +177,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "2835f329fd9c0081f4f21ca98a026e169420a31baedef00c8ed22f835fb31aba",
+      "request_headers_sha256": "a10e793ef7c87389479fe5d15bc74a272c561d18205938d3a082dc9b6b7a271a",
       "status": 404,
       "headers": {
         "content-length": "80",
@@ -187,7 +188,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f69ef64d-b269-4030-8015-455c302567a6"
+        "x-request-id": "a0c608c8-3dea-4c27-91d5-56690c1de57d"
       },
       "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
     },
@@ -196,7 +197,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "4d1e09792fb15b5f12556c205fa3d95a6fb4b0680cdc8b3cb7848240986ef822",
+      "request_headers_sha256": "5954c8b878012b84da59015846f26a1f4bb6bb05e2c2180e9457a9613f5c870b",
       "status": 403,
       "headers": {
         "content-length": "42",
@@ -207,7 +208,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f8a3c7c0-e1c9-4a19-a649-9df975e77663"
+        "x-request-id": "7b593b14-82e5-40b7-8206-728969dcade4"
       },
       "body": "{\"detail\":\"Organization context required\"}"
     },
@@ -216,7 +217,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "2bca690bc44fcf3f16172f4fcf4faca8298f8e00d078b24c61c7cfd702f15e66",
+      "request_headers_sha256": "5505f2cbe3891308224b6bdcd847fea3bc7d85ebdb6fb9a26007d5731ad1a544",
       "status": 403,
       "headers": {
         "content-length": "34",
@@ -227,7 +228,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "45df78d8-8df5-4410-8ebd-c8a873d6ccae"
+        "x-request-id": "ad355e2f-1e30-4b06-afde-0a20c0b706b3"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -248,7 +249,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "4f0e0ca0-2d5c-46c6-bff7-a9a88278d400"
+        "x-request-id": "19ad1f64-15d9-4fac-a791-dfad6fab8c73"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     },
@@ -257,7 +258,7 @@
       "method": "POST",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
-      "request_headers_sha256": "13b995e5da9c0b95c16ed0171e19fe28b3754c860536a37c02f077f21dc7ac82",
+      "request_headers_sha256": "169cb7ea28e9e2dfac8848dfd83775f4f3dd6ff6ff2c6734dc7ceff03a4054d1",
       "status": 405,
       "headers": {
         "allow": "GET",
@@ -269,7 +270,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e4455541-e8a2-4369-9b58-e942ebb87641"
+        "x-request-id": "c13190b4-4972-4952-b453-a810422a6a45"
       },
       "body": "{\"detail\":\"Method Not Allowed\"}"
     },
@@ -278,7 +279,7 @@
       "method": "PATCH",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
-      "request_headers_sha256": "13b995e5da9c0b95c16ed0171e19fe28b3754c860536a37c02f077f21dc7ac82",
+      "request_headers_sha256": "169cb7ea28e9e2dfac8848dfd83775f4f3dd6ff6ff2c6734dc7ceff03a4054d1",
       "status": 405,
       "headers": {
         "allow": "GET",
@@ -290,7 +291,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d57736dd-32bc-413b-9208-5113d1b6de70"
+        "x-request-id": "ffcda5c7-57d7-46bb-9a4d-a47bb804d41f"
       },
       "body": "{\"detail\":\"Method Not Allowed\"}"
     },
@@ -299,7 +300,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "8dbd0a6384e9576e853f958d321f071781040ad7da3021f92d3608521506d9b9",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -310,7 +311,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "4f852225-2d88-4d69-8a53-8eb2649fb0f5"
+        "x-request-id": "fdb2b8f1-50aa-422e-a84d-96f5e523e13e"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -319,7 +320,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "a5bdf4591c70167d18afb453059da02f1dbf3ecd88caf0ccc2b73997c95f3324",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -332,7 +333,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "1df766dd5167c290d1b997d6a896a0f68a68afc7c243ee7caa3ef918da979a8f",
+      "request_headers_sha256": "e78ced8cf7d206c617b657175d74a89da7957640df103366646b7fe3d0749578",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -343,7 +344,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5b8aaf6d-8e9e-4c9f-b2d9-f869ce751e9c"
+        "x-request-id": "540df7ea-44fd-477f-bbac-57cd30d94a8d"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -352,7 +353,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "110769d90ebf4e6e6f7807458e789f2fbbd80a6ee1eefb107d50ad0a0621165f",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -363,7 +364,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "91e479fc-d05f-48a2-9ac3-199289415130"
+        "x-request-id": "e62b72ab-24e0-4e79-85de-7e80aebe3c41"
       },
       "body": "{\"provider\":\"anthropic\",\"model\":\"m2\"}"
     },
@@ -372,7 +373,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "98302737320a57e721c671fb3d18d94d88ed21e5441be5f6fe9a62cee4af0faa",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -385,7 +386,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "96ea9c00827cddfff8e028a9f6e3d88055cd2bbd18d83f46bf927a27004e62bc",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -398,7 +399,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "92489564cb0b2974edeab2bdf634337fd06f827659e545fa4d8edbaef62a60be",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -411,7 +412,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "51c23abdb4e23ff56c233a2e79db8c7434077342b2586083d2f1633fb0a761e6",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -424,7 +425,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "b2ef8fa9baa43a9330fe62b468396756a20e1ffbfd4d487307ed26fc37fe6fe5",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -435,7 +436,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f7e40715-ab84-4aeb-a492-44dabd6e04b2"
+        "x-request-id": "4d921b50-baf9-43ff-9b93-5e304d61c435"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -444,7 +445,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "62a8527aebdc4da2d050f8469236f455e2366e4bc032c00c56fed4d46b590bd9",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -455,7 +456,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6f0aabb5-2915-4011-ba80-e3399c0d53a5"
+        "x-request-id": "ecdbec05-9776-4848-a2e8-be3e8ba2d267"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -464,7 +465,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "8c74556646ea7699d954bc73047f0a77282830d38bfd34db43eec38ce14c4391",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -477,7 +478,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "a48e27633be686fe72b63ec53933bb0678ca1e9e899449e512fd03c7c28f152f",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "15",
@@ -488,7 +489,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e2e50c86-7c45-486d-9248-97b9188eba90"
+        "x-request-id": "5da759a0-1b23-4f7d-b27c-7ebd145709f0"
       },
       "body": "{\"provider\":\"\"}"
     },
@@ -497,7 +498,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "548715b090197c89f24e33f147fd0d9ffb656e64740a1b68e776f8a90a4abdff",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "25",
@@ -508,7 +509,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f12dab3e-964b-4c1e-a56c-04dc0bff20c8"
+        "x-request-id": "f3881674-cada-4858-b047-f95fb0db6b9a"
       },
       "body": "{\"provider\":\"i̇stanbul\"}"
     },
@@ -517,7 +518,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e95e6992fffb8ea05b3a93bc91947646f8fd94a97c4dd3b1ba12f3764cbf4c37",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "19",
@@ -528,7 +529,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "00cdb06a-cd8d-48a0-a839-55ce30d07279"
+        "x-request-id": "483b7027-e3d3-4528-be99-6e0c50839a00"
       },
       "body": "{\"provider\":\"ας\"}"
     },
@@ -537,7 +538,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "500336b73eb16dd415515035f60733e7a77fc4c6ed0e3d4606831d88e6de9ca4",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -548,7 +549,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b5eda081-f9d4-4907-a1b8-be7350ed08a1"
+        "x-request-id": "6028d83e-3984-447b-bec9-8e909a5164ec"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -557,7 +558,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "9aa640fe2b55c3fae4cb54f9f227b429f877ea7d4e903c293a58b379f4092bc6",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -568,7 +569,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9914a6f0-9d23-4d41-bb5c-5b05f74b1dfc"
+        "x-request-id": "7262aaaa-ef8e-4313-926e-0e781ab479e2"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -577,7 +578,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "b3968ccab1a348f0f012837a74ae9dba55f641df3cafa1bcf68bdb59542b070f",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "41",
@@ -588,7 +589,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5f5134a8-abfc-414e-aa38-bf1447bc5159"
+        "x-request-id": "3f33ece7-70b1-4713-b703-e2dce246b86b"
       },
       "body": "{\"provider\":\"openai\",\"model\":\"模型-é\"}"
     },
@@ -597,7 +598,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "06aaaf8d70ca7486f5310cf7b638082b7e5c36fb9896f7bee7fc773b0eee7705",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -608,7 +609,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3968feb8-a9db-4a1b-b73f-a15a02e603ce"
+        "x-request-id": "90a3311e-da47-4757-913f-48f1d49f75e7"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -617,7 +618,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "9286e3a1ad70f8eab77ae34287e134854f65b287c63788d0e20e760c768aaec7",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "38",
@@ -628,7 +629,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3b8591ef-064a-4642-b882-781af698540e"
+        "x-request-id": "5db5ca04-0781-48f1-bf7d-eda1167e8bd7"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":32}"
     },
@@ -637,7 +638,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "4b420dfd196b9e3b3784b3ec9df9ac43deecf7b00d18239ffde4a3a5ae034f32",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "147",
@@ -648,7 +649,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "cda888ae-7005-4e89-9659-3bea27e0affb"
+        "x-request-id": "29d4d499-a560-462c-be7a-4a3d9c5e2540"
       },
       "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"concurrency\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":0,\"ctx\":{\"ge\":1}}]}"
     },
@@ -657,7 +658,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "d452bbde46deadce91715bd8b6ec8ab98f37aebe66e6b8afe93eb7c3a3e7d3ef",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "144",
@@ -668,7 +669,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5dec85df-9a56-4119-9702-801811f9bc34"
+        "x-request-id": "1671ee75-942d-4799-93d3-fef34059451f"
       },
       "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"body\",\"concurrency\"],\"msg\":\"Input should be less than or equal to 32\",\"input\":33,\"ctx\":{\"le\":32}}]}"
     },
@@ -677,7 +678,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "674ef79e52918756cd875464f39fcf80647ad47b5b70642ab7e1e3b1fd512423",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -688,7 +689,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "c70dbc79-e0d5-445c-a5b9-73e757d1ed15"
+        "x-request-id": "2d81ad88-015a-415d-b5bd-b8dc72a71f1e"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":7}"
     },
@@ -697,7 +698,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "a07914519eb30e2daf5e680960f21bd56c45aa60e0d383eaf2d5805f6b7c9754",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -708,7 +709,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0f35b063-9384-4cb7-a159-4840f2745ca9"
+        "x-request-id": "ae9ee9f9-0f79-4f27-a16e-4a8ce6070523"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":6}"
     },
@@ -717,7 +718,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "8e08caca62eca5ea20872bc3dccbb891e3db2d4761a82733e1d065d91a62d91f",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "156",
@@ -728,7 +729,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5fcf7486-9cbc-42a5-b3da-51eef42ae034"
+        "x-request-id": "2aec1fc3-184f-4bc4-a390-1c501cd5b8bb"
       },
       "body": "{\"detail\":[{\"type\":\"int_from_float\",\"loc\":[\"body\",\"concurrency\"],\"msg\":\"Input should be a valid integer, got a number with a fractional part\",\"input\":6.5}]}"
     },
@@ -737,7 +738,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "8f43c99c69b2b7d701c1404acafc4e10543e371f7ccabba558bfb23b69ad8922",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -748,7 +749,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ee25f882-3730-46b1-a1aa-375721e24410"
+        "x-request-id": "1d7bc8a0-db41-407f-a2d0-983350fa8283"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -757,7 +758,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "ff516216648cb79733bf4362ec523b0ac2e43d1329481fc36c50e894f31c6497",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -768,7 +769,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6c7c5c6e-a787-4d23-8ec8-0f545ab62ae1"
+        "x-request-id": "dfb53651-6315-44fd-8873-4b104443ad84"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -777,7 +778,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "7d5ee561772cf6668dca7cce46609bf21f23eebbf01ed1a8101dd5a44927cb52",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "148",
@@ -788,7 +789,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "78d2d870-896e-4cff-91c4-546fb763184f"
+        "x-request-id": "4fa68848-a648-4967-baf1-477af375cfc3"
       },
       "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"provider\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
     },
@@ -797,7 +798,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "91",
@@ -808,7 +809,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "c77e76ee-1ced-487c-ac41-4b8f5ba3c47f"
+        "x-request-id": "97ef0edb-65ab-4605-ad3e-5f069f5864c7"
       },
       "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"provider\"],\"msg\":\"Field required\",\"input\":{}}]}"
     },
@@ -817,7 +818,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "b9509744052ba4243acc3825ac2725752c9e3ad80c5f40aa33b6e600068ed0ee",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "113",
@@ -828,7 +829,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9172cb70-e910-4600-8cb6-1269a60aaeb0"
+        "x-request-id": "4993e201-0985-4c97-865c-0a49e06176ce"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"provider\"],\"msg\":\"Input should be a valid string\",\"input\":null}]}"
     },
@@ -837,7 +838,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "9e467d019ec796e8c515c476eadd574894760a8585f4fd61ecf248f9e2c9b82d",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "110",
@@ -848,7 +849,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "49e9b820-0dcf-4798-a47d-010706ca259b"
+        "x-request-id": "970c8e04-9ad3-449e-8bf7-d8313166f7bf"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"provider\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
     },
@@ -857,7 +858,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "6895dd60218d4e57b3333ae114424885efe98ede5d61ff921d4a5ad68b526f83",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "107",
@@ -868,7 +869,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "62e594b2-ed16-4c89-a706-2d8edca86ddd"
+        "x-request-id": "75e3cb47-4831-4d8f-8a06-ae514d15fec5"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"model\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
     },
@@ -877,7 +878,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "9d7f54585464cadc1c795937b349ea5b3ef2648868adfaad3c3aece9cab4944d",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "430",
@@ -888,7 +889,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d978d37f-0623-4704-bd33-fb5ea7ac929a"
+        "x-request-id": "b8a9a141-3b91-4a7e-8b75-a59329dba4f9"
       },
       "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"provider\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}},{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"concurrency\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":0,\"ctx\":{\"ge\":1}},{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"budget_limit_micro_usd\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":-1,\"ctx\":{\"ge\":0}}]}"
     },
@@ -897,7 +898,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "18088dc6d210d05c977af0ed3c00c3f9d473216abed49fef20c19f30754dfb2e",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "122",
@@ -908,7 +909,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "cc3fdefa-fef0-4d44-96d0-27dfc3d251ac"
+        "x-request-id": "2d4b787d-b99c-4230-8b29-a1d947ab8e9c"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url is invalid: Port out of range 0-65535\"}}"
     },
@@ -917,7 +918,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "60307964d484c86fcdf2f8f201049ae90679c88c632ca4dd4cb109be738afdfb",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -930,7 +931,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e5b11f49ba0979a2e7207bd6926b88cada1649c9500ce0edacef40f0699b7c52",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "145",
@@ -941,7 +942,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "62922c6f-d304-49c4-8dbe-8191ea0b4979"
+        "x-request-id": "7062d907-aefc-4fa9-a61c-7f97fa724993"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url is invalid: Port could not be cast to integer value as 'abc'\"}}"
     },
@@ -950,7 +951,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "5a17ae47c2d3da2592f03ca797ac5ef9b2b7e26199024a770e9ab0f6651dda9c",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "144",
@@ -961,7 +962,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "778ab5bd-a364-4c9e-a6c7-44c492e5bcf0"
+        "x-request-id": "8e3503de-2343-4db6-9f50-de6b4c383e58"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url is invalid: Port could not be cast to integer value as '-1'\"}}"
     },
@@ -970,7 +971,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "97c2ecc21abf35af214fd4b0edc2799ffbf89ff22bf43dc1525c2f8f988f2acd",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "78",
@@ -981,7 +982,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "db3d5d73-c0f0-4b6c-91b4-762a876d8572"
+        "x-request-id": "c3f710a0-a82a-424d-9daa-855da573e1af"
       },
       "body": "{\"provider\":\"openai\",\"base_url\":\"https://exa%mple.invalid/v1\",\"concurrency\":1}"
     },
@@ -990,7 +991,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e511e02c5b1e82e02acd9c2cfd21bcbbf88a92a9946c3ec7f688f8608c5c5b34",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "78",
@@ -1001,7 +1002,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2f0c3bf0-549c-4e41-a9cf-d5e87000a8fb"
+        "x-request-id": "e436d0ce-b718-4c61-99bb-eb804f8e940b"
       },
       "body": "{\"provider\":\"openai\",\"base_url\":\"https://example%.invalid/v1\",\"concurrency\":1}"
     },
@@ -1010,7 +1011,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "5a2d5d1fc4a8aa1d0abd00a0fd52324d45553b9bdf4cf7f78c2853256585528e",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -1023,7 +1024,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "1db0a662b14d6f287373205f908f38998f1248d6ca59a5459fc5a1a6daa9abea",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "107",
@@ -1034,7 +1035,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1019afc4-04a9-4e33-b4c1-529eb1c2bfda"
+        "x-request-id": "37b7e86d-ee67-4f17-a2a2-644341651b4c"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host is not valid IDNA\"}}"
     },
@@ -1043,7 +1044,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "faef4d0f34e01671ab74b2c37780e2ab93c8ab5d89dec6d66ccd5dc06def5397",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "122",
@@ -1054,7 +1055,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "dc819eab-70f2-4d9a-a079-bbdcdbe8b922"
+        "x-request-id": "7b061c5b-a689-44c2-9c03-442663842055"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
     },
@@ -1063,7 +1064,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "69653b120a16135ae1c6bf6a824358c38ae5207e56d0d90b4f3b7caf1ed66704",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "122",
@@ -1074,7 +1075,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "82add4be-dda5-4558-9b72-9d68084364ab"
+        "x-request-id": "9de26ad5-190d-4dcf-8fba-34c26b75e568"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
     },
@@ -1083,7 +1084,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "7d477d721694c979aabf720ac8ca32dcf85068b36717f0a380066497b16826b5",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "122",
@@ -1094,7 +1095,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3578494a-f3c3-4c8a-8837-63aaac8306c9"
+        "x-request-id": "3aa47318-3180-4312-baf6-8ea28cf3a6c6"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
     },
@@ -1103,7 +1104,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "0da77f461afc1d8949a3e5fa90d2fcebe1f0cf91761413907e278bf53d0bf481",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "51",
@@ -1114,7 +1115,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "83b30ef5-1eb5-4b94-bd91-0cfa02fcb036"
+        "x-request-id": "0301aa64-b79e-46de-a21b-c9566f2b4fa2"
       },
       "body": "{\"provider\":\"openai\",\"base_url\":\"\",\"concurrency\":1}"
     },
@@ -1123,7 +1124,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "4ace701ac6bb811fba100a1040e9bbee132fea6947e1e130be5271c06907658d",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -1134,7 +1135,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f305779c-3d2b-4b73-be6d-d6d752be04bb"
+        "x-request-id": "0bc3fe43-8070-49bd-b709-296e1a8a8f70"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -1143,7 +1144,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "7abb1736276f5a60f114f9028846a2f30d734aa0c1dbd1f4a412fd0ceb03d27d",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "99",
@@ -1154,7 +1155,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8f721c4e-3df4-496a-9571-6beccd680f74"
+        "x-request-id": "33f800f8-a820-465d-8161-c6a19a5db62a"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must use https\"}}"
     },
@@ -1163,7 +1164,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "cd2bb28a36ae658749a5d51ea7740950a09a8d3ce7a0f3507cc8fc6b9f75acc4",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "107",
@@ -1174,7 +1175,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "61a0aac8-2062-4573-a21b-c9391a6285dd"
+        "x-request-id": "0727c788-afec-4c1a-99db-aacdfd3b319e"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must use http or https\"}}"
     },
@@ -1183,7 +1184,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "3062bab80e04ca98a5075112c961185c54507680969e808807e62b2c740fe3a7",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "110",
@@ -1194,7 +1195,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "c5a356c6-b521-4d59-847c-032b3c73e80a"
+        "x-request-id": "eccb972e-3d82-4b2e-a1eb-552e39139d4a"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must not include userinfo\"}}"
     },
@@ -1203,7 +1204,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "81b4524820355402806a63bd2364b705cea5353a8307607b0ab1e4aea0cc33c5",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "122",
@@ -1214,7 +1215,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b43a95c6-0981-4b3c-b951-07a0d137612f"
+        "x-request-id": "9f5834ea-4b38-47d7-b3c2-f4d6558ba8b4"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
     },
@@ -1223,7 +1224,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "8c0d2d610e5cb16df42e32acab1b9fe8f40cd5c2fed55fccdd45ec3443631bff",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "122",
@@ -1234,7 +1235,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e309835a-e66d-4867-bf82-81fd0b405010"
+        "x-request-id": "0ecc7a57-a397-42cd-950e-cae1b0230e9b"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
     },
@@ -1243,7 +1244,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "95e505279f6d2a26fcc1af921700612a96ad4df73b6ff5d8b0e11074ed024f3e",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "69",
@@ -1254,7 +1255,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9fdad05b-8475-4ae9-b9e1-2b1806c16046"
+        "x-request-id": "08a34540-2394-44b0-82ab-6f465789cd64"
       },
       "body": "{\"provider\":\"openai\",\"base_url\":\"https://8.8.8.8/v1\",\"concurrency\":1}"
     },
@@ -1263,7 +1264,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "dcafc1a9defb54339a91d2329e86a6fa0ba0a47308fe4efe16fb6a78e874ee53",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "134",
@@ -1274,7 +1275,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3c60f483-e38e-46a0-893a-ba2071e8b468"
+        "x-request-id": "95cac765-112b-4381-9aa7-36a29ed20ae0"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must not contain whitespace or control characters\"}}"
     },
@@ -1283,7 +1284,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "ab4e9257db027bab799f1e0c95fe355da8a434e04dde2ffc4d6ba852b340a304",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "134",
@@ -1294,7 +1295,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "349c1912-83c9-4ff0-aa8f-d3e229aed393"
+        "x-request-id": "22bccdfd-9e94-4e3e-b0f7-401927814b58"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must not contain whitespace or control characters\"}}"
     },
@@ -1303,7 +1304,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "016c3b2386f1a155356d722a4fc8f668d4480774dfa491b9b3dee62962715750",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "82",
@@ -1314,7 +1315,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ed89b4d6-fd28-4d3c-9768-342a3c3cce59"
+        "x-request-id": "b512e974-d92b-4311-bb3e-63cc8c58c8c7"
       },
       "body": "{\"provider\":\"openai\",\"base_url\":\"https://example.invalid:8443/v1\",\"concurrency\":1}"
     },
@@ -1323,7 +1324,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "3673431ee78546e360a332d607ad4d109ea914535ac6f902c5c65f335caa3b3f",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "78",
@@ -1334,7 +1335,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "80b68df8-5854-47f4-9d1b-155ed697b6e5"
+        "x-request-id": "749471fc-3ebd-4694-bdd1-07190e20816e"
       },
       "body": "{\"provider\":\"openai\",\"base_url\":\"https://example.invalid:/v1\",\"concurrency\":1}"
     },
@@ -1343,7 +1344,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "2e258c19fe9f8af9ae1e1b8eead8118cd91c4e606fad942398987091711a3523",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "71",
@@ -1354,7 +1355,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8ef91940-7abd-4967-b947-1a18d9851d71"
+        "x-request-id": "4ebd2dbf-71b9-4955-8d39-b12edbdbbd7b"
       },
       "body": "{\"provider\":\"openai\",\"base_url\":\"https://例え.jp/v1\",\"concurrency\":1}"
     },
@@ -1363,7 +1364,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "05f5a856894d701444d1b9446ab6eefa975c7681be7adccbc6399e38cb185ccd",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "122",
@@ -1374,7 +1375,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "af403e17-afb7-4248-b5d7-fa2bad2ccf65"
+        "x-request-id": "2f30c76c-0ea5-4a87-8507-5b8ed6b7d4a8"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
     },
@@ -1383,7 +1384,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "ac45fe8c191db197ec145c7a2054eab2c7881b2b09c553573618cbac393a06c8",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "77",
@@ -1394,7 +1395,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "09440b9f-e4ec-47ef-94b9-3ebc433feade"
+        "x-request-id": "da107966-74db-4bab-bcb9-a35701ad9b34"
       },
       "body": "{\"provider\":\"openai\",\"base_url\":\"HTTPS://Example.Invalid/v1\",\"concurrency\":1}"
     },
@@ -1403,7 +1404,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "8844754da708c8cdbe97a9cb72e93ff4f7e82495b0cd1aad5598716733025001",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "102",
@@ -1414,7 +1415,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "edaa85e9-4d56-4612-a868-e07554d1116e"
+        "x-request-id": "924860fa-1ac8-45f3-8e9b-87189d9eebd6"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url is missing a host\"}}"
     },
@@ -1423,7 +1424,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "209e5dbd85abcadc07069e1f9cabbcd0a624f5426e9660e7a3de18bbdcbbe794",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "122",
@@ -1434,7 +1435,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7a9aa176-a9df-4696-b6cc-4112dab973fe"
+        "x-request-id": "e6548a27-82b8-4a7c-848c-8fcf90d88abb"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
     },
@@ -1443,7 +1444,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e6fc49b8e676a51da6427116c4a09c88fc915f57a69c628436c056500be20361",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "102",
@@ -1454,7 +1455,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "cf528312-7b1a-4232-aace-3654b8a800bf"
+        "x-request-id": "c169735a-3f26-4884-9dca-aebc30794296"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url is missing a host\"}}"
     },
@@ -1463,7 +1464,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "9b8a66f652244363649551e07c104384bb8e3057ac4bbad015ee5f2aeef8fdb8",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "134",
@@ -1474,7 +1475,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "482fdd3b-acc1-412b-9144-183ef21ad0ca"
+        "x-request-id": "3bcd9c36-c063-46c1-810c-5e1780df5015"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must not contain whitespace or control characters\"}}"
     },
@@ -1483,7 +1484,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "1d71e85bde32bb4368a5898cd13f52868f9969d11b4fe957d543cdde433169e9",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "99",
@@ -1494,7 +1495,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8caabf8e-0ba7-424f-8db7-f63a2a2dbe21"
+        "x-request-id": "939f17ee-7cba-48af-ba58-9879cfe97cbf"
       },
       "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must use https\"}}"
     },
@@ -1503,7 +1504,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "1df766dd5167c290d1b997d6a896a0f68a68afc7c243ee7caa3ef918da979a8f",
+      "request_headers_sha256": "e78ced8cf7d206c617b657175d74a89da7957640df103366646b7fe3d0749578",
       "status": 200,
       "headers": {
         "content-length": "77",
@@ -1514,7 +1515,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "70ac1985-8971-4281-8415-33e35d9dfbd3"
+        "x-request-id": "41143fa9-0ff8-41db-bc3e-afec54374f60"
       },
       "body": "{\"provider\":\"openai\",\"base_url\":\"HTTPS://Example.Invalid/v1\",\"concurrency\":1}"
     },
@@ -1523,7 +1524,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "c901f2eaadabf1ca5b7f3f061ad74f90cebeb2e96efb65b37c6db58b18899222",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -1534,7 +1535,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6b38cdf5-7eff-47c7-8308-8b4186884364"
+        "x-request-id": "4e1ff0ce-b969-4ac9-8e34-cf09cd57b014"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -1543,7 +1544,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "26fac388b61bf1a5af76da3e43b96d35b0c2cde66e3228a24a18d05bcbbcac9b",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -1554,7 +1555,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "df07ecd0-b915-4e25-ad3a-dd16e3cf3a6a"
+        "x-request-id": "333dcf1b-9176-45a7-ba65-516ad19efdbc"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -1563,7 +1564,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "0075a587c3f211e4f70ffc5d2c27c6eefd97ace51ae5a00351059c822c635ddf",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -1576,7 +1577,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "1df766dd5167c290d1b997d6a896a0f68a68afc7c243ee7caa3ef918da979a8f",
+      "request_headers_sha256": "e78ced8cf7d206c617b657175d74a89da7957640df103366646b7fe3d0749578",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -1587,7 +1588,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8849b96f-2720-4a4b-ab71-bc3b2da0915c"
+        "x-request-id": "a85e167e-647f-4bdd-bcc6-ff3440b78c8c"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -1596,7 +1597,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "1989601a99ff3bf5718fc3680387a23f4113125feaaf56d5aff84e1421c2f4c8",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 400,
       "headers": {
         "content-length": "137",
@@ -1607,7 +1608,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ff6bb14a-12b0-4d0e-b18d-5bc6fd39ad82"
+        "x-request-id": "7c452ec0-6c25-4a62-ad36-46e457e95002"
       },
       "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 10000000\"}}"
     },
@@ -1616,7 +1617,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "d869961942f4d4ecb016171509eb0aa1c4245a0139b7f5dce562ec540a9ce111",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "159",
@@ -1627,7 +1628,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "693b5a15-8272-4a22-b956-3bbf7602d446"
+        "x-request-id": "2c038fd3-e0e2-4b9c-a35a-66e9c1e428ef"
       },
       "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"budget_limit_micro_usd\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":-1,\"ctx\":{\"ge\":0}}]}"
     },
@@ -1636,7 +1637,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "b9ab5b49e18c0d1c619857f8bea94a2f23583545826c5aa8378341c3ac976b41",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -1647,7 +1648,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "20887c4f-9673-4933-ba73-0da4b518c226"
+        "x-request-id": "c9af9b0f-ad7d-4f65-b4c8-b0edc3227cd0"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -1656,7 +1657,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e2f8b06e5f4099dbe8785e0b464ff79ac1ec04508a577279cf38a8df59591e1d",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -1667,7 +1668,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8ff9227e-894f-4509-9bf2-b5c070902f24"
+        "x-request-id": "6e6abb42-9d9c-4304-8d78-34225dbf0949"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -1676,7 +1677,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "34e7e7ef7eaf35ab00b0956e16e5416b463e0c9dd9b0159491cb17654106acb3",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "167",
@@ -1687,7 +1688,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "4a7e3490-0899-48ce-9f57-a42577e89b57"
+        "x-request-id": "f1df1a9a-53b3-4a10-afbc-cc4623fdf72c"
       },
       "body": "{\"detail\":[{\"type\":\"int_from_float\",\"loc\":[\"body\",\"budget_limit_micro_usd\"],\"msg\":\"Input should be a valid integer, got a number with a fractional part\",\"input\":5.5}]}"
     },
@@ -1696,7 +1697,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e5026d67525c6126c00efd189c534575000e29ccbcad782cf40382dccb4c5ab0",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -1707,7 +1708,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "dd406725-3e9c-4b32-826b-f6f35fa8c9b0"
+        "x-request-id": "3ae3a8be-9ca9-4684-9f0b-ea99c1336f16"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -1716,7 +1717,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "d011acb137ec4c6bba3ba334153440d039cf1ff321ad6163f206412f52be5efc",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -1727,7 +1728,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0a18272f-7d9d-4006-8785-fc0bca59f64a"
+        "x-request-id": "6a07a01e-c6b5-4d1e-988f-a69691186ec6"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -1736,7 +1737,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "2d23ee4a616ea60eb756962d95bcdb98b2a68439503df498e9caf92f1e429925",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -1747,7 +1748,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f9057b86-a988-4940-a52b-aa26f72fcda6"
+        "x-request-id": "ad9ab64c-b8f2-4f60-a6b0-19a47d2b0b5c"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -1756,7 +1757,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e6d7462284652ae7bd9afa3bfbaa1e087fa28adcb19275a686dff89369e765bb",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -1767,7 +1768,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "4be641ea-c92b-483a-a87c-9127bb8e07d4"
+        "x-request-id": "bab2ce7c-132b-4a31-91e8-255a76ea1747"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -1776,7 +1777,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e6d7462284652ae7bd9afa3bfbaa1e087fa28adcb19275a686dff89369e765bb",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 200,
       "headers": {
         "content-length": "37",
@@ -1787,7 +1788,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d0b16a8f-5130-4932-a66c-8bc2300655b5"
+        "x-request-id": "a970fdcb-19bb-4a2f-bd18-79a4bbd11554"
       },
       "body": "{\"provider\":\"openai\",\"concurrency\":1}"
     },
@@ -1796,7 +1797,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "b84fadec4f9e3366d5c83b460cf33c9afeadd0f3fc1455067b1416b17fed655b",
-      "request_headers_sha256": "3be2146b438f6e1a31b06246f29dfe3e07da79140b0ff70562b755e7af92fca7",
+      "request_headers_sha256": "3e1892cc56305d85c38c1baf1c189e0686b15410867393619f81429d347d5d7e",
       "status": 403,
       "headers": {
         "content-length": "122",
@@ -1807,7 +1808,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "fef19cdb-44fb-4ea2-83eb-76049e9f89a0"
+        "x-request-id": "6c53ec91-5f2c-40ba-b0aa-cdbd71bf321d"
       },
       "body": "{\"detail\":{\"error\":\"impersonated_write_forbidden\",\"message\":\"BYO LLM budget changes are unavailable while impersonating\"}}"
     },
@@ -1816,7 +1817,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "5c6fe7403cf9d1dd56ed4754503b437d3be08a83a601a1644d5d2236df16e427",
-      "request_headers_sha256": "3be2146b438f6e1a31b06246f29dfe3e07da79140b0ff70562b755e7af92fca7",
+      "request_headers_sha256": "3e1892cc56305d85c38c1baf1c189e0686b15410867393619f81429d347d5d7e",
       "status": 403,
       "headers": {
         "content-length": "122",
@@ -1827,7 +1828,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d8663a93-50cf-44ee-b71a-c1001f2d9874"
+        "x-request-id": "3434f9f7-28ac-48f2-8027-f31ed461f27f"
       },
       "body": "{\"detail\":{\"error\":\"impersonated_write_forbidden\",\"message\":\"BYO LLM budget changes are unavailable while impersonating\"}}"
     },
@@ -1836,7 +1837,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e29832f4ea9a316a0097041589ba9a6bb7ae9949919f4c39b88c0eb20ccac513",
-      "request_headers_sha256": "3be2146b438f6e1a31b06246f29dfe3e07da79140b0ff70562b755e7af92fca7",
+      "request_headers_sha256": "3e1892cc56305d85c38c1baf1c189e0686b15410867393619f81429d347d5d7e",
       "status": 200,
       "headers": {
         "content-length": "51",
@@ -1847,7 +1848,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "442d92fa-1587-48ac-ae23-4f77b2ae4a94"
+        "x-request-id": "bfb78bbd-905e-4805-a1a6-8f2b5271df4e"
       },
       "body": "{\"provider\":\"openai\",\"model\":\"imp\",\"concurrency\":1}"
     },
@@ -1856,7 +1857,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "a224aa5edf56b54ed57fae071cd7b69fff46a3122802efd0cb437ff8e7ee6d38",
-      "request_headers_sha256": "136def62d720dbbd64d6d90614b4892c3964e8a2d108f09fb16e46dada8aa76c",
+      "request_headers_sha256": "ac9f2c713ab0fac9ced364c3697d7ad547d9cb7e782a7f8dba93a8e605d74e4a",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -1867,7 +1868,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d0cc6228-8942-4d28-8d60-571e250bab39"
+        "x-request-id": "f8f3662e-7381-4641-9a45-a6aab0687fa5"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -1876,7 +1877,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "415bb0cb21a7cf213009c3da1d2dd09640a000f373497c64e4549732f9a2124c",
-      "request_headers_sha256": "136def62d720dbbd64d6d90614b4892c3964e8a2d108f09fb16e46dada8aa76c",
+      "request_headers_sha256": "ac9f2c713ab0fac9ced364c3697d7ad547d9cb7e782a7f8dba93a8e605d74e4a",
       "status": 400,
       "headers": {
         "content-length": "136",
@@ -1887,7 +1888,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "414af140-8612-4137-9f9e-9c16e2b068cd"
+        "x-request-id": "260b1200-60a2-4f17-bd4c-cce030ab1bf4"
       },
       "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 5000000\"}}"
     },
@@ -1896,7 +1897,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e1c12353be6a1785bdf729879ec4e3eea2dbcc7b0e36d13f306ee1ddf8916e96",
-      "request_headers_sha256": "f053e9b739fb3379e1e446c7088662dc01a4ba3502f41c8f8964fbb8fbe4a167",
+      "request_headers_sha256": "72249cac594e7d4a7ba6849af1cd81eac952814a59c0f05a98833f3198b86c8b",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -1907,7 +1908,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "de1a9be8-5354-4663-b486-00cd5976625f"
+        "x-request-id": "f31521da-577b-45c8-a14b-300f70d8a723"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -1916,7 +1917,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "5b43acd6078f44c4fbb30e9c84ac4ff91a05d4a79d8da38aadc95f3ed4b206a5",
-      "request_headers_sha256": "f053e9b739fb3379e1e446c7088662dc01a4ba3502f41c8f8964fbb8fbe4a167",
+      "request_headers_sha256": "72249cac594e7d4a7ba6849af1cd81eac952814a59c0f05a98833f3198b86c8b",
       "status": 400,
       "headers": {
         "content-length": "133",
@@ -1927,7 +1928,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e99b0bff-e3ef-40b2-9f47-b55a5d566edd"
+        "x-request-id": "6cd73e90-b0ee-43de-846f-7bcc7dea663a"
       },
       "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 7000\"}}"
     },
@@ -1936,7 +1937,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "b84fadec4f9e3366d5c83b460cf33c9afeadd0f3fc1455067b1416b17fed655b",
-      "request_headers_sha256": "c97fc10e7a66bf7c60e84de63a6d00bf208773554f848b57e7b447f91e460dad",
+      "request_headers_sha256": "d7de28b03045c7664b8420ac845957b6fd425299667b23f8110a8cac89641bd8",
       "status": 400,
       "headers": {
         "content-length": "130",
@@ -1947,7 +1948,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1ffcc481-788f-484b-a425-6438cb1754c8"
+        "x-request-id": "2f2a7ed6-b830-44ce-b67b-a08979a243d6"
       },
       "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 0\"}}"
     },
@@ -1956,7 +1957,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "c901f2eaadabf1ca5b7f3f061ad74f90cebeb2e96efb65b37c6db58b18899222",
-      "request_headers_sha256": "c97fc10e7a66bf7c60e84de63a6d00bf208773554f848b57e7b447f91e460dad",
+      "request_headers_sha256": "d7de28b03045c7664b8420ac845957b6fd425299667b23f8110a8cac89641bd8",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -1967,7 +1968,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3f33a47d-2476-4943-b248-ee0eecb9c0ff"
+        "x-request-id": "a5ca03f8-a5b5-4077-98ea-86e5ec74972b"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -1976,7 +1977,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "b84fadec4f9e3366d5c83b460cf33c9afeadd0f3fc1455067b1416b17fed655b",
-      "request_headers_sha256": "3161ffd4855b28da701f90227f1e7daaa126f60e286b2c649c9bf35818f643c4",
+      "request_headers_sha256": "88254ff9a8d4c5d20a14d2b833d7e9eedd89acbdfe45afb1cbdc1d52750db0d8",
       "status": 400,
       "headers": {
         "content-length": "130",
@@ -1987,7 +1988,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "97304108-8da3-4bf2-b622-be018d4b0b03"
+        "x-request-id": "48417f94-fbdd-4e44-8c5a-cd063c596190"
       },
       "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 0\"}}"
     },
@@ -1996,7 +1997,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "12c85d2889ff7fef301b5d426bee9ad3ae87a39dfc2f716a574db0b166e1771a",
-      "request_headers_sha256": "d3ecef5a6f57a3c41214dca69b5ce33aab39fafa6489072282846ef264f838f0",
+      "request_headers_sha256": "2fdd7f7f0e7cc22cb2b2e7b2bebd511eb7953ba02df85ba93eb596b0cbda7770",
       "status": 400,
       "headers": {
         "content-length": "137",
@@ -2007,7 +2008,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "231e716c-765c-47b6-81cb-a5a8d7c6579e"
+        "x-request-id": "cdaaec11-9616-488f-93e8-4fcc2ee6de87"
       },
       "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 10000000\"}}"
     },
@@ -2016,7 +2017,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "26fac388b61bf1a5af76da3e43b96d35b0c2cde66e3228a24a18d05bcbbcac9b",
-      "request_headers_sha256": "d3ecef5a6f57a3c41214dca69b5ce33aab39fafa6489072282846ef264f838f0",
+      "request_headers_sha256": "2fdd7f7f0e7cc22cb2b2e7b2bebd511eb7953ba02df85ba93eb596b0cbda7770",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -2027,7 +2028,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "bd5af78e-36c9-416b-a8be-623d423f3d3b"
+        "x-request-id": "0781b45b-a4fe-4b06-b4a6-6bdeaf7f8c80"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -2036,7 +2037,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "26fac388b61bf1a5af76da3e43b96d35b0c2cde66e3228a24a18d05bcbbcac9b",
-      "request_headers_sha256": "319ca7219e47858884efe1759231e6460716b8883c3aaf660b08420b399986ff",
+      "request_headers_sha256": "831f29db558f192c66b25260788dfc7aa9d1788be6549aac9b8855955b0fa472",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -2047,7 +2048,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6af24c24-4459-4edf-aea5-886da5ca935f"
+        "x-request-id": "1abf10dc-40c2-4b08-af08-868fa0fc9df8"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -2056,7 +2057,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "26fac388b61bf1a5af76da3e43b96d35b0c2cde66e3228a24a18d05bcbbcac9b",
-      "request_headers_sha256": "be552c50ac165062212c6f22c640a20bf0763a4e6b91aeace63aaf0bec990255",
+      "request_headers_sha256": "1e229194942dec5e6893ffb318712cc901ce915d6787c688076a7fad40c352f7",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -2067,7 +2068,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "dfc2074e-4065-4a5a-a081-19bc66964a91"
+        "x-request-id": "c05ef2d3-7ff0-41ec-8d3d-92b055037819"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -2076,7 +2077,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
-      "request_headers_sha256": "f64c8eaa1003cf53b610641926a55c65788e606d6ec21b8e408a17d142cdccee",
+      "request_headers_sha256": "7f020f3c60a76a39888bf4cc8f1f8a5e028ffc756cd84fd7b4217ea02dad9157",
       "status": 402,
       "headers": {
         "content-length": "113",
@@ -2087,7 +2088,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "96502e8b-f331-4121-817f-ef5c8b350730"
+        "x-request-id": "f709c14b-9b77-4d49-be2e-a09f7faad673"
       },
       "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
     },
@@ -2096,7 +2097,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
-      "request_headers_sha256": "6c22a50b9713fea8e72380b0f5726301a889a6bebedf990d5a5342315da89e36",
+      "request_headers_sha256": "d5d74683d69e93edb6896691d9758f8cb90174af2ea304ce7bc3140239a5cce9",
       "status": 403,
       "headers": {
         "content-length": "119",
@@ -2107,7 +2108,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "19f11bdb-5566-4df0-ae8b-95d15a9f589a"
+        "x-request-id": "a842da38-c8e0-4dd8-ad1b-8c52c623f127"
       },
       "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"byo_llm\",\"message\":\"BYO LLM is not enabled for this organization\"}}"
     },
@@ -2116,7 +2117,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
-      "request_headers_sha256": "29d68f6755070865c3bf821f794ecdc21e6935174771c1e5b95fee878a9d6548",
+      "request_headers_sha256": "80be6d343de29bcc7b84651a67a230d94fb3c2cf10ab0c7b99ec6abfcf4d4d27",
       "status": 402,
       "headers": {
         "content-length": "113",
@@ -2127,7 +2128,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8378a013-3529-403d-b9d8-9f3bbeb43d95"
+        "x-request-id": "1f0d5dd8-9e3c-4520-972b-ec602530cef3"
       },
       "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
     },
@@ -2136,7 +2137,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
-      "request_headers_sha256": "44525e119a827b8f33fe9c261cb4f41cefb51a4ecd00d5caf35ed1031908ba6d",
+      "request_headers_sha256": "1dbc48cd6996b495dc41e7874a48b7e379c75830fc5ab8daf0c651415ef00d32",
       "status": 402,
       "headers": {
         "content-length": "113",
@@ -2147,7 +2148,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a17a927d-72da-4cdc-8b3a-aff4a6e49dff"
+        "x-request-id": "37a8048a-6f75-4cf1-9302-213432de5f2c"
       },
       "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
     },
@@ -2156,7 +2157,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
-      "request_headers_sha256": "3b8d1ae2b8395e4a0edbe809d9de920ca3874066375540d7b59682dba205d11e",
+      "request_headers_sha256": "0f8de41366825bd5da55857bfdd6531c225f3548b75319e1531380c5703f7fe2",
       "status": 404,
       "headers": {
         "content-length": "80",
@@ -2167,7 +2168,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "796fd572-8520-4bb9-a6b4-4998e25054fb"
+        "x-request-id": "3efcb04e-2930-43f1-9d8b-2794e0ddc1e1"
       },
       "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
     },
@@ -2176,7 +2177,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
-      "request_headers_sha256": "d9980da6df9c466f44ade742bfb1be5a07ba2c77a1a8abbdd507ed83b42b49b2",
+      "request_headers_sha256": "45b5bfd648a46ea044ae897a929c8285515576ab785b0c2329d5770d09f4eff4",
       "status": 404,
       "headers": {
         "content-length": "80",
@@ -2187,7 +2188,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "4b0fd960-e1fd-49ba-bc0c-98dcde065f7b"
+        "x-request-id": "903d553d-4da4-4acc-81d1-3c6bd557be58"
       },
       "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
     },
@@ -2196,7 +2197,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "7d5ee561772cf6668dca7cce46609bf21f23eebbf01ed1a8101dd5a44927cb52",
-      "request_headers_sha256": "f64c8eaa1003cf53b610641926a55c65788e606d6ec21b8e408a17d142cdccee",
+      "request_headers_sha256": "7f020f3c60a76a39888bf4cc8f1f8a5e028ffc756cd84fd7b4217ea02dad9157",
       "status": 422,
       "headers": {
         "content-length": "148",
@@ -2207,7 +2208,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8c13a686-eb10-4ee1-b9d2-de95ffc4964c"
+        "x-request-id": "72a7d74c-4867-42be-97a3-8f45f5153215"
       },
       "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"provider\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
     },
@@ -2216,7 +2217,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
-      "request_headers_sha256": "3b8d1ae2b8395e4a0edbe809d9de920ca3874066375540d7b59682dba205d11e",
+      "request_headers_sha256": "0f8de41366825bd5da55857bfdd6531c225f3548b75319e1531380c5703f7fe2",
       "status": 422,
       "headers": {
         "content-length": "91",
@@ -2227,7 +2228,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2f85ab1d-adb2-4f41-91d2-b3eee63b2818"
+        "x-request-id": "4c4a0e62-0a1a-442b-8220-92407a14e36b"
       },
       "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"provider\"],\"msg\":\"Field required\",\"input\":{}}]}"
     },
@@ -2236,7 +2237,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
-      "request_headers_sha256": "eeea5aae1f5540248c0ecf0c57c33632bcb327abb42c49a58861f83972606f2b",
+      "request_headers_sha256": "d161db3252007bd1424f05aee7a6564a19554e245833d4edd74698b9d66e48d4",
       "status": 403,
       "headers": {
         "content-length": "42",
@@ -2247,7 +2248,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "84d8de97-210e-494c-82cd-52dbb00ce35b"
+        "x-request-id": "f754801e-3aee-4b86-b14d-b192e2ebad70"
       },
       "body": "{\"detail\":\"Organization context required\"}"
     },
@@ -2256,7 +2257,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
-      "request_headers_sha256": "3774f18037300d9b698e5de7e4992047a08ae0e4cb17de3b5152cc40c74fb4d4",
+      "request_headers_sha256": "637a6aff39665a719580ef5ac49d9bd6bb9f121d7ce8a9a467215b1bcfc7dc9a",
       "status": 403,
       "headers": {
         "content-length": "34",
@@ -2267,7 +2268,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "54e64968-9925-4975-a6fd-407595ac97a5"
+        "x-request-id": "40b555f0-d040-4f87-82e0-0bd81f3f37c2"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -2276,7 +2277,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "147",
@@ -2287,7 +2288,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5d3555a6-1853-4214-a9e5-c70442c0ac81"
+        "x-request-id": "03a1610e-ffb1-4095-81f8-7f4d1c674e0e"
       },
       "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
     },
@@ -2296,7 +2297,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "bb99e5bb3a756453730056b900774c14cb31358abd79a0903bf0e0349d0ade7a",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "82",
@@ -2307,7 +2308,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6e046f87-964b-4577-b497-a92ba4d1e231"
+        "x-request-id": "13c9340e-855f-43b6-89f3-64deaef1a2dd"
       },
       "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
     },
@@ -2316,7 +2317,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
-      "request_headers_sha256": "f711681b20b96cd6dc19fa13e25357e6368675e171c74080c891e8bad88e6155",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
       "status": 422,
       "headers": {
         "content-length": "158",
@@ -2327,7 +2328,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6d9f1e38-083c-48a3-9456-54bbd2ab149d"
+        "x-request-id": "9bcd0c5f-69df-4ca2-8273-c5303cdd5380"
       },
       "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
     },
@@ -2336,7 +2337,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "5e21d86b709b6aa2d5fff6d7cfed56ab73bf002020a6399a955c0b09791d4613",
-      "request_headers_sha256": "be0f63fa24300416c1dea534a19ed3f76369584b5d4e8ad0e016284fa96ba61c",
+      "request_headers_sha256": "28b5fdb2b04f92a8ace891902c9b0d6622cf9eb2a9097c8b7cb06e2fed9b1a0d",
       "status": 422,
       "headers": {
         "content-length": "148",
@@ -2347,7 +2348,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7ea1dca2-9bd6-4962-bf7b-109b85cbbfbb"
+        "x-request-id": "c4724a24-83c5-490d-a477-bbc96af654d3"
       },
       "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":\"x\"}]}"
     },
@@ -2368,7 +2369,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "c11ea280-429c-4354-b87b-8600bb48945d"
+        "x-request-id": "cb5dafc3-450f-401f-957c-5f8e924c0c80"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     },
@@ -2377,7 +2378,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "b0b08590c84d7b2edead76ab47c58d0b669d7ae8e6a4e3ec45978a782b9e881e",
-      "request_headers_sha256": "1b543ea3f36725a8bbfa39da26175571cafb9bdb65169a6212315109a193e0df",
+      "request_headers_sha256": "233ed00e7ae225bf6f52be12f9d7dac3edb78435ec7e603739db6a8b20890af3",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -2390,7 +2391,7 @@
       "method": "PUT",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "d3d1b7a882a6b2597116b0db4d5551bd2df4c262adfcf805ed8d7adbeac452d8",
-      "request_headers_sha256": "136def62d720dbbd64d6d90614b4892c3964e8a2d108f09fb16e46dada8aa76c",
+      "request_headers_sha256": "ac9f2c713ab0fac9ced364c3697d7ad547d9cb7e782a7f8dba93a8e605d74e4a",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -2403,7 +2404,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "6276bc0313e2fab7f6b01507e031dbfffe8fa5fe8d3b95fe4ba816254c2b4bfa",
+      "request_headers_sha256": "90a9575fc05f01b8f3e4b4e7573710d6cf6054362aaa230f48d4d0a0a832e3fb",
       "status": 200,
       "headers": {
         "content-length": "21",
@@ -2414,7 +2415,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "dc35bc28-144b-44a0-bced-ffbb40524b24"
+        "x-request-id": "1d69a5d3-da3e-4673-a10b-8a3dd943dc16"
       },
       "body": "{\"provider\":\"openai\"}"
     },
@@ -2423,7 +2424,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "1df766dd5167c290d1b997d6a896a0f68a68afc7c243ee7caa3ef918da979a8f",
+      "request_headers_sha256": "e78ced8cf7d206c617b657175d74a89da7957640df103366646b7fe3d0749578",
       "status": 200,
       "headers": {
         "content-length": "51",
@@ -2434,7 +2435,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "23a6b636-a002-4032-bcd5-6ff3e7e83cb5"
+        "x-request-id": "217202b5-7990-4dec-b41f-910a9a7b0050"
       },
       "body": "{\"provider\":\"openai\",\"model\":\"imp\",\"concurrency\":1}"
     },
@@ -2443,7 +2444,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "e3caa0f7c55b400a44b3a077c5ae3619e7be768748279a333230fa4d37185b3a",
+      "request_headers_sha256": "0b421402383e97f316eedb8e0f8b74c7aba8d20082dcc17350113f1b27a209cf",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -2456,7 +2457,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "e3caa0f7c55b400a44b3a077c5ae3619e7be768748279a333230fa4d37185b3a",
+      "request_headers_sha256": "0b421402383e97f316eedb8e0f8b74c7aba8d20082dcc17350113f1b27a209cf",
       "status": 200,
       "headers": {
         "content-length": "16",
@@ -2467,7 +2468,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d00fff87-c719-4cd4-9e84-949265d19ca4"
+        "x-request-id": "14016bdc-8906-4bce-882e-3a88088023be"
       },
       "body": "{\"deleted\":true}"
     },
@@ -2476,7 +2477,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "e3caa0f7c55b400a44b3a077c5ae3619e7be768748279a333230fa4d37185b3a",
+      "request_headers_sha256": "0b421402383e97f316eedb8e0f8b74c7aba8d20082dcc17350113f1b27a209cf",
       "status": 404,
       "headers": {
         "content-length": "35",
@@ -2487,7 +2488,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f70ab739-3dad-4ff7-b544-68bd71737ad0"
+        "x-request-id": "60ab2c10-713e-4ab2-a011-3c46b48eb5ba"
       },
       "body": "{\"detail\":\"LLM settings not found\"}"
     },
@@ -2496,7 +2497,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "e3caa0f7c55b400a44b3a077c5ae3619e7be768748279a333230fa4d37185b3a",
+      "request_headers_sha256": "0b421402383e97f316eedb8e0f8b74c7aba8d20082dcc17350113f1b27a209cf",
       "status": 200,
       "headers": {
         "content-length": "2",
@@ -2507,7 +2508,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b7c42603-cea5-4632-bb3d-b2a727bf8153"
+        "x-request-id": "c875f1dc-8e10-406c-b81b-16ad115c5333"
       },
       "body": "{}"
     },
@@ -2516,7 +2517,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "d3ef10cb3c3f240f4d172cf0b4ebe5a9d45426cc54a1f82a865b32780c39576e",
+      "request_headers_sha256": "a10440682687f41784fcca93378d410aada61a524469e0148b75680e8fe98249",
       "status": 200,
       "headers": {
         "content-length": "16",
@@ -2527,7 +2528,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b083a7cc-4c79-4981-9641-e2d01cb274f3"
+        "x-request-id": "1ac85662-c9f5-4abf-9bcc-5c29a7c22d1d"
       },
       "body": "{\"deleted\":true}"
     },
@@ -2536,7 +2537,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "93598525dcda8a1ca8fd96c39e085a59df6090cd2b1ebce410f09572c4a4c635",
+      "request_headers_sha256": "49cf6f56124730cf98e41e92692d61ba6492ce24a6f519bdad17c72dc73710ad",
       "status": 404,
       "headers": {
         "content-length": "35",
@@ -2547,7 +2548,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a2475193-1368-493d-9923-09ebc33b0dff"
+        "x-request-id": "7957c4d3-9b20-4a73-ac0b-d576eea6129d"
       },
       "body": "{\"detail\":\"LLM settings not found\"}"
     },
@@ -2556,7 +2557,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "59a02fbc2b46a8b02b8659191a44fd110c938579cf3d2677ae3e76ea4a0eb38b",
+      "request_headers_sha256": "0e2637c7f24f1af4ffb28249b71b4c589a75d9e2437afd0c162454dc7aa18dfd",
       "status": 404,
       "headers": {
         "content-length": "35",
@@ -2567,7 +2568,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6e6ddf1a-f7e8-42b7-bfb4-69928d99ff1b"
+        "x-request-id": "7a1ec57d-53b3-4741-a7f6-bbbecb070fe8"
       },
       "body": "{\"detail\":\"LLM settings not found\"}"
     },
@@ -2576,7 +2577,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "500de930660cd8fff4a6277297342e6935b538e3e4dfd924fc856c24199e5d62",
+      "request_headers_sha256": "a26b8e1af4dec59a101c1e6d9187c8226a49d413dcb3c235663a4bf5d36dfaa8",
       "status": 404,
       "headers": {
         "content-length": "35",
@@ -2587,7 +2588,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2cd24efb-7801-42c9-9e98-440e14086f0a"
+        "x-request-id": "1995eee2-5bb5-442b-8c63-79f4c140155a"
       },
       "body": "{\"detail\":\"LLM settings not found\"}"
     },
@@ -2596,7 +2597,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "612f953f03c63511f45781d153f4fb51bc14bc76fffd629af9adbad9267d216c",
+      "request_headers_sha256": "360228b2207aeeebc9ded435eaa2a522facbe1c7ff47cbd91905220720cf5881",
       "status": 404,
       "headers": {
         "content-length": "80",
@@ -2607,7 +2608,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d41e622b-da04-4c65-a2b4-9f5b67fbc9c6"
+        "x-request-id": "19ec60d6-8615-45c7-b323-edd7d74e93ef"
       },
       "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
     },
@@ -2616,7 +2617,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "2835f329fd9c0081f4f21ca98a026e169420a31baedef00c8ed22f835fb31aba",
+      "request_headers_sha256": "a10e793ef7c87389479fe5d15bc74a272c561d18205938d3a082dc9b6b7a271a",
       "status": 404,
       "headers": {
         "content-length": "80",
@@ -2627,7 +2628,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "01ced81e-1d48-4efa-8703-b0b6fe248940"
+        "x-request-id": "1487e1f5-d006-4295-901e-f59751d11e04"
       },
       "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
     },
@@ -2636,7 +2637,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "4d1e09792fb15b5f12556c205fa3d95a6fb4b0680cdc8b3cb7848240986ef822",
+      "request_headers_sha256": "5954c8b878012b84da59015846f26a1f4bb6bb05e2c2180e9457a9613f5c870b",
       "status": 403,
       "headers": {
         "content-length": "42",
@@ -2647,7 +2648,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8b953b13-36c7-40cf-acf3-2a7debc84417"
+        "x-request-id": "01631af1-e7fc-4187-8bf4-f79db23d16b0"
       },
       "body": "{\"detail\":\"Organization context required\"}"
     },
@@ -2656,7 +2657,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "2bca690bc44fcf3f16172f4fcf4faca8298f8e00d078b24c61c7cfd702f15e66",
+      "request_headers_sha256": "5505f2cbe3891308224b6bdcd847fea3bc7d85ebdb6fb9a26007d5731ad1a544",
       "status": 403,
       "headers": {
         "content-length": "34",
@@ -2667,7 +2668,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "32beab95-9add-42b6-a60c-d60b86836380"
+        "x-request-id": "dace534a-a890-4b1a-9e37-9c2b728fa5ff"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -2688,7 +2689,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1670799a-ca63-4438-b674-0ab7f80150ca"
+        "x-request-id": "7ed77205-3a43-41e1-8a33-3abe7345cb8d"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     },
@@ -2697,7 +2698,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "1f50ec145c2b24c843ebab9227faacdcc13cb8e3c79659ed2add80700597e328",
+      "request_headers_sha256": "033b8524ac254c1025daaaac7a6c107fd3f9d99cefbe1882191b9f53af7f383c",
       "status": 200,
       "headers": {
         "content-length": "16",
@@ -2708,7 +2709,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3046fd0f-0da7-49fd-97fc-5d4f536f0ef2"
+        "x-request-id": "4b06cf5a-cb56-4b17-a1b4-70a57b1f6602"
       },
       "body": "{\"deleted\":true}"
     },
@@ -2717,7 +2718,7 @@
       "method": "DELETE",
       "path": "/api/v1/admin/llm-settings",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "1df766dd5167c290d1b997d6a896a0f68a68afc7c243ee7caa3ef918da979a8f",
+      "request_headers_sha256": "e78ced8cf7d206c617b657175d74a89da7957640df103366646b7fe3d0749578",
       "status": 200,
       "headers": {
         "content-length": "16",
@@ -2728,7 +2729,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a9114254-dca3-4662-ba9a-fbc30636dcc7"
+        "x-request-id": "525be8a9-9d09-42f9-b455-ce0839b91dcf"
       },
       "body": "{\"deleted\":true}"
     }

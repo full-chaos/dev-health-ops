@@ -161,7 +161,7 @@ var budgetNow = time.Date(2026, 9, 26, 0, 30, 0, 0, time.UTC)
 
 func TestAdminLLMBudgetVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, goldenSpec("budget", "TestAdminLLMBudgetVenueOracle", "5c40cf398a73de4616e4d488039ef8ada73a37bcdacd6a0749ccd4ef795372cd"))
+	golden := venueoracle.OpenGolden(t, goldenSpec("budget", "TestAdminLLMBudgetVenueOracle", "08daa3751027a4fb08316e51256e4cc9539e5f596445aa2e6ecd1f89e6f0c856"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("budget")
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-budget-32-bytes!"

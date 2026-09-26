@@ -2,7 +2,8 @@
   "header": {
     "test": "TestAdminLLMBudgetVenueOracle",
     "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
-    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=$DIR DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestAdminLLMBudgetVenueOracle$' ./internal/apiservice/adminllmvenue/ (it fails once by design and prints the digest to pin)"
+    "producer_digest": "c0f6de73e34fa0583fea646a33b5f133309c1639cf5fc59dd5ebe0f439faed19",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/adminllmvenue/ -test '^TestAdminLLMBudgetVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
   },
   "requests": [
     {
@@ -10,7 +11,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "7b24a259c2286bbda41597ee22e02c814b0aed9fadb349d3c659d910c81ec00e",
+      "request_headers_sha256": "bfae63092feeced62a19a06c4da7172cf8e56a4793914558159769493f6be6e6",
       "status": 402,
       "headers": {
         "content-length": "113",
@@ -21,7 +22,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9dea4de5-689f-43d4-9b19-ae6ca6b9f6fc"
+        "x-request-id": "26819f3a-5ca2-4fb9-9e5d-0d95b876bcf9"
       },
       "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
     },
@@ -30,7 +31,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "16d4e89b44a93e2996ff544453eb6d8db8498f4eb0efc2feeef64a334172fb5c",
+      "request_headers_sha256": "3cefc2a88173687a5280a7cceca17c894d8f85d8c00fb49721e45a94bf545658",
       "status": 403,
       "headers": {
         "content-length": "119",
@@ -41,7 +42,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "979cce5f-9b09-4fbd-842e-034ae40b4ff3"
+        "x-request-id": "cd7ac708-07c3-4a47-8ce0-06f29a167cde"
       },
       "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"byo_llm\",\"message\":\"BYO LLM is not enabled for this organization\"}}"
     },
@@ -50,7 +51,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "20f512cc4fb36838edd5a65c49302c92289253e78427f7668e10a198b0b53068",
+      "request_headers_sha256": "1e97d50ded4d2ff631825c1f49d38ca168e377aed5b19286957f3447ce2123ab",
       "status": 200,
       "headers": {
         "content-length": "258",
@@ -61,7 +62,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d2e733f7-7932-46ad-a782-390f5111eaaa"
+        "x-request-id": "205c7534-1376-42e8-aae1-e7053fa7600d"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -70,7 +71,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "ff3dbf624e74dfe5992342855dfb89eda4583f2bb1c49764b3d033c37ca5efd1",
+      "request_headers_sha256": "d0e036853a633aac7db325e21fbeb7e32e654d5b01a97465d1e4bd12b3fba668",
       "status": 200,
       "headers": {
         "content-length": "256",
@@ -81,7 +82,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6a06ba9c-d34e-49bc-9527-3d1ba3d2f454"
+        "x-request-id": "a5ffbc92-f64c-4b59-b68f-760a23846a67"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":1000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -90,7 +91,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "c6c777c9e4694ffac3e022b00fbf786c5f2d4f3f78d5eed72947359dc09afa01",
+      "request_headers_sha256": "7f0dc2378199b24ed994332bd434f67a3b4f4fb1ef33b2caa67af511c390daf6",
       "status": 200,
       "headers": {
         "content-length": "258",
@@ -101,7 +102,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "77d9fde7-4539-4e24-8f07-2a9088822156"
+        "x-request-id": "a901043d-35f7-4406-98c7-af27023c095d"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -110,7 +111,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "b40daa11a8612583ca0508b7b62e18748a81dfb41934ff9600a639be9e14a998",
+      "request_headers_sha256": "2819707c4ef02f0132e239880b4262c68ecc2812ce6f3c4156ad6c4381588f2d",
       "status": 200,
       "headers": {
         "content-length": "267",
@@ -121,7 +122,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "4552a191-d0af-4aaf-989b-e7a84c01e8d3"
+        "x-request-id": "4e3c302e-35b7-49ba-b3b9-063cd6d4c644"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":1000,\"remaining_micro_usd\":1000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -130,7 +131,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "f5ba3b06b71f75403122d25f9540177be29f7338dc9813f6882ecefbe2abf1b2",
+      "request_headers_sha256": "da887538236c2dcc001169de219a1e6b337a995fec6fb14154414691bcde045f",
       "status": 200,
       "headers": {
         "content-length": "256",
@@ -141,7 +142,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6ae51fa5-da9d-4c1b-bec7-8314e9d5f7cc"
+        "x-request-id": "1e7cc932-333f-4145-9e78-35f8f88b3e2f"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":1000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -150,7 +151,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "59a0718ec071d9355b43fe96763a7dd394ed2ae2635def4e0c386fc06efd0ac5",
+      "request_headers_sha256": "c9131067ec7ee690ab85bdace9869f2a5234cf937190009add6495e4d596cecd",
       "status": 200,
       "headers": {
         "content-length": "280",
@@ -161,7 +162,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "743a083c-c238-4a57-b7c8-cf5dadd524ce"
+        "x-request-id": "9aaa4c0b-0e11-4d4f-a68f-696d4e0961dd"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -170,7 +171,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "6cb5954518ffae2fcb97cc44bf070ad57b9e24ad7e4d4c89787f9dbf246d678d",
+      "request_headers_sha256": "2e0f08669dfa9d56d079dfc9981dc3e3bd0a1bbda1338d16633dae90b74ea1fc",
       "status": 200,
       "headers": {
         "content-length": "267",
@@ -181,7 +182,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "260300bb-d7f3-4610-9b0d-c625806b7379"
+        "x-request-id": "99611054-7ea1-451d-ac7a-7827f8658606"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":1000,\"remaining_micro_usd\":1000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -190,7 +191,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "4b4fddf99007e290c31f93ccde7418706baf709b5f5afcfbc2556b14bca3cfad",
+      "request_headers_sha256": "613da04bdaa6a56da2a407c9d9dcfb957ed75506baf5e783874ce1dfb9344d79",
       "status": 200,
       "headers": {
         "content-length": "275",
@@ -201,7 +202,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0e2c256b-cc5d-4b13-bb7d-73d384a32c87"
+        "x-request-id": "e2fc0ff4-796a-430e-92ce-21eea175b999"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":10000000,\"remaining_micro_usd\":10000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -210,7 +211,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "7b1bb1687eccd1d0b359f08e865aa3e9402c83fe99592d5b6deafce51740ff8b",
+      "request_headers_sha256": "307cdc2ddd288a417294a04594785df388682d04a44b9e6cee564666516aacd3",
       "status": 200,
       "headers": {
         "content-length": "268",
@@ -221,7 +222,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "91507f6d-07b7-43bb-9379-eaee2ab8b614"
+        "x-request-id": "13f71a0d-2b73-440f-a76d-52dcaf8e20c4"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":0,\"remaining_micro_usd\":0,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"budget_exhausted\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -230,7 +231,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "99c48984b20e19355adb22a1fd3b88496131799701440b325e5714612b6b7586",
+      "request_headers_sha256": "0e2c609a488ad4f56c5bb9198dc3a493d0e0a8a00a9adba39065df8620cb6049",
       "status": 200,
       "headers": {
         "content-length": "267",
@@ -241,7 +242,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "60bcf6d8-cf1d-410f-afc5-930c5b9b636a"
+        "x-request-id": "edd168b7-58cb-4d35-94f7-aaa0154df016"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":7000,\"remaining_micro_usd\":7000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -250,7 +251,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "c566b0dfe50ac11cb0d0ca1d90e29567f50b2330a94beb4ef2524e2ff8b90604",
+      "request_headers_sha256": "6d3e0e062e0f77321f8b4e0579d09893f217b956ed86d0e36345bac44ff887c6",
       "status": 200,
       "headers": {
         "content-length": "280",
@@ -261,7 +262,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "19316c78-1693-4974-8667-404d2127250d"
+        "x-request-id": "c00a7228-a7fd-4cd2-8103-351985740df3"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -270,7 +271,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "234dcfd69127f8dd750417dec58193c221be264a41c033a970e933c42408efd9",
+      "request_headers_sha256": "0b571e3c2d79dccd5ef15c80a2c2bbe459edeac5eca79f666563d5ce23530bb0",
       "status": 200,
       "headers": {
         "content-length": "280",
@@ -281,7 +282,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "54cd4e1f-96b5-46f3-9214-c2bd833e87fa"
+        "x-request-id": "bb538c58-2d24-4461-af5b-7b1afbaffbe3"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -290,7 +291,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "eb27a04d22e8c6dd5e7ed4b2063c4dccf5f93082fc14fbbb5ebae308f566567e",
+      "request_headers_sha256": "73903b283a013fce51f3d4ad0de2fe2375ec8df9768acd679597345adb79c25a",
       "status": 200,
       "headers": {
         "content-length": "280",
@@ -301,7 +302,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2981b010-bc13-423d-a9d0-a07f8b4260b0"
+        "x-request-id": "65a37354-cedf-4f85-a363-b2c332e932a6"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -310,7 +311,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "4f31a2717b608af29f2f94b59f5b4483546c07fcefee5946c6f0a72ad726fc70",
+      "request_headers_sha256": "653652f973a3f2046e355e0e77c195126c4b52164f31434dc652f5812a568114",
       "status": 200,
       "headers": {
         "content-length": "280",
@@ -321,7 +322,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e8151cad-5a74-4e00-8090-f37b88f4d295"
+        "x-request-id": "7f5d3359-ae79-4383-a250-33a5f3d4c474"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -330,7 +331,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "4800d06224f99f5bf1022a0c9b9ffc0fd2cce7ca04faea035fe875eb3e936217",
+      "request_headers_sha256": "674cbb37415cf79281cceb6d5712f83a62d479c4f8dd5a7f6f0affaf5b87731d",
       "status": 200,
       "headers": {
         "content-length": "268",
@@ -341,7 +342,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "badf4d68-fbc5-4bd9-96e6-7509877e334d"
+        "x-request-id": "62681e69-88bc-4dcc-923c-72ad8bd4eeb2"
       },
       "body": "{\"used_micro_usd\":300,\"limit_micro_usd\":1000,\"remaining_micro_usd\":700,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -350,7 +351,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "bad45f162e04eed537ec512322a64734e39f92c13bee1d436dcc74a8e8b3bdaf",
+      "request_headers_sha256": "c04829ee7f1642dd685c589c9601891789cb6080bc0415856394ebc49a80f6d1",
       "status": 200,
       "headers": {
         "content-length": "268",
@@ -361,7 +362,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b6dbbcfe-c17f-4d2a-adb6-aa6a078ea23c"
+        "x-request-id": "b8a00c2c-88ff-48e2-9239-c51cbcdf782d"
       },
       "body": "{\"used_micro_usd\":120,\"limit_micro_usd\":1000,\"remaining_micro_usd\":880,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -370,7 +371,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "2539db7769fe9a636dd2e0918ec90b1ade8569162ee9f8a00c6e24bc59c095bb",
+      "request_headers_sha256": "b99bb2a9194faa1c37219b27e1c7ed3ccc05720cbd7781f02b8ccc1be2c7022d",
       "status": 200,
       "headers": {
         "content-length": "267",
@@ -381,7 +382,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e3fb96a5-b64d-4a01-9922-6c98f2a815b4"
+        "x-request-id": "b00fea5a-2c37-4ddc-ac5e-1e5f4d8aa1d3"
       },
       "body": "{\"used_micro_usd\":40,\"limit_micro_usd\":1000,\"remaining_micro_usd\":960,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -390,7 +391,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "c1ebd28585c43ce270951477037608f9b4070a9430f3cecd5fc5bf324a3e21fe",
+      "request_headers_sha256": "2c5a9e71d8f1652e3e09dd1358d307d83126191737ef90cd371d1df041f018e8",
       "status": 200,
       "headers": {
         "content-length": "267",
@@ -401,7 +402,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3a081ceb-2914-4a23-b83b-051538333284"
+        "x-request-id": "fe578c40-9668-4018-8843-4c83777c1a02"
       },
       "body": "{\"used_micro_usd\":60,\"limit_micro_usd\":1000,\"remaining_micro_usd\":940,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -410,7 +411,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "b6ca8f9db60fa285ec0a86bf6d2c87199568c1247385685ca38d01e1c64294e5",
+      "request_headers_sha256": "16066c1414e486651d610eb428e27eee2d4a09d1c5c3091551ece6c37e774f31",
       "status": 200,
       "headers": {
         "content-length": "272",
@@ -421,7 +422,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "97883970-ad36-48ea-92fc-97ca289fba25"
+        "x-request-id": "061e8021-a487-44b8-ab58-53fc9a0f2889"
       },
       "body": "{\"used_micro_usd\":300,\"limit_micro_usd\":300,\"remaining_micro_usd\":0,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"budget_exhausted\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -430,7 +431,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "ac4d8ab311c8925e793fae68f6f230f68ee78985e22192fb2b4922f9e3846f6d",
+      "request_headers_sha256": "a161896880b2747f410d4d71eaa8bbf057c57b6e5386eb8a333791b9c8ce04e9",
       "status": 200,
       "headers": {
         "content-length": "272",
@@ -441,7 +442,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "795a3d02-0151-4605-95dc-1d14aebbf918"
+        "x-request-id": "fe65d72a-5d01-4506-9486-68f20ffcdade"
       },
       "body": "{\"used_micro_usd\":900,\"limit_micro_usd\":300,\"remaining_micro_usd\":0,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"budget_exhausted\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -450,7 +451,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "c82460ea20e66471552b520a27f798cf7db14beaee8e4107787968308df8c06b",
+      "request_headers_sha256": "da6dce5ea8d0d8e5f34f253cd23b1ab1fcf7fe955fa0da99c787ba33c30076a2",
       "status": 200,
       "headers": {
         "content-length": "279",
@@ -461,7 +462,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2a28752b-3ba6-42dd-91cf-a78dd3dcc9d8"
+        "x-request-id": "1e511802-7275-453a-b844-8b6a23c1167d"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":1000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"usage_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -470,7 +471,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "4066da695fb62d8e2d436d2e505a9eecc27ac14be2e9c2f72c61fe83fe3811a7",
+      "request_headers_sha256": "e3426bcd1c9ba1471919d90b7e86d3d16f28a98542cb5ec27238a4034549406e",
       "status": 200,
       "headers": {
         "content-length": "282",
@@ -481,7 +482,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "39e960c7-3782-490c-8984-b6d21f77f28c"
+        "x-request-id": "f0719ed3-fe4a-4c70-a77f-0efc0307fb76"
       },
       "body": "{\"used_micro_usd\":410,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -490,7 +491,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "960189869c10eef9c579ff1c2ff5e8ce6140ebb4fb174393cab8953b3d38359a",
+      "request_headers_sha256": "a6a4fca4210505abbef7ebf9ca9be58c0a1b6e5254b379498c76e0c3780e0b4b",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -501,7 +502,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ce66de52-18c1-4340-a381-8273bd12d5db"
+        "x-request-id": "599a1899-c0f0-4056-a60b-0bdf3b596cb9"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -510,7 +511,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "ee8b4b2c04223a88d745a99f5b66ff02adb4a869f40b70e17ecea968f4998909",
+      "request_headers_sha256": "0e4ba402e3adca93d38bcbf3ba809b3849928d67c4ba44b82a119f20d6816654",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -521,7 +522,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "19941aa1-a61f-43b9-8b17-aa3e280b3552"
+        "x-request-id": "73abfcea-9d80-4fa9-98d3-c4f3225c04f7"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -530,7 +531,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "89a8b0f9ad49568b6a367f31bd6cb42d367db96774b74ee05dd667b58a8c4fff",
+      "request_headers_sha256": "0447e93e5113195ac8eac9e5504a5a022a864501d68d8b983cc99deedc911811",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -541,7 +542,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "593a2e80-f2ef-4bed-a458-cf47344e8387"
+        "x-request-id": "ae612f11-7a02-4a06-9409-4b011de64bd0"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -550,7 +551,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "e2fe99cda244ca70c95bffeae478a7c987d16ace99803efec80e0f0e07d0e0a9",
+      "request_headers_sha256": "8c298a7198da55de7f7d8ac102c7425dd169f423c020f50be0d4fa1172fa5128",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -561,7 +562,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9ccd2baf-307a-4221-bf18-ea4b6e52c040"
+        "x-request-id": "11c7bff5-e326-4351-9da9-3ba6d95c1d63"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -570,7 +571,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "5e33ffc2a212c775288a606fe973ae3a9db8098473c12d18a20554904355dcb4",
+      "request_headers_sha256": "ee4e473963d07a8760b63975fda0fda687bb8fdf11409f93cade98f9f7d2bb7a",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -581,7 +582,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ffad552c-e506-43ab-8c32-f88a42bb3cc8"
+        "x-request-id": "d01af0fe-c421-43b3-8d6b-a7deb3e40eb4"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -590,7 +591,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "42e90747b32e9584c7d909b024211e6ab36f43af8de4df27ce8607d69814ac8c",
+      "request_headers_sha256": "c65248a9d368a9ed7af1074a34402d1bf04904886f563e40880c7623f198e023",
       "status": 200,
       "headers": {
         "content-length": "259",
@@ -601,7 +602,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "70265183-1766-442f-bb4e-bb07a3874a7a"
+        "x-request-id": "a98bfdaa-2e17-4531-b298-129c44ea4494"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -610,7 +611,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "ebb9c281a2a8f5e562b3acdb52f4a5517f938109cfbf5bb970fb91f8dbed673d",
+      "request_headers_sha256": "9c33fe2a0db962b7081bd9a802f971932eb29b6db8895c96bb777029d1a078f5",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -621,7 +622,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0b7c941c-2a58-4c3e-b51e-8fe287962812"
+        "x-request-id": "21f222b8-5890-4439-8e39-f9216c93f499"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -630,7 +631,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "99f81e84a22d11f913a0c4e4a013efaea177b8af51800b9f839f322a5a82c6e6",
+      "request_headers_sha256": "4bef5c1dc29441a74a8a0056f3b83a422716746716b64ed5d0af05ad11f45b86",
       "status": 200,
       "headers": {
         "content-length": "259",
@@ -641,7 +642,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "966aaca6-87e9-406e-abd2-d1a57bb069e9"
+        "x-request-id": "6b4cb30e-034b-446f-9804-656f5e185a2d"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -650,7 +651,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "6590221156baa60e05d7845f4f2ebdca0098934b5ee9f678315c989544e06b1b",
+      "request_headers_sha256": "52b1885328365216def4ed36c5f9f8d7f5139b321006b13811b16e628c4ba441",
       "status": 200,
       "headers": {
         "content-length": "259",
@@ -661,7 +662,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "045b70b7-b8bf-4e5e-90a5-7a421d97a0a0"
+        "x-request-id": "d9f3ea97-9486-4e65-9475-dd7ae3c29d8a"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -670,7 +671,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "bbb4e1754f1083b543c4c37fdd00d707a9acbe20ee6d431b5239540fa0d0cedc",
+      "request_headers_sha256": "d82d8c73d403ddf8c49522177f0abbd9f7406a00a43d7074026b4a7cfc0dbcb4",
       "status": 200,
       "headers": {
         "content-length": "259",
@@ -681,7 +682,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "566cb365-cb0a-4a05-8dbe-323441858d69"
+        "x-request-id": "b3b2a735-f671-4263-804a-2b0e28feba19"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -690,7 +691,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "9af2ec9fb270def5931616db866246d8d84eb90bd7b9f177c7a0541f449244d7",
+      "request_headers_sha256": "d45d43dec06d41db154d4bd87e426f917f546ec139b1a5975eee3037d15885ae",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -701,7 +702,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5c484cf3-2d7b-4639-8a59-2b2f839a8656"
+        "x-request-id": "56353834-d4f0-4f5a-9cb5-91413b7cad62"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -710,7 +711,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "792bf03cf330d6d249ec8ec7efe6153fbbe87ee21e9a54c53584ab0aad32e5f1",
+      "request_headers_sha256": "07f9cf37971de28b2ee69cfc9d93d54414b66441b4ab2b35441ff109cbcc899c",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -721,7 +722,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "22d3d84a-a7d9-49e7-898a-d05397ca3b2b"
+        "x-request-id": "8dbf543c-2bd3-4265-8a5b-fe8475b7fe8c"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -730,7 +731,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "73480b3b7532d93329b36c9c67c8f4fc848b0e81ace7e6be1fe26f607a437133",
+      "request_headers_sha256": "52a0b5bb5b55c846796afb743f8aa7b09923bdde307a7b9bd2a2c1d753962c2f",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -741,7 +742,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9e25a369-dd66-452c-b44e-5feb9f989442"
+        "x-request-id": "109c4789-99fd-4a86-ad81-8fb302782927"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -750,7 +751,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "19a9e2e50bd8d1b9c597d9cec4bc10051098cb00c722876418a5522ad8d39a88",
+      "request_headers_sha256": "83d4fe8cfdd10d634141298c5e4de1e12341b7c88b76a6e5519be21b73afa087",
       "status": 200,
       "headers": {
         "content-length": "259",
@@ -761,7 +762,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "23b09513-b6c9-49a9-a703-d01d91807a56"
+        "x-request-id": "60048ce3-fd00-4e1c-b335-ff50a4d02395"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -770,7 +771,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "ca26a6bc570cc0782fc67740661b2ecb42f9b9c514655468dc21a9adfe8c706d",
+      "request_headers_sha256": "961e1ce3e138a0b51fdf82e5d7b13bb76f99ac465be3951974f814c6dc75f7f4",
       "status": 200,
       "headers": {
         "content-length": "259",
@@ -781,7 +782,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0dd9f20c-4a4a-402d-a562-bb8c0c18dcee"
+        "x-request-id": "15911193-c938-4a4b-935e-39e3243afcc2"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -790,7 +791,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "fcb5bd297005270a424e18c4fe9820dd830ad9f794998c31aa844c4972890691",
+      "request_headers_sha256": "0398501817e872ca1a43dd4ff0e728ede4ad75c54b974bb00954af4535ad9041",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -801,7 +802,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9174b2fc-e6b0-400a-8bb3-3a5f23c46d73"
+        "x-request-id": "ef3750f2-fe8f-49dc-b648-24b54d84d7cd"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -810,7 +811,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "79b2a035ca93af22173245e388d876017b6652df8f040d04edb1985a36921043",
+      "request_headers_sha256": "96caf1933c0c545c3492d0e4d6ec5014c66c368c7b4fd770c98818bd001a81e1",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -821,7 +822,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "cc6989ef-f5c9-4010-b259-45659e8c19eb"
+        "x-request-id": "903f92cc-454f-4125-a80e-36d6fee516f0"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -830,7 +831,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "91255fc3c65b2f595755da9f24406f747eff664c0315a572b0b7199390d91d4b",
+      "request_headers_sha256": "525196ef81939cbecaca0da894a73e4e4639de99ce6bb69f7674ace90a3d77d9",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -841,7 +842,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f26e6bc6-08e0-4d95-a80d-08e0962519ac"
+        "x-request-id": "cac28629-db94-4037-bc7d-6ea5c92c571f"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -850,7 +851,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "821b2a3b94280fdba62b549478777708697504040aeb4104d13a8876a2d51d44",
+      "request_headers_sha256": "dac8710450939bc38454df6d7795ea17d65d1910b56fecb8a6e21d28def7bc2b",
       "status": 200,
       "headers": {
         "content-length": "259",
@@ -861,7 +862,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "eca1c3d1-09c0-43a6-b6fd-1d8a88629f07"
+        "x-request-id": "2be4af4a-ca4a-49ea-88ac-1eb9b5126923"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -870,7 +871,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "d5b94eddc108ae91ba3118de26fa8b3f6449d8647ac83d1ed4a2fe009a465682",
+      "request_headers_sha256": "28b9600666cd19cb8c867b5268fb2fb0f97aa5d917ce4ff5fe68f0bcda9775f0",
       "status": 200,
       "headers": {
         "content-length": "259",
@@ -881,7 +882,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3350d961-1a64-458f-9b27-a83926c17ce2"
+        "x-request-id": "8d2866f5-d08f-48ee-a13f-1a4f047fffd0"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -890,7 +891,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "47439024d2bd4b3267c7fdaae615c1500a92a6a1682155d8dce94af99efe50c0",
+      "request_headers_sha256": "5e34bd47792c0544c2333a4a6e115fb4e6302b209f682b008165c79cd63c92c3",
       "status": 200,
       "headers": {
         "content-length": "259",
@@ -901,7 +902,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "aa33c4f6-6c01-442e-91ca-d0fb730ae2a0"
+        "x-request-id": "1101d663-ce8c-423a-85c4-8c4ee5c28a95"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -910,7 +911,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "ec237c399633c2557c0b57bae45568a99cfff93ba8c08c379b03f78f2b70cf91",
+      "request_headers_sha256": "a12318ed8a7afe7dfae2ec1271105edf112970e27974e1381de9b914b03134de",
       "status": 200,
       "headers": {
         "content-length": "273",
@@ -921,7 +922,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3c99b52d-5298-4374-9932-363eb3d31107"
+        "x-request-id": "808c05ed-e2bd-43dd-b84a-d05dd5f47fc2"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -930,7 +931,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "d114ed7034a603db23d55a8fd6052fc1e6acbe9eb9335eda798e86860726127c",
+      "request_headers_sha256": "dde43f7173934fc1d4211a66e013dc1a172c5f21baa4aa5e81438da2a3cd0b73",
       "status": 200,
       "headers": {
         "content-length": "259",
@@ -941,7 +942,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "c6feaf3f-de27-4692-ad75-0c185499ff7a"
+        "x-request-id": "c00662aa-6a11-4f6a-bb33-27847c40ed78"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -950,7 +951,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "6f8d0157d459a968baf970d144014fc6ffe1880878e6d5bffa7d5529048c21cd",
+      "request_headers_sha256": "d8f9af901f7d0e0fbf15f54c6ff0c5b90baed12a6f4f783516fca25f6023bacc",
       "status": 200,
       "headers": {
         "content-length": "259",
@@ -961,7 +962,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "bc5c8cb3-6798-4e05-a783-e4ea82a3ebe3"
+        "x-request-id": "b2f4de7e-e81f-4caf-a8c0-a1f3e2c08a46"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -970,7 +971,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "fc804a03996669be9eae6caea8a68d0a5c0f6a7c99e1ec14372bb65e5d6175b3",
+      "request_headers_sha256": "9a110f75105edcdef1bb047b10a854a046a47c6c9cfecff75ce14b8a625da7d1",
       "status": 500,
       "headers": {
         "content-length": "34",
@@ -983,7 +984,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "4fa1dc1c658b6bd0d7409d0621c20f5edabb931446a5fda26c1e2a66bb97f16f",
+      "request_headers_sha256": "5155ed65a64089e9c0499c3e01cb83bc44b43b237bda5e00c5385ebab095752c",
       "status": 200,
       "headers": {
         "content-length": "259",
@@ -994,7 +995,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b81c459f-d8e3-4e07-979b-80db926ea153"
+        "x-request-id": "0f9f4421-326b-4234-8660-a9c2956688f9"
       },
       "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
     },
@@ -1003,7 +1004,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "1538b457084b9305d2706758eace7bf4306745b0413ac490bd4b5688d891d469",
+      "request_headers_sha256": "22a453d969a8e63e4fa1c81ce7ca2e120f8a0a02a12b7c4caeec2a9703e3f37c",
       "status": 200,
       "headers": {
         "content-length": "267",
@@ -1014,7 +1015,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ad24f3b7-8812-4d41-8804-6ea455209eb6"
+        "x-request-id": "0d22ef82-0b70-4ef7-b6eb-6d078a129b4d"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":1000,\"remaining_micro_usd\":1000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -1023,7 +1024,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "2fd9868377ba96ff2880321567498bca18509e438cf8dcfc25cecf1a72cecff2",
+      "request_headers_sha256": "8ebf802ce4558239546690ae6f8e6340766ffb82f43a2ca9aaaaba887c2447ec",
       "status": 200,
       "headers": {
         "content-length": "267",
@@ -1034,7 +1035,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7543dfc9-8607-44e7-a39c-20f6bb9762aa"
+        "x-request-id": "321337a0-817e-4225-acca-4954ee7f9a49"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":1000,\"remaining_micro_usd\":1000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -1043,7 +1044,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "f10b43c0eaa9ae319c8da06ff7ca0de9fa478addb014d1d66dcfc2d84813ea1f",
+      "request_headers_sha256": "7d2457ae7f363d394445e4f384380f0b2cb7cc77bd9d6bfdaca0e2e15682afcb",
       "status": 200,
       "headers": {
         "content-length": "263",
@@ -1054,7 +1055,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7d8c1040-53bc-4483-b94c-bce9c33758be"
+        "x-request-id": "67b9f6eb-b1bb-444d-b5f7-4ad212ac521f"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000,\"remaining_micro_usd\":5000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":5000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -1063,7 +1064,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "51a3f9271b49b21362d8ef4c3942d2933be6072aa152f009b3c6a01db424b412",
+      "request_headers_sha256": "8612f5d75fc1f354ee91f4cec4daefc5c7e18ef06d4aec0eeffe7eb5a7a6ae6c",
       "status": 200,
       "headers": {
         "content-length": "271",
@@ -1074,7 +1075,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "97666e82-a84b-46e4-a87e-d0fa4d849d43"
+        "x-request-id": "5acfc495-8657-4ad2-ab54-425136a576d1"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":999999,\"remaining_micro_usd\":999999,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -1083,7 +1084,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "9acf6bc00a005c7794175562b88405ab353bde1ff0c3e4dae462087cfb68ce46",
+      "request_headers_sha256": "f610cf1775e5aca9ab95e17f13d4e17fc6e2429548c1c689baacd2b6c3d99f04",
       "status": 200,
       "headers": {
         "content-length": "261",
@@ -1094,7 +1095,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "adf6ef91-edff-410a-bbd5-f3b0e9eeda04"
+        "x-request-id": "04ad2a04-d2cd-4d64-9239-eb14027ccb24"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":0,\"remaining_micro_usd\":0,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"budget_exhausted\",\"maximum_limit_micro_usd\":0,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -1103,7 +1104,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "49b3edc97ded9c403c6f65db3e7acafe5b978d226b45c5f05b3a70427c11fc70",
+      "request_headers_sha256": "6feacef8a40adc460f91e947bf17c3e6881cdc624de1be2002b47d0c09b28322",
       "status": 200,
       "headers": {
         "content-length": "261",
@@ -1114,7 +1115,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "962d7f26-4585-45b5-a797-809595a708b0"
+        "x-request-id": "b57c0ed4-e769-42dc-a19f-a161e6896b87"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":0,\"remaining_micro_usd\":0,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"budget_exhausted\",\"maximum_limit_micro_usd\":0,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -1123,7 +1124,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "9d9da5fb7ebae59651d18a142fe57dac2b1b71cc2b16256c160178e6008b21e1",
+      "request_headers_sha256": "e116638ffa6dc9610819ca3165c814dc3fca7a9b57ca61c0f78ddc0e487c36a6",
       "status": 200,
       "headers": {
         "content-length": "263",
@@ -1134,7 +1135,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "36e54176-7584-42b3-a13a-0c51b708956a"
+        "x-request-id": "b886c953-30d3-4dfd-ab2a-b779cf74991e"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":7000,\"remaining_micro_usd\":7000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":7000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -1143,7 +1144,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "44dc5f5843a336c99f03fe2dab083cc5ba60e09d7aab4626a9270f2a9c5da49a",
+      "request_headers_sha256": "c6951a6c3d0d9189312cb40c6ae6b280a4a6652f93dc55a2f7c2ae5ccf5bd958",
       "status": 200,
       "headers": {
         "content-length": "261",
@@ -1154,7 +1155,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d1ec3eae-af50-42d3-8dfd-350211400b90"
+        "x-request-id": "10a8e80a-409f-49cb-b8fb-3641d18f5a2f"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":0,\"remaining_micro_usd\":0,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"budget_exhausted\",\"maximum_limit_micro_usd\":0,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -1163,7 +1164,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "0d5d5cc4f544ebef45b99dcf26318f752dc5a1857f7dff64b66d3fbb0828b889",
+      "request_headers_sha256": "2095bf9954ea2137f00bbf78304b59149cc22b5097bf373fbfcea4cc799eb17c",
       "status": 200,
       "headers": {
         "content-length": "271",
@@ -1174,7 +1175,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "bc0efbd5-37a3-41e0-a3d4-3e1c91d75035"
+        "x-request-id": "5e965562-48c3-4913-8de6-670a14aa9142"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":999999,\"remaining_micro_usd\":999999,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -1183,7 +1184,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "842d7f1dc12267dc0d9ceaa89eb70e8e166a538a239fab9e8a7e62ffaf22e0c3",
+      "request_headers_sha256": "9125b95df257dccdd101084d1e9f1382dccfd9e074352c91dbc679c616f0c0be",
       "status": 200,
       "headers": {
         "content-length": "271",
@@ -1194,7 +1195,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "95a47281-4bd5-4c92-b61f-9f2966608d06"
+        "x-request-id": "87e42b65-b58e-4771-a411-8767850897d9"
       },
       "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":999999,\"remaining_micro_usd\":999999,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
     },
@@ -1203,7 +1204,7 @@
       "method": "GET",
       "path": "/api/v1/admin/llm-settings/budget",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "690483fcd7c3b97b1c904c3f4c93e72f7092b4d1487ed830adde3af77bd167eb",
+      "request_headers_sha256": "3332d829a86a39de94aa4b1b7d72042954c53e6672e0efcbf53d9ea908b718ad",
       "status": 403,
       "headers": {
         "content-length": "34",
@@ -1214,7 +1215,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5f8549fc-95f2-48be-8f4d-d62b3560d434"
+        "x-request-id": "77b668ec-d001-4ec5-a677-df29f31401ec"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -1235,7 +1236,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e4d964d2-d2fc-4cfc-92ab-c845975dffbd"
+        "x-request-id": "b1e07ba6-60a0-4f9d-8e3f-0a14cd4136ae"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     }

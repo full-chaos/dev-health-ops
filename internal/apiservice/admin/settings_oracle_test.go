@@ -28,14 +28,14 @@ const settingsVenueEncryptionKey = "venue-settings-admin-fernet-key-32-bytes!"
 // (an encrypted value by decrypting each plane's ciphertext with the shared
 // key through the Python api's own decrypt, since Fernet output is random).
 func TestSettingsRoutesVenueOracle(t *testing.T) {
-	runSettingsOracle(t, true, "keyed", "17a4f2e69d818d1c328ce348eb74f40c5a33b41bf1fa1a382597c7ca2c69e7c9")
+	runSettingsOracle(t, true, "keyed", "47fad24c060949475af62138d342f4b8146792a9b80b147ddf1882f3fc86bea0")
 }
 
 // TestSettingsRoutesWithoutEncryptionKeyVenueOracle runs the same routes on
 // planes that hold no SETTINGS_ENCRYPTION_KEY: encrypting or decrypting then
 // raises in Python, an unhandled 500.
 func TestSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
-	runSettingsOracle(t, false, "nokey", "9f474e94c1a57dbc203f24a198c7abb1ba5f14e9a014958e99fc763650877e16")
+	runSettingsOracle(t, false, "nokey", "9bcb3f28a01fc786b76f5e96a4b431b223f73a066b78ef3ec2efb24e22079d63")
 }
 
 func runSettingsOracle(t *testing.T, withKey bool, mode, digest string) {

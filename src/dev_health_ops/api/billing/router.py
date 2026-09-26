@@ -831,6 +831,7 @@ async def create_checkout_session(
     body: CheckoutRequest,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
 ) -> CheckoutResponse:
+    """Create a Stripe Checkout session for the authenticated user's org."""
     raise_served_by_go_api("/api/v1/billing/checkout", GO_API)
 
 
@@ -844,6 +845,7 @@ async def create_portal_session(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     return_url: str | None = None,
 ) -> PortalResponse:
+    """Create a Stripe Billing Portal session for the authenticated user's org."""
     raise_served_by_go_api("/api/v1/billing/portal", GO_API)
 
 

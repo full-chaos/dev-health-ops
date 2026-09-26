@@ -207,3 +207,20 @@ def test_a_billing_route_with_an_auth_dependency_still_401s_first():
     finally:
         app.dependency_overrides[get_current_user] = _override_get_current_user
     assert resp.status_code == 401, resp.text
+
+
+@pytest.mark.parametrize(
+    ("path", "method", "starts"),
+    [
+        ("/api/v1/billing/checkout", "post", "Create a Stripe Checkout session"),
+        ("/api/v1/billing/portal", "post", "Create a Stripe Billing Portal session"),
+    ],
+)
+def test_a_stub_keeps_the_openapi_description_its_docstring_gave(
+    path: str, method: str, starts: str
+):
+    """Reducing a body to the refusal must not change the route's OpenAPI entry:
+    the description is the handler's docstring, so the stub keeps it (r1 of the
+    sync-admin deletion found the same loss; checked here for the billing stubs)."""
+    description = app.openapi()["paths"][path][method].get("description", "")
+    assert description.startswith(starts), description

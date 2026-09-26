@@ -138,3 +138,47 @@ func parseHandTables(file, src string) ([]handTable, error) {
 	}
 	return out, nil
 }
+
+// probeMaxColumns bounds a PROBE shell: `id` plus a probe column or two.
+const probeMaxColumns = 3
+
+// probeVenues are the privilege venues whose hand tables are deliberate shells:
+// each test builds a scratch database with hand-made roles and creates a table
+// under a production name only so the posture manifest has something to GRANT
+// on (the manifest is table-level; no query reads a column). A table here that
+// carries a column production lacks is recorded as PROBE, not INVENTED. A file
+// is added only with the reason for it.
+var probeVenues = map[string]string{
+	"internal/storage/postgres/runtime_authorization_integration_test.go":            "runtime posture: GRANT targets for the domain/queue/elevated roles",
+	"internal/storage/postgres/domain_authorization_integration_test.go":             "domain posture: GRANT targets, DDL-forbidden probes",
+	"internal/storage/postgres/domain_grant_reconciliation_integration_test.go":      "grant reconciliation over shell tables",
+	"internal/storage/postgres/coordinator_statement_privileges_integration_test.go": "coordinator statement privileges over shell tables",
+	"internal/storage/river/migrate_integration_test.go":                             "river migration role grants over shell tables",
+	"internal/syncreconciler/kernel_integration_test.go":                             "reconciler roles over shell tables",
+	"internal/syncdispatchruntime/publisher_integration_test.go":                     "publisher roles over shell outbox tables",
+	"internal/joboperator/postgres_integration_test.go":                              "operator role posture over shell tables",
+	"internal/api/policy/store_integration_test.go":                                  "API posture: readiness requires every declared table",
+}
+
+// classifyHandTable names a hand table that differs from the real one (invented and missing are
+// the columns it has that production lacks and the reverse; either non-empty).
+//
+//	INVENTED  the hand table declares a column production lacks, and is not a probe shell.
+//	PROBE     a shell of at most probeMaxColumns columns in a privilege venue (probeVenues): a GRANT
+//	          target for the posture manifest, whether it carries a probe column production lacks or
+//	          only omits columns production has. No query in a venue reads a column of a shell, so
+//	          "missing columns" is the point of a shell, not drift.
+//	SUBSET    any other table that lacks columns production has: a query that reads one fails.
+//
+// A larger table in a probe venue is NOT a shell: it keeps INVENTED / SUBSET so it stays on the
+// backlog, and a venue that grows a shell past probeMaxColumns leaves PROBE.
+func classifyHandTable(file string, columns, invented []string) string {
+	_, venue := probeVenues[file]
+	if venue && len(columns) <= probeMaxColumns {
+		return "PROBE"
+	}
+	if len(invented) > 0 {
+		return "INVENTED"
+	}
+	return "SUBSET"
+}

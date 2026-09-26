@@ -24,27 +24,6 @@ const ledgerEnv = "DHO_HAND_DDL_LEDGER_UPDATE"
 
 const ledgerPath = "testdata/hand_ddl_ledger.tsv"
 
-// probeMaxColumns bounds a PROBE shell: `id` plus a probe column or two.
-const probeMaxColumns = 3
-
-// probeVenues are the privilege venues whose hand tables are deliberate shells:
-// each test builds a scratch database with hand-made roles and creates a table
-// under a production name only so the posture manifest has something to GRANT
-// on (the manifest is table-level; no query reads a column). A table here that
-// carries a column production lacks is recorded as PROBE, not INVENTED. A file
-// is added only with the reason for it.
-var probeVenues = map[string]string{
-	"internal/storage/postgres/runtime_authorization_integration_test.go":            "runtime posture: GRANT targets for the domain/queue/elevated roles",
-	"internal/storage/postgres/domain_authorization_integration_test.go":             "domain posture: GRANT targets, DDL-forbidden probes",
-	"internal/storage/postgres/domain_grant_reconciliation_integration_test.go":      "grant reconciliation over shell tables",
-	"internal/storage/postgres/coordinator_statement_privileges_integration_test.go": "coordinator statement privileges over shell tables",
-	"internal/storage/river/migrate_integration_test.go":                             "river migration role grants over shell tables",
-	"internal/syncreconciler/kernel_integration_test.go":                             "reconciler roles over shell tables",
-	"internal/syncdispatchruntime/publisher_integration_test.go":                     "publisher roles over shell outbox tables",
-	"internal/joboperator/postgres_integration_test.go":                              "operator role posture over shell tables",
-	"internal/api/policy/store_integration_test.go":                                  "API posture: readiness requires every declared table",
-}
-
 // TestHandWrittenTestDDLMatchesTheMigratedSchema is the guard for CHAOS-6769
 // (Trap #412: integration tests never hand-write DDL for production tables).
 //
@@ -61,8 +40,9 @@ var probeVenues = map[string]string{
 //
 //	INVENTED  the hand table declares a column the real table does not have.
 //	          The test exercises a schema production never had.
-//	PROBE     INVENTED, in a privilege venue (probeVenues), and a shell of at
-//	          most probeMaxColumns columns: a GRANT target for the posture
+//	PROBE     a shell of at most probeMaxColumns columns in a privilege venue
+//	          (probeVenues), whether it invents a probe column or only omits
+//	          columns (classifyHandTable): a GRANT target for the posture
 //	          manifest with a probe column (`state`), not a model of the table.
 //	SUBSET    the hand table lacks columns the real table has: a query that
 //	          reads one fails with the 500 above.
@@ -111,13 +91,7 @@ func TestHandWrittenTestDDLMatchesTheMigratedSchema(t *testing.T) {
 			continue
 		}
 		sort.Strings(invented)
-		kind := "SUBSET"
-		if len(invented) > 0 {
-			kind = "INVENTED"
-			if _, ok := probeVenues[h.File]; ok && len(h.Columns) <= probeMaxColumns {
-				kind = "PROBE"
-			}
-		}
+		kind := classifyHandTable(h.File, h.Columns, invented)
 		key := h.File + "\t" + h.Table
 		// two CREATEs of one table in one file: the worse kind, the union.
 		if prev, seen := current[key]; seen && (strings.HasPrefix(prev, "INVENTED") || strings.HasPrefix(prev, "PROBE")) && kind == "SUBSET" {

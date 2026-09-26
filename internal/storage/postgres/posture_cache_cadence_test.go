@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -148,4 +150,45 @@ func TestAGenericRunCheckSeesAChangedResultAfterThirtySecondsNotFiveMinutes(t *t
 	_ = check.CheckNoWait() // stale pass served, refresh starts
 	waitFor(t, "the refresh after the 30 s window", func() bool { return runs.Load() == 2 })
 	waitFor(t, "the refusal", func() bool { return errors.Is(check.CheckNoWait(), ErrPostureRefused) })
+}
+
+// The default draw (no injected Rand) is the operating system's CSPRNG, never math/rand (Semgrep
+// go.lang.security.audit.crypto.math_random; fixed by content, not by an allowlist): every value is in
+// [0, 1), the resulting windows stay inside [ttl*(1-jitter), ttl], and they actually spread.
+func TestTheDefaultJitterDrawIsSecureBoundedAndSpread(t *testing.T) {
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 200; i++ {
+		if got := secureUnitFloat(); got < 0 || got >= 1 {
+			t.Fatalf("secureUnitFloat() = %v, want a value in [0, 1)", got)
+		}
+		check := newCachedPostureCheck("r", func(context.Context) error { return nil }, PostureCheckOptions{TTL: 100 * time.Second, Jitter: 0.2})
+		window := check.jitteredTTL()
+		if window < 80*time.Second || window > 100*time.Second {
+			t.Fatalf("jittered window %s outside [80s, 100s]", window)
+		}
+		seen[window] = true
+	}
+	if len(seen) < 20 {
+		t.Fatalf("only %d distinct windows in 200 draws: the jitter does not spread refreshes", len(seen))
+	}
+}
+
+func TestNoNonTestSourceOfThePostureCachesPackageImportsMathRand(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), `"math/rand`) {
+			t.Errorf("%s imports math/rand: the static analysis (Semgrep math-random-used) refuses it; use crypto/rand", name)
+		}
+	}
 }

@@ -2,10 +2,11 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -73,7 +74,7 @@ type PostureCheckOptions struct {
 	// takes the default; a negative value disables jitter.
 	Jitter float64
 	// Rand returns a value in [0, 1) for the per-pass jitter. Nil uses
-	// math/rand/v2; tests inject a fixed one.
+	// the operating system CSPRNG (secureUnitFloat); tests inject a fixed one.
 	Rand func() float64
 }
 
@@ -306,7 +307,7 @@ func (c *CachedPostureCheck) jitteredTTL() time.Duration {
 	if c.jitter <= 0 {
 		return c.ttl
 	}
-	draw := rand.Float64
+	draw := secureUnitFloat
 	if c.rand != nil {
 		draw = c.rand
 	}
@@ -315,6 +316,18 @@ func (c *CachedPostureCheck) jitteredTTL() time.Duration {
 		fraction = 0
 	}
 	return time.Duration(float64(c.ttl) * (1 - c.jitter*fraction))
+}
+
+// secureUnitFloat returns a uniformly distributed value in [0, 1) from the operating system's CSPRNG
+// (53 bits, the width of a float64 mantissa). The jitter only spreads refreshes across replicas, so
+// nothing here needs to be unpredictable, but crypto/rand keeps the statically-checked "no math/rand"
+// rule without an exemption. If the system source fails the draw is 0: no shortening, i.e. the plain TTL.
+func secureUnitFloat() float64 {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return 0
+	}
+	return float64(binary.BigEndian.Uint64(raw[:])>>11) / (1 << 53)
 }
 
 // postureJitter resolves the option: zero takes the default, negative turns

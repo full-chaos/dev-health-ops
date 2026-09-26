@@ -175,6 +175,14 @@ _LAUNCH_WITH_DEFAULT_SIGNALS = (
 )
 
 
+# The launcher's mirror image: what a backgrounded `cmd &` leaves a child with.
+_LAUNCH_WITH_SIGINT_IGNORED = """\
+import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+os.execvp('bash', ['bash', '-c', sys.argv[1]])
+"""
+
+
 def _run(body: str, timeout: int = 60) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-c", _LAUNCH_WITH_DEFAULT_SIGNALS, body],
@@ -216,9 +224,7 @@ def test_a_shell_started_with_sigint_ignored_cannot_trap_it():
         [
             sys.executable,
             "-c",
-            "import os, signal, sys\n"
-            "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
-            "os.execvp('bash', ['bash', '-c', sys.argv[1]])\n",
+            _LAUNCH_WITH_SIGINT_IGNORED,
             _TRAP_PROBE,
         ],
         capture_output=True,

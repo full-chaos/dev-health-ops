@@ -1002,10 +1002,11 @@ different reason: the three runtime roles
 (`devhealth_domain`/`devhealth_queue`/`devhealth_coordinator`) don't exist
 yet, or exist without the grants `CheckRolePosture`
 (`internal/storage/postgres/domain_authorization.go`) requires.
-`scripts/worker/provision_river_roles.sql` (run via `psql` with
-`domain_role`/`queue_role`/`coordinator_role`/`*_password` variables, exactly
-as `deploy/docker-compose/compose.go-workers.yml`'s `go-river-provision`
-service invokes it) **must run before** `dho migrate river`, every
+`dho migrate roles` (Compose's `go-river-provision` runs it on the Go operator
+image since CHAOS-6904; the chart's provision-roles Job and
+`ci/lib/go_worker_fixture.sh` still run `scripts/worker/provision_river_roles.sql`
+through `psql` with the `domain_role`/`queue_role`/`coordinator_role`/`*_password`
+variables, until they move) **must run before** `dho migrate river`, every
 time, on every fresh database — confirmed while building CHAOS-4266's CI
 gate (`ci/run_metrics_executed_proof.sh`).
 

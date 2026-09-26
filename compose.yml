@@ -889,78 +889,45 @@ services:
   # grants see every current semantic table, including an already
   # initialized local volume.
   go-river-provision:
-    # The default here is `dev-hops-runner`, the family the release
-    # workflow actually publishes for `docker/Dockerfile` target `runner`,
-    # not the `ghcr.io/your-org/...` placeholder a production renderer
-    # uses: that placeholder cannot be pulled, which is why carrying it as
-    # this file's local default was wrong. This service needs the Ops
-    # runtime image (it runs `psql` AND the repo's own tooling), not a
-    # bare postgres client image, and that is exactly what the build block
-    # below produces and tags.
-    # This root file is a STAGING file that honours an image pin by
-    # default -- `pull_policy` is left at compose's own default
-    # (`missing`: reuse an already-built/pulled local tag if one exists,
-    # else build) rather than forcing a rebuild every run. The CHAOS-5437
-    # cross-tree lockstep this used to guard against is closed by pinning
-    # every image to the ONE sha the prebuild produces
-    # (`job6-prebuild/*:<sha>`), not by forcing a build here.
-    # Declared alongside `build:` so an operator pin is honoured: this is a
-    # staging file, `pull_policy` is left at Compose's own default, and a
-    # one-shot job that keeps building locally while the long-running
-    # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the `:local` tag
-    # of the same family, which no registry publishes: unpinned, Compose
-    # builds it from THIS tree, so a start is one coherent revision. A
-    # published moving tag as the default was worse than no pin at all --
-    # present on the host from any earlier pull, Compose ran THAT image
-    # instead of building, putting a months-old migration beside a fleet
-    # built today. Two consequences, both deliberate: with no pin and no
-    # prior build there is nothing for `--no-build` to run, and `:local`
-    # is shared across compose projects on one host.
-    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:local}
+    # CHAOS-6904: the Go operator image (entrypoint dho, distroless): `dho migrate
+    # roles` replaces the psql script this service used to run (executed parity,
+    # CHAOS-6901). It creates and bootstraps the same unprivileged logins in one
+    # transaction and NEVER prints a role name or password (the script echoed a
+    # failing CREATE ROLE statement, and these defaults set each password equal to
+    # its role name). Same image, build and component-form DSN as go-river-migrate
+    # below; the default is the `:local` tag of that family, which no registry
+    # publishes: unpinned, Compose builds it from THIS tree, so a start is one
+    # coherent revision.
+    image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:local}
     build:
       context: .
-      dockerfile: ./docker/Dockerfile
-      target: runner
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
       args:
-        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     restart: "no"
     read_only: true
+    user: "65532:65532"
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
+    command: [migrate, roles]
     environment:
-      # The root `postgres` service above creates the
-      # superuser identity postgres/postgres/postgres (container_name:
-      # postgres, lines ~97-102) -- NOT a `devhealth` role or database.
-      # (A)'s defaults assumed compose.production.yml's postgres identity,
-      # which this file does not share. Match `migrate`'s own
-      # POSTGRES_URI default (line ~252) instead of inventing a second
-      # convention.
-      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # The root `postgres` service creates the superuser identity
+      # postgres/postgres/postgres -- NOT a `devhealth` role or database; match
+      # `migrate`'s own POSTGRES_URI default rather than inventing a second
+      # convention (same as go-river-migrate below).
+      DEV_HEALTH_MIGRATION_PG_HOST: ${POSTGRES_HOST:-postgres}
+      DEV_HEALTH_MIGRATION_PG_USER: ${POSTGRES_USER:-postgres}
+      DEV_HEALTH_MIGRATION_PG_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DEV_HEALTH_MIGRATION_PG_DB: ${POSTGRES_DB:-postgres}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
       RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
       RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
       RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
       RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
-    entrypoint:
-      - /bin/sh
-      - -ec
-      - |
-        exec psql \
-          --host="${POSTGRES_HOST:-postgres}" \
-          --username="${POSTGRES_USER:-postgres}" \
-          --dbname="${POSTGRES_DB:-postgres}" \
-          --set=domain_role="$$RIVER_DOMAIN_DATABASE_ROLE" \
-          --set=queue_role="$$RIVER_QUEUE_DATABASE_ROLE" \
-          --set=coordinator_role="$$RIVER_COORDINATOR_DATABASE_ROLE" \
-          --set=domain_password="$$RIVER_DOMAIN_DATABASE_PASSWORD" \
-          --set=queue_password="$$RIVER_QUEUE_DATABASE_PASSWORD" \
-          --set=coordinator_password="$$RIVER_COORDINATOR_DATABASE_PASSWORD" \
-          --file=/usr/local/share/dev-health/provision_river_roles.sql
     depends_on:
       migrate:
         condition: service_completed_successfully

@@ -103,8 +103,10 @@ privilege would let the domain role forge a fence that retention never reaps.
 Two files grant privileges, and they run in an order that makes only one of
 them authoritative.
 
-1. `scripts/worker/provision_river_roles.sql` creates the roles and issues a
-   first set of grants. It runs as the `go-river-provision` step.
+1. `dho migrate roles` (the Go leg that replaced the psql script
+   `scripts/worker/provision_river_roles.sql` in Compose, CHAOS-6904) creates the
+   roles and bootstraps them (CONNECT, USAGE on `public`, no TEMPORARY/CREATE).
+   It runs as the `go-river-provision` step, on the Go operator image.
 2. `internal/storage/river/migrate.go` then **REVOKEs ALL** privileges on the
    public schema from the domain role
    (`internal/storage/river/migrate.go:381-382`) and re-grants an explicit list
@@ -1446,9 +1448,11 @@ table, including on an already-initialised volume.
 
 ### Two images have to move together
 
-Provisioning runs from the **ops runtime image** (`DEV_HEALTH_IMAGE`) — it
-carries both `psql` and `provision_river_roles.sql`
-(`docker/Dockerfile:98`). The posture assertions that check those grants ship in
+Provisioning (`go-river-provision`, `dho migrate roles`) and the River migration
+run from the **Go operator image** (`DEV_HEALTH_GO_OPERATOR_IMAGE`); the runtime
+image (`DEV_HEALTH_IMAGE`) still carries `psql` and `provision_river_roles.sql`
+(`docker/Dockerfile:98`) for the callers that have not moved (the chart's
+provision-roles Job). The posture assertions that check those grants ship in
 the **Go worker image**, the dho image (`DEV_HEALTH_GO_DHO_IMAGE`).
 
 **A posture change requires both images to be bumped in the same deploy.** Bump

@@ -1082,6 +1082,10 @@ secrets:
     #    goWorkers.pgbouncer.transaction.extraUsers, then repoint this key at
     #    `...@<release>-go-pgbouncer-transaction:6432/...`. Nothing else moves.
     #
+    #    CHAOS-6804: once QUERY_API_DATABASE_ROLE is set (queryApi.extraEnv) this
+    #    key holds that least-privilege role's DIRECT DSN instead of the owner's;
+    #    see deploy/go-workers/README.md "query-api role" for the rollout order.
+    #
     #    What must NOT happen instead: granting these three tables to
     #    RIVER_DOMAIN_DATABASE_ROLE so the existing pooler role can read them.
     #    Role provisioning can revert a grant with no error at the call site,

@@ -1021,28 +1021,87 @@ silently skips grant re-application, so revoking privileges by hand and
 re-running the migrate binary does not restore them; re-run
 `provision_river_roles.sql` instead, or start from a fresh database.
 
-### query-api write grants: `QUERY_API_DATABASE_ROLE` (opt-in, additive)
+### query-api role: `QUERY_API_DATABASE_ROLE` (opt-in, full least-privilege posture)
 
-query-api is the read plane, and today it connects with
-`GO_API_REGISTRY_POSTGRES_URI`, the DSN of the role that owns the registry
-tables. The saved-report GraphQL mutations (CHAOS-6098) are its first writes,
-so `internal/storage/postgres/query_api_authorization.go` declares the exact
-write privileges they need (`QueryAPIWritePosture`).
+query-api is the read plane, and until this is rolled out it connects with
+`GO_API_REGISTRY_POSTGRES_URI`, the DSN of the role that OWNS the registry tables
+(a superuser on bigboy), so the read plane holds every write privilege
+(CHAOS-6804). `internal/storage/postgres/query_api_authorization.go` declares the
+exact relations `dho query-api` reaches (`QueryAPIPosture`: the read plane, plus
+the saved-report mutation writes of CHAOS-6098), and the same list drives both
+sides:
 
-Setting `QUERY_API_DATABASE_ROLE` to an existing role, on BOTH the migrate Job
-and the query-api Deployment, does two things and nothing else:
+- `dho migrate river` provisions the role from ONE enumeration
+  (`internal/storage/roleacl`): it removes every grant the role holds in its OWN
+  name, in every ACL-bearing catalog class and every schema (relations, columns,
+  schemas, functions, types, languages, large objects, default privileges, the
+  database, tablespaces, foreign data wrappers and servers, parameters) plus its
+  role-level settings, then grants exactly the manifest, the baseline (CONNECT on
+  this database, USAGE on `public`) included. It REFUSES
+  (`ErrMigrationConfiguration`, before any statement runs) a role that is not an
+  unprivileged login, is a member of another role, is the migration identity, or
+  OWNS anything: pointing it at the registry owner must never strip that owner.
+  PUBLIC's grants are not the role's to lose and are left alone (other roles rely
+  on them); the check names them. A role that does not exist yet is skipped with a
+  warning.
+- query-api's `/readyz` is not ready (`postgres_posture`) until ALL of:
+  1. **Identity:** the pool AUTHENTICATED as the role (`pg_stat_activity.usename` of
+     this backend, which neither `SET ROLE` nor `SET SESSION AUTHORIZATION`
+     changes, plus `session_user` and `current_user`), and the role is an
+     unprivileged login (no SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB,
+     REPLICATION) that is a member of no role.
+  2. The role owns nothing.
+  3. **Grants:** the set of EFFECTIVE grants the role holds, enumerated from every
+     ACL-bearing catalog with PUBLIC counted as granted to the role, EQUALS the
+     manifest plus the baseline: nothing extra, nothing missing, no grant option,
+     no role-level `ALTER ROLE ... SET`. A privilege kind nobody thought to check
+     cannot slip past a set-equality over a complete enumeration. Stated scope
+     (the exclusion predicate is the enumeration's own SQL): every schema except
+     `pg_catalog`, `information_schema`, `pg_toast*` and `pg_temp_*`, and every
+     object except those an EXTENSION owns (`pg_depend` deptype `e`); PUBLIC counts
+     as granted to the role, including PUBLIC EXECUTE on a SECURITY DEFINER
+     function; the ambient PUBLIC defaults on types, languages and
+     non-SECURITY-DEFINER functions (what every catalog has) are not counted;
+     other databases are out of scope.
+  4. **Resolution:** every manifest table resolves, unqualified, to its `public`
+     relation (the application's queries are unqualified, so a `search_path` that
+     hides the manifest would leave a Ready pod failing every request).
+  The whole-catalog query takes 1.4-1.9 s on the production catalog, longer than
+  the 2 s probe timeout, so the probe never runs it: the proof starts in the
+  background when the process starts, and `/readyz` reads the last answer without
+  waiting (`CheckNoWait`). Until the first run answers the role is unproven and the
+  pod is NotReady (fail closed); a refusal is served with its age and re-run every
+  2 s until fixed; a pass counts for up to 5 minutes without a newer answer, then
+  the pod is NotReady again. A grant the migrate leg cannot remove (PUBLIC's, or
+  one whose revoke the migration identity may not run) keeps the new pod NotReady
+  (the old ReplicaSet keeps serving) until an operator revokes it; the refusal names
+  the first one.
 
-- `dho migrate river` issues plain `GRANT` statements for that manifest. This
-  leg never revokes and never requires a least-privilege login, so a role that
-  already reads the whole query plane keeps reading it. A role that does not
-  exist yet is skipped with a warning, like the api role.
-- query-api's `/readyz` is not ready (`postgres_write_grants`) until the pool's
-  login IS that role and the role holds every declared write. A role that holds
-  more is accepted: this is not a "hold exactly" posture.
+Leaving `QUERY_API_DATABASE_ROLE` unset changes nothing. The completeness proof
+for the manifest is `TestQueryAPIRoleServesEveryPostgresPathItReaches`
+(`internal/queryapi/server`): it drives every Postgres path query-api reaches
+as the migrate-provisioned role on the real migrated schema.
 
-Leaving the variable unset changes nothing. Enforcing a full least-privilege
-posture for query-api (every relation it reads, off the owner DSN) is a
-separate piece of work (CHAOS-6804).
+**Rollout order** (each step is independently safe; rollback is reverting the
+Secret value and unsetting the env, the role and grants stay and are harmless):
+
+1. Ship the code (this leg is a no-op while the env is unset).
+2. prod-ops / chris create the login once, with the provisioning script's
+   `query_api_role` block (distinct from every other runtime role; the password
+   is a Secret value chris/prod-ops own):
+   `psql "$MIGRATION_DATABASE_URI" --set=ON_ERROR_STOP=1 --set=domain_role=... --set=queue_role=... --set=coordinator_role=... --set=domain_password=... --set=queue_password=... --set=coordinator_password=... --set=query_api_role=devhealth_query_api --set=query_api_password=... --file=scripts/worker/provision_river_roles.sql`
+3. Run `dho migrate river` with `QUERY_API_DATABASE_ROLE=devhealth_query_api`
+   (the migrate Job). No traffic changes yet.
+4. ONE roll of the query-api Deployment: set `QUERY_API_DATABASE_ROLE`
+   (`queryApi.extraEnv`) AND point the `GO_API_REGISTRY_POSTGRES_URI` Secret value
+   at that role's DIRECT DSN (`...@<postgres-host>:5432/...`, not the transaction
+   pooler: the pooler authenticates one role, and pgx's statement cache does not
+   suit transaction pooling). The posture check gates readiness, so a wrong DSN or
+   a missing grant leaves the new pod NotReady while the old ReplicaSet keeps
+   serving.
+5. A follow-up PR makes the role required (default `devhealth_query_api`, distinct
+   from the other runtime roles, as `API_DATABASE_ROLE` is), only after step 4 is
+   proven.
 
 ### `post_sync` needs the `sync` queue too — `--queues=metrics` alone leaves the fanout job stuck `available` forever
 

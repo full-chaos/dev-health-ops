@@ -1691,6 +1691,37 @@ dev-hops maintenance cleanup-all
 
 ---
 
+## Service Credentials
+
+Internal service credentials are the bearer tokens the ACR entitlement lookup (`acr`) and the worker operator API (`worker-operator`) present to the API. The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read`; `worker-operator` holds `workers:read` and `workers:operate`.
+
+```bash
+# Create a credential (the token is printed once)
+dev-hops service-credentials create --service acr --scope entitlements:read
+
+# A worker-operator credential with both scopes that lapses at a fixed time
+dev-hops service-credentials create --service worker-operator \
+  --scope workers:read --scope workers:operate --expires-at 2027-01-01T00:00:00+00:00
+
+# List one service's credentials (metadata only)
+dev-hops service-credentials list --service worker-operator
+
+# Rotate: issue a replacement now; the old credential stays valid for 5 more minutes
+dev-hops service-credentials rotate <credential-id> --scope entitlements:read --overlap-seconds 300
+
+# Revoke
+dev-hops service-credentials revoke <credential-id>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `create` | `--service {acr,worker-operator}` (default `acr`), `--scope` (required, repeatable), `--expires-at` (ISO 8601 with a timezone, in the future), `--created-by-user-id` (a user id) |
+| `list` | `--service` (default `acr`); one JSON line: `id`, `service_name`, `token_prefix`, `scopes`, `expires_at`, `revoked_at`, `last_used_at` (no computed validity: an expired credential prints like a live one) |
+| `rotate` | `<credential_id>` then the `create` options plus `--overlap-seconds` (0 to 3600, default 0). The credential must belong to `--service` (the default is `acr`: pass `--service worker-operator` to rotate a worker-operator credential) and be active; its expiry is set to now + the overlap (even if it had less time left) and a replacement is issued |
+| `revoke` | `<credential_id>`; sets `revoked_at` to now, also on an already revoked credential |
+
+> **`dho service-credentials` (Go):** the same four verbs, flags and defaults, printing the same bytes and leaving the same rows: a differential test runs one 83-step script (every option in its accepted and refused forms, `datetime.fromisoformat` spellings, UUID spellings, overlaps, wrong-service and revoked credentials, options before and after the credential id) through the real `dev-hops` verbs and through `dho` on real PostgreSQL databases and compares every step's exit code, stdout and rows. Differences to know: a refusal `dev-hops` raises as a `ValueError` (a traceback, exit 1, nothing on stdout) is one JSON error line on stderr, exit 1, with the same message; the database is `MIGRATION_DATABASE_URI`, else `POSTGRES_URI` (as every `dho admin` verb), and a missing one is exit 1 where `dev-hops` exits 2; `rotate` locks the credential row while it checks and changes it; options must be spelled in full (argparse also accepts unique prefixes); `list` keeps `dev-hops`'s shape (CHAOS-4032: no computed validity).
+
 ## Billing
 
 ### `billing reconcile`

@@ -27,9 +27,10 @@ package routing
 //     checked against the catalog row's build alone by both, and dho also turns the drifted row off,
 //     unguarded. The scenarios assert both.
 //   - `status` when the planes disagree classifies against the DEPLOYED plane's digest (PENDING /
-//     MATCH), Python against its own; and dho reports a drifted or unregistered live row on the
-//     catalog row's `unreachable_document_digests`, where Python lists it as its own DOCUMENT_DRIFT /
-//     UNREGISTERED entry. The status states below assert both.
+//     MATCH), Python against its own; and dho reports a drifted live row on the catalog row's
+//     `unreachable_document_digests`, where Python lists it as its own DOCUMENT_DRIFT entry. A live row
+//     of an operation the catalog does not register is listed alike by both (UNREGISTERED).
+//     The status states below assert both.
 //
 // It needs the full project Python environment (live oracle): the venue-oracles job
 // runs it on main and on dispatch.
@@ -536,8 +537,19 @@ func oracleStatus(t *testing.T, py, goPlane oraclePlane, catalogPath string, cat
 		t.Errorf("python must list the unregistered live row as UNREGISTERED: %v", row)
 	}
 	// dho: the catalog row of the drifted operation names the drifted document; no separate entry.
-	if find(goDoc.Operations, ops[3], drift) != nil || find(goDoc.Operations, "notInTheCatalog", "") != nil {
-		t.Errorf("dho lists the drifted or unregistered row as an entry of its own; the oracle's named difference changed")
+	if find(goDoc.Operations, ops[3], drift) != nil {
+		t.Errorf("dho lists the drifted row as an entry of its own; the oracle's named difference changed")
+	}
+	// A live row of an operation the catalog does not register is listed by both, alike.
+	pyRow, goRow := find(pyDoc.Operations, "notInTheCatalog", ""), find(goDoc.Operations, "notInTheCatalog", "")
+	if goRow == nil {
+		t.Errorf("dho does not list the live row of an unregistered operation")
+	} else {
+		for _, key := range statusRowKeys {
+			if !reflect.DeepEqual(pyRow[key], goRow[key]) {
+				t.Errorf("the unregistered row's %s: python %v go %v", key, pyRow[key], goRow[key])
+			}
+		}
 	}
 	row := find(goDoc.Operations, ops[3], catalog[ops[3]])
 	unreachable, _ := row["unreachable_document_digests"].([]any)

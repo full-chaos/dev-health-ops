@@ -505,6 +505,11 @@ func printStatusText(report statusReport, local string) {
 		case "UNREGISTERED":
 			fmt.Fprintln(stdout, "    !! the deployed go plane does not register this operation at all -- enable would refuse it")
 		}
+		// A live row of an operation the catalog does not register: the row's own document
+		// digest is the only question it raises.
+		if operation.DigestState == goapiproof.DigestUnregistered {
+			fmt.Fprintf(stdout, "    serving document %s -- the catalog does not register this operation at all, so the edge cannot dispatch this row\n", operation.DocumentDigest)
+		}
 	}
 }
 
@@ -626,7 +631,7 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 	default:
 		reported.Reachable = boolPtr(true)
 	}
-	if status.DigestState != goapiproof.DigestMatch {
+	if status.DigestState != goapiproof.DigestMatch && status.DigestState != goapiproof.DigestUnregistered {
 		return reported
 	}
 	reported.Mode = stringPtr(status.Mode)

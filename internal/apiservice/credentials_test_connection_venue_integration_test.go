@@ -4,13 +4,13 @@ package apiservice
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -266,12 +266,37 @@ func (t rewriteToStub) RoundTrip(request *http.Request) (*http.Response, error) 
 	return http.DefaultTransport.RoundTrip(request)
 }
 
+// fixedProbePrimeP and fixedProbePrimeQ are two throwaway 1024-bit primes that
+// exist only to make the GitHub App private key of this oracle the same in every
+// process: the frozen golden records the request bodies that carry it, and Go's
+// rsa.GenerateKey is deliberately not reproducible. The key protects nothing: it
+// signs App JWTs that only the local provider stub reads.
+const (
+	fixedProbePrimeP = "d26c38d1cf062185f0a1ac2872f8d4fc1b74d6d1ecceabf9891ab384c67d0bf1ddab60f9cbf790fb8c96471d36f2093ee5f4f2b85a89eb3d73d445decd351f15a8b13854362a7b7a2ad275b1fda66cbe38f2f84bf338a061f584f8102ce498c594dfb34f413187093da2e19f3da9dd33de976a2826b59edc6d1a501f086a8e8f"
+	fixedProbePrimeQ = "eff38d1e0185816c65c47478fdc43f219d251df8f4c9e103cf1fb23eb9e21d96505482970279640a318b9ce0f953e8dd8ca56b47eb06155e24755a745ec54584c89dd02d8c932e3860b809b8058d52cda945672a59f7cc1c1cf113f10b30cb21e246254c62fb2bb5e1cc3aaa0c9c2fc2921d905c9b7ea822093b34eb601fdba5"
+)
+
+// generatePEM is the oracle's GitHub App private key, PKCS#1 PEM, identical on
+// every call and in every process.
 func generatePEM(t *testing.T) string {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
+	p, okP := new(big.Int).SetString(fixedProbePrimeP, 16)
+	q, okQ := new(big.Int).SetString(fixedProbePrimeQ, 16)
+	if !okP || !okQ {
+		t.Fatal("fixed probe primes are not hex")
+	}
+	one := big.NewInt(1)
+	phi := new(big.Int).Mul(new(big.Int).Sub(p, one), new(big.Int).Sub(q, one))
+	e := big.NewInt(65537)
+	d := new(big.Int).ModInverse(e, phi)
+	if d == nil {
+		t.Fatal("fixed probe primes have no private exponent")
+	}
+	key := &rsa.PrivateKey{PublicKey: rsa.PublicKey{N: new(big.Int).Mul(p, q), E: 65537}, D: d, Primes: []*big.Int{p, q}}
+	if err := key.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	key.Precompute()
 	return string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
 }
 
@@ -347,7 +372,7 @@ func seedProbeCredentials(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 		if row.config != "" {
 			config = row.config
 		}
-		id := uuid.New()
+		id := uuid.MustParse(venueoracle.StableUUID("probe-credential-" + row.provider + "/" + row.name))
 		if _, err := admin.Exec(ctx, `INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, true, $5, $6::json, '2026-09-01T09:00:00Z', '2026-09-01T09:00:00Z')`,
 			id, org.String(), row.provider, row.name, ciphertext, config); err != nil {
@@ -487,6 +512,7 @@ func probeRequests(tokens map[string]string, ids map[string]string, pemKey strin
 func TestVenueOracleCredentialConnectionTest(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	golden := venueoracle.OpenGolden(t, credentialsGolden("connection_test", "TestVenueOracleCredentialConnectionTest", "444ebffddb858a92545dbf2a7db790da86b44bc419969ff1224913bb75d03a32"))
 	stub := newProbeStub(t)
 	stubURL, err := url.Parse(stub.server.URL)
 	if err != nil {
@@ -513,12 +539,13 @@ func TestVenueOracleCredentialConnectionTest(t *testing.T) {
 	var seed venueFixture
 	var ids map[string]string
 	rows := probeSeedRows(pemKey)
+	pythonRoot := golden.PythonRoot(t, venueRoot())
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Root: pythonRoot, JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey,
 			"VENUE_PROVIDER_STUB_PORT=" + stub.port(),
-			"PYTHONPATH=" + siteDir + ":" + filepath.Join(venueRoot(), "src"),
+			"PYTHONPATH=" + siteDir + ":" + filepath.Join(pythonRoot, "src"),
 		},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			seed = venueSeed(t, ctx, admin)
@@ -535,9 +562,11 @@ func TestVenueOracleCredentialConnectionTest(t *testing.T) {
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := probeRequests(venue.Tokens, ids, pemKey)
-	pythonResponses := venue.ServePython(t, requests)
-	pythonProvider := stub.take()
-	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{})
+	pythonResponses := golden.Python(t, venue, requests)
+	// What the Python plane asked the provider is part of what its executed
+	// build answered: frozen with the golden, compared with the Go plane's.
+	pythonProviderText := golden.Rows(t, "provider requests of the Python plane", func() string { return stripJWT(stub.take()) })
+	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{Golden: golden})
 	goProvider := stub.take()
 
 	// PagerDuty is the one provider this plane does not serve: 501 for an inline
@@ -555,14 +584,13 @@ func TestVenueOracleCredentialConnectionTest(t *testing.T) {
 		}
 	}
 
-	providerSame := len(goProvider) > 0 && stripJWT(pythonProvider) == stripJWT(goProvider)
+	providerSame := len(goProvider) > 0 && pythonProviderText == stripJWT(goProvider)
 	if !providerSame {
-		t.Errorf("provider requests differ:\n python:\n%s\n go:\n%s", strings.Join(pythonProvider, "\n"), strings.Join(goProvider, "\n"))
+		t.Errorf("provider requests differ:\n python:\n%s\n go:\n%s", pythonProviderText, strings.Join(goProvider, "\n"))
 	}
 
-	rowsByPlane := map[string]string{}
-	for _, plane := range []struct{ name, uri string }{{"python", venue.AdminURI(t, venue.SourceDB)}, {"go", venue.AdminURI(t, venue.GoDB)}} {
-		pool, err := pgxpool.New(ctx, plane.uri)
+	renderRows := func(uri string) string {
+		pool, err := pgxpool.New(ctx, uri)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -582,13 +610,18 @@ func TestVenueOracleCredentialConnectionTest(t *testing.T) {
 		}
 		result.Close()
 		pool.Close()
-		rowsByPlane[plane.name] = strings.Join(lines, "\n")
+		return strings.Join(lines, "\n")
+	}
+	rowsByPlane := map[string]string{
+		"python": golden.Rows(t, "python last_test_* columns", func() string { return renderRows(venue.AdminURI(t, venue.SourceDB)) }),
+		"go":     renderRows(venue.AdminURI(t, venue.GoDB)),
 	}
 	rowsSame := rowsByPlane["python"] == rowsByPlane["go"]
 	if !rowsSame {
 		t.Errorf("last_test_* columns differ:\n python:\n%s\n go:\n%s", rowsByPlane["python"], rowsByPlane["go"])
 	}
 	t.Logf("\n%sprovider requests (%d): %s\nlast_test_* columns: %s\n", receipt, len(goProvider), venueoracle.Mark(providerSame), venueoracle.Mark(rowsSame))
+	golden.Finish(t)
 }
 
 // stripJWT drops the App installation exchange's request signature detail:

@@ -87,7 +87,7 @@ func seedCredentials(t *testing.T, ctx context.Context, admin *pgxpool.Pool, ven
 		}
 		if _, err := admin.Exec(ctx, `INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, last_test_at, last_test_success, last_test_error, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7::json, CASE WHEN $8::boolean IS NULL THEN NULL ELSE '2026-09-01T10:00:00Z'::timestamptz END, $8, $9, '2026-09-01T09:00:00Z', '2026-09-01T09:00:00Z')`,
-			uuid.New(), row.org.String(), row.provider, row.name, row.isActive, ciphertext, config, row.lastTestSuccess, lastError); err != nil {
+			uuid.MustParse(venueoracle.StableUUID("credential-seed-"+row.provider+"/"+row.name)), row.org.String(), row.provider, row.name, row.isActive, ciphertext, config, row.lastTestSuccess, lastError); err != nil {
 			t.Fatalf("seed credential %s/%s: %v", row.provider, row.name, err)
 		}
 	}
@@ -240,9 +240,10 @@ func credentialRequests(f venueFixture, tokens map[string]string) []venueoracle.
 func TestVenueOracleCredentialAdmin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
+	golden := venueoracle.OpenGolden(t, credentialsGolden("admin", "TestVenueOracleCredentialAdmin", "adae213c4bf0d87473644cf85fbc981ccf976b1998c1e91041b0784fa0d5c8b2"))
 	var seed venueFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			seed = venueSeed(t, ctx, admin)
@@ -259,7 +260,8 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := credentialRequests(seed, venue.Tokens)
-	receipt := venueoracle.Diff(t, base, requests, venue.ServePython(t, requests), venueoracle.DiffOptions{
+	receipt := venueoracle.Diff(t, base, requests, golden.Python(t, venue, requests), venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(_ venueoracle.Request, body string) string {
 			body = timestampFieldPattern.ReplaceAllString(body, `"$1":"<time>"`)
 			body = strings.ReplaceAll(body, `"last_test_at":"2026-09-01T10:00:00Z"`, `"last_test_at":"<time>"`)
@@ -275,8 +277,7 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rendered := map[string]string{}
-	for _, plane := range planes {
+	renderPlane := func(plane struct{ name, uri string }) string {
 		pool, err := pgxpool.New(ctx, plane.uri)
 		if err != nil {
 			t.Fatal(err)
@@ -328,11 +329,16 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 			}
 			lines[i] += "|secret=" + plaintext
 		}
-		rendered[plane.name] = strings.Join(lines, "\n")
+		return strings.Join(lines, "\n")
+	}
+	rendered := map[string]string{
+		"python": golden.Rows(t, "python integration_credentials rows decrypted", func() string { return renderPlane(planes[0]) }),
+		"go":     renderPlane(planes[1]),
 	}
 	same := rendered["python"] == rendered["go"] && rendered["go"] != ""
 	if !same {
 		t.Errorf("integration_credentials rows differ after the writes:\n python:\n%s\n go:\n%s", rendered["python"], rendered["go"])
 	}
 	t.Log("\n" + receipt + "integration_credentials rows (decrypted): " + venueoracle.Mark(same) + "\n")
+	golden.Finish(t)
 }

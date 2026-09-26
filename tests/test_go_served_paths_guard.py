@@ -98,6 +98,21 @@ SOURCE = textwrap.dedent(
     def stubbed_public_attribute():
         go_served.raise_served_by_go_api("/x", GO_API)
 
+    def stubbed_keyword_plane():
+        raise_served_by_go_api("/x", plane=GO_API)
+
+    def stubbed_query_constant():
+        raise_served_by_go_api("/x", QUERY_API)
+
+    def stubbed_attribute_plane():
+        raise_served_by_go_api("/x", go_served.GO_API)
+
+    def stubbed_unknown_literal_plane():
+        raise_served_by_go_api("/x", "python")
+
+    def stubbed_computed_plane():
+        raise_served_by_go_api("/x", pick_plane())
+
     def public_name_then_more():
         raise_served_by_go_api("/x", "go-api")
         return 1
@@ -203,7 +218,9 @@ def test_routes_outside_the_ops_source_are_ignored(tree):
 def test_parameter_names_do_not_matter_but_the_path_does(tree, tmp_path):
     root, source, _ = tree
     manifest = {
-        "/api/v1/things/{}": checker.ManifestRow("rev1", "go-api", "/api/v1/things/{}")
+        "/api/v1/things/{}": checker.ManifestRow(
+            "rev1", "query-api", "/api/v1/things/{}"
+        )
     }
     same = _route(source, "stubbed", "/api/v1/things/{thing_id}")
     assert checker.check([same], manifest, root) == []
@@ -216,7 +233,7 @@ def test_parameter_names_do_not_matter_but_the_path_does(tree, tmp_path):
 
 def test_a_method_on_a_listed_path_is_covered_by_the_path(tree):
     root, source, _ = tree
-    manifest = {"/p": checker.ManifestRow("rev1", "go-api", "/p")}
+    manifest = {"/p": checker.ManifestRow("rev1", "query-api", "/p")}
     routes = [
         _route(source, "stubbed", "/p", method="GET"),
         _route(source, "stubbed_return", "/p", method="POST"),
@@ -261,7 +278,7 @@ def test_a_template_covers_its_static_sibling_as_the_ingress_does(tree):
     root, source, _ = tree
     manifest = {
         "/api/v1/billing/plans/{}": checker.ManifestRow(
-            "rev1", "go-api", "/api/v1/billing/plans/{}"
+            "rev1", "query-api", "/api/v1/billing/plans/{}"
         )
     }
     pull = _route(source, "stubbed", "/api/v1/billing/plans/pull-stripe", method="POST")
@@ -286,7 +303,7 @@ def test_a_template_row_is_satisfied_by_a_static_sibling_alone(tree):
     root, source, _ = tree
     manifest = {
         "/api/v1/billing/plans/{}": checker.ManifestRow(
-            "rev1", "go-api", "/api/v1/billing/plans/{}"
+            "rev1", "query-api", "/api/v1/billing/plans/{}"
         )
     }
     only_static = _route(
@@ -306,3 +323,68 @@ def test_covers_matches_one_non_empty_segment_and_escapes_the_rest():
     assert not checker.covers("/a.b/{}", "/aXb/x")  # a dot is a dot
     assert not checker.covers("/a+b/{}", "/aab/x")
     assert checker.covers("/a.b/{}", "/a.b/x")
+
+
+# --- CHAOS-6865: the stub's plane must be the plane the manifest routes the path to
+
+
+def _plane_check(tree, stub: str, plane: str) -> list[str]:
+    root, source, _ = tree
+    manifest = {"/p": checker.ManifestRow("rev1", plane, "/p")}
+    return checker.check([_route(source, stub, "/p")], manifest, root)
+
+
+@pytest.mark.parametrize(
+    ("stub", "stub_plane"),
+    [
+        ("stubbed", "query-api"),  # omitted plane = the function's own default
+        ("stubbed_return", "query-api"),
+        ("stubbed_query_constant", "query-api"),  # QUERY_API constant
+        ("stubbed_public_name", "go-api"),  # "go-api" literal
+        ("stubbed_public_attribute", "go-api"),  # go_served.GO_API attribute
+        ("stubbed_keyword_plane", "go-api"),  # plane=GO_API keyword
+        ("stubbed_attribute_plane", "go-api"),  # go_served.GO_API as the argument
+    ],
+)
+def test_a_stub_is_accepted_only_on_the_plane_it_names(tree, stub, stub_plane):
+    other = "go-api" if stub_plane == "query-api" else "query-api"
+    assert _plane_check(tree, stub, stub_plane) == []
+    problems = _plane_check(tree, stub, other)
+    assert len(problems) == 1, problems
+    assert f"the stub says {stub_plane} owns the route" in problems[0]
+    assert other in problems[0] and "wrong service" in problems[0]
+
+
+@pytest.mark.parametrize(
+    "stub", ["stubbed_computed_plane", "stubbed_unknown_literal_plane"]
+)
+def test_a_stub_plane_the_guard_cannot_read_is_refused_not_waved_through(tree, stub):
+    for plane in ("go-api", "query-api"):
+        problems = _plane_check(tree, stub, plane)
+        assert len(problems) == 1 and "cannot tell which" in problems[0], problems
+
+
+def test_a_mixed_plane_cover_accepts_the_stub_when_any_covering_row_agrees(tree):
+    root, source, _ = tree
+    manifest = {
+        "/p/{}": checker.ManifestRow("rev1", "go-api", "/p/{}"),
+        "/p/x": checker.ManifestRow("rev1", "query-api", "/p/x"),
+    }
+    route = _route(source, "stubbed", "/p/x")  # default plane query-api
+    assert checker.check([route], manifest, root) == []
+
+
+def test_swapping_every_manifest_plane_on_the_real_tree_fails(real_routes):
+    manifest, _ = checker.load_manifest(MANIFEST_PATH)
+    assert checker.check(real_routes, manifest, REPO_ROOT) == []
+    swapped = {
+        path: checker.ManifestRow(
+            row.rev, "go-api" if row.plane == "query-api" else "query-api", path
+        )
+        for path, row in manifest.items()
+    }
+    problems = checker.check(real_routes, swapped, REPO_ROOT)
+    stubs = checker.stub_routes(real_routes, REPO_ROOT)
+    wrong = [problem for problem in problems if "wrong service" in problem]
+    # one problem per stubbed route: a guard that ignores the plane reports none
+    assert len(wrong) == len(stubs) > 0, (len(wrong), len(stubs))

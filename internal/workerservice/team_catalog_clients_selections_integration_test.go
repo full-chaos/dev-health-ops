@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -18,22 +19,9 @@ import (
 // (needed for the no-canonical-row owner/group_path fallback below).
 func createTeamCatalogSelectionsTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-CREATE TABLE integrations (
-  id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, credential_id uuid NULL,
-  config jsonb NOT NULL DEFAULT '{}'::jsonb
-);
-CREATE TABLE sync_runs (
-  id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
-  credential_id uuid NULL, credential_fingerprint text NULL, auth_source text NULL
-);
-CREATE TABLE sync_configurations (
-  id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
-  parent_id uuid NULL, sync_options json NOT NULL DEFAULT '{}'::json, created_at timestamptz NOT NULL DEFAULT now()
-);
-`); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema: integrations, sync_runs and sync_configurations carry their real columns,
+	// foreign keys and constraints.
+	pgschema.Apply(ctx, t, pool)
 }
 
 // TestResolveSelectionsFallsBackToIntegrationConfigOwnerWithNoCanonicalRow
@@ -69,9 +57,9 @@ func TestResolveSelectionsFallsBackToIntegrationConfigOwnerWithNoCanonicalRow(t 
 		runID         = "00000000-0000-4000-8000-000000000032"
 	)
 	for _, statement := range []string{
-		`INSERT INTO integrations (id,org_id,provider,config) VALUES ('` + integrationID + `','` + orgID + `','github','{"owner":"acme-org"}'::jsonb)`,
+		`INSERT INTO integrations (name,is_active,created_at,updated_at,id,org_id,provider,config) VALUES ('integration',TRUE,now(),now(),'` + integrationID + `','` + orgID + `','github','{"owner":"acme-org"}'::json)`,
 		// No sync_configurations row at all for this integration.
-		`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ('` + runID + `','` + orgID + `','` + integrationID + `')`,
+		`INSERT INTO sync_runs (triggered_by,mode,status,total_units,completed_units,failed_units,created_at,id,org_id,integration_id) VALUES ('test','incremental','running',0,0,0,now(),'` + runID + `','` + orgID + `','` + integrationID + `')`,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -116,8 +104,8 @@ func TestResolveSelectionsNonStrictFallbackStaysAllOffDespiteConfigFallback(t *t
 		runID         = "00000000-0000-4000-8000-000000000042"
 	)
 	for _, statement := range []string{
-		`INSERT INTO integrations (id,org_id,provider,config) VALUES ('` + integrationID + `','` + orgID + `','gitlab','{"group_path":"acme/group"}'::jsonb)`,
-		`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ('` + runID + `','` + orgID + `','` + integrationID + `')`,
+		`INSERT INTO integrations (name,is_active,created_at,updated_at,id,org_id,provider,config) VALUES ('integration',TRUE,now(),now(),'` + integrationID + `','` + orgID + `','gitlab','{"group_path":"acme/group"}'::json)`,
+		`INSERT INTO sync_runs (triggered_by,mode,status,total_units,completed_units,failed_units,created_at,id,org_id,integration_id) VALUES ('test','incremental','running',0,0,0,now(),'` + runID + `','` + orgID + `','` + integrationID + `')`,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

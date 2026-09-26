@@ -157,12 +157,14 @@ const pythonBuild = "023ae3e584ef6345a3bfaef1f0b30abd89f5dee8"
 // two lists, not a name-to-digest map: a "...Key" oracle name next to a
 // 64-hex value on one line reads as a credential to the secret scanner.
 var goldenOracles = []string{
+	"TestVenueOracleBillingEdge",
 	"TestVenueOracleBillingLedger",
 	"TestVenueOracleBillingPlansCheckout",
 	"TestVenueOracleBillingWithoutStripeKey",
 }
 
 var goldenPins = []string{
+	"620e9e74db6edcd1ee581d2e3c20de6984e35b33b3b729c7fc3121153d575087",
 	"086d39915f2bf1a97ce9a895c3e45d74496c0b24a4c1a91c4a55835468ff5f78",
 	"62b01745c54ab42a2e714dab3140d895fbab9c83d978445003a0b185e0bbd0f4",
 	"bc6f6a1cfd97cc65b0381e87742bd157b17306f0d9b77fa20cde18fad5464ff2",

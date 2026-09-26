@@ -1,0 +1,2332 @@
+{
+  "header": {
+    "test": "TestVenueOracleBillingEdge",
+    "python_build": "023ae3e584ef6345a3bfaef1f0b30abd89f5dee8",
+    "producer_digest": "53028fde43de410ecb5704202be163d92617d6794f5d2108513c8868e2607e80",
+    "recipe": "git worktree add --detach \u003cdir\u003e 023ae3e584ef6345a3bfaef1f0b30abd89f5dee8; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestVenueOracleBillingEdge$' ."
+  },
+  "requests": [
+    {
+      "name": "secrets=000 postgres=true GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "186",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"not_configured\",\"stripe_webhook_secret\":\"not_configured\",\"license_private_key\":\"not_configured\",\"stripe_client\":\"down\",\"postgres\":\"ok\"}}"
+    },
+    {
+      "name": "secrets=000 postgres=true HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "186",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=000 postgres=false GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "188",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"not_configured\",\"stripe_webhook_secret\":\"not_configured\",\"license_private_key\":\"not_configured\",\"stripe_client\":\"down\",\"postgres\":\"down\"}}"
+    },
+    {
+      "name": "secrets=000 postgres=false HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "188",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=001 postgres=true GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "172",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"ok\",\"stripe_webhook_secret\":\"not_configured\",\"license_private_key\":\"not_configured\",\"stripe_client\":\"ok\",\"postgres\":\"ok\"}}"
+    },
+    {
+      "name": "secrets=001 postgres=true HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "172",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=001 postgres=false GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "174",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"ok\",\"stripe_webhook_secret\":\"not_configured\",\"license_private_key\":\"not_configured\",\"stripe_client\":\"ok\",\"postgres\":\"down\"}}"
+    },
+    {
+      "name": "secrets=001 postgres=false HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "174",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=010 postgres=true GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "174",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"not_configured\",\"stripe_webhook_secret\":\"ok\",\"license_private_key\":\"not_configured\",\"stripe_client\":\"down\",\"postgres\":\"ok\"}}"
+    },
+    {
+      "name": "secrets=010 postgres=true HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "174",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=010 postgres=false GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "176",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"not_configured\",\"stripe_webhook_secret\":\"ok\",\"license_private_key\":\"not_configured\",\"stripe_client\":\"down\",\"postgres\":\"down\"}}"
+    },
+    {
+      "name": "secrets=010 postgres=false HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "176",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=011 postgres=true GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "160",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"ok\",\"stripe_webhook_secret\":\"ok\",\"license_private_key\":\"not_configured\",\"stripe_client\":\"ok\",\"postgres\":\"ok\"}}"
+    },
+    {
+      "name": "secrets=011 postgres=true HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "160",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=011 postgres=false GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "162",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"ok\",\"stripe_webhook_secret\":\"ok\",\"license_private_key\":\"not_configured\",\"stripe_client\":\"ok\",\"postgres\":\"down\"}}"
+    },
+    {
+      "name": "secrets=011 postgres=false HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "162",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=100 postgres=true GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "174",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"not_configured\",\"stripe_webhook_secret\":\"not_configured\",\"license_private_key\":\"ok\",\"stripe_client\":\"down\",\"postgres\":\"ok\"}}"
+    },
+    {
+      "name": "secrets=100 postgres=true HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "174",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=100 postgres=false GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "176",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"not_configured\",\"stripe_webhook_secret\":\"not_configured\",\"license_private_key\":\"ok\",\"stripe_client\":\"down\",\"postgres\":\"down\"}}"
+    },
+    {
+      "name": "secrets=100 postgres=false HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "176",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=101 postgres=true GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "160",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"ok\",\"stripe_webhook_secret\":\"not_configured\",\"license_private_key\":\"ok\",\"stripe_client\":\"ok\",\"postgres\":\"ok\"}}"
+    },
+    {
+      "name": "secrets=101 postgres=true HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "160",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=101 postgres=false GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "162",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"ok\",\"stripe_webhook_secret\":\"not_configured\",\"license_private_key\":\"ok\",\"stripe_client\":\"ok\",\"postgres\":\"down\"}}"
+    },
+    {
+      "name": "secrets=101 postgres=false HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "162",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=110 postgres=true GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "162",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"not_configured\",\"stripe_webhook_secret\":\"ok\",\"license_private_key\":\"ok\",\"stripe_client\":\"down\",\"postgres\":\"ok\"}}"
+    },
+    {
+      "name": "secrets=110 postgres=true HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "162",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=110 postgres=false GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "164",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"not_configured\",\"stripe_webhook_secret\":\"ok\",\"license_private_key\":\"ok\",\"stripe_client\":\"down\",\"postgres\":\"down\"}}"
+    },
+    {
+      "name": "secrets=110 postgres=false HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "164",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=111 postgres=true GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "146",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"ok\",\"services\":{\"stripe_secret_key\":\"ok\",\"stripe_webhook_secret\":\"ok\",\"license_private_key\":\"ok\",\"stripe_client\":\"ok\",\"postgres\":\"ok\"}}"
+    },
+    {
+      "name": "secrets=111 postgres=true HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "146",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "secrets=111 postgres=false GET /health",
+      "method": "GET",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "150",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"down\",\"services\":{\"stripe_secret_key\":\"ok\",\"stripe_webhook_secret\":\"ok\",\"license_private_key\":\"ok\",\"stripe_client\":\"ok\",\"postgres\":\"down\"}}"
+    },
+    {
+      "name": "secrets=111 postgres=false HEAD /health",
+      "method": "HEAD",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 503,
+      "headers": {
+        "content-length": "150",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "webhook: signed, an unhandled type",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "d98fe02db50056b3c6d7ac688678d78907aee926ea45f7aae1626cbe25bf64c8",
+      "request_headers_sha256": "e2872b92047a843bfa2c7b202909249c2376c2758a94174118863b511f2256ec",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-type": "application/json"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "webhook: bad signature",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "d98fe02db50056b3c6d7ac688678d78907aee926ea45f7aae1626cbe25bf64c8",
+      "request_headers_sha256": "7d5168890b4fcc6513d9f04c04075443d9b08d76748dfc308e6e8b1362e9b6b7",
+      "status": 400,
+      "headers": {
+        "content-length": "37",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Invalid Stripe signature\"}"
+    },
+    {
+      "name": "webhook: no signature header",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "d98fe02db50056b3c6d7ac688678d78907aee926ea45f7aae1626cbe25bf64c8",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 400,
+      "headers": {
+        "content-length": "37",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Invalid Stripe signature\"}"
+    },
+    {
+      "name": "webhook: not json",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "3a3358abc4cd58081d1b7ef0f8d6bb8eabba50ba30c7adc3a45acf248a539b82",
+      "request_headers_sha256": "fb62b9f989df31117a5aa75553d134dd4a532f364e24f4f2438391c44b0b4712",
+      "status": 500,
+      "headers": {
+        "content-length": "21",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Internal Server Error"
+    },
+    {
+      "name": "POST /health",
+      "method": "POST",
+      "path": "/health",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /health",
+      "method": "PUT",
+      "path": "/health",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /health",
+      "method": "PATCH",
+      "path": "/health",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /health",
+      "method": "DELETE",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /health",
+      "method": "OPTIONS",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "TRACE /health",
+      "method": "TRACE",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "GET, HEAD",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /health",
+      "method": "PROPFIND",
+      "path": "/health",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "GET, HEAD",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /health",
+      "method": "PURGE",
+      "path": "/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "GET, HEAD",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /health/",
+      "method": "GET",
+      "path": "/health/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "POST /health/",
+      "method": "POST",
+      "path": "/health/",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /health/",
+      "method": "PUT",
+      "path": "/health/",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /health/",
+      "method": "PATCH",
+      "path": "/health/",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /health/",
+      "method": "DELETE",
+      "path": "/health/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /health/",
+      "method": "OPTIONS",
+      "path": "/health/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /health/",
+      "method": "HEAD",
+      "path": "/health/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /health/",
+      "method": "TRACE",
+      "path": "/health/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /health/",
+      "method": "PROPFIND",
+      "path": "/health/",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /health/",
+      "method": "PURGE",
+      "path": "/health/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /healthz",
+      "method": "GET",
+      "path": "/healthz",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "POST /healthz",
+      "method": "POST",
+      "path": "/healthz",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /healthz",
+      "method": "PUT",
+      "path": "/healthz",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /healthz",
+      "method": "PATCH",
+      "path": "/healthz",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /healthz",
+      "method": "DELETE",
+      "path": "/healthz",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /healthz",
+      "method": "OPTIONS",
+      "path": "/healthz",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /healthz",
+      "method": "HEAD",
+      "path": "/healthz",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /healthz",
+      "method": "TRACE",
+      "path": "/healthz",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /healthz",
+      "method": "PROPFIND",
+      "path": "/healthz",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /healthz",
+      "method": "PURGE",
+      "path": "/healthz",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /HEALTH",
+      "method": "GET",
+      "path": "/HEALTH",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "POST /HEALTH",
+      "method": "POST",
+      "path": "/HEALTH",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /HEALTH",
+      "method": "PUT",
+      "path": "/HEALTH",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /HEALTH",
+      "method": "PATCH",
+      "path": "/HEALTH",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /HEALTH",
+      "method": "DELETE",
+      "path": "/HEALTH",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /HEALTH",
+      "method": "OPTIONS",
+      "path": "/HEALTH",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /HEALTH",
+      "method": "HEAD",
+      "path": "/HEALTH",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /HEALTH",
+      "method": "TRACE",
+      "path": "/HEALTH",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /HEALTH",
+      "method": "PROPFIND",
+      "path": "/HEALTH",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /HEALTH",
+      "method": "PURGE",
+      "path": "/HEALTH",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /",
+      "method": "GET",
+      "path": "/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "POST /",
+      "method": "POST",
+      "path": "/",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /",
+      "method": "PUT",
+      "path": "/",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /",
+      "method": "PATCH",
+      "path": "/",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /",
+      "method": "DELETE",
+      "path": "/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /",
+      "method": "OPTIONS",
+      "path": "/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /",
+      "method": "HEAD",
+      "path": "/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /",
+      "method": "TRACE",
+      "path": "/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /",
+      "method": "PROPFIND",
+      "path": "/",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /",
+      "method": "PURGE",
+      "path": "/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /api/v1/billing/webhooks/stripe",
+      "method": "GET",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /api/v1/billing/webhooks/stripe",
+      "method": "PUT",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /api/v1/billing/webhooks/stripe",
+      "method": "PATCH",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /api/v1/billing/webhooks/stripe",
+      "method": "DELETE",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /api/v1/billing/webhooks/stripe",
+      "method": "OPTIONS",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /api/v1/billing/webhooks/stripe",
+      "method": "HEAD",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /api/v1/billing/webhooks/stripe",
+      "method": "TRACE",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /api/v1/billing/webhooks/stripe",
+      "method": "PROPFIND",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /api/v1/billing/webhooks/stripe",
+      "method": "PURGE",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /api/v1/billing/webhooks/stripe/",
+      "method": "GET",
+      "path": "/api/v1/billing/webhooks/stripe/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "POST /api/v1/billing/webhooks/stripe/",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe/",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /api/v1/billing/webhooks/stripe/",
+      "method": "PUT",
+      "path": "/api/v1/billing/webhooks/stripe/",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /api/v1/billing/webhooks/stripe/",
+      "method": "PATCH",
+      "path": "/api/v1/billing/webhooks/stripe/",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /api/v1/billing/webhooks/stripe/",
+      "method": "DELETE",
+      "path": "/api/v1/billing/webhooks/stripe/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /api/v1/billing/webhooks/stripe/",
+      "method": "OPTIONS",
+      "path": "/api/v1/billing/webhooks/stripe/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /api/v1/billing/webhooks/stripe/",
+      "method": "HEAD",
+      "path": "/api/v1/billing/webhooks/stripe/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /api/v1/billing/webhooks/stripe/",
+      "method": "TRACE",
+      "path": "/api/v1/billing/webhooks/stripe/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /api/v1/billing/webhooks/stripe/",
+      "method": "PROPFIND",
+      "path": "/api/v1/billing/webhooks/stripe/",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /api/v1/billing/webhooks/stripe/",
+      "method": "PURGE",
+      "path": "/api/v1/billing/webhooks/stripe/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /api/v1/billing/plans",
+      "method": "GET",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "POST /api/v1/billing/plans",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /api/v1/billing/plans",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /api/v1/billing/plans",
+      "method": "PATCH",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /api/v1/billing/plans",
+      "method": "DELETE",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /api/v1/billing/plans",
+      "method": "OPTIONS",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /api/v1/billing/plans",
+      "method": "HEAD",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /api/v1/billing/plans",
+      "method": "TRACE",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /api/v1/billing/plans",
+      "method": "PROPFIND",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /api/v1/billing/plans",
+      "method": "PURGE",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /api/v1/billing/checkout",
+      "method": "GET",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "POST /api/v1/billing/checkout",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /api/v1/billing/checkout",
+      "method": "PUT",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /api/v1/billing/checkout",
+      "method": "PATCH",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /api/v1/billing/checkout",
+      "method": "DELETE",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /api/v1/billing/checkout",
+      "method": "OPTIONS",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /api/v1/billing/checkout",
+      "method": "HEAD",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /api/v1/billing/checkout",
+      "method": "TRACE",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /api/v1/billing/checkout",
+      "method": "PROPFIND",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /api/v1/billing/checkout",
+      "method": "PURGE",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /x/y",
+      "method": "GET",
+      "path": "/x/y",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "POST /x/y",
+      "method": "POST",
+      "path": "/x/y",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /x/y",
+      "method": "PUT",
+      "path": "/x/y",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /x/y",
+      "method": "PATCH",
+      "path": "/x/y",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /x/y",
+      "method": "DELETE",
+      "path": "/x/y",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /x/y",
+      "method": "OPTIONS",
+      "path": "/x/y",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /x/y",
+      "method": "HEAD",
+      "path": "/x/y",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /x/y",
+      "method": "TRACE",
+      "path": "/x/y",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /x/y",
+      "method": "PROPFIND",
+      "path": "/x/y",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /x/y",
+      "method": "PURGE",
+      "path": "/x/y",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /health/x",
+      "method": "GET",
+      "path": "/health/x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "POST /health/x",
+      "method": "POST",
+      "path": "/health/x",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /health/x",
+      "method": "PUT",
+      "path": "/health/x",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /health/x",
+      "method": "PATCH",
+      "path": "/health/x",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /health/x",
+      "method": "DELETE",
+      "path": "/health/x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /health/x",
+      "method": "OPTIONS",
+      "path": "/health/x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /health/x",
+      "method": "HEAD",
+      "path": "/health/x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /health/x",
+      "method": "TRACE",
+      "path": "/health/x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /health/x",
+      "method": "PROPFIND",
+      "path": "/health/x",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /health/x",
+      "method": "PURGE",
+      "path": "/health/x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /docs",
+      "method": "GET",
+      "path": "/docs",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "POST /docs",
+      "method": "POST",
+      "path": "/docs",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /docs",
+      "method": "PUT",
+      "path": "/docs",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /docs",
+      "method": "PATCH",
+      "path": "/docs",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /docs",
+      "method": "DELETE",
+      "path": "/docs",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /docs",
+      "method": "OPTIONS",
+      "path": "/docs",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /docs",
+      "method": "HEAD",
+      "path": "/docs",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /docs",
+      "method": "TRACE",
+      "path": "/docs",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /docs",
+      "method": "PROPFIND",
+      "path": "/docs",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /docs",
+      "method": "PURGE",
+      "path": "/docs",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /openapi.json",
+      "method": "GET",
+      "path": "/openapi.json",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "POST /openapi.json",
+      "method": "POST",
+      "path": "/openapi.json",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /openapi.json",
+      "method": "PUT",
+      "path": "/openapi.json",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /openapi.json",
+      "method": "PATCH",
+      "path": "/openapi.json",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /openapi.json",
+      "method": "DELETE",
+      "path": "/openapi.json",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /openapi.json",
+      "method": "OPTIONS",
+      "path": "/openapi.json",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /openapi.json",
+      "method": "HEAD",
+      "path": "/openapi.json",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /openapi.json",
+      "method": "TRACE",
+      "path": "/openapi.json",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /openapi.json",
+      "method": "PROPFIND",
+      "path": "/openapi.json",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /openapi.json",
+      "method": "PURGE",
+      "path": "/openapi.json",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "GET /metrics",
+      "method": "GET",
+      "path": "/metrics",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "POST /metrics",
+      "method": "POST",
+      "path": "/metrics",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PUT /metrics",
+      "method": "PUT",
+      "path": "/metrics",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "PATCH /metrics",
+      "method": "PATCH",
+      "path": "/metrics",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "DELETE /metrics",
+      "method": "DELETE",
+      "path": "/metrics",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "OPTIONS /metrics",
+      "method": "OPTIONS",
+      "path": "/metrics",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    },
+    {
+      "name": "HEAD /metrics",
+      "method": "HEAD",
+      "path": "/metrics",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": ""
+    },
+    {
+      "name": "TRACE /metrics",
+      "method": "TRACE",
+      "path": "/metrics",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PROPFIND /metrics",
+      "method": "PROPFIND",
+      "path": "/metrics",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PURGE /metrics",
+      "method": "PURGE",
+      "path": "/metrics",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 405,
+      "headers": {
+        "allow": "PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS",
+        "content-length": "31",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "named limit: webhook body above the bound",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "68ba5a3fd8d4e5c15fb28ddc71888f2545ac1c063298d764669f862bbe615e37",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 400,
+      "headers": {
+        "content-length": "37",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Invalid Stripe signature\"}"
+    },
+    {
+      "name": "named limit: request head above the bound",
+      "method": "GET",
+      "path": "/unknown",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "43d1c93b60809fb10ccf6a868a84ae3821f60c2f8fba12109b2f4f27cae6240d",
+      "status": 404,
+      "headers": {
+        "content-length": "22",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Not Found\"}"
+    }
+  ],
+  "rows": {
+    "recorded_at": {
+      "rows": "2026-09-26T15:33:40.751705761Z"
+    }
+  }
+}

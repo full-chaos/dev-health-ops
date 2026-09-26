@@ -661,3 +661,31 @@ func TestARecordingNeedsBytecodeWritingSwitchedOff(t *testing.T) {
 		t.Fatalf("PYTHONDONTWRITEBYTECODE=1 was refused: %v", err)
 	}
 }
+
+// PythonWithEnv serves one request under several configurations: frozen it
+// answers each from the file, keyed by the request's Name (the environment is
+// executed only while recording), so a scenario whose name drifted is refused.
+func TestFrozenPythonWithEnvAnswersEachScenarioByName(t *testing.T) {
+	t.Setenv(goldenUpdateEnv, "")
+	requests := []Request{
+		{Name: "secrets=111 GET /health", Method: "GET", Path: "/health"},
+		{Name: "secrets=000 GET /health", Method: "GET", Path: "/health"},
+	}
+	file := sampleGolden(requests)
+	file.Header.Test = t.Name()
+	path, digest := writeGoldenFile(t, t.TempDir(), file)
+	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+	first := golden.PythonWithEnv(t, nil, []string{"STRIPE_SECRET_KEY="}, requests[:1])
+	second := golden.PythonWithEnv(t, nil, []string{"STRIPE_SECRET_KEY="}, requests[1:])
+	if first[0].Status != 200 || second[0].Status != 201 {
+		t.Fatalf("scenario answers = %d, %d; each scenario must get its own recorded answer", first[0].Status, second[0].Status)
+	}
+	drifted, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, t.Name(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed := []Request{{Name: "secrets=101 GET /health", Method: "GET", Path: "/health"}}
+	if _, err := drifted.frozenAnswers(renamed); err == nil || !strings.Contains(err.Error(), "secrets=111 GET /health") {
+		t.Fatalf("a renamed scenario was answered from the file: %v", err)
+	}
+}

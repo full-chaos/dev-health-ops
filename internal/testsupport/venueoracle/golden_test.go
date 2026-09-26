@@ -133,7 +133,6 @@ func TestFrozenGoldenRefusesWhatItCannotTrust(t *testing.T) {
 	if _, err := golden.frozenAnswers(sampleRequests()[1:]); err != nil {
 		t.Fatalf("the remaining request: error = %v", err)
 	}
-	golden.compared = 2 // Diff compared both answers
 	if err := golden.unusedAnswers(); err != nil {
 		t.Fatalf("every answer used: error = %v", err)
 	}
@@ -423,9 +422,9 @@ func TestTheLifecycleOrderIsEnforcedWithANamedError(t *testing.T) {
 	if err := golden.stepErr("Python", stateOpen, statePython, stateDiffed); err != nil {
 		t.Fatalf("a second Python call was refused: %v", err)
 	}
-	golden.afterDiff(2)
-	if golden.state != stateDiffed || golden.compared != 2 {
-		t.Fatalf("state %v compared %d", golden.state, golden.compared)
+	golden.afterDiff()
+	if golden.state != stateDiffed {
+		t.Fatalf("state %v", golden.state)
 	}
 	golden.state = stateFinished
 	for _, call := range []string{"Python", "Rows", "Diff", "Finish"} {
@@ -472,21 +471,63 @@ func TestThePublicFrozenWorkflowEndToEnd(t *testing.T) {
 		t.Fatalf("rows = %q", got)
 	}
 	Diff(t, goPlane.URL, requests, answers, DiffOptions{Golden: golden})
-	if golden.compared != 2 {
-		t.Fatalf("Diff compared %d answers, want 2", golden.compared)
-	}
 	golden.Finish(t)
 }
 
+// handOut gives a golden two handed-out answers the way Python does.
+func handOut(t *testing.T) (*Golden, []Request, []Response) {
+	t.Helper()
+	requests := sampleRequests()
+	golden := &Golden{spec: GoldenSpec{Path: "x.json"}}
+	answers := []Response{{Status: 200}, {Status: 201}}
+	for index := range answers {
+		golden.slots = append(golden.slots, answerSlot{request: requestIdentity(requests[index])})
+		answers[index].slot = len(golden.slots)
+	}
+	return golden, requests, answers
+}
+
 func TestAnAnswerNobodyComparedIsRefusedUnlessTheTestDeclaresItInspected(t *testing.T) {
-	golden := &Golden{spec: GoldenSpec{Path: "x.json"}, handed: 2}
-	golden.afterDiff(1) // Diff was handed one of the two answers
-	if err := golden.answersCompared(); err == nil || !strings.Contains(err.Error(), "Diff compared 1") {
+	golden, requests, answers := handOut(t)
+	if err := golden.bindAnswers(requests[:1], answers[:1]); err != nil { // Diff was handed one of the two answers
+		t.Fatal(err)
+	}
+	if err := golden.answersCompared(); err == nil || !strings.Contains(err.Error(), "neither compared") {
 		t.Fatalf("an answer nobody compared was accepted: %v", err)
 	}
-	golden.Consumed(1) // the test read the other one itself
+	if err := golden.consume(answers[1:]); err != nil { // the test read the other one itself
+		t.Fatal(err)
+	}
 	if err := golden.answersCompared(); err != nil {
 		t.Fatalf("a declared inspection was refused: %v", err)
+	}
+}
+
+// One answer reused for two requests hides the divergence of the second: the
+// answer must be the one fetched for that request.
+func TestAnAnswerAnswersTheOneRequestItWasFetchedFor(t *testing.T) {
+	golden, requests, answers := handOut(t)
+	if err := golden.bindAnswers(requests, []Response{answers[0], answers[0]}); err == nil || !strings.Contains(err.Error(), "belongs to another request") {
+		t.Fatalf("answer 1 reused for request 2 was accepted: %v", err)
+	}
+	golden, requests, answers = handOut(t)
+	if err := golden.bindAnswers(requests, []Response{answers[1], answers[0]}); err == nil || !strings.Contains(err.Error(), "belongs to another request") {
+		t.Fatalf("answers out of order were accepted: %v", err)
+	}
+	golden, requests, answers = handOut(t)
+	if err := golden.bindAnswers(requests, []Response{{Status: 200}, answers[1]}); err == nil || !strings.Contains(err.Error(), "did not come from golden.Python") {
+		t.Fatalf("an answer that did not come from Python() was accepted: %v", err)
+	}
+	golden, requests, answers = handOut(t)
+	if err := golden.bindAnswers(requests, answers); err != nil {
+		t.Fatalf("the right answers were refused: %v", err)
+	}
+	if err := golden.bindAnswers(requests, answers); err == nil || !strings.Contains(err.Error(), "already used once") {
+		t.Fatalf("the same answers compared twice were accepted: %v", err)
+	}
+	// An answer compared by Diff cannot also be declared inspected.
+	if err := golden.consume(answers[:1]); err == nil || !strings.Contains(err.Error(), "already used once") {
+		t.Fatalf("a compared answer was declared inspected: %v", err)
 	}
 }
 
@@ -504,17 +545,33 @@ func TestAFrozenRowSnapshotAnswersOneComparison(t *testing.T) {
 	}
 }
 
-func TestARecordingRefusesPythonFromARootItNeverVerified(t *testing.T) {
+func TestARecordingRefusesPythonFromARootItNeverVerifiedOrThatTheVenueDoesNotServe(t *testing.T) {
 	golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := golden.recordingRootErr(); err == nil || !strings.Contains(err.Error(), "PythonRoot") {
+	verified, other := t.TempDir(), t.TempDir()
+	if err := golden.recordingRootErr(&Venue{Root: verified}); err == nil || !strings.Contains(err.Error(), "PythonRoot") {
 		t.Fatalf("an unverified root was accepted: %v", err)
 	}
-	golden.rootVerified = true
-	if err := golden.recordingRootErr(); err != nil {
-		t.Fatalf("a verified root was refused: %v", err)
+	golden.verifiedRoot = verified
+	if err := golden.recordingRootErr(&Venue{Root: verified}); err != nil {
+		t.Fatalf("a venue on the verified root was refused: %v", err)
+	}
+	// The same directory through a symlink is the same root.
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(verified, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := golden.recordingRootErr(&Venue{Root: link}); err != nil {
+		t.Fatalf("the verified root through a symlink was refused: %v", err)
+	}
+	// The verified checkout is not the one the venue runs Python from.
+	if err := golden.recordingRootErr(&Venue{Root: other}); err == nil || !strings.Contains(err.Error(), "not from the verified checkout") {
+		t.Fatalf("a venue on another root was accepted: %v", err)
+	}
+	if err := golden.recordingRootErr(nil); err == nil {
+		t.Fatal("no venue was accepted")
 	}
 }
 
@@ -551,13 +608,13 @@ func TestTheRecordingPathVerifiesTheRootThenWritesOnlyACandidate(t *testing.T) {
 	if !golden.Recording() {
 		t.Fatal("OpenGolden did not open a recording")
 	}
-	if err := golden.recordingRootErr(); err == nil {
+	if err := golden.recordingRootErr(&Venue{Root: dir}); err == nil {
 		t.Fatal("Python was allowed before the root was verified")
 	}
 	if got := golden.PythonRoot(t, "/the/callers/own/root"); got != dir {
 		t.Fatalf("PythonRoot = %q, want the pinned checkout %q", got, dir)
 	}
-	if err := golden.recordingRootErr(); err != nil {
+	if err := golden.recordingRootErr(&Venue{Root: dir}); err != nil {
 		t.Fatalf("a verified root was refused: %v", err)
 	}
 	if len(golden.recorded.Header.ProducerDigest) != 64 {

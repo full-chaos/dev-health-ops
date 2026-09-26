@@ -368,6 +368,9 @@ type Response struct {
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers"`
 	Body    string            `json:"body"`
+	// slot identifies the answer a Golden handed out (0 for any other response):
+	// Diff and Consumed use it to bind each answer to the request it belongs to.
+	slot int
 }
 
 // B64 encodes a request body.
@@ -833,6 +836,9 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 	}
 	if options.Golden != nil {
 		options.Golden.beforeDiff(t)
+		if err := options.Golden.bindAnswers(requests, python); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var receipt strings.Builder
 	for index, request := range requests {
@@ -857,7 +863,7 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 	if options.Golden == nil {
 		writeProof(t)
 	} else {
-		options.Golden.afterDiff(len(requests))
+		options.Golden.afterDiff()
 	}
 	return receipt.String()
 }

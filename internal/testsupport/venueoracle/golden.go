@@ -84,12 +84,13 @@ type Golden struct {
 	// compared counts the answers Diff compared with the Go plane's, consumed the
 	// answers the test says it inspected itself (Consumed): together they must be
 	// every answer handed out, or a comparison was skipped.
-	compared, consumed int
-	// handed counts every answer Python returned (recording or frozen).
-	handed int
-	// rootVerified is set by PythonRoot once it verified the recording checkout;
-	// a recording run refuses to serve Python from an unverified root.
-	rootVerified bool
+	// slots binds each answer handed out (slot n, from 1) to the request it
+	// answers and records what became of it: compared by Diff or inspected by the
+	// test (Consumed), each exactly once.
+	slots []answerSlot
+	// verifiedRoot is the checkout PythonRoot verified; a recording run serves
+	// Python only through a venue built on exactly that root.
+	verifiedRoot string
 	// rowsUsed records which frozen row comparisons the test asked for: a
 	// snapshot nothing consumed is a comparison that no longer happens.
 	rowsUsed    map[string]bool
@@ -109,6 +110,13 @@ const (
 	// recording run writes. A recording run never writes the golden itself.
 	GoldenCandidateSuffix = ".recording"
 )
+
+// answerSlot is one answer a Golden handed out.
+type answerSlot struct {
+	request  string
+	compared bool
+	consumed bool
+}
 
 // goldenState is where a Golden is in its lifecycle. The order is fixed:
 // Open, then Python answers fetched (any number of calls), then Diff, then
@@ -248,7 +256,7 @@ func (g *Golden) PythonRoot(t *testing.T, root string) string {
 		t.Fatalf("recording: %v", err)
 	}
 	g.recorded.Header.ProducerDigest = digest
-	g.rootVerified = true
+	g.verifiedRoot = pinned
 	return pinned
 }
 
@@ -484,7 +492,7 @@ func (g *Golden) Python(t *testing.T, v *Venue, requests []Request) []Response {
 	g.step(t, "Python", stateOpen, statePython, stateDiffed)
 	var answers []Response
 	if g.recording {
-		if err := g.recordingRootErr(); err != nil {
+		if err := g.recordingRootErr(v); err != nil {
 			t.Fatal(err)
 		}
 		answers = v.ServePython(t, requests)
@@ -499,7 +507,10 @@ func (g *Golden) Python(t *testing.T, v *Venue, requests []Request) []Response {
 			t.Fatal(err)
 		}
 	}
-	g.handed += len(answers)
+	for index := range answers {
+		g.slots = append(g.slots, answerSlot{request: requestIdentity(requests[index])})
+		answers[index].slot = len(g.slots)
+	}
 	if g.state == stateOpen {
 		g.state = statePython
 	}
@@ -602,17 +613,56 @@ func (g *Golden) beforeDiff(t *testing.T) {
 	g.step(t, "Diff", statePython, stateDiffed)
 }
 
-// afterDiff records that Diff compared n answers.
-func (g *Golden) afterDiff(n int) {
-	g.compared += n
-	g.state = stateDiffed
+// bindAnswers is Diff's binding of answers to requests: answer i must be the
+// answer this golden handed out for request i (a slot bound to that request's
+// key), and each answer may be compared once. An answer reused for another
+// request, one out of order, or one that did not come from golden.Python is an
+// error, so a divergence on the request it stood in for cannot hide.
+func (g *Golden) bindAnswers(requests []Request, answers []Response) error {
+	for index, request := range requests {
+		slot := answers[index].slot
+		if slot < 1 || slot > len(g.slots) {
+			return fmt.Errorf("golden %s: the Python answer for request %d (%q) did not come from golden.Python", g.spec.Path, index, request.Name)
+		}
+		bound := &g.slots[slot-1]
+		if bound.request != requestIdentity(request) {
+			return fmt.Errorf("golden %s: request %d (%q) was given the answer that belongs to another request (%s): each answer answers the one request it was fetched for", g.spec.Path, index, request.Name, bound.request)
+		}
+		if bound.compared || bound.consumed {
+			return fmt.Errorf("golden %s: the answer for request %d (%q) was already used once (compared or inspected): an answer stands in for one comparison", g.spec.Path, index, request.Name)
+		}
+		bound.compared = true
+	}
+	return nil
 }
 
-// Consumed declares that the test itself inspected n of the answers Python
-// returned (for example a /metrics scrape it reads a counter from), so they are
-// not left uncompared: Finish requires every answer handed out to have been
-// either compared by Diff or declared here.
-func (g *Golden) Consumed(n int) { g.consumed += n }
+// afterDiff records that Diff ran.
+func (g *Golden) afterDiff() { g.state = stateDiffed }
+
+// Consumed declares that the test itself inspected these answers (for example a
+// /metrics scrape it reads a counter from), so they are not left uncompared:
+// Finish requires every answer handed out to have been either compared by Diff
+// or declared here, each once.
+func (g *Golden) Consumed(t *testing.T, answers ...Response) {
+	t.Helper()
+	if err := g.consume(answers); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (g *Golden) consume(answers []Response) error {
+	for _, answer := range answers {
+		if answer.slot < 1 || answer.slot > len(g.slots) {
+			return fmt.Errorf("golden %s: Consumed was given an answer that did not come from golden.Python", g.spec.Path)
+		}
+		bound := &g.slots[answer.slot-1]
+		if bound.compared || bound.consumed {
+			return fmt.Errorf("golden %s: an answer (for %s) was declared inspected after it was already used once", g.spec.Path, bound.request)
+		}
+		bound.consumed = true
+	}
+	return nil
+}
 
 // Finish ends the test's use of the golden, in the test body. Recording, it
 // writes the candidate (spec.Path + GoldenCandidateSuffix) when every check
@@ -648,8 +698,14 @@ func (g *Golden) Finish(t *testing.T) {
 // answersCompared is an error unless every answer handed out was compared by
 // Diff or declared inspected.
 func (g *Golden) answersCompared() error {
-	if g.compared+g.consumed != g.handed {
-		return fmt.Errorf("golden %s handed out %d answers, but Diff compared %d and the test declared %d as inspected (Consumed): an answer nobody compared is a comparison that no longer happens", g.spec.Path, g.handed, g.compared, g.consumed)
+	var missing []string
+	for index, slot := range g.slots {
+		if !slot.compared && !slot.consumed {
+			missing = append(missing, fmt.Sprintf("#%d (%s)", index+1, slot.request))
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("golden %s handed out %d answers, but these were neither compared by Diff nor declared inspected (Consumed): %s; an answer nobody compared is a comparison that no longer happens", g.spec.Path, len(g.slots), strings.Join(missing, ", "))
 	}
 	return nil
 }
@@ -683,13 +739,40 @@ func (g *Golden) writeCandidate(failed bool) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// recordingRootErr is an error when a recording run has not verified the
-// checkout it is about to execute Python from.
-func (g *Golden) recordingRootErr() error {
-	if !g.rootVerified {
+// recordingRootErr is an error unless the checkout PythonRoot verified is the
+// root the venue serves Python from.
+func (g *Golden) recordingRootErr(v *Venue) error {
+	if g.verifiedRoot == "" {
 		return fmt.Errorf("recording: serve Python only from the root golden.PythonRoot returned (it verifies the checkout is clean and at the pinned build); it was never called")
 	}
+	if v == nil || !sameDirectory(v.Root, g.verifiedRoot) {
+		venueRoot := "<no venue>"
+		if v != nil {
+			venueRoot = v.Root
+		}
+		return fmt.Errorf("recording: the venue serves Python from %s, not from the verified checkout %s: build the venue with Options.Root = golden.PythonRoot(...)", venueRoot, g.verifiedRoot)
+	}
 	return nil
+}
+
+// sameDirectory reports whether a and b are the same directory, symlinks resolved.
+func sameDirectory(a, b string) bool {
+	resolve := func(path string) string {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			path = resolved
+		}
+		if absolute, err := filepath.Abs(path); err == nil {
+			path = absolute
+		}
+		return filepath.Clean(path)
+	}
+	return resolve(a) == resolve(b)
+}
+
+// requestIdentity is what makes a request the same request across processes.
+func requestIdentity(request Request) string {
+	key := requestKey(request)
+	return fmt.Sprintf("%s %s %s body=%s headers=%s", key.Name, key.Method, key.Path, key.BodySHA256, key.HeadersSHA256)
 }
 
 // unusedAnswers is an error when the frozen file holds answers the test never

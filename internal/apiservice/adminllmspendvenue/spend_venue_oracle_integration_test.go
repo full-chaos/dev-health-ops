@@ -238,17 +238,29 @@ var sinceField = regexp.MustCompile(`"since":"[^"]*"`)
 // TestAdminLLMSpendVenueOracle answers GET /api/v1/admin/llm-settings/spend
 // with the real Python api and the real Go api over the same organizations
 // and ClickHouse rows, and requires the same status and response text.
-func TestAdminLLMSpendVenueOracle(t *testing.T) { runSpendVenue(t, "") }
+func TestAdminLLMSpendVenueOracle(t *testing.T) { runSpendVenue(t, "", "utc", "83b3489db754b542e25f5b863a05408362984447b7b3ae78b9ee909d1b7398be") }
 
 // TestAdminLLMSpendLocalZoneVenueOracle runs both planes in
 // America/Los_Angeles (TZ for the Python plane, time.Local for Go): a naive
 // `since` is local time there, so a window edge that lands exactly on a row
 // only matches when both read it the same way.
-func TestAdminLLMSpendLocalZoneVenueOracle(t *testing.T) { runSpendVenue(t, "America/Los_Angeles") }
+func TestAdminLLMSpendLocalZoneVenueOracle(t *testing.T) {
+	runSpendVenue(t, "America/Los_Angeles", "localzone", "2e8d1fb3322a4505aed5bcc907b0f42985bcdd0b4bbc721174f61c4e30cc0d71")
+}
 
-func runSpendVenue(t *testing.T, zone string) {
+// spendBase is the clock of the frozen golden: the hour the Python plane's
+// answers were executed in. The rows are seeded relative to it, every base-derived
+// query is built from it, and the Go plane's clock is set to spendBase + 30
+// minutes, so a replay on any later day reads the same window the Python plane
+// read (the default window starts 30 days before its clock; no seeded row lies
+// within days of that edge).
+var spendBase = time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC)
+
+func runSpendVenue(t *testing.T, zone, mode, digest string) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, goldenSpec("spend_"+mode, t.Name(), digest))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("spend-" + mode)
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-spend-32-bytes!"
 	cases := scenarios()
 	var pythonEnv []string
@@ -263,16 +275,16 @@ func runSpendVenue(t *testing.T, zone string) {
 		pythonEnv = []string{"TZ=" + zone}
 		cases = cases[:2] // the gates only; the settings branches are zone-free
 	}
-	orgs := map[string]uuid.UUID{richOrg: uuid.New(), otherOrg: uuid.New()}
+	orgs := map[string]uuid.UUID{richOrg: nextID(), otherOrg: nextID()}
 	for key := range specialErrors() {
-		orgs[key] = uuid.New()
+		orgs[key] = nextID()
 	}
 	caseOrgs := make([]uuid.UUID, len(cases))
 	for i := range cases {
-		caseOrgs[i] = uuid.New()
+		caseOrgs[i] = nextID()
 	}
-	memberOrg := uuid.New()
-	base := time.Now().UTC().Truncate(time.Hour)
+	memberOrg := nextID()
+	base := spendBase
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root: root, JWTKey: jwtKey, PythonEnv: pythonEnv,
@@ -290,16 +302,16 @@ func runSpendVenue(t *testing.T, zone string) {
 VALUES ($1, $2, $2, $3, 'stripe', true, now(), now())`, id, "llm-spend-"+key, tier)
 			}
 			addUser := func(key string, orgID uuid.UUID, role string) {
-				id, email := uuid.New(), key+"@example.com"
+				id, email := nextID(), key+"@example.com"
 				exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, false, 0, now(), now())`, id, email)
 				exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), orgID, id, role)
+VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), orgID, id, role)
 				tokens[key] = map[string]any{"user_id": id.String(), "email": email, "org_id": orgID.String(), "role": role}
 			}
 			setting := func(orgID uuid.UUID, key, value string) {
 				exec(`INSERT INTO settings (id, org_id, category, key, value, is_encrypted, created_at, updated_at)
-VALUES ($1, $2, 'llm', $3, $4, false, '2026-02-01T00:00:00+00:00', '2026-02-01T00:00:00+00:00')`, uuid.New(), orgID.String(), key, value)
+VALUES ($1, $2, 'llm', $3, $4, false, '2026-02-01T00:00:00+00:00', '2026-02-01T00:00:00+00:00')`, nextID(), orgID.String(), key, value)
 			}
 			active := func(orgID uuid.UUID) {
 				setting(orgID, "provider", "openai")
@@ -315,7 +327,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, '2026-02-01T00:00:00+00:00', '2026-02-01T0
 				org(fmt.Sprintf("c%d", i), id, c.tier)
 				if c.killSwitch {
 					exec(`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, expires_at, config, reason, created_by, created_at, updated_at)
-VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NULL, NULL, 'kill switch', NULL, now(), now())`, uuid.New(), id)
+VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NULL, NULL, 'kill switch', NULL, now(), now())`, nextID(), id)
 				}
 				addUser(fmt.Sprintf("admin%d", i), id, "admin")
 				if c.provider != nil {
@@ -385,10 +397,11 @@ VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NUL
 			requests = append(requests, venueoracle.Request{Name: "errors json " + key, Method: "GET", Path: path, Headers: auth("admin-" + key)})
 		}
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 
 	goBase := startGoServer(t, ctx, venue, jwtKey)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		// A window that starts "30 days ago" is read from each plane's own clock.
 		Normalize: func(request venueoracle.Request, body string) string {
 			if strings.Contains(request.Path, "since=") {
@@ -398,6 +411,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NUL
 		},
 	})
 	t.Log(receipt)
+	golden.Finish(t)
 }
 
 // localEdgeQueries are naive `since` values, written in zone's wall clock,
@@ -454,7 +468,8 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	routes := apiservice.Routes(apiservice.Deps{Pool: pool, Valkey: client, ClickHouse: clickHouse, Auth: auth, Guard: guard}, logger)
+	routes := apiservice.Routes(apiservice.Deps{Pool: pool, Valkey: client, ClickHouse: clickHouse, Auth: auth, Guard: guard,
+		Now: func() time.Time { return spendBase.Add(30 * time.Minute) }}, logger)
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, routes, scope.OrgScope, scope.Impersonation)
 	if err != nil {

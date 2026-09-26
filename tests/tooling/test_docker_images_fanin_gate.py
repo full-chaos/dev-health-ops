@@ -201,8 +201,8 @@ def test_platform_label_agreement_does_not_fall_back_to_whichever_exists() -> No
 
 
 def test_fan_in_job_has_a_bounded_fallback_for_unlabeled_families() -> None:
-    """dev-hops-runner and dev-hops-api predate this ticket's revision
-    label and currently carry no Labels map at all (measured, lane-084-
+    """dev-hops-api predates this ticket's revision
+    label and currently carries no Labels map at all (measured, lane-084-
     prod) -- a labelless `:latest` is not the same as a missing `:latest`
     (bootstrap) and needs its own resolution path, not a permanent
     decline. The fallback must be a BOUNDED walk (an unbounded one is a
@@ -503,7 +503,7 @@ if [ "$1" = "buildx" ] && [ "$2" = "imagetools" ] && [ "$3" = "inspect" ]; then
         unlabelled)
           # exit 0, valid JSON, but no revision label on either platform
           # -- falls through to the digest-walk fallback, same as
-          # dev-hops-runner/dev-hops-api during this PR's own migration.
+          # dev-hops-api during this PR's own migration.
           echo '{"manifest":{"digest":"sha256:aaaa"},"image":{"linux/amd64":{"config":{"Labels":{}}},"linux/arm64":{"config":{"Labels":{}}}}}'
           exit 0
           ;;
@@ -1158,7 +1158,7 @@ def test_source_tag_all_unknown_fails_the_job_instead_of_a_silent_noop() -> None
         "merge-base ancestry check instead of failing immediately after "
         "the per-family loop"
     )
-    assert "0 of 7 families had a moving tag applied this run" in stdout, (
+    assert "0 of 6 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
@@ -1202,7 +1202,7 @@ def test_source_tag_mixed_unknown_and_absent_still_fails_the_job() -> None:
         "merge-base ancestry check instead of failing immediately after "
         "the per-family loop"
     )
-    assert "0 of 7 families had a moving tag applied this run" in stdout, (
+    assert "0 of 6 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
@@ -1251,7 +1251,7 @@ def test_latest_check_all_unknown_fails_the_job() -> None:
         "merge-base ancestry check instead of failing immediately after "
         "the per-family loop"
     )
-    assert "0 of 7 families had a moving tag applied this run" in stdout, (
+    assert "0 of 6 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
@@ -1290,7 +1290,7 @@ def test_latest_check_all_families_digest_walk_exhausted_fails_the_job() -> None
         f"log) but never the merge-base ancestry check -- got "
         f"log_called={log_called}, merge_base_called={mb_called}"
     )
-    assert "0 of 7 families had a moving tag applied this run" in stdout, (
+    assert "0 of 6 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
@@ -1329,7 +1329,7 @@ def test_latest_check_all_families_disagree_fails_the_job() -> None:
         f"the platform-label mismatch -- log_called={log_called}, "
         f"merge_base_called={mb_called}"
     )
-    assert "0 of 7 families had a moving tag applied this run" in stdout, (
+    assert "0 of 6 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )

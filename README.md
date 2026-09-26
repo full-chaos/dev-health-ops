@@ -218,14 +218,9 @@ Notes:
 
 ## Container images
 
-The repository builds two reusable images from `docker/Dockerfile`:
+The repository builds one Python image from `docker/Dockerfile`, `dev-hops-api`, which runs `dev-hops api` on port 8000. (The `dev-hops-runner` image, a generic `dev-hops` entrypoint, is no longer built: run CLI jobs with `dho`, the Go image, or `dev-hops` from a checkout.)
 
-| Image | Purpose |
-| --- | --- |
-| `dev-hops-api` | Runs `dev-hops api` on port 8000 |
-| `dev-hops-runner` | Uses `dev-hops` as the entrypoint for sync, fixtures, metrics, and maintenance jobs |
-
-Build both images:
+Build the image:
 
 ```bash
 IMAGE_REGISTRY=ghcr.io/myorg/dev-health-ops \
@@ -240,18 +235,6 @@ docker run --rm -p 8000:8000 \
   -e POSTGRES_URI="postgresql+asyncpg://postgres:postgres@postgres:5432/postgres" \
   -e CLICKHOUSE_URI="clickhouse://ch:ch@clickhouse:8123/default" \
   dev-hops-api:latest
-```
-
-Run a CLI job through the runner image:
-
-```bash
-docker run --rm -it \
-  --network dev-health_default \
-  -v "$(pwd)":/app \
-  -w /app \
-  -e CLICKHOUSE_URI="clickhouse://ch:ch@clickhouse:8123/default" \
-  dev-hops-runner:latest \
-  metrics daily --backfill 14
 ```
 
 ## Key docs

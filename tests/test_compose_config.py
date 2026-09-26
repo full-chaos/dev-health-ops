@@ -337,7 +337,6 @@ def test_every_buildable_service_declares_an_overridable_image() -> None:
     built today.
     """
     published_families = {
-        "ghcr.io/full-chaos/dev-hops-runner",
         "ghcr.io/full-chaos/dev-hops-api",
         "ghcr.io/full-chaos/dev-health-go-worker",
         "ghcr.io/full-chaos/dev-health-go-scheduler",

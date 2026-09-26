@@ -180,9 +180,3 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
 
 ENTRYPOINT ["dev-hops", "api"]
 CMD ["--host", "0.0.0.0", "--port", "8000"]
-
-# ── Generic runner target ──────────────────────────────────────────────────────
-FROM runtime AS runner
-
-ENTRYPOINT ["dev-hops"]
-CMD ["--help"]

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
@@ -152,6 +154,96 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 	WHERE role.rolname <> current_user
 ), current_role_identity(oid) AS (
 	SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user
+), governed_relations AS MATERIALIZED (
+	-- CHAOS-6937: every privilege below is read from the ACL columns of the
+	-- relations in the two schemas this posture governs, ONCE, instead of
+	-- calling has_*_privilege per catalog row per predicate (and reading
+	-- information_schema.column_privileges, which expands every ACL to every
+	-- column of every relation in the database and sorted 21k rows on the
+	-- production catalog). On that catalog the sweeps took 1.8 s of a 2 s
+	-- readiness budget; the scoped read is a few thousand ACL entries.
+	--
+	-- "Held" below means: an ACL entry whose grantee is the caller by name or
+	-- PUBLIC (0). That is the caller's whole effective privilege set only
+	-- because the identity predicate above asserts the caller is a member of no
+	-- role, and is not a superuser: nothing else can confer a privilege. A
+	-- caller for whom that fails is refused by the identity predicate before any
+	-- of this matters.
+	SELECT class.oid, class.relkind, class.relacl, class.relowner,
+		namespace.nspname = 'public' AS in_public
+	FROM pg_catalog.pg_class AS class
+	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+	WHERE namespace.nspname IN ('public', $2)
+		AND class.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+), relation_held AS MATERIALIZED (
+	-- Table-level privileges held on each governed relation, with the
+	-- "... WITH GRANT OPTION" form present as its own element when the entry is
+	-- grantable, so a test for either form is one array membership test. A
+	-- relation with no ACL carries its owner-only default (a sequence's is its
+	-- own kind's), exactly as the has_*_privilege functions resolve it.
+	SELECT governed.oid, array_agg(DISTINCT held.privilege) AS privileges
+	FROM governed_relations AS governed
+	CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+		governed.relacl,
+		pg_catalog.acldefault(
+			CASE WHEN governed.relkind = 'S' THEN 's'::"char" ELSE 'r'::"char" END,
+			governed.relowner
+		)
+	)) AS entry
+	CROSS JOIN LATERAL (
+		VALUES
+			(entry.privilege_type),
+			(CASE WHEN entry.is_grantable THEN entry.privilege_type || ' WITH GRANT OPTION' END)
+	) AS held(privilege)
+	WHERE entry.grantee IN (0, (SELECT oid FROM current_role_identity))
+		AND held.privilege IS NOT NULL
+	GROUP BY governed.oid
+), column_held AS MATERIALIZED (
+	-- Column-level privileges held on any live column of each governed
+	-- relation (has_any_column_privilege's column half). attacl is NULL for the
+	-- overwhelming majority of columns, so the filter comes first.
+	SELECT attribute.attrelid AS oid, array_agg(DISTINCT held.privilege) AS privileges
+	FROM pg_catalog.pg_attribute AS attribute
+	CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS entry
+	CROSS JOIN LATERAL (
+		VALUES
+			(entry.privilege_type),
+			(CASE WHEN entry.is_grantable THEN entry.privilege_type || ' WITH GRANT OPTION' END)
+	) AS held(privilege)
+	WHERE attribute.attacl IS NOT NULL
+		AND attribute.attnum > 0
+		AND NOT attribute.attisdropped
+		AND attribute.attrelid IN (SELECT oid FROM governed_relations)
+		AND entry.grantee IN (0, (SELECT oid FROM current_role_identity))
+		AND held.privilege IS NOT NULL
+	GROUP BY attribute.attrelid
+), caller_column_grants(table_name, column_name, privilege_type, is_grantable) AS MATERIALIZED (
+	-- The table-level entries granted to the caller by name, expanded to
+	-- every live column (what column_privileges shows for them) ...
+	SELECT scoped.relname, attribute.attname, entry.privilege_type, entry.is_grantable
+	FROM column_scoped_relations AS scoped
+	JOIN pg_catalog.pg_class AS class ON class.oid = scoped.oid
+	JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = scoped.oid
+	CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+		class.relacl, pg_catalog.acldefault('r'::"char", class.relowner)
+	)) AS entry
+	WHERE attribute.attnum > 0
+		AND NOT attribute.attisdropped
+		AND entry.grantee = (SELECT oid FROM current_role_identity)
+		AND entry.privilege_type IN ('INSERT', 'SELECT', 'UPDATE', 'REFERENCES')
+	UNION
+	-- ... and the column-level entries granted to it by name. UNION, not UNION ALL:
+	-- the view dedupes a privilege that arrives both ways, and the rows are pinned
+	-- against it (TestCallerColumnGrantsAreTheRowsInformationSchemaShowsForTheCaller).
+	SELECT scoped.relname, attribute.attname, entry.privilege_type, entry.is_grantable
+	FROM column_scoped_relations AS scoped
+	JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = scoped.oid
+	CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS entry
+	WHERE attribute.attacl IS NOT NULL
+		AND attribute.attnum > 0
+		AND NOT attribute.attisdropped
+		AND entry.grantee = (SELECT oid FROM current_role_identity)
+		AND entry.privilege_type IN ('INSERT', 'SELECT', 'UPDATE', 'REFERENCES')
 )
 SELECT
 	` + roleacl.IdentityPredicateSQL + `
@@ -247,8 +339,12 @@ SELECT
 			)
 	)
 	AND NOT EXISTS (
-		-- No column privilege beyond the declared set, catalog angle: reads
-		-- information_schema.column_privileges directly. This alone is NOT
+		-- No column privilege beyond the declared set, catalog angle: reads the
+		-- ACL entries granted to the caller BY NAME (the table-level ones
+		-- expanded to every live column, plus each column's own) -- the rows
+		-- information_schema.column_privileges shows for it, without that
+		-- view's expansion of every relation in the database (CHAOS-6937).
+		-- This alone is NOT
 		-- sufficient — it is filtered to grants whose grantee literally is
 		-- current_user, so it misses a column privilege the domain role
 		-- holds only via PUBLIC or role membership. Kept as a second
@@ -257,19 +353,14 @@ SELECT
 		-- with is_grantable = YES is excess even on a declared pair, since
 		-- the declared posture never lets the role re-delegate its privilege.
 		SELECT 1
-		FROM information_schema.column_privileges AS granted
-		JOIN column_scoped_relations AS scoped ON scoped.relname = granted.table_name
-		WHERE granted.table_schema = 'public'
-			AND granted.grantee = current_user
-			AND (
-				granted.is_grantable = 'YES'
-				OR NOT EXISTS (
-					SELECT 1
-					FROM column_scoped_privileges AS required
-					WHERE required.table_name = granted.table_name
-						AND required.column_name = granted.column_name
-						AND required.privilege = granted.privilege_type
-				)
+		FROM caller_column_grants AS granted
+		WHERE granted.is_grantable
+			OR NOT EXISTS (
+				SELECT 1
+				FROM column_scoped_privileges AS required
+				WHERE required.table_name = granted.table_name
+					AND required.column_name = granted.column_name
+					AND required.privilege = granted.privilege_type
 			)
 	)
 	AND NOT EXISTS (
@@ -331,89 +422,85 @@ SELECT
 		-- column-level options are caught too, not just ones granted
 		-- directly to the role by name.
 		SELECT 1
-		FROM required_tables
-		WHERE NOT has_table_privilege(current_user, oid, 'SELECT')
-			OR has_table_privilege(current_user, oid, 'SELECT WITH GRANT OPTION')
-			OR has_any_column_privilege(current_user, oid, 'SELECT WITH GRANT OPTION')
-			OR has_table_privilege(current_user, oid, 'INSERT') <> allow_insert
+		FROM required_tables AS required
+		LEFT JOIN relation_held AS on_table ON on_table.oid = required.oid
+		LEFT JOIN column_held AS on_columns ON on_columns.oid = required.oid
+		CROSS JOIN LATERAL (
+			-- what has_table_privilege sees, and what has_any_column_privilege
+			-- sees (the table-level entry OR any column's)
+			SELECT COALESCE(on_table.privileges, '{}'::text[]) AS table_level,
+				COALESCE(on_table.privileges, '{}'::text[]) || COALESCE(on_columns.privileges, '{}'::text[]) AS any_column
+		) AS held
+		WHERE NOT ('SELECT' = ANY (held.table_level))
+			OR 'SELECT WITH GRANT OPTION' = ANY (held.table_level)
+			OR 'SELECT WITH GRANT OPTION' = ANY (held.any_column)
+			OR ('INSERT' = ANY (held.table_level)) <> required.allow_insert
 			OR (
-				NOT allow_insert
-				AND has_any_column_privilege(current_user, oid, 'INSERT')
+				NOT required.allow_insert
+				AND 'INSERT' = ANY (held.any_column)
 			)
 			OR (
-				allow_insert
+				required.allow_insert
 				AND (
-					has_table_privilege(current_user, oid, 'INSERT WITH GRANT OPTION')
-					OR has_any_column_privilege(current_user, oid, 'INSERT WITH GRANT OPTION')
+					'INSERT WITH GRANT OPTION' = ANY (held.table_level)
+					OR 'INSERT WITH GRANT OPTION' = ANY (held.any_column)
 				)
 			)
-			OR has_table_privilege(current_user, oid, 'UPDATE') <> allow_update
+			OR ('UPDATE' = ANY (held.table_level)) <> required.allow_update
 			OR (
-				NOT allow_update
-				AND has_any_column_privilege(current_user, oid, 'UPDATE')
+				NOT required.allow_update
+				AND 'UPDATE' = ANY (held.any_column)
 			)
 			OR (
-				allow_update
+				required.allow_update
 				AND (
-					has_table_privilege(current_user, oid, 'UPDATE WITH GRANT OPTION')
-					OR has_any_column_privilege(current_user, oid, 'UPDATE WITH GRANT OPTION')
+					'UPDATE WITH GRANT OPTION' = ANY (held.table_level)
+					OR 'UPDATE WITH GRANT OPTION' = ANY (held.any_column)
 				)
 			)
-			-- DELETE is not column-grantable in PostgreSQL (only SELECT,
-			-- INSERT, UPDATE, REFERENCES can be), so unlike the two checks
-			-- above there is no column-level or has_any_column_privilege
-			-- route to guard here — a table-level mismatch or option check
-			-- is the whole surface.
-			OR has_table_privilege(current_user, oid, 'DELETE') <> allow_delete
+			OR ('DELETE' = ANY (held.table_level)) <> required.allow_delete
 			OR (
-				allow_delete
-				AND has_table_privilege(current_user, oid, 'DELETE WITH GRANT OPTION')
+				required.allow_delete
+				AND 'DELETE WITH GRANT OPTION' = ANY (held.table_level)
 			)
-			OR has_table_privilege(current_user, oid, 'TRUNCATE')
-			OR has_table_privilege(current_user, oid, 'REFERENCES')
-			OR has_any_column_privilege(current_user, oid, 'REFERENCES')
-			OR has_table_privilege(current_user, oid, 'TRIGGER')
-			OR CASE
-				WHEN current_setting('server_version_num')::integer >= 170000
-				THEN has_table_privilege(current_user, oid, 'MAINTAIN')
-				ELSE false
-			END
+			OR 'TRUNCATE' = ANY (held.table_level)
+			OR 'REFERENCES' = ANY (held.table_level)
+			OR 'REFERENCES' = ANY (held.any_column)
+			OR 'TRIGGER' = ANY (held.table_level)
+			OR 'MAINTAIN' = ANY (held.table_level)
 	)
 	AND NOT EXISTS (
 		SELECT 1
-		FROM other_public_relations
-		WHERE has_table_privilege(current_user, oid, 'SELECT')
-			OR has_table_privilege(current_user, oid, 'INSERT')
-			OR has_table_privilege(current_user, oid, 'UPDATE')
-			OR has_table_privilege(current_user, oid, 'DELETE')
-			OR has_any_column_privilege(
-				current_user, oid, 'SELECT, INSERT, UPDATE, REFERENCES'
+		FROM other_public_relations AS other
+		WHERE EXISTS (
+				SELECT 1 FROM relation_held AS on_table
+				WHERE on_table.oid = other.oid
+					AND on_table.privileges && ARRAY[
+						'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'
+					]
 			)
-			OR has_table_privilege(current_user, oid, 'TRUNCATE')
-			OR has_table_privilege(current_user, oid, 'REFERENCES')
-			OR has_table_privilege(current_user, oid, 'TRIGGER')
-			OR CASE
-				WHEN current_setting('server_version_num')::integer >= 170000
-				THEN has_table_privilege(current_user, oid, 'MAINTAIN')
-				ELSE false
-			END
+			OR EXISTS (
+				SELECT 1 FROM column_held AS on_columns
+				WHERE on_columns.oid = other.oid
+					AND on_columns.privileges && ARRAY['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']
+			)
 	)
 	AND (SELECT count(*) FROM required_public_sequences) =
 		(SELECT count(*) FROM required_sequence_privileges)
 	AND NOT EXISTS (
 		SELECT 1
-		FROM required_public_sequences
-		WHERE NOT has_sequence_privilege(current_user, oid, 'USAGE')
-			OR has_sequence_privilege(current_user, oid, 'USAGE WITH GRANT OPTION')
-			OR has_sequence_privilege(current_user, oid, 'SELECT')
-			OR has_sequence_privilege(current_user, oid, 'UPDATE')
+		FROM required_public_sequences AS required
+		LEFT JOIN relation_held AS held ON held.oid = required.oid
+		WHERE NOT ('USAGE' = ANY (COALESCE(held.privileges, '{}'::text[])))
+			OR 'USAGE WITH GRANT OPTION' = ANY (COALESCE(held.privileges, '{}'::text[]))
+			OR 'SELECT' = ANY (COALESCE(held.privileges, '{}'::text[]))
+			OR 'UPDATE' = ANY (COALESCE(held.privileges, '{}'::text[]))
 	)
 	AND NOT EXISTS (
 		SELECT 1
-		FROM other_public_sequences
-		WHERE has_sequence_privilege(current_user, oid, 'USAGE')
-			OR has_sequence_privilege(current_user, oid, 'SELECT')
-			OR has_sequence_privilege(current_user, oid, 'UPDATE')
+		FROM other_public_sequences AS other
+		JOIN relation_held AS held ON held.oid = other.oid
+		WHERE held.privileges && ARRAY['USAGE', 'SELECT', 'UPDATE']
 	)
 	AND NOT has_schema_privilege(current_user, $2, 'USAGE')
 	-- Mirrors the public-schema CREATE check above: migrate.go revokes ALL
@@ -424,39 +511,45 @@ SELECT
 	AND NOT has_schema_privilege(current_user, $2, 'CREATE')
 	AND NOT EXISTS (
 		SELECT 1
-		FROM river_relations
-		WHERE has_table_privilege(current_user, oid, 'SELECT')
-			OR has_table_privilege(current_user, oid, 'INSERT')
-			OR has_table_privilege(current_user, oid, 'UPDATE')
-			OR has_table_privilege(current_user, oid, 'DELETE')
-			OR has_any_column_privilege(
-				current_user, oid, 'SELECT, INSERT, UPDATE, REFERENCES'
+		FROM river_relations AS river
+		WHERE EXISTS (
+				SELECT 1 FROM relation_held AS on_table
+				WHERE on_table.oid = river.oid
+					AND on_table.privileges && ARRAY[
+						'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'
+					]
 			)
-			OR has_table_privilege(current_user, oid, 'TRUNCATE')
-			OR has_table_privilege(current_user, oid, 'REFERENCES')
-			OR has_table_privilege(current_user, oid, 'TRIGGER')
-			OR CASE
-				WHEN current_setting('server_version_num')::integer >= 170000
-				THEN has_table_privilege(current_user, oid, 'MAINTAIN')
-				ELSE false
-			END
+			OR EXISTS (
+				SELECT 1 FROM column_held AS on_columns
+				WHERE on_columns.oid = river.oid
+					AND on_columns.privileges && ARRAY['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']
+			)
 	)
 	AND NOT EXISTS (
 		SELECT 1
-		FROM river_sequences
-		WHERE has_sequence_privilege(current_user, oid, 'USAGE')
-			OR has_sequence_privilege(current_user, oid, 'SELECT')
-			OR has_sequence_privilege(current_user, oid, 'UPDATE')
+		FROM river_sequences AS river
+		JOIN relation_held AS held ON held.oid = river.oid
+		WHERE held.privileges && ARRAY['USAGE', 'SELECT', 'UPDATE']
 	)
 	AND NOT EXISTS (
 		SELECT 1
-		FROM river_functions
-		WHERE has_function_privilege(current_user, oid, 'EXECUTE')
+		FROM river_functions AS river
+		JOIN pg_catalog.pg_proc AS procedure ON procedure.oid = river.oid
+		CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+			procedure.proacl, pg_catalog.acldefault('f'::"char", procedure.proowner)
+		)) AS entry
+		WHERE entry.privilege_type = 'EXECUTE'
+			AND entry.grantee IN (0, (SELECT oid FROM current_role_identity))
 	)
 	AND NOT EXISTS (
 		SELECT 1
-		FROM public_functions
-		WHERE has_function_privilege(current_user, oid, 'EXECUTE')
+		FROM public_functions AS public_function
+		JOIN pg_catalog.pg_proc AS procedure ON procedure.oid = public_function.oid
+		CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+			procedure.proacl, pg_catalog.acldefault('f'::"char", procedure.proowner)
+		)) AS entry
+		WHERE entry.privilege_type = 'EXECUTE'
+			AND entry.grantee IN (0, (SELECT oid FROM current_role_identity))
 	)`
 
 // TablePrivilege declares the exact table-level privileges one role's
@@ -1211,6 +1304,39 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 	if pool == nil || !validRuntimeIdentifier(expectedRole) || !validRuntimeIdentifier(riverSchema) {
 		return ErrUnavailable
 	}
+	args, err := rolePostureArgs(expectedRole, riverSchema, posture)
+	if err != nil {
+		return err
+	}
+	authorized, err := queryPostureAnswer(ctx, pool, rolePostureStatementTimeout, rolePostureQuery, args...)
+	switch {
+	case err != nil:
+		// The query never produced an answer at all: connection refused, auth
+		// failure, context deadline, a driver-level fault. Both ErrUnavailable
+		// and the driver error itself are %w-wrapped (Go's multi-%w support),
+		// so a caller can errors.Is/errors.As all the way to the concrete
+		// driver error -- never the DSN this pool was built from (Config.URI
+		// is deliberately excluded from every error path in this package) --
+		// while staying readiness-compatible via errors.Is(err, ErrUnavailable)
+		// and distinguishable from ErrPostureRefused below.
+		return fmt.Errorf("%w: querying role posture: %w", ErrUnavailable, err)
+	case !authorized:
+		// The query ran and answered "no": this role's own grants do not
+		// match its declared posture. A completely different incident from
+		// the case above, and a role name is a checked-in runtime identifier
+		// (config, not connection material), so it is always safe to log.
+		return fmt.Errorf("%w: %w for role %q: %s", ErrUnavailable, ErrPostureRefused, expectedRole,
+			firstPostureMismatch(ctx, pool, expectedRole, posture))
+	default:
+		return nil
+	}
+}
+
+// rolePostureArgs builds rolePostureQuery's parameters ($1..$10) from a role's
+// declared posture, refusing an internally inconsistent one. It is separate
+// from CheckRolePosture so the differential oracle for the query runs the
+// production argument construction, not a copy of it.
+func rolePostureArgs(expectedRole, riverSchema string, posture RolePosture) ([]any, error) {
 	tableNames := make([]string, len(posture.RequiredTables))
 	allowInserts := make([]bool, len(posture.RequiredTables))
 	allowUpdates := make([]bool, len(posture.RequiredTables))
@@ -1247,42 +1373,73 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 	if err := validateParallelArrayLengths(
 		"required table privileges", len(tableNames), len(allowInserts), len(allowUpdates), len(allowDeletes),
 	); err != nil {
-		return err
+		return nil, err
 	}
 	if err := validateParallelArrayLengths(
 		"column-scoped privileges", len(columnTables), len(columnNames), len(columnPrivileges),
 	); err != nil {
-		return err
+		return nil, err
 	}
-	var authorized bool
-	err := pool.QueryRow(
-		ctx, rolePostureQuery,
+	return []any{
 		expectedRole, riverSchema,
 		tableNames, allowInserts, allowUpdates,
 		columnTables, columnNames, columnPrivileges,
 		allowDeletes, posture.RequiredSequences,
-	).Scan(&authorized)
-	switch {
-	case err != nil:
-		// The query never produced an answer at all: connection refused, auth
-		// failure, context deadline, a driver-level fault. Both ErrUnavailable
-		// and the driver error itself are %w-wrapped (Go's multi-%w support),
-		// so a caller can errors.Is/errors.As all the way to the concrete
-		// driver error -- never the DSN this pool was built from (Config.URI
-		// is deliberately excluded from every error path in this package) --
-		// while staying readiness-compatible via errors.Is(err, ErrUnavailable)
-		// and distinguishable from ErrPostureRefused below.
-		return fmt.Errorf("%w: querying role posture: %w", ErrUnavailable, err)
-	case !authorized:
-		// The query ran and answered "no": this role's own grants do not
-		// match its declared posture. A completely different incident from
-		// the case above, and a role name is a checked-in runtime identifier
-		// (config, not connection material), so it is always safe to log.
-		return fmt.Errorf("%w: %w for role %q: %s", ErrUnavailable, ErrPostureRefused, expectedRole,
-			firstPostureMismatch(ctx, pool, expectedRole, posture))
-	default:
-		return nil
+	}, nil
+}
+
+// rolePostureStatementTimeout is the server-side bound on one posture
+// statement (CHAOS-6937). The client-side bounds (the probe's deadline, the
+// cache's RunTimeout) cancel by sending a cancel request; if that never
+// arrives (a pooler that drops it, a wedged client), the statement would keep
+// running on a pooled server connection. Prod observed this check running up
+// to 14 s. It is a variable only so a test can shorten it.
+var rolePostureStatementTimeout = 10 * time.Second
+
+// postureQuerier is the slice of pgx a posture check needs: a pool, or the
+// read-only transaction runInPostureTx opens.
+type postureQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// runInPostureTx runs fn inside a read-only transaction whose statement_timeout
+// is set LOCAL to the given bound, so every statement fn issues (one, or a
+// sequence) can neither outlive its caller on the server nor leak the setting to
+// whatever else uses the pooled connection. A timeout surfaces as the driver
+// error (SQLSTATE 57014), which the callers already treat as "the database never
+// answered". The errors it returns for opening the transaction and setting the
+// timeout are the driver's own, unwrapped.
+func runInPostureTx(
+	ctx context.Context, pool *pgxpool.Pool, timeout time.Duration, fn func(postureQuerier) error,
+) error {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return err
 	}
+	// Rollback, not Commit: nothing was written, and it must succeed even if
+	// ctx is already done.
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, "SELECT set_config('statement_timeout', $1, true)",
+		strconv.FormatInt(timeout.Milliseconds(), 10)); err != nil {
+		return err
+	}
+	return fn(tx)
+}
+
+// queryPostureAnswer runs one posture statement that returns a single boolean
+// under runInPostureTx.
+func queryPostureAnswer(
+	ctx context.Context, pool *pgxpool.Pool, timeout time.Duration, query string, args ...any,
+) (bool, error) {
+	var answer bool
+	err := runInPostureTx(ctx, pool, timeout, func(q postureQuerier) error {
+		return q.QueryRow(ctx, query, args...).Scan(&answer)
+	})
+	if err != nil {
+		return false, err
+	}
+	return answer, nil
 }
 
 // postureDiagnoseTimeout bounds the diagnostic pass that names the first

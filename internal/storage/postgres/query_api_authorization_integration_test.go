@@ -767,3 +767,31 @@ func TestCheckQueryAPIAuthorizationRefusesPrivilegesOutsideTheManagedSchemas(t *
 		}
 	}
 }
+
+// CHAOS-6937 r1 P1: the query-api check is a sequence of statements (identity,
+// ownership, the whole-catalog grant enumeration, name resolution), and the
+// enumeration is the longest of them. It must run under the same server-side
+// statement_timeout as the other roles' posture checks: with the bound made
+// impossibly short, the check reports "the database never answered"
+// (ErrUnavailable carrying SQLSTATE 57014), never a refusal and never a pass;
+// with the real bound the same role passes, so the timeout is what stopped it.
+func TestCheckQueryAPIAuthorizationRunsUnderTheServerSideStatementTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIFixture(t)
+	role := fixture.newRole(t, ctx, "_timeout")
+	grantQueryAPIManifest(t, ctx, fixture.admin, role, nil)
+	pool := fixture.connect(t, ctx, role)
+	if err := CheckQueryAPIAuthorization(ctx, pool, role, "river"); err != nil {
+		t.Fatalf("control: the role holding exactly the manifest failed readiness: %v", err)
+	}
+
+	previous := rolePostureStatementTimeout
+	rolePostureStatementTimeout = time.Millisecond
+	t.Cleanup(func() { rolePostureStatementTimeout = previous })
+	err := CheckQueryAPIAuthorization(ctx, pool, role, "river")
+	var pgErr *pgconn.PgError
+	if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrPostureRefused) || !errors.As(err, &pgErr) || pgErr.Code != "57014" {
+		t.Fatalf("query-api check under a 1 ms statement_timeout = %v, want ErrUnavailable carrying SQLSTATE 57014", err)
+	}
+}

@@ -113,6 +113,19 @@ func CheckQueryAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expecte
 	if pool == nil || !validRuntimeIdentifier(expectedRole) || !validRuntimeIdentifier(riverSchema) {
 		return ErrUnavailable
 	}
+	// Every statement below runs in one read-only transaction under the same
+	// server-side statement_timeout as the other roles' posture checks
+	// (CHAOS-6937): the enumeration is the longest of them.
+	err := runInPostureTx(ctx, pool, rolePostureStatementTimeout, func(q postureQuerier) error {
+		return checkQueryAPIAuthorization(ctx, q, expectedRole)
+	})
+	if err != nil && !errors.Is(err, ErrUnavailable) {
+		return fmt.Errorf("%w: starting the query-api posture transaction: %w", ErrUnavailable, err)
+	}
+	return err
+}
+
+func checkQueryAPIAuthorization(ctx context.Context, pool postureQuerier, expectedRole string) error {
 	if err := checkRoleIdentity(ctx, pool, expectedRole); err != nil {
 		return err
 	}

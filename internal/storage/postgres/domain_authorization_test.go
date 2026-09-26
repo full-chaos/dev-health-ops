@@ -86,8 +86,13 @@ func TestRolePostureQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *testing.T)
 		"ROLBYPASSRLS",
 		"HAS_SCHEMA_PRIVILEGE",
 		"HAS_TABLE_PRIVILEGE",
-		"HAS_ANY_COLUMN_PRIVILEGE",
-		"HAS_SEQUENCE_PRIVILEGE",
+		// CHAOS-6937: relation, column, sequence and function privileges are read
+		// from the ACL columns of the governed schemas (aclexplode), not swept
+		// with has_*_privilege per catalog row.
+		"ACLEXPLODE",
+		"GOVERNED_RELATIONS",
+		"RELATION_HELD",
+		"COLUMN_HELD",
 		"HAS_DATABASE_PRIVILEGE",
 		"PG_HAS_ROLE",
 		"'MEMBER'",
@@ -110,6 +115,43 @@ func TestRolePostureQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *testing.T)
 	} {
 		if !strings.Contains(upperQuery, required) {
 			t.Fatalf("role posture query omits %q", required)
+		}
+	}
+}
+
+// CHAOS-6937: information_schema.column_privileges expands every ACL to every
+// column of every relation in the database (21.3k rows sorted on the production
+// catalog, ~0.9 s of a 1.8 s posture query, twice the view's cost in the plan).
+// The catalog read is scoped to the two governed schemas instead; nothing in
+// the statement may go back to a system view or to a per-row sweep.
+func TestRolePostureQueryReadsScopedCatalogAclsNotSystemViewsOrPerRowSweeps(t *testing.T) {
+	t.Parallel()
+
+	code := sqlLineComment.ReplaceAllString(strings.ToLower(rolePostureQuery), "")
+	if strings.Contains(code, "information_schema") {
+		t.Fatal("rolePostureQuery reads information_schema: read pg_class.relacl / pg_attribute.attacl via aclexplode, scoped to the governed schemas")
+	}
+	for _, sweep := range []string{"has_any_column_privilege", "has_sequence_privilege", "has_function_privilege"} {
+		if strings.Contains(code, sweep) {
+			t.Fatalf("rolePostureQuery calls %s: per-row privilege sweeps over the catalog are what made the check cost 1.8 s", sweep)
+		}
+	}
+	// Forbidding text is not enough (a statement of just `SELECT TRUE` contains none of it):
+	// the statement must actually read the three ACL columns through aclexplode, scoped to the
+	// two governed schemas, and consume what it read.
+	for _, required := range []string{
+		"aclexplode(", "relacl", "attacl", "proacl",
+		"nspname in ('public', $2)",
+		"governed_relations", "relation_held", "column_held", "caller_column_grants",
+		"from relation_held", "from column_held", "from caller_column_grants",
+	} {
+		if !strings.Contains(code, required) {
+			t.Fatalf("rolePostureQuery omits %q: the scoped ACL read is what replaced the per-row sweeps", required)
+		}
+	}
+	for _, cte := range []string{"governed_relations", "relation_held", "column_held", "caller_column_grants"} {
+		if strings.Count(code, cte) < 2 {
+			t.Fatalf("CTE %s is defined but not consumed (it appears %d times)", cte, strings.Count(code, cte))
 		}
 	}
 }

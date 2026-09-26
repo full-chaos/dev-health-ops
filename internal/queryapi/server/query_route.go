@@ -2601,13 +2601,25 @@ func readinessProbes(chClient readinessPinger, pgPool readinessPinger, verifier 
 // can flip: an unproven role is not ready) and /readyz reads the last answer
 // without waiting (CachedPostureCheck.CheckNoWait).
 func queryAPIPostureCheck(getenv getenvFunc, pgPool *pgxpool.Pool) func(context.Context) error {
+	return queryAPIPostureCheckWith(getenv, pgPool, postgresstore.PostureCheckOptions{})
+}
+
+// queryAPIPostureCheckWith is queryAPIPostureCheck with the cache's freshness
+// tunable. Production passes the zero value (the defaults: a passing answer is
+// re-proven every 300 s, CHAOS-6937); a test that must watch a grant change
+// reach readiness passes a short TTL, and still runs the production
+// composition (role from the environment, River schema, background warm,
+// no-wait read).
+func queryAPIPostureCheckWith(
+	getenv getenvFunc, pgPool *pgxpool.Pool, options postgresstore.PostureCheckOptions,
+) func(context.Context) error {
 	role := strings.TrimSpace(getenv("QUERY_API_DATABASE_ROLE"))
 	if role == "" {
 		return nil
 	}
+	options.Logger = slog.Default()
 	cached := postgresstore.NewCachedQueryAPIPostureCheck(
-		pgPool, role, queryAPIRiverSchema(getenv),
-		postgresstore.PostureCheckOptions{Logger: slog.Default()},
+		pgPool, role, queryAPIRiverSchema(getenv), options,
 	)
 	cached.Warm()
 	return func(context.Context) error { return cached.CheckNoWait() }

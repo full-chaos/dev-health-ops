@@ -17,7 +17,7 @@ import (
 // roleacl.IdentityPredicateSQL, the ONE definition every posture check shares.
 // A refusal names the cause; role names are checked-in runtime identifiers, never
 // connection material, so nothing here can carry a credential.
-func checkRoleIdentity(ctx context.Context, pool *pgxpool.Pool, role string) error {
+func checkRoleIdentity(ctx context.Context, pool postureQuerier, role string) error {
 	var ok bool
 	if err := pool.QueryRow(ctx, "SELECT "+roleacl.IdentityPredicateSQL, role).Scan(&ok); err != nil {
 		return fmt.Errorf("%w: reading the login identity: %w", ErrUnavailable, err)
@@ -29,7 +29,7 @@ func checkRoleIdentity(ctx context.Context, pool *pgxpool.Pool, role string) err
 }
 
 // describeIdentityMismatch says which part of the identity predicate failed.
-func describeIdentityMismatch(ctx context.Context, pool *pgxpool.Pool, role string) string {
+func describeIdentityMismatch(ctx context.Context, pool postureQuerier, role string) string {
 	var authenticated *string
 	var sessionUser, currentUser string
 	var attributesOK, membershipFree bool

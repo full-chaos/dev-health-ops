@@ -402,8 +402,7 @@ func CheckQueueAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRo
 	if pool == nil || !validRuntimeIdentifier(expectedRole) || !validRuntimeIdentifier(riverSchema) {
 		return ErrUnavailable
 	}
-	var authorized bool
-	err := pool.QueryRow(ctx, queueAuthorizationQuery, expectedRole, riverSchema).Scan(&authorized)
+	authorized, err := queryPostureAnswer(ctx, pool, rolePostureStatementTimeout, queueAuthorizationQuery, expectedRole, riverSchema)
 	switch {
 	case err != nil:
 		// CHAOS-5435 applied the same split to CheckRolePosture but left this

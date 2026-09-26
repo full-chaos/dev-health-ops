@@ -614,6 +614,11 @@ func localScenarios() []localScenario {
 			}
 			f.commit("suffix corners\n")
 		}},
+		{name: "blame: a file name that is not valid UTF-8", targets: []string{"blame"}, build: func(f *fixture) {
+			f.write("plain.txt", "plain\n", 0o644)
+			f.write("bad\xffname.txt", "bad name\n", 0o644)
+			f.commit("bytes in a name\n")
+		}},
 		{name: "blame: many files", build: func(f *fixture) {
 			for i := 0; i < 120; i++ {
 				f.write(fmt.Sprintf("d%d/f%03d.txt", i%5, i), strings.Repeat(fmt.Sprintf("line %d\n", i), 1+i%4), 0o644)
@@ -909,11 +914,6 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 			pythonRows := tablesSnapshot(ctx, t, admin, pythonDatabase)
 			goRows := tablesSnapshot(ctx, t, admin, goDatabase)
 			compared++
-			if strings.HasPrefix(scenario.name, "crafted") && target == "git" && false {
-				for _, line := range pythonRows["git_commits"] {
-					t.Logf("python %s: %s", scenario.name, strings.ReplaceAll(line, "\x1f", " | "))
-				}
-			}
 			for _, table := range localTables {
 				rowsSeen += len(pythonRows[table])
 				perTable[table] += len(pythonRows[table])

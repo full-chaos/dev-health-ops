@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -3663,5 +3664,90 @@ func TestQueuedContractVersionsReadyDoesNotWaitOnTheCensusOnceProven(t *testing.
 	}
 	if time.Since(begun) > 200*time.Millisecond {
 		t.Fatalf("the refusal waited %s", time.Since(begun))
+	}
+}
+
+// selfprobeBeginFn adapts a function to selfprobe.TxOpener.
+type selfprobeBeginFn func(context.Context) (selfprobe.Tx, error)
+
+func (fn selfprobeBeginFn) Begin(ctx context.Context) (selfprobe.Tx, error) { return fn(ctx) }
+
+// CHAOS-6955, the rev 191 go-sync exit: domain_transaction (selfprobe.Once) ran into its deadline
+// waiting for the one-connection readiness pool, and dropped the cause, so the registry called it a
+// hard failure and preclaim-readiness exited on attempt 1 ("dependency_check_failed", elapsed 10.0 s)
+// with a 5 minute retry budget unspent. With the deadline class kept, the same probe is retried.
+func TestPreclaimReadinessRetriesADomainTransactionProbeThatHitItsDeadline(t *testing.T) {
+	t.Parallel()
+	const wantSuccessAttempt = 3
+
+	var attempts atomic.Int32
+	opener := selfprobeBeginFn(func(context.Context) (selfprobe.Tx, error) {
+		if attempts.Add(1) < wantSuccessAttempt {
+			// what pool.Begin returns when no connection frees up before the caller's deadline
+			return nil, fmt.Errorf("acquire connection: %w", context.DeadlineExceeded)
+		}
+		return preclaimNoopTx{}, nil
+	})
+	registry := health.NewRegistry(preclaimTestCheckTimeout)
+	if err := registry.RegisterRequired("domain_transaction", func(ctx context.Context) error {
+		return selfprobe.Once(ctx, opener)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	clock := &preclaimFakeClock{}
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: registry,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+		budget:   time.Minute,
+		now:      clock.now,
+		sleep:    clock.sleep,
+	}
+	if err := component.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want nil: a probe that only ran into its deadline is retried, not fatal\nlogs: %s", err, logs.String())
+	}
+	if got := attempts.Load(); got != wantSuccessAttempt {
+		t.Fatalf("probe ran %d times, want %d", got, wantSuccessAttempt)
+	}
+	if !strings.Contains(logs.String(), `"failed_causes":"domain_transaction=timeout"`) {
+		t.Fatalf("each retry must name the failed check's class: %s", logs.String())
+	}
+}
+
+type preclaimNoopTx struct{}
+
+func (preclaimNoopTx) Rollback(context.Context) error { return nil }
+
+// The refusal that ends a startup (and every retry before it) names the class of EACH failed check,
+// so an exit says which of them failed as a hard error instead of only that four checks failed.
+func TestPreclaimReadinessLogsTheFailureClassOfEachFailedCheck(t *testing.T) {
+	t.Parallel()
+	registry := health.NewRegistry(preclaimTestCheckTimeout)
+	for name, check := range map[string]health.CheckFunc{
+		"domain_postgres":    func(context.Context) error { return errPreclaimCheckDeadline },
+		"domain_transaction": func(context.Context) error { return errors.New("refused") },
+		"queue_postgres":     func(context.Context) error { return nil },
+	} {
+		if err := registry.RegisterRequired(name, check); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{registry: registry, logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+	if err := component.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the refusal")
+	}
+	line := logs.String()
+	for _, want := range []string{
+		`"failed_checks":"domain_postgres,domain_transaction"`,
+		`"failed_causes":"domain_postgres=timeout,domain_transaction=error"`,
+		`"reason":"dependency_check_failed"`, `"attempts":1`,
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("refusal log lacks %s: %s", want, line)
+		}
+	}
+	if strings.Contains(line, "queue_postgres=") {
+		t.Fatalf("a passing check must not appear among the failed causes: %s", line)
 	}
 }

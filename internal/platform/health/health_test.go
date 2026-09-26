@@ -799,3 +799,40 @@ func TestRegistryDropsRefusalLogsInsteadOfStackingGoroutinesBehindAStuckSink(t *
 	close(sink.release)
 	registry.flushRefusalLogs()
 }
+
+// CHAOS-6955: a startup path that cannot serve the HTTP surface (the worker's preclaim-readiness)
+// needs each failed check's CLASS, not only its name, or an exit reads "these four checks failed"
+// with no way to tell a slow dependency from a wrong one. Cause is a bounded vocabulary, never text.
+func TestCheckRequiredReportsTheBoundedFailureClassOfEachCheck(t *testing.T) {
+	t.Parallel()
+	registry := NewRegistry(30 * time.Millisecond)
+	for name, check := range map[string]CheckFunc{
+		"slow":     func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() },
+		"broken":   func(context.Context) error { return errors.New("password=secret refused") },
+		"panicky":  func(context.Context) error { panic("boom") },
+		"canceled": func(context.Context) error { return context.Canceled },
+		"fine":     func(context.Context) error { return nil },
+	} {
+		if err := registry.RegisterRequired(name, check); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status := registry.CheckRequired(context.Background())
+	byName := map[string]CheckStatus{}
+	for _, check := range status.Checks {
+		byName[check.Name] = check
+	}
+	if got := byName["slow"].Cause; got != "timeout" && got != "wait_expired" {
+		t.Errorf("slow Cause = %q, want timeout or wait_expired", got)
+	}
+	for name, want := range map[string]string{"broken": "error", "panicky": "panic", "canceled": "canceled", "fine": ""} {
+		if got := byName[name].Cause; got != want {
+			t.Errorf("%s Cause = %q, want %q", name, got, want)
+		}
+	}
+	for _, check := range status.Checks {
+		if strings.Contains(check.Cause, "secret") || strings.Contains(check.Cause, "boom") {
+			t.Errorf("%s Cause leaked error text: %q", check.Name, check.Cause)
+		}
+	}
+}

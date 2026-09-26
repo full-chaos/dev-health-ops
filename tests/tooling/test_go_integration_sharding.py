@@ -227,125 +227,199 @@ def _providersync_integration_tagged_tests() -> set[str]:
     return tests
 
 
-def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
-    tmp_path: Path,
-) -> None:
-    github_output = tmp_path / "github-output"
-    result = _run_check_go("integration-shard-plan", github_output=github_output)
+# CHAOS-6927: the plan tests below assert PROPERTIES of the planner's output, not one
+# frozen membership. The matrix used to be pinned to exactly {providersync 1-4, packages
+# 2-6} and shard 1 to exactly {internal/providersync}; any PR whose new rows shifted the
+# longest-processing-time placement (two 1 s packages landing in shard 1 beside
+# providersync, so ('packages', 1) appeared) turned the required `test` job red although
+# `check_go.sh integration-shard-plan` exited 0 and every package still ran once.
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    package_total = len(_expected_packages())
-    assert (
-        f"{package_total} package(s) discovered, 0 denylisted, {package_total} will run"
-    ) in result.stdout
-    # Raised 4 -> 6: at four shards each balanced "packages" shard's own
-    # estimated test time (2191s) already exceeded the hosted job's
-    # 25-minute (1500s) timeout-minutes cap before any setup/teardown
-    # overhead. Six shards spreads the same non-isolated packages across
-    # five balanced shards instead of three, each landing near 1315s --
-    # comfortably under the cap -- see the weight-derived isolation check
-    # below for how a future regression here is caught instead of silently
-    # re-balanced.
-    assert (
-        f"integration shard plan: 6 shard(s), {package_total} package(s)"
-    ) in result.stdout
+_PLAN_HEADER = re.compile(
+    r"integration shard plan: (?P<shards>[0-9]+) shard\(s\), (?P<packages>[0-9]+) package\(s\)"
+)
+_SHARD_ROW = re.compile(
+    r"  SHARD (?P<shard>[0-9]+) (?P<package>[A-Za-z0-9_./-]+) weight=(?P<weight>[0-9]+)s"
+)
+_SHARD_TOTAL = re.compile(
+    r"integration shard (?P<shard>[0-9]+): estimated (?P<seconds>[0-9]+)s, "
+    r"(?P<count>[0-9]+) package\(s\)"
+)
+
+
+def _manifest_rows() -> tuple[int, dict[str, int]]:
+    """(the declared shard count, {package: weight}) read straight from the manifest."""
+    shards = None
+    weights: dict[str, int] = {}
+    for line in MANIFEST.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        key, value = line.split("\t")
+        if key == "shards":
+            shards = int(value)
+        else:
+            weights[key] = int(value)
+    assert shards is not None, "the manifest declares no shard count"
+    return shards, weights
+
+
+def _provider_shard_count() -> int:
+    for line in PROVIDER_MANIFEST.read_text(encoding="utf-8").splitlines():
+        if line.startswith("shards\t"):
+            return int(line.split("\t")[1])
+    raise AssertionError("the provider manifest declares no shard count")
+
+
+def _check_shard_plan(
+    stdout: str,
+    github_output: str,
+    *,
+    expected: set[str],
+    manifest_shards: int,
+    manifest_weights: dict[str, int],
+    provider_shards: int,
+) -> dict[int, dict[str, int]]:
+    """Every property the plan must have, whichever way the weights place the packages.
+
+    Raises AssertionError naming the first broken one. Returns {shard: {package: weight}}.
+    """
+    headers = [
+        match
+        for match in map(_PLAN_HEADER.fullmatch, stdout.splitlines())
+        if match is not None
+    ]
+    assert len(headers) == 1, f"want one plan header line, got {len(headers)}"
+    declared = int(headers[0].group("shards"))
+    assert declared == manifest_shards >= 2, (
+        f"the plan says {declared} shard(s), the manifest declares {manifest_shards}"
+    )
+    assert int(headers[0].group("packages")) == len(expected), (
+        f"the plan header counts {headers[0].group('packages')} package(s), "
+        f"discovery found {len(expected)}"
+    )
+
+    assignments: dict[int, dict[str, int]] = {}
+    for line in stdout.splitlines():
+        if not line.startswith("  SHARD "):
+            continue
+        row = _SHARD_ROW.fullmatch(line)
+        assert row, f"malformed shard row: {line!r}"
+        shard = int(row.group("shard"))
+        assert 1 <= shard <= declared, (
+            f"shard {shard} is outside 1..{declared}: {line!r}"
+        )
+        package = row.group("package")
+        assignments.setdefault(shard, {})[package] = int(row.group("weight"))
+
+    flattened = [package for rows in assignments.values() for package in rows]
+    assert len(flattened) == len(set(flattened)), (
+        "a package is assigned to more than one shard (or twice): "
+        f"{sorted({p for p in flattened if flattened.count(p) > 1})[:5]}"
+    )
+    assert set(flattened) == expected, (
+        f"the plan misses {sorted(expected - set(flattened))[:5]} and adds "
+        f"{sorted(set(flattened) - expected)[:5]}"
+    )
+    for shard, rows in assignments.items():
+        for package, weight in rows.items():
+            assert weight == manifest_weights[package] > 0, (
+                f"{package} is planned at {weight}s, the manifest says "
+                f"{manifest_weights[package]}s"
+            )
+    assert PROVIDER_PACKAGE in flattened
+
+    totals = {}
+    for line in stdout.splitlines():
+        match = _SHARD_TOTAL.fullmatch(line)
+        if match:
+            totals[int(match.group("shard"))] = (
+                int(match.group("seconds")),
+                int(match.group("count")),
+            )
+    assert set(totals) == set(range(1, declared + 1)), (
+        f"shard totals for {sorted(totals)}, want every shard 1..{declared}"
+    )
+    for shard, (seconds, count) in totals.items():
+        rows = assignments.get(shard, {})
+        assert count == len(rows) and seconds == sum(rows.values()), (
+            f"shard {shard} says {seconds}s over {count} package(s); its rows sum to "
+            f"{sum(rows.values())}s over {len(rows)}"
+        )
+
+    # Longest-processing-time balance, derived rather than frozen: the last package the
+    # planner handed the heaviest shard was, at that moment, on the lightest shard, and
+    # LPT hands out packages heaviest first, so the heaviest shard's smallest package
+    # bounds how far ahead it can be of the lightest.
+    heaviest = max(totals, key=lambda shard: totals[shard][0])
+    spread = totals[heaviest][0] - min(seconds for seconds, _ in totals.values())
+    smallest_in_heaviest = min(assignments[heaviest].values())
+    assert spread <= smallest_in_heaviest, (
+        f"shard {heaviest} is {spread}s ahead of the lightest shard but its smallest "
+        f"package weighs {smallest_in_heaviest}s: the planner is not balancing"
+    )
 
     output = dict(
         line.split("=", maxsplit=1)
-        for line in github_output.read_text(encoding="utf-8").splitlines()
+        for line in github_output.splitlines()
+        if "=" in line
     )
+    assert "matrix" in output, "the plan wrote no matrix"
     matrix = json.loads(output["matrix"])["include"]
-    assert {(entry["target"], entry["shard"]) for entry in matrix} == {
-        ("providersync", 1),
-        ("providersync", 2),
-        ("providersync", 3),
-        ("providersync", 4),
-        ("packages", 2),
-        ("packages", 3),
-        ("packages", 4),
-        ("packages", 5),
-        ("packages", 6),
+    entries = [(entry["target"], entry["shard"]) for entry in matrix]
+    assert len(entries) == len(set(entries)), f"a matrix entry is repeated: {entries}"
+    assert {shard for target, shard in entries if target == "providersync"} == set(
+        range(1, provider_shards + 1)
+    ), "the providersync shards are not exactly 1..N"
+    packages_entries = {shard for target, shard in entries if target == "packages"}
+    runs_packages = {
+        shard
+        for shard, rows in assignments.items()
+        if any(package != PROVIDER_PACKAGE for package in rows)
     }
-    assert len(matrix) == 9
-
-    assignments: dict[int, set[str]] = {}
-    shard_weights: dict[str, int] = {}
-    for line in result.stdout.splitlines():
-        if not line.startswith("  SHARD "):
-            continue
-        _, shard, package, weight_field = line.split()
-        assignments.setdefault(int(shard), set()).add(package)
-        assert weight_field.startswith("weight=") and weight_field.endswith("s"), (
-            weight_field
-        )
-        shard_weights[package] = int(
-            weight_field.removeprefix("weight=").removesuffix("s")
-        )
-
-    assert set(assignments) == {1, 2, 3, 4, 5, 6}
-    flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == len(_expected_packages())
-    assert set(flattened) == _expected_packages()
-
-    # internal/providersync's isolation in the lowest-numbered shard is a
-    # property of its WEIGHT relative to the other packages, not a fact this
-    # test should hardcode as a bare membership literal -- a literal only
-    # tells a human "this passed today", it does not explain why, and it
-    # says nothing about how close the next re-time is to breaking it. Derive
-    # the same inequality the LPT planner's own greedy placement depends on
-    # directly from the planner's printed weights: providersync must cover
-    # at least the other packages' balanced share once split evenly across
-    # the remaining shards, or the planner starts packing packages into its
-    # shard too. Checking the inequality AND the resulting membership means
-    # a future package addition that erodes this margin fails loudly here,
-    # with the actual numbers, instead of a human silently recounting a new
-    # shard-1 membership as fine.
-    provider_weight = shard_weights[PROVIDER_PACKAGE]
-    other_total = sum(
-        weight
-        for package, weight in shard_weights.items()
-        if package != PROVIDER_PACKAGE
+    assert packages_entries == runs_packages, (
+        f"the matrix runs packages shards {sorted(packages_entries)}; shards holding a "
+        f"package other than {PROVIDER_PACKAGE} are {sorted(runs_packages)}"
     )
-    non_isolated_shards = len(assignments) - 1
-    balanced_share = other_total / non_isolated_shards
-    assert provider_weight >= balanced_share, (
-        f"{PROVIDER_PACKAGE}'s weight ({provider_weight}s) no longer covers "
-        f"the other {len(shard_weights) - 1} packages' balanced per-shard "
-        f"share ({balanced_share:.1f}s across {non_isolated_shards} shards) "
-        "-- the LPT planner will start packing other packages into its "
-        "shard. Re-time ci/go_integration_shards.tsv (or raise its shard "
-        "count) before this reshuffles silently."
-    )
-    assert assignments[1] == {PROVIDER_PACKAGE}
+    assert len(entries) == provider_shards + len(packages_entries)
+    return assignments
 
-    estimated = {
-        int(match.group("shard")): int(match.group("seconds"))
-        for line in result.stdout.splitlines()
-        if (
-            match := re.fullmatch(
-                r"integration shard (?P<shard>\d+): estimated "
-                r"(?P<seconds>\d+)s, \d+ package\(s\)",
-                line,
-            )
-        )
-    }
-    assert set(estimated) == {1, 2, 3, 4, 5, 6}
-    # The five non-isolated "packages" shards (2/3/4/5/6) are what the LPT
-    # planner actually balances against each other -- shard 1 only ever
-    # holds internal/providersync, checked above. Recounted directly from
-    # this run's own planner output (not hand-adjusted) after CHAOS-6246
-    # added internal/api/externalingest (weight 10, a placeholder estimate
-    # -- no hosted CI run has timed it yet, so it is not the observed-wall-
-    # time-from-a-green-run figure every other row's comment promises;
-    # re-measure and replace it the same way CHAOS-6244's rows were): 1370s/
-    # 1371s/1368s/1368s/1369s, a 3s spread. Re-tighten or loosen this to
-    # match a future re-time's actual output rather than forcing new
-    # weights to preserve today's gap.
-    # The bound is proportional (1% of the largest shard, about 13s today)
-    # so a package added at its measured weight is never tuned to fit a
-    # fixed gap: LPT on real weights leaves a few seconds of spread.
-    packages_totals = [estimated[shard] for shard in (2, 3, 4, 5, 6)]
-    assert max(packages_totals) - min(packages_totals) <= max(packages_totals) // 100
+
+_PLAN_CACHE: dict[str, tuple[str, str]] = {}
+
+
+def _real_plan(tmp_path: Path) -> tuple[str, str]:
+    """(planner stdout, GITHUB_OUTPUT text) of the real manifest, run once per process."""
+    if "plan" not in _PLAN_CACHE:
+        github_output = tmp_path / "github-output"
+        result = _run_check_go("integration-shard-plan", github_output=github_output)
+        assert result.returncode == 0, result.stdout + result.stderr
+        _PLAN_CACHE["plan"] = (result.stdout, github_output.read_text(encoding="utf-8"))
+    return _PLAN_CACHE["plan"]
+
+
+def _check_real_plan(stdout: str, github_output: str) -> dict[int, dict[str, int]]:
+    shards, weights = _manifest_rows()
+    return _check_shard_plan(
+        stdout,
+        github_output,
+        expected=_expected_packages(),
+        manifest_shards=shards,
+        manifest_weights=weights,
+        provider_shards=_provider_shard_count(),
+    )
+
+
+def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    stdout, github_output = _real_plan(tmp_path_factory.mktemp("plan"))
+    package_total = len(_expected_packages())
+    assert (
+        f"{package_total} package(s) discovered, 0 denylisted, {package_total} will run"
+    ) in stdout
+    assignments = _check_real_plan(stdout, github_output)
+    assert set(assignments) == set(range(1, _manifest_rows()[0] + 1)), (
+        "a shard holds no package"
+    )
 
     expected_provider_tests = _providersync_top_level_tests()
     expected_integration_tests = _providersync_integration_tagged_tests()
@@ -355,7 +429,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     provider_assignments: dict[int, set[str]] = {}
     provider_class: dict[str, str] = {}
-    for line in result.stdout.splitlines():
+    for line in stdout.splitlines():
         if not line.startswith("  PROVIDER-SHARD "):
             continue
         _label, shard, test_name, _weight, classification = line.split()
@@ -377,7 +451,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     provider_totals: dict[int, int] = {}
     provider_integration_counts: dict[int, int] = {}
-    for line in result.stdout.splitlines():
+    for line in stdout.splitlines():
         match = re.fullmatch(
             r"providersync test shard (?P<shard>\d+): relative weight "
             r"(?P<weight>\d+), (?P<count>\d+) test\(s\), "
@@ -398,23 +472,217 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     )
 
 
-def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
+def test_the_plan_checker_fails_each_planted_defect(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """The properties above are only worth something if a broken plan trips them."""
+    stdout, github_output = _real_plan(tmp_path_factory.mktemp("plan"))
+    _check_real_plan(stdout, github_output)  # the real plan passes
+    lines = stdout.splitlines()
+    first_row = next(i for i, line in enumerate(lines) if line.startswith("  SHARD "))
+    package = lines[first_row].split()[2]
+
+    def plant(name: str, new_lines: list[str], output: str = github_output) -> None:
+        with pytest.raises(AssertionError):
+            _check_real_plan("\n".join(new_lines), output)
+        print(f"killed: {name}")
+
+    def with_rows(changes: dict[int, dict[str, int]]) -> list[str]:
+        """The real plan with shards' rows replaced and their total lines made consistent,
+        so a plan differs from a valid one in exactly the property under test."""
+        assigned: dict[int, dict[str, int]] = {
+            int(m.group("shard")): {} for m in map(_SHARD_TOTAL.fullmatch, lines) if m
+        }
+        for line in lines:
+            row = _SHARD_ROW.fullmatch(line)
+            if row:
+                assigned[int(row.group("shard"))][row.group("package")] = int(
+                    row.group("weight")
+                )
+        assigned.update(changes)
+        out: list[str] = []
+        for line in lines:
+            if line.startswith("  SHARD "):
+                continue
+            total = _SHARD_TOTAL.fullmatch(line)
+            if total:
+                shard = int(total.group("shard"))
+                out.append(
+                    f"integration shard {shard}: estimated "
+                    f"{sum(assigned[shard].values())}s, {len(assigned[shard])} package(s)"
+                )
+                out.extend(
+                    f"  SHARD {shard} {name} weight={weight}s"
+                    for name, weight in sorted(assigned[shard].items())
+                )
+            else:
+                out.append(line)
+        return out
+
+    by_shard: dict[int, dict[str, int]] = {}
+    for line in lines:
+        row = _SHARD_ROW.fullmatch(line)
+        if row:
+            by_shard.setdefault(int(row.group("shard")), {})[row.group("package")] = (
+                int(row.group("weight"))
+            )
+    provider_shard = next(s for s, rows in by_shard.items() if PROVIDER_PACKAGE in rows)
+    shard_a, shard_b = [s for s in sorted(by_shard) if s != provider_shard][:2]
+    lightest_name, lightest_weight = min(
+        by_shard[shard_a].items(), key=lambda kv: kv[1]
+    )
+    # A package listed under a second shard, with every total consistent.
+    plant(
+        "a package assigned twice (totals consistent)",
+        with_rows({shard_b: {**by_shard[shard_b], lightest_name: lightest_weight}}),
+    )
+    # A package dropped from its shard, with every total consistent.
+    plant(
+        "a package missing (totals consistent)",
+        with_rows(
+            {
+                shard_a: {
+                    k: v for k, v in by_shard[shard_a].items() if k != lightest_name
+                }
+            }
+        ),
+    )
+    # A package planned at a weight the manifest does not carry, totals consistent.
+    plant(
+        "a package planned at the wrong weight (totals consistent)",
+        with_rows(
+            {
+                shard_a: {
+                    **by_shard[shard_a],
+                    lightest_name: lightest_weight + 1,
+                }
+            }
+        ),
+    )
+    # A shard total that does not add up, rows untouched.
+    total_line = next(i for i, line in enumerate(lines) if _SHARD_TOTAL.fullmatch(line))
+    wrong = _SHARD_TOTAL.fullmatch(lines[total_line])
+    assert wrong is not None
+    plant(
+        "a shard total that does not add up",
+        lines[:total_line]
+        + [
+            f"integration shard {wrong.group('shard')}: estimated "
+            f"{int(wrong.group('seconds')) + 1}s, {wrong.group('count')} package(s)"
+        ]
+        + lines[total_line + 1 :],
+    )
+    plant(
+        "a malformed row",
+        lines[:first_row]
+        + ["  SHARD 1 " + package + " weight=fast"]
+        + lines[first_row + 1 :],
+    )
+    header = next(i for i, line in enumerate(lines) if _PLAN_HEADER.fullmatch(line))
+    over = _PLAN_HEADER.fullmatch(lines[header])
+    assert over is not None
+    bumped = (
+        lines[:header]
+        + [
+            f"integration shard plan: {int(over.group('shards')) + 1} shard(s), "
+            f"{over.group('packages')} package(s)"
+        ]
+        + lines[header + 1 :]
+    )
+    plant("a shard count over the manifest's", bumped)
+    # An unbalanced plan whose rows and totals are consistent with each other: only the
+    # balance property can refuse it. Move the heaviest non-providersync package to the
+    # shard that already carries the most, so that shard becomes the heaviest and the
+    # lightest one sinks by the same amount.
+    rows = [
+        (i, _SHARD_ROW.fullmatch(line))
+        for i, line in enumerate(lines)
+        if line.startswith("  SHARD ")
+    ]
+    movable = max(
+        (
+            (int(m.group("weight")), i, m)
+            for i, m in rows
+            if m is not None and m.group("package") != PROVIDER_PACKAGE
+        ),
+        key=lambda item: item[0],
+    )
+    weight, index, moved = movable
+    totals = {
+        int(m.group("shard")): int(m.group("seconds"))
+        for m in (_SHARD_TOTAL.fullmatch(line) for line in lines)
+        if m
+    }
+    source = int(moved.group("shard"))
+    others = sorted((t for t in totals if t != source), key=lambda t: -totals[t])
+    provider_shard = next(
+        int(m.group("shard"))
+        for _, m in rows
+        if m is not None and m.group("package") == PROVIDER_PACKAGE
+    )
+    target = next(t for t in others if t != provider_shard)
+    unbalanced = list(lines)
+    unbalanced[index] = f"  SHARD {target} {moved.group('package')} weight={weight}s"
+    for position, line in enumerate(unbalanced):
+        total = _SHARD_TOTAL.fullmatch(line)
+        if total is None:
+            continue
+        shard = int(total.group("shard"))
+        seconds, count = int(total.group("seconds")), int(total.group("count"))
+        if shard == source:
+            unbalanced[position] = (
+                f"integration shard {shard}: estimated {seconds - weight}s, {count - 1} package(s)"
+            )
+        elif shard == target:
+            unbalanced[position] = (
+                f"integration shard {shard}: estimated {seconds + weight}s, {count + 1} package(s)"
+            )
+    _check_real_plan(stdout, github_output)  # the untouched plan still passes
+    with pytest.raises(AssertionError, match="not balancing"):
+        _check_real_plan("\n".join(unbalanced), github_output)
+    matrix = json.loads(
+        dict(line.split("=", 1) for line in github_output.splitlines())["matrix"]
+    )
+    matrix["include"].append({"target": "packages", "shard": 99})
+    plant(
+        "a matrix entry for a shard that holds nothing",
+        lines,
+        "matrix=" + json.dumps(matrix),
+    )
+
+
+def test_each_shard_dry_run_executes_only_its_manifest_assignment(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    stdout, github_output = _real_plan(tmp_path_factory.mktemp("plan"))
+    assignments = _check_real_plan(stdout, github_output)
     selected_packages: list[str] = []
-    for shard in (2, 3, 4, 5, 6):
+    ran = 0
+    for shard, rows in sorted(assignments.items()):
+        want = set(rows) - {PROVIDER_PACKAGE}
+        if not want:
+            continue  # the planner runs no packages job for a providersync-only shard
         result = _run_check_go("integration-shard", "packages", str(shard), "--dry-run")
         assert result.returncode == 0, result.stdout + result.stderr
         assert f"integration package shard {shard}: DRY RUN" in result.stdout
-        selected_packages.extend(
+        chosen = [
             line.removeprefix("  SHARD-RUN ")
             for line in result.stdout.splitlines()
             if line.startswith("  SHARD-RUN ")
+        ]
+        assert set(chosen) == want and len(chosen) == len(want), (
+            f"shard {shard} would run {sorted(chosen)[:3]}..., the plan assigned "
+            f"{sorted(want)[:3]}..."
         )
+        selected_packages.extend(chosen)
+        ran += 1
+    assert ran >= 2, "fewer than two packages shards ran: the loop measured nothing"
 
     assert len(selected_packages) == len(set(selected_packages))
     assert set(selected_packages) == _expected_packages() - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
-    for shard in (1, 2, 3, 4):
+    for shard in range(1, _provider_shard_count() + 1):
         result = _run_check_go(
             "integration-shard", "providersync", str(shard), "--dry-run"
         )

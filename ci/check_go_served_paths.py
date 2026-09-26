@@ -16,7 +16,10 @@ This gate fails when
    manifest (the body was deleted for a path no recorded revision routes to Go);
 2. a manifest row names a path no served Python route has (the manifest and the
    route registry drifted: a row nobody can act on);
-3. the manifest itself is malformed (columns, plane, path form, duplicates).
+3. a served stub names a different plane than the manifest routes its path to
+   (the stub's ``plane`` argument: ``GO_API``/``QUERY_API``, the literal, or the
+   function's default ``query-api`` when omitted; an unreadable value fails too);
+4. the manifest itself is malformed (columns, plane, path form, duplicates).
 
 Routes come from ``ci/discover_ops_routes.py`` (the served application, not a
 source regex); the stub is recognised on the endpoint function's AST, so a body
@@ -104,7 +107,8 @@ def load_manifest(path: Path) -> tuple[dict[str, ManifestRow], list[str]]:
     return rows, problems
 
 
-def _is_stub_body(body: list[ast.stmt]) -> bool:
+def _stub_call(body: list[ast.stmt]) -> ast.Call | None:
+    """The refusal call when the body is nothing but it (a docstring allowed)."""
     statements = list(body)
     if (
         statements
@@ -114,7 +118,7 @@ def _is_stub_body(body: list[ast.stmt]) -> bool:
     ):
         statements = statements[1:]  # the docstring
     if len(statements) != 1:
-        return False
+        return None
     statement = statements[0]
     call = None
     if isinstance(statement, ast.Expr):
@@ -122,7 +126,7 @@ def _is_stub_body(body: list[ast.stmt]) -> bool:
     elif isinstance(statement, ast.Return):
         call = statement.value
     if not isinstance(call, ast.Call):
-        return False
+        return None
     func = call.func
     name = (
         func.id
@@ -131,7 +135,35 @@ def _is_stub_body(body: list[ast.stmt]) -> bool:
         if isinstance(func, ast.Attribute)
         else None
     )
-    return name in STUB_NAMES
+    return call if name in STUB_NAMES else None
+
+
+def _is_stub_body(body: list[ast.stmt]) -> bool:
+    return _stub_call(body) is not None
+
+
+_PLANE_CONSTANTS = {"QUERY_API": "query-api", "GO_API": "go-api"}
+_DEFAULT_STUB_PLANE = "query-api"  # go_served.raise_served_by_go_api's default
+
+
+def stub_plane(call: ast.Call) -> str | None:
+    """The Go service the stub says owns the route: its ``plane`` argument
+    (second positional or keyword; the module constants or the literal), the
+    function's own default when it is omitted, ``None`` when it is anything
+    the guard cannot read (a computed value must not be waved through)."""
+    node: ast.expr | None = call.args[1] if len(call.args) > 1 else None
+    for keyword in call.keywords:
+        if keyword.arg == "plane":
+            node = keyword.value
+    if node is None:
+        return _DEFAULT_STUB_PLANE
+    if isinstance(node, ast.Name) and node.id in _PLANE_CONSTANTS:
+        return _PLANE_CONSTANTS[node.id]
+    if isinstance(node, ast.Attribute) and node.attr in _PLANE_CONSTANTS:
+        return _PLANE_CONSTANTS[node.attr]
+    if isinstance(node, ast.Constant) and node.value in PLANES:
+        return str(node.value)
+    return None
 
 
 def _function_at(
@@ -156,8 +188,13 @@ def _function_at(
 
 def stub_routes(routes: list[dict], root: Path) -> list[dict]:
     """The served routes whose endpoint body is nothing but the refusal stub."""
+    return [route for route, _ in _stubs(routes, root)]
+
+
+def _stubs(routes: list[dict], root: Path) -> list[tuple[dict, str | None]]:
+    """Each stubbed route with the plane its stub names."""
     trees: dict[str, ast.AST] = {}
-    found: list[dict] = []
+    found: list[tuple[dict, str | None]] = []
     for route in routes:
         if not route.get("endpoint_in_ops_source") or not route.get("file"):
             continue
@@ -170,8 +207,9 @@ def stub_routes(routes: list[dict], root: Path) -> list[dict]:
         function = _function_at(
             trees[key], route.get("endpoint_name") or "", route.get("line")
         )
-        if function is not None and _is_stub_body(function.body):
-            found.append(route)
+        call = _stub_call(function.body) if function is not None else None
+        if call is not None:
+            found.append((route, stub_plane(call)))
     return found
 
 
@@ -179,9 +217,22 @@ def check(
     routes: list[dict], manifest: dict[str, ManifestRow], root: Path
 ) -> list[str]:
     problems: list[str] = []
-    for route in stub_routes(routes, root):
+    for route, plane in _stubs(routes, root):
         path = normalize(route["path"])
-        if not any(covers(template, path) for template in manifest):
+        covering = [row for template, row in manifest.items() if covers(template, path)]
+        if covering and plane is None:
+            problems.append(
+                f"{route['method']} {route['path']} ({route.get('file')}:{route.get('line')}): the stub's plane "
+                "argument is not one of the go_served constants or a literal plane; the guard cannot tell which "
+                "Go service it says owns the route"
+            )
+        elif covering and not any(row.plane == plane for row in covering):
+            problems.append(
+                f"{route['method']} {route['path']} ({route.get('file')}:{route.get('line')}): the stub says {plane} "
+                f"owns the route but {MANIFEST_RELATIVE} routes {path} to "
+                f"{sorted({row.plane for row in covering})}; the refusal would name the wrong service"
+            )
+        if not covering:
             problems.append(
                 f"{route['method']} {route['path']} ({route.get('file')}:{route.get('line')}): the body is the "
                 f"'served by Go' refusal stub, but {path} is not in the Go-served path manifest "

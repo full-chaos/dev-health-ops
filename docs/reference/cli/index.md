@@ -13,7 +13,7 @@ The CLI entry point is `dev-hops` (module `dev_health_ops.cli`). Command groups:
 - `metrics` — compute analytics (daily, rebuild, dora, complexity, capacity, release-impact, validate-flags, compounding-risk)
 - `audit` — diagnostics (completeness, schema, perf, coverage)
 - `fixtures` — synthetic/demo data (generate, validate, product-telemetry)
-- `work-graph` / `investment` / `recommendations` — graph, investment, and recommendation computation
+- `work-graph` / `investment` / `recommendations` — no `dev-hops` verb: the native Go jobs compute them; `dho workers` enqueues them (see the Work Graph, Investment and Recommendations sections below)
 - `admin` — users, orgs, licenses, feature flags, billing plans, feature bundles
 - `billing` — Stripe reconciliation
 - `ai` — AI governance allowlist
@@ -40,7 +40,7 @@ The advice that used to sit here -- trigger the equivalent Celery job instead --
 
 Subcommands that write analytics accept `--sink` to select the output backend. Legacy values (`mongo`, `sqlite`, `postgres`, `both`) are rejected immediately with a migration message. ClickHouse is the only supported analytics backend.
 
-> **Caveat:** Some subcommands (e.g., `audit completeness`, `audit coverage`, `work-graph build`) define their own `--db` flag that accepts an **analytics** (ClickHouse) connection string, overriding the global `--db` meaning for that subcommand. Check individual subcommand docs below for the expected connection type.
+> **Caveat:** Some subcommands (e.g., `audit completeness`, `audit coverage`) define their own `--db` flag that accepts an **analytics** (ClickHouse) connection string, overriding the global `--db` meaning for that subcommand. Check individual subcommand docs below for the expected connection type.
 
 ### Dual-Database Architecture
 
@@ -1773,30 +1773,7 @@ dev-hops ai allowlist list
 
 ## Work Graph
 
-### `work-graph build`
-
-> ⚠️ **Warning (CHAOS-2475):** The `work-graph build` command runs inline and requires configurations that the CLI doesn't enforce at startup. Running it inline can cause silent failures.
->
-> **Interim Workaround:** Prefer the scheduled Go run over an inline invocation; it validates the same inputs before admitting the job. See [Run workers and jobs](../../operate/run/workers-and-jobs.md).
-
-Build work graph edges from raw data (issue → PR → commit linkages). Takes its ClickHouse DSN via its own **required** `--db` flag.
-
-```bash
-dev-hops work-graph build --db "$CLICKHOUSE_URI" \
-  --from 2025-01-01 --to 2025-02-01
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--db` | ClickHouse connection string (**required**) |
-| `--from` | Start date (YYYY-MM-DD, default: 30 days ago) |
-| `--to` | End date (YYYY-MM-DD, default: today) |
-| `--repo-id` | Filter to a specific repository UUID |
-| `--heuristic-window` | Days window for heuristic issue→PR matching (default: 7) |
-| `--heuristic-confidence` | Confidence score for heuristic matches (default: 0.3) |
-| `--allow-degenerate` | Allow single connected-component graphs (default: fail) |
-| `--check-components` | Perform component analysis (enabled by default) |
+> **CHAOS-4924:** the `dev-hops work-graph build` verb was deleted; the Python build compute is gone. To enqueue a fresh `workgraph.build` request, use `dho workers workgraph trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run] --reason <code> --correlation-id <id>`, or rely on the scheduled Go run. See [Run workers and jobs](../../operate/run/workers-and-jobs.md).
 
 ---
 

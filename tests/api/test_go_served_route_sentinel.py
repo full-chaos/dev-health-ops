@@ -203,3 +203,63 @@ def test_the_sync_config_trigger_and_backfill_posts_are_not_stubbed(path: str):
         else ""
     )
     assert "no Python implementation" not in str(detail), (resp.status_code, detail)
+
+
+@pytest.mark.parametrize(("method", "path", "body"), _SYNC_ADMIN_ROUTES)
+def test_a_failing_session_or_sink_dependency_does_not_mask_the_sync_admin_refusal(
+    method: str,
+    path: str,
+    body: dict | None,
+    caplog: pytest.LogCaptureFixture,
+):
+    """The stubs take no database session or metrics sink: with the session
+    dependency failing (database down) an authenticated request that reaches a
+    deleted body still answers the go-api refusal and logs it, instead of the
+    dependency's own error hiding a routing mistake (r1 finding, executed)."""
+    from fastapi import HTTPException
+
+    from dev_health_ops.api.admin.routers import sync as sync_module
+
+    async def broken() -> None:
+        raise HTTPException(status_code=503, detail="synthetic dependency failure")
+
+    overridden = [sync_module.get_session, sync_module.get_backfill_metrics_sink]
+    for dependency in overridden:
+        app.dependency_overrides[dependency] = broken
+    try:
+        with caplog.at_level(logging.ERROR, logger="dev_health_ops.api.go_served"):
+            resp = client.request(method, path, json=body)
+    finally:
+        for dependency in overridden:
+            app.dependency_overrides.pop(dependency, None)
+    assert resp.status_code == 500, f"{method} {path} = {resp.status_code} {resp.text}"
+    assert "go-api" in resp.json().get("detail", ""), resp.text
+    assert any(r.message == "rest.route_served_by_go_api" for r in caplog.records), (
+        f"{method} {path} did not emit rest.route_served_by_go_api"
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "method", "starts"),
+    [
+        (
+            "/api/v1/admin/sync-configs/auto-import-capabilities",
+            "get",
+            "Per-provider, per-category auto-import capability",
+        ),
+        (
+            "/api/v1/admin/sync-configs/batch",
+            "post",
+            "Create a parent sync config backed by the integration",
+        ),
+    ],
+)
+def test_a_sync_admin_stub_keeps_the_openapi_description_its_docstring_gave(
+    path: str, method: str, starts: str
+):
+    """Reducing a body to the refusal must not change the route's OpenAPI entry:
+    the description is the handler's docstring, so the stub keeps it (r1 of this
+    deletion found the loss on these two operations; the whole sync-admin
+    OpenAPI surface is otherwise byte-identical to the pre-deletion build)."""
+    description = app.openapi()["paths"][path][method].get("description", "")
+    assert description.startswith(starts), description

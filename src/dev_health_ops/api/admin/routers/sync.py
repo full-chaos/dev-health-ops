@@ -1640,6 +1640,14 @@ async def _create_planner_managed_config(
 async def get_auto_import_capabilities(
     org_id: str = Depends(get_admin_org_id),
 ) -> dict[str, dict[str, object]]:
+    """Per-provider, per-category auto-import capability (CHAOS-4323).
+
+    Single source of truth for the wizard's three checkboxes: which
+    provider supports which of teams/projects/members, and why not for the
+    ones it doesn't (e.g. GitHub has no "Projects" import). The web wizard
+    renders an unsupported category disabled with this reason rather than
+    letting an operator select a checkbox that would write nothing.
+    """
     raise_served_by_go_api(
         "/api/v1/admin/sync-configs/auto-import-capabilities", GO_API
     )
@@ -1647,7 +1655,6 @@ async def get_auto_import_capabilities(
 
 @router.get("/sync-targets")
 async def get_provider_sync_targets(
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> dict[str, list[str]]:
     raise_served_by_go_api("/api/v1/admin/sync-targets", GO_API)
@@ -1676,7 +1683,6 @@ async def list_sync_configs(
             "Set to true for support or rollback access."
         ),
     ),
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> list[SyncConfigResponse]:
     raise_served_by_go_api("/api/v1/admin/sync-configs", GO_API)
@@ -1855,16 +1861,46 @@ async def _resolve_gitlab_batch_projects(
 )
 async def batch_create_sync_configs(
     payload: SyncConfigBatchCreate,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigBatchResponse:
+    """Create a parent sync config backed by the integration/source/dataset model.
+
+    Per-source options are provider-shaped:
+
+    - **github**: each planner source row carries ``repo`` (plus ``owner``
+      inherited from the parent options); the source name is ``{owner}/{repo}``.
+    - **gitlab**: each planner source row carries an integer ``project_id`` plus
+      ``group`` (and ``gitlab_url`` when present in the parent options), which the
+      unitized GitLab dataset adapter requires to address a project.
+      ``payload.repos`` entries may be either numeric GitLab
+      project ids or project names, which are resolved to ids by listing the
+      group's projects via the stored credential. Name entries therefore
+      require ``credential_id`` and a ``group``/``owner`` in ``sync_options``;
+      unknown or ambiguous names are rejected with a 400. When a credential
+      and group are available the listing also cross-checks numeric entries:
+      a numeric entry matching a listed project *name* is resolved as a name
+      (so a project literally named ``007`` is not coerced to project id 7),
+      and only entries matching no listed name keep id semantics. Without a
+      credential, an all-numeric ``repos`` list is the escape hatch: entries
+      are used as project ids as-is, with no listing call. The effective
+      ``gitlab_url`` (``sync_options.gitlab_url`` → credential ``url`` →
+      ``https://gitlab.com``) is persisted into parent and child options when
+      it is not the public default, so self-hosted sources sync against the
+      same instance used for resolution. The source name is the project's
+      ``path_with_namespace`` when known.
+
+    .. deprecated:: CHAOS-2520
+        Child sync configs are removed. The integration planner is the only
+        routing path; new integrations use the integration/source/dataset model.
+        This endpoint always creates the parent config only (zero children) plus
+        the integration/source/dataset rows it routes through.
+    """
     raise_served_by_go_api("/api/v1/admin/sync-configs/batch", GO_API)
 
 
 @router.post("/sync-configs", response_model=SyncConfigResponse, status_code=201)
 async def create_sync_config(
     payload: SyncConfigCreate,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
     raise_served_by_go_api("/api/v1/admin/sync-configs", GO_API)
@@ -1873,7 +1909,6 @@ async def create_sync_config(
 @router.get("/sync-configs/{config_id}", response_model=SyncConfigResponse)
 async def get_sync_config(
     config_id: str,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
     raise_served_by_go_api("/api/v1/admin/sync-configs/{config_id}", GO_API)
@@ -1885,7 +1920,6 @@ async def get_sync_config(
 )
 async def get_sync_config_repositories(
     config_id: str,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigRepositorySelection:
     raise_served_by_go_api(
@@ -1899,7 +1933,6 @@ async def get_sync_config_repositories(
 )
 async def get_sync_config_coverage(
     config_id: str,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncCoverageSummaryResponse:
     raise_served_by_go_api("/api/v1/admin/sync-configs/{config_id}/coverage", GO_API)
@@ -1912,7 +1945,6 @@ async def get_sync_config_coverage(
 async def replace_sync_config_repositories(
     config_id: str,
     payload: SyncConfigRepositorySelectionUpdate,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigRepositorySelection:
     raise_served_by_go_api(
@@ -1924,7 +1956,6 @@ async def replace_sync_config_repositories(
 async def update_sync_config(
     config_id: str,
     payload: SyncConfigUpdate,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
     raise_served_by_go_api("/api/v1/admin/sync-configs/{config_id}", GO_API)
@@ -1933,7 +1964,6 @@ async def update_sync_config(
 @router.delete("/sync-configs/{config_id}", status_code=204)
 async def delete_sync_config(
     config_id: str,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> None:
     raise_served_by_go_api("/api/v1/admin/sync-configs/{config_id}", GO_API)
@@ -2269,7 +2299,6 @@ async def list_sync_config_jobs(
     config_id: str,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> list[JobRunResponse]:
     raise_served_by_go_api("/api/v1/admin/sync-configs/{config_id}/jobs", GO_API)
@@ -2279,7 +2308,6 @@ async def list_sync_config_jobs(
 async def list_backfill_jobs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ):
     raise_served_by_go_api("/api/v1/admin/backfill-jobs", GO_API)
@@ -2288,10 +2316,6 @@ async def list_backfill_jobs(
 @router.get("/backfill-jobs/{job_id}")
 async def get_backfill_job(
     job_id: str,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
-    metrics_sink_factory: Callable[
-        [], AbstractAsyncContextManager[Any | None]
-    ] = Depends(get_backfill_metrics_sink),
 ):
     raise_served_by_go_api("/api/v1/admin/backfill-jobs/{job_id}", GO_API)

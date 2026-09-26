@@ -239,7 +239,7 @@ var sinceField = regexp.MustCompile(`"since":"[^"]*"`)
 // with the real Python api and the real Go api over the same organizations
 // and ClickHouse rows, and requires the same status and response text.
 func TestAdminLLMSpendVenueOracle(t *testing.T) {
-	runSpendVenue(t, "", "utc", "8a22094063601364705493d9ceb2699ffd148d371ef358201f968dba17240943")
+	runSpendVenue(t, "", "utc", "add8332bde752e5ab856db660341165b5690f64937f8bd1fc4a73c5fa61decb0")
 }
 
 // TestAdminLLMSpendLocalZoneVenueOracle runs both planes in
@@ -247,7 +247,7 @@ func TestAdminLLMSpendVenueOracle(t *testing.T) {
 // `since` is local time there, so a window edge that lands exactly on a row
 // only matches when both read it the same way.
 func TestAdminLLMSpendLocalZoneVenueOracle(t *testing.T) {
-	runSpendVenue(t, "America/Los_Angeles", "localzone", "81f7c65951488431ae038216f3a711c5f695fe8b59e9b1424fe9f97b2f126ba3")
+	runSpendVenue(t, "America/Los_Angeles", "localzone", "e62302e5b409998255a5a1b3ee90e4b862dfcbbaf6ea7d1237aaf690c7c45485")
 }
 
 // spendBase is the clock of the frozen golden: the hour the Python plane's
@@ -278,7 +278,12 @@ func runSpendVenue(t *testing.T, zone, mode, digest string) {
 		cases = cases[:2] // the gates only; the settings branches are zone-free
 	}
 	orgs := map[string]uuid.UUID{richOrg: nextID(), otherOrg: nextID()}
+	specialKeys := make([]string, 0, len(specialErrors()))
 	for key := range specialErrors() {
+		specialKeys = append(specialKeys, key)
+	}
+	sort.Strings(specialKeys)
+	for _, key := range specialKeys {
 		orgs[key] = nextID()
 	}
 	caseOrgs := make([]uuid.UUID, len(cases))
@@ -319,7 +324,14 @@ VALUES ($1, $2, 'llm', $3, $4, false, '2026-02-01T00:00:00+00:00', '2026-02-01T0
 				setting(orgID, "provider", "openai")
 				setting(orgID, "api_key", "key")
 			}
-			for key, id := range orgs {
+			// In key order: the ids the users draw must be the same in every process.
+			orgKeys := make([]string, 0, len(orgs))
+			for key := range orgs {
+				orgKeys = append(orgKeys, key)
+			}
+			sort.Strings(orgKeys)
+			for _, key := range orgKeys {
+				id := orgs[key]
 				org(key, id, "team")
 				addUser("admin-"+key, id, "admin")
 				active(id)

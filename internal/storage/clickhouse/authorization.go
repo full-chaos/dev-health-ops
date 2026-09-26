@@ -85,9 +85,10 @@ func APIPosture(database string) Posture {
 		{Database: database, Table: "work_unit_investments", AllowSelect: true},
 		// POST /sync-configs/{id}/trigger (CHAOS-6871) counts the org's stored
 		// work items against the tier's max_work_items before it hands a
-		// work-items sync to the scheduler. Read-only. Without this grant the
-		// count fails and the sync is allowed (as when ClickHouse is down), so the
-		// tier cap would silently stop being enforced.
+		// work-items sync to the scheduler. Read-only. A login without this grant
+		// is refused by CheckPosture at startup, and at request time the route
+		// fails closed on ACCESS_DENIED / AUTH_FAILED (an unreachable ClickHouse
+		// alone allows the sync, loudly: WARN + counter).
 		{Database: database, Table: "work_items", AllowSelect: true},
 	}}
 }

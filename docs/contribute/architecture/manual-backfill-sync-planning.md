@@ -8,6 +8,8 @@ source_of_truth:
   - internal/scheduler/sync/materializer.go (loadMaterializationPlan's sync_manual_triggers lookup, Materialize's mode routing)
   - src/dev_health_ops/sync/execution_trigger.py (create_sync_execution_trigger's Go hand-off branch, await_sync_execution_trigger_materialized)
   - src/dev_health_ops/alembic/versions/0118_add_sync_manual_triggers.py
+  - internal/api/syncadmin/manual_trigger.go (the Go trigger and backfill routes, CHAOS-6871)
+  - internal/synchandoff/handoff.go (Mint, Wait)
 applicability: current
 lifecycle: active
 ---
@@ -119,3 +121,31 @@ such rows already exist in production (and locally) independent of who
 wrote them, so it is ported here too, as `PlanSource.NonProjectJiraSource`
 -- resolved by `loadPlanSources` (which has the DB access the check needs)
 and read by the otherwise-pure planner as a plain bool.
+
+## The Go admin routes (CHAOS-6871)
+
+`POST /api/v1/admin/sync-configs/{config_id}/trigger` and `.../backfill` are
+served by the Go api (`internal/api/syncadmin`), on the same seam the
+integration sync and backfill routes use: `internal/synchandoff` writes the
+`scheduled_sync_occurrences` row and its `sync_manual_triggers` payload in one
+transaction (with the config's sync job marker and the coverage projection
+invalidation) and waits a bounded time for the scheduler's plan. The guards run
+in Python's order: the config (404), the canonical-incident gate (403), paused
+(409), the tier limit (the trigger's `max_work_items`, read from ClickHouse; the
+backfill's `backfill_days`), and the credential preflight (409, or 400 for a
+credential row that is missing); then the hand-off. The wait is
+`SYNC_MANUAL_TRIGGER_AWAIT_SECONDS` (default 10s) and answers `failed` (a
+quarantined occurrence), `pending`, `disabled` or `triggered`/`accepted`. The
+backfill also records its `backfill_jobs` history row, so the api role holds
+INSERT on that table, and the trigger's work items count needs SELECT on
+ClickHouse `work_items` for the api login. ClickHouse unreachable allows the
+sync with a warning log and the `devhealth_sync_work_items_limit_open_total`
+counter (the tier cap is not enforced for that request); an ACCESS_DENIED or
+AUTH_FAILED answer (a login without the grant) fails closed with an error log.
+
+Named divergences from the Python routes: a configuration that is neither
+planner-managed nor pinned to one source (which Python plans in process) is
+refused with 409 and nothing written, the same ruling as the integration routes;
+an infrastructure failure past the guards answers 503 with Go's own error text;
+the request bodies are the same pydantic models (`date`, `AwareDatetime`), pinned
+to the live FastAPI route and to pydantic's datetime grammar by executed oracles.

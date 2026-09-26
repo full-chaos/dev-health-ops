@@ -67,6 +67,8 @@ func TestInlineRunsEveryDatasetOfATargetInOrder(t *testing.T) {
 		"blame":       {"blame"},
 		"deployments": {"deployments"},
 		"security":    {"security"},
+		"cicd":        {"cicd"},
+		"tests":       {"cicd"},
 	}
 
 	providerArgs := map[string][]string{
@@ -139,7 +141,6 @@ func TestInlineRunCarriesTheRequest(t *testing.T) {
 
 func TestInlineRefusesWhatItCannotRunWithoutOpeningAnything(t *testing.T) {
 	gh := []string{"--provider", "github", "--owner", "a", "--repo", "b", "--auth", "tok"}
-	gl := []string{"--provider", "gitlab", "--project-id", "1", "--auth", "tok"}
 	cases := []struct {
 		name   string
 		target string
@@ -147,9 +148,6 @@ func TestInlineRefusesWhatItCannotRunWithoutOpeningAnything(t *testing.T) {
 		env    map[string]string
 		want   string
 	}{
-		{"local blame", "blame", []string{"--provider", "local"}, inlineEnv, ticketLocalBlame},
-		{"cicd", "cicd", gh, inlineEnv, ticketChunked},
-		{"tests", "tests", gl, inlineEnv, ticketChunked},
 		{"first org from Postgres", "git", gh, map[string]string{"CLICKHOUSE_URI": inlineEnv["CLICKHOUSE_URI"]}, ticketDBLookups},
 		{"an empty ORG_ID is not an org", "git", gh, map[string]string{"CLICKHOUSE_URI": inlineEnv["CLICKHOUSE_URI"], "ORG_ID": ""}, ticketDBLookups},
 		{"synthetic", "git", []string{"--provider", "synthetic"}, inlineEnv, "chris-pending"},

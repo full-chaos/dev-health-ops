@@ -797,3 +797,56 @@ func TestCheckAPIAuthorizationRefusesAMissingDeclaredGrant(t *testing.T) {
 		acrEntitlementTables(t, ctx, admin, role)
 	}
 }
+
+// TestCheckAPIAuthorizationRefusesAWithheldBackfillJobsInsert withholds the one
+// privilege CHAOS-6871 added to the api role, INSERT on backfill_jobs (the
+// sync configuration's backfill POST records its history row): a role that
+// keeps SELECT and DELETE but lacks INSERT must not be ready, or the route
+// would answer 503 on the first backfill.
+func TestCheckAPIAuthorizationRefusesAWithheldBackfillJobsInsert(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closePostgresInstanceInternal(t, instance) })
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := containers.RoleName(apiAuthorizationRole+"_bfjobs", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
+
+	bootstrapAPIRole(t, ctx, admin, dbName, role)
+	acrEntitlementTables(t, ctx, admin, role)
+	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+		t.Fatalf("fully granted api role failed readiness: %v", err)
+	}
+	declared := false
+	for _, table := range apiPosture().RequiredTables {
+		if table.TableName == "backfill_jobs" {
+			declared = table.AllowInsert
+		}
+	}
+	if !declared {
+		t.Fatal("the api posture no longer declares INSERT on backfill_jobs: the backfill route records its history row")
+	}
+	if _, err := admin.Exec(ctx, "REVOKE INSERT ON TABLE public.backfill_jobs FROM "+role); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); !errors.Is(err, ErrPostureRefused) {
+		t.Fatalf("api role without INSERT on backfill_jobs: readiness error %v, want ErrPostureRefused", err)
+	}
+}

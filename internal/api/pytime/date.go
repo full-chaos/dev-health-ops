@@ -51,7 +51,10 @@ func ParseDate(value any) (date time.Time, failure *DateFailure, judged bool) {
 		} else if parsed, ok := parseFull(typed); ok {
 			at = parsed
 		} else {
-			return time.Time{}, nil, false
+			// Not a date, a number or a datetime: pydantic reports the reason
+			// speedate's datetime parser gives (datereason.go).
+			reason := datetimeReason(typed)
+			return time.Time{}, &DateFailure{Type: "date_from_datetime_parsing", Msg: dateFromDatePrefix + reason, Reason: reason}, true
 		}
 	case float64:
 		at, reason = rawFloat(typed)

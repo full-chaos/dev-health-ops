@@ -1050,7 +1050,9 @@ sides:
      changes, plus `session_user` and `current_user`), and the role is an
      unprivileged login (no SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB,
      REPLICATION) that is a member of no role.
-  2. The role owns nothing.
+  2. **Ownership:** the role owns nothing, of ANY object class, in any database
+     (`pg_shdepend` deptype `o`, which records every owned object: collations,
+     operators, text-search objects, types, domains, extensions, ...).
   3. **Grants:** the set of EFFECTIVE grants the role holds, enumerated from every
      ACL-bearing catalog with PUBLIC counted as granted to the role, EQUALS the
      manifest plus the baseline: nothing extra, nothing missing, no grant option,
@@ -1058,11 +1060,23 @@ sides:
      cannot slip past a set-equality over a complete enumeration. Stated scope
      (the exclusion predicate is the enumeration's own SQL): every schema except
      `pg_catalog`, `information_schema`, `pg_toast*` and `pg_temp_*`, and every
-     object except those an EXTENSION owns (`pg_depend` deptype `e`); PUBLIC counts
+     object except those an EXTENSION owns in THIS database (`pg_depend` deptype `e`;
+     it is per-database, so an ACL entry for the role on ANY object in another
+     database is refused, extension-owned or not: it is outside the manifest either
+     way); PUBLIC counts
      as granted to the role, including PUBLIC EXECUTE on a SECURITY DEFINER
      function; the ambient PUBLIC defaults on types, languages and
-     non-SECURITY-DEFINER functions (what every catalog has) are not counted;
-     other databases are out of scope.
+     non-SECURITY-DEFINER functions (what every catalog has) are not counted.
+     Databases: this one in full, and every OTHER database for grants made to the
+     role itself (`pg_database` is shared); PUBLIC's default CONNECT/TEMPORARY on
+     other databases is ambient (`pg_hba.conf` is the control there). An entry
+     granted to the ROLE itself is never ambient, so it counts even in a system
+     schema. **Closure (self-check):** `pg_shdepend` records an ACL row (deptype `a`)
+     for every ACL entry granted to the role, in every class and database; each
+     must be explained by an enumerated grant (or be extension-owned), otherwise
+     it is reported as an `unexplained ACL dependency` and refused, and the migrate
+     leg stops instead of provisioning a role it cannot fully see. An enumeration
+     that misses a class therefore cannot pass silently.
   4. **Resolution:** every manifest table resolves, unqualified, to its `public`
      relation (the application's queries are unqualified, so a `search_path` that
      hides the manifest would leave a Ready pod failing every request).

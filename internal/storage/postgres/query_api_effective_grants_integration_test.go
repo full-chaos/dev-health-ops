@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -113,6 +114,9 @@ func TestCheckQueryAPIAuthorizationRefusesEveryEffectiveGrantOutsideTheManifest(
 		{"USAGE on a foreign server", func(r string) []string {
 			return []string{"GRANT USAGE ON FOREIGN SERVER qapi_server TO " + r}
 		}, nil, "qapi_server"},
+		{"an explicit grant on a SYSTEM-schema object (never ambient: it is the role's own)", func(r string) []string {
+			return []string{"GRANT SELECT ON pg_catalog.pg_extension TO " + r}
+		}, nil, "pg_extension"},
 		{"a WITH GRANT OPTION on a manifest table", func(r string) []string {
 			return []string{"GRANT SELECT ON public.organizations TO " + r + " WITH GRANT OPTION"}
 		}, nil, "GRANT OPTION"},
@@ -261,6 +265,9 @@ func TestQueryAPIMigrateLegLeavesTheRoleExactlyOnTheManifest(t *testing.T) {
 	for _, statement := range []string{
 		"CREATE ROLE " + role + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + password + "'",
 		"GRANT CONNECT ON DATABASE " + dbName + " TO " + role,
+		"CREATE DATABASE exact_other_db",
+		"REVOKE CONNECT ON DATABASE exact_other_db FROM PUBLIC",
+		"GRANT CONNECT, CREATE, TEMPORARY ON DATABASE exact_other_db TO " + role,
 		"CREATE SCHEMA other_schema",
 		"CREATE TABLE other_schema.t (id int, note text)",
 		"CREATE SEQUENCE other_schema.s",
@@ -294,7 +301,10 @@ func TestQueryAPIMigrateLegLeavesTheRoleExactlyOnTheManifest(t *testing.T) {
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
-	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS exact_other_db WITH (FORCE)")
+		containers.DropRole(admin, role, t.Logf)
+	})
 	rolePool := connectAs(t, ctx, uri, role, password)
 	if err := CheckQueryAPIAuthorization(ctx, rolePool, role, grantSchema); !errors.Is(err, ErrPostureRefused) {
 		t.Fatalf("before the migrate leg the role holds grants outside the manifest: error %v", err)
@@ -305,6 +315,10 @@ func TestQueryAPIMigrateLegLeavesTheRoleExactlyOnTheManifest(t *testing.T) {
 	rolePool = connectAs(t, ctx, uri, role, password)
 	if err := CheckQueryAPIAuthorization(ctx, rolePool, role, grantSchema); err != nil {
 		t.Fatalf("after the migrate leg the role must hold exactly the manifest: %v", err)
+	}
+	var stillConnects bool
+	if err := admin.QueryRow(ctx, "SELECT has_database_privilege($1, 'exact_other_db', 'CONNECT')", role).Scan(&stillConnects); err != nil || stillConnects {
+		t.Fatalf("the leg must revoke the role's grant on another database (still=%v err=%v)", stillConnects, err)
 	}
 }
 
@@ -488,5 +502,164 @@ func TestDiffQueryAPIGrantsNamesTheFirstDifferenceDeterministically(t *testing.T
 	noUsage = append(noUsage, full[3:]...)
 	if got := diffQueryAPIGrants("db", posture, noUsage); got != "lacks USAGE on schema public" {
 		t.Fatalf("a missing USAGE on public must be named: %q", got)
+	}
+}
+
+// CHAOS-6804 r3b P1-1: ownership of ANY object class, not only the four the
+// preflight listed. Ownership carries every privilege on the object (including
+// DROP) and leaves no ACL entry, so the enumeration cannot see it: pg_shdepend
+// (deptype 'o') records the ownership of EVERY object class, and the check reads it.
+func TestCheckQueryAPIAuthorizationRefusesOwnershipOfAnyObjectClass(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIFixture(t)
+	cases := []struct {
+		name          string
+		create, owner string
+	}{
+		{"a collation", "CREATE COLLATION public.qapi_owned_collation (provider = libc, locale = 'C')", "ALTER COLLATION public.qapi_owned_collation OWNER TO %s"},
+		{"a text search configuration", "CREATE TEXT SEARCH CONFIGURATION public.qapi_owned_tsconfig (COPY = simple)", "ALTER TEXT SEARCH CONFIGURATION public.qapi_owned_tsconfig OWNER TO %s"},
+		{"a text search dictionary", "CREATE TEXT SEARCH DICTIONARY public.qapi_owned_tsdict (TEMPLATE = simple)", "ALTER TEXT SEARCH DICTIONARY public.qapi_owned_tsdict OWNER TO %s"},
+		{"an enum type", "CREATE TYPE public.qapi_owned_enum AS ENUM ('a')", "ALTER TYPE public.qapi_owned_enum OWNER TO %s"},
+		{"a domain", "CREATE DOMAIN public.qapi_owned_domain AS int", "ALTER DOMAIN public.qapi_owned_domain OWNER TO %s"},
+		{"a conversion", "CREATE CONVERSION public.qapi_owned_conversion FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1", "ALTER CONVERSION public.qapi_owned_conversion OWNER TO %s"},
+		{"an operator", "CREATE FUNCTION public.qapi_op_fn(int, int) RETURNS bool LANGUAGE sql AS 'SELECT true'; CREATE OPERATOR public.=== (LEFTARG = int, RIGHTARG = int, FUNCTION = public.qapi_op_fn)", "ALTER OPERATOR public.===(int, int) OWNER TO %s"},
+	}
+	for index, test := range cases {
+		role := fixture.newRole(t, ctx, fmt.Sprintf("_own%d", index))
+		grantQueryAPIManifest(t, ctx, fixture.admin, role, nil)
+		if err := CheckQueryAPIAuthorization(ctx, fixture.connect(t, ctx, role), role, "river"); err != nil {
+			t.Fatalf("%s: the control must be ready: %v", test.name, err)
+		}
+		if _, err := fixture.admin.Exec(ctx, test.create); err != nil {
+			t.Fatalf("%s: create: %v", test.name, err)
+		}
+		if _, err := fixture.admin.Exec(ctx, fmt.Sprintf(test.owner, role)); err != nil {
+			t.Fatalf("%s: transfer: %v", test.name, err)
+		}
+		err := CheckQueryAPIAuthorization(ctx, fixture.connect(t, ctx, role), role, "river")
+		if !errors.Is(err, ErrPostureRefused) || !strings.Contains(err.Error(), "owns") {
+			t.Errorf("%s: a role that owns it passed readiness: %v", test.name, err)
+		}
+	}
+}
+
+// CHAOS-6804 r3b P1-2: an explicit grant TO THE ROLE on ANOTHER database. The
+// catalogs of grants are per database but pg_database is shared, so the role's own
+// grants on every database are enumerable: the baseline is CONNECT on THIS database
+// only. (PUBLIC's default CONNECT/TEMPORARY on other databases is ambient.)
+func TestCheckQueryAPIAuthorizationRefusesAnExplicitGrantOnAnotherDatabase(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIFixture(t)
+	role := fixture.newRole(t, ctx, "_odb")
+	grantQueryAPIManifest(t, ctx, fixture.admin, role, nil)
+	other := "qapi_other_" + role[len(role)-8:]
+	for _, statement := range []string{
+		"CREATE DATABASE " + other,
+		"REVOKE CONNECT ON DATABASE " + other + " FROM PUBLIC",
+	} {
+		if _, err := fixture.admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = fixture.admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+other+" WITH (FORCE)")
+	})
+	if err := CheckQueryAPIAuthorization(ctx, fixture.connect(t, ctx, role), role, "river"); err != nil {
+		t.Fatalf("the control must be ready: %v", err)
+	}
+	for _, privilege := range []string{"CONNECT", "CREATE", "TEMPORARY"} {
+		if _, err := fixture.admin.Exec(ctx, "GRANT "+privilege+" ON DATABASE "+other+" TO "+role); err != nil {
+			t.Fatal(err)
+		}
+		err := CheckQueryAPIAuthorization(ctx, fixture.connect(t, ctx, role), role, "river")
+		if !errors.Is(err, ErrPostureRefused) || !strings.Contains(err.Error(), other) {
+			t.Errorf("%s on another database passed readiness: %v", privilege, err)
+		}
+		if _, err := fixture.admin.Exec(ctx, "REVOKE "+privilege+" ON DATABASE "+other+" FROM "+role); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A grant on an object INSIDE another database cannot be enumerated from this
+// database's catalogs, but pg_shdepend records it (dbid = that database): the
+// self-check reports it as an unexplained ACL dependency and readiness refuses.
+func TestCheckQueryAPIAuthorizationRefusesAGrantOnAnObjectInAnotherDatabase(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIFixture(t)
+	role := fixture.newRole(t, ctx, "_odbobj")
+	grantQueryAPIManifest(t, ctx, fixture.admin, role, nil)
+	other := "qapi_objdb_" + role[len(role)-8:]
+	if _, err := fixture.admin.Exec(ctx, "CREATE DATABASE "+other); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = fixture.admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+other+" WITH (FORCE)")
+	})
+	parsed, err := url.Parse(fixture.uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Path = "/" + other
+	otherAdmin, err := pgxpool.New(ctx, parsed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(otherAdmin.Close)
+	if err := CheckQueryAPIAuthorization(ctx, fixture.connect(t, ctx, role), role, "river"); err != nil {
+		t.Fatalf("the control must be ready: %v", err)
+	}
+	for _, statement := range []string{"CREATE TABLE other_facts (id int)", "GRANT SELECT ON other_facts TO " + role} {
+		if _, err := otherAdmin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	err = CheckQueryAPIAuthorization(ctx, fixture.connect(t, ctx, role), role, "river")
+	if !errors.Is(err, ErrPostureRefused) || !strings.Contains(err.Error(), "unexplained ACL dependency") {
+		t.Fatalf("a grant on an object in another database passed readiness: %v", err)
+	}
+}
+
+// r4 P1, resolved as a documented scope rule: the extension-owned exclusion applies to
+// objects in THIS database only (pg_depend is per-database). An ACL entry for the role
+// on an extension-owned object in ANOTHER database cannot be classified from here, so
+// it is refused, named, and stops the migrate leg: fail closed, and outside the
+// manifest either way.
+func TestCheckQueryAPIAuthorizationRefusesAnExtensionObjectGrantInAnotherDatabaseByDesign(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIFixture(t)
+	role := fixture.newRole(t, ctx, "_extodb")
+	grantQueryAPIManifest(t, ctx, fixture.admin, role, nil)
+	other := "qapi_extdb_" + role[len(role)-8:]
+	if _, err := fixture.admin.Exec(ctx, "CREATE DATABASE "+other); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = fixture.admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+other+" WITH (FORCE)")
+	})
+	parsed, err := url.Parse(fixture.uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Path = "/" + other
+	otherAdmin, err := pgxpool.New(ctx, parsed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(otherAdmin.Close)
+	if _, err := otherAdmin.Exec(ctx, "GRANT EXECUTE ON FUNCTION pg_catalog.plpgsql_call_handler() TO "+role); err != nil {
+		t.Fatal(err)
+	}
+	err = CheckQueryAPIAuthorization(ctx, fixture.connect(t, ctx, role), role, "river")
+	if !errors.Is(err, ErrPostureRefused) || !strings.Contains(err.Error(), "unexplained ACL dependency") {
+		t.Fatalf("an extension-owned object's grant in another database must be refused and named: %v", err)
 	}
 }

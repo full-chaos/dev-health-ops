@@ -28,9 +28,7 @@ import (
 //   - a sync for which Postgres holds no organization (dblookup.go: the first
 //     organization and the GitHub credential are read from Postgres like
 //     Python does; with no organization at all the sync is refused);
-//   - the chunked targets cicd and tests (they need a chunk store the
-//     in-process ledger does not implement yet);
-//   - --provider local blame (CHAOS-6776) and --provider synthetic (their own tickets).
+//   - --provider synthetic (its own ticket).
 //
 // `--search` batch mode is batch.go: the listing, then this same per-dataset
 // run for each listed repository.
@@ -41,9 +39,7 @@ const githubIncidentsRefusal = "GitHub does not expose a native incident source;
 
 // Tickets the refusals point at.
 const (
-	ticketDBLookups  = "CHAOS-6710"
-	ticketChunked    = "CHAOS-6711"
-	ticketLocalBlame = "CHAOS-6776"
+	ticketDBLookups = "CHAOS-6710"
 )
 
 // InlineDeps are the executor's outside connections, replaceable in tests.
@@ -103,7 +99,7 @@ func InlineExecutor(deps InlineDeps) Executor {
 	}
 	lookups := dbLookups{FirstOrg: deps.FirstOrg, GitHubCredential: deps.GitHubCredential}
 	return func(ctx context.Context, plan Plan, env cli.Env) error {
-		if plan.Call == CallLocalRepo {
+		if plan.Call == CallLocalRepo || plan.Call == CallLocalBlame {
 			return runLocalRepo(ctx, deps, lookups, plan, env)
 		}
 		datasets, refusal := inlineDatasets(plan)
@@ -155,14 +151,41 @@ func notYet(plan Plan, what, ticket string) *Refusal {
 	}
 }
 
+// unappliedFlags refuses a flag that the command line accepts (dev-hops does apply it)
+// and that the worker's routes do not: a run that ignored it would look like a sync
+// that honoured it. It is a usage error (exit 2) that names the flag and writes
+// nothing. Only what Python applies is refused: --max-commits-per-repo caps the
+// commits, their stats and the blame backfill of `git` and `blame`; --rate-limit-delay
+// seeds the pull-request backoff of a batch that syncs pull requests. (--use-async is
+// accepted and ignored by dev-hops itself, so ignoring it is parity.)
+func unappliedFlags(plan Plan) *Refusal {
+	refuse := func(flag, why string) *Refusal {
+		return &Refusal{
+			Code:  cli.ExitUsage,
+			Stage: "exit",
+			Message: fmt.Sprintf("%s is not supported by the Go routes (%s); drop the flag, or run dev-hops sync %s",
+				flag, why, plan.Target),
+		}
+	}
+	if plan.MaxCommitsGiven && (plan.Target == "git" || plan.Target == "blame") {
+		return refuse("--max-commits-per-repo", "they fetch the whole window and stop at their own page caps")
+	}
+	batch := plan.Call == CallGitHubBatch || plan.Call == CallGitLabBatch
+	if plan.RateLimitDelayGiven && batch && plan.Target == "prs" {
+		return refuse("--rate-limit-delay", "they back off on the provider's own rate-limit signals")
+	}
+	return nil
+}
+
 // inlineDatasets maps the target to the worker datasets it runs, or refuses.
 func inlineDatasets(plan Plan) ([]string, *Refusal) {
 	switch plan.Call {
 	case CallGitHubSingle, CallGitLabSingle, CallGitHubBatch, CallGitLabBatch:
-	case CallLocalBlame:
-		return nil, notYet(plan, "the local provider's blame target", ticketLocalBlame)
 	default:
 		return nil, notYet(plan, "this provider", "chris-pending")
+	}
+	if refusal := unappliedFlags(plan); refusal != nil {
+		return nil, refusal
 	}
 	switch plan.Target {
 	case "incidents":
@@ -171,8 +194,6 @@ func inlineDatasets(plan Plan) ([]string, *Refusal) {
 			// uncaught traceback, exit 1. GitHub has no native incident source.
 			return nil, &Refusal{Code: cli.ExitFailure, Stage: "error", Type: "ValueError", Message: githubIncidentsRefusal}
 		}
-	case "cicd", "tests":
-		return nil, notYet(plan, "the chunked CI/CD and test routes", ticketChunked)
 	}
 	var datasets []string
 	for _, capability := range providersync.Capabilities(plan.Provider) {
@@ -184,14 +205,20 @@ func inlineDatasets(plan Plan) ([]string, *Refusal) {
 			continue
 		}
 		// A dataset that is only an alias of another (pr-reviews and pr-comments
-		// of prs) is written by its canonical dataset.
-		if descriptor.CanonicalDataset != capability.Dataset && capability.Dataset != plan.Target {
-			continue
+		// of prs, tests of cicd) is written by its canonical dataset: the worker
+		// plans a `tests` unit as its `cicd` route, whose one sink writes the CI
+		// runs and the test results together, so the alias the target names runs
+		// as the canonical route, once.
+		dataset := capability.Dataset
+		if descriptor.CanonicalDataset != capability.Dataset {
+			if capability.Dataset != plan.Target {
+				continue
+			}
+			dataset = descriptor.CanonicalDataset
 		}
-		if descriptor.Chunked {
-			return nil, notYet(plan, "the chunked "+capability.Dataset+" route", ticketChunked)
+		if !contains(datasets, dataset) {
+			datasets = append(datasets, dataset)
 		}
-		datasets = append(datasets, capability.Dataset)
 	}
 	if len(datasets) == 0 {
 		return nil, notYet(plan, "target "+plan.Target, "no worker dataset serves it")

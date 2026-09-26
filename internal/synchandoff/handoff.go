@@ -280,7 +280,9 @@ const (
 
 // Outcome is the result of Wait.
 type Outcome struct {
-	State      State
+	State State
+	// JobRunID is the occurrence's job run (empty until it is planned).
+	JobRunID   string
 	SyncRunID  string
 	TotalUnits int
 	ErrorCode  string
@@ -293,10 +295,10 @@ func Wait(ctx context.Context, pool *pgxpool.Pool, occurrenceID string, wait, po
 	deadline := time.Now().Add(wait)
 	for {
 		var status string
-		var syncRunID, errorCode *string
+		var syncRunID, jobRunID, errorCode *string
 		err := pool.QueryRow(ctx, `
-SELECT reconcile_status, sync_run_id::text, reconcile_error_code
-FROM public.scheduled_sync_occurrences WHERE occurrence_id = $1`, occurrenceID).Scan(&status, &syncRunID, &errorCode)
+SELECT reconcile_status, sync_run_id::text, job_run_id::text, reconcile_error_code
+FROM public.scheduled_sync_occurrences WHERE occurrence_id = $1`, occurrenceID).Scan(&status, &syncRunID, &jobRunID, &errorCode)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return Outcome{}, fmt.Errorf("read the occurrence: %w", err)
 		}
@@ -304,7 +306,11 @@ FROM public.scheduled_sync_occurrences WHERE occurrence_id = $1`, occurrenceID).
 			switch status {
 			case "completed":
 				if syncRunID != nil {
-					return readRun(ctx, pool, *syncRunID)
+					outcome, err := readRun(ctx, pool, *syncRunID)
+					if err == nil && jobRunID != nil {
+						outcome.JobRunID = *jobRunID
+					}
+					return outcome, err
 				}
 			case "quarantined":
 				code := "unknown"
@@ -347,7 +353,7 @@ FROM public.sync_runs WHERE id = $1::uuid`, syncRunID).Scan(&units, &status, &ru
 		if runError != nil {
 			reason = *runError
 		}
-		return Outcome{State: StateTerminal, SyncRunID: syncRunID, Reason: reason}, nil
+		return Outcome{State: StateTerminal, SyncRunID: syncRunID, TotalUnits: units, Reason: reason}, nil
 	}
 	return Outcome{State: StateMaterialized, SyncRunID: syncRunID, TotalUnits: units}, nil
 }

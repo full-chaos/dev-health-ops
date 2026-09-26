@@ -220,3 +220,96 @@ func TestParseDateMatchesLivePydantic(t *testing.T) {
 	}
 	t.Logf("%d values compared, %d judged by ParseDate", len(corpus), judged)
 }
+
+// dateReasonCorpus is every string of up to four characters over the characters
+// that decide speedate's datetime grammar, appended to each stage of a valid
+// datetime, plus the same alphabet mutated into the date part. It is the whole
+// boundary of the reason texts, not a sample of it.
+func dateReasonCorpus() []string {
+	stages := []string{"", "2", "2026", "2026-0", "2026-09", "2026-09-2", "2026-09-23", "2026-09-23T", "2026-09-23T0",
+		"2026-09-23T02", "2026-09-23T02:", "2026-09-23T02:0", "2026-09-23T02:00", "2026-09-23T02:00:", "2026-09-23T02:00:0",
+		"2026-09-23T02:00:00", "2026-09-23T02:00:00.", "2026-09-23T02:00:00.1", "2026-09-23T02:00:00,", "2026-09-23T02:00:00Z",
+		"2026-09-23T02:00:00+", "2026-09-23T02:00:00+0", "2026-09-23T02:00:00+02", "2026-09-23T02:00:00+02:", "2026-09-23T02:00:00+02:0",
+		"2026-09-23T02:00:00+02:00", "2026-09-23 02:00", "2026-09-23_02:00", "2026-09-23t02:00", "2026-13-01", "2026-02-30", "2026-00-10"}
+	alphabet := []string{"0", "9", "6", ":", ".", ",", "+", "-", "Z", "x", " ", "T"}
+	var out []string
+	for _, stage := range stages {
+		out = append(out, stage)
+		frontier := []string{""}
+		for range 3 {
+			var next []string
+			for _, prefix := range frontier {
+				for _, character := range alphabet {
+					next = append(next, prefix+character)
+				}
+			}
+			for _, suffix := range next {
+				out = append(out, stage+suffix)
+			}
+			frontier = next
+		}
+	}
+	return out
+}
+
+// TestDatetimeReasonMatchesLivePydantic is the refusing side of the datetime
+// grammar: for every string ParseDate would answer with a datetime-parse
+// reason, that reason is pydantic-core's.
+func TestDatetimeReasonMatchesLivePydantic(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	python := pyoracle.Resolve(t, root)
+	corpus := dateReasonCorpus()
+	quoted := make([]string, len(corpus))
+	for index, text := range corpus {
+		quoted[index] = strconv.Quote(text)
+	}
+	input, _ := json.Marshal(quoted)
+	command := exec.Command(python, "-c", pythonDateProgram)
+	command.Stdin = strings.NewReader(string(input))
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("live pydantic: %v", pyoracle.RunError(python, err, output))
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var want []struct{ OK, Type, Msg, Reason string }
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(want) != len(corpus) {
+		t.Fatalf("python returned %d results for %d inputs", len(want), len(corpus))
+	}
+	compared, mismatches := 0, 0
+	for index, text := range corpus {
+		date, failure, judged := ParseDate(text)
+		if !judged {
+			t.Fatalf("%q: ParseDate no longer answers every string", text)
+		}
+		expected := want[index].OK
+		if expected == "" {
+			expected = want[index].Type + "|" + want[index].Msg + "|" + want[index].Reason
+		}
+		got := date.Format("2006-01-02")
+		if failure != nil {
+			got = failure.Type + "|" + failure.Msg + "|" + failure.Reason
+		}
+		compared++
+		if got != expected {
+			mismatches++
+			if mismatches <= 40 {
+				t.Errorf("%q:\n Go     %s\n Python %s", text, got, expected)
+			}
+		}
+	}
+	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDir == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+	if err := os.WriteFile(filepath.Join(proofDir, "api-pytime-datereason"), []byte("executed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%d strings compared, %d mismatches", compared, mismatches)
+}

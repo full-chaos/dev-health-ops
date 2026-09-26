@@ -106,6 +106,15 @@ type EnableRequest struct {
 	// document the deployed binary does not serve.
 	DocumentDigest map[string]string
 
+	// OperationKinds is each operation's registered document kind
+	// (OperationKindQuery / OperationKindMutation; CHAOS-6810, from the
+	// catalog). A mutation is admitted ONLY by a write_executed write receipt, a
+	// query only by a deployed_executed two-plane receipt. EVERY requested
+	// operation needs a known kind: a request naming one without is refused
+	// before anything is read or written, because defaulting an unknown kind to
+	// "query" would let a query receipt authorize a mutation.
+	OperationKinds map[string]string
+
 	Mode string
 	// RolloutPercentage must be EnforcedRolloutPercentage: no plane obeys any
 	// other value (CHAOS-6807), so Enable refuses it rather than record it.
@@ -239,6 +248,9 @@ func (r EnableRequest) validateFields() error {
 		if r.DocumentDigest[operation] == "" {
 			return fmt.Errorf("goapiproof: no document digest for %s -- the RUNNING process's /registry is the only source for it", operation)
 		}
+		if kind := r.OperationKinds[operation]; kind != OperationKindQuery && kind != OperationKindMutation {
+			return fmt.Errorf("goapiproof: no known document kind for %s (got %q) -- enable needs each operation's kind from the catalog: a query is admitted by a two-plane receipt and a mutation only by a write receipt, and an unknown kind is refused rather than treated as a query", operation, kind)
+		}
 	}
 	return nil
 }
@@ -308,7 +320,7 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 	// OperationsWithEnablementProof's targetMode expects, so the value
 	// enable is about to WRITE is also the value that decides whether
 	// today's proof authorizes writing it.
-	proven, err := OperationsWithEnablementProof(ctx, pool, request.SchemaDigest, request.RunningBuild, request.Mode, wanted)
+	proven, err := OperationsWithEnablementProofByKind(ctx, pool, request.SchemaDigest, request.RunningBuild, request.Mode, wanted, request.OperationKinds)
 	if err != nil {
 		return nil, err
 	}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -40,21 +41,21 @@ func TestPostgresRunStorePreservesArtifactCancellationAndNotificationSemantics(t
 		occurrenceID = "scheduled-success"
 	)
 	if _, err := pool.Exec(ctx, `
-INSERT INTO saved_reports (id, org_id, report_plan, parameters, is_active, last_run_status, updated_at)
-VALUES ($1, 'org-1',
- '{"plan_id":"plan-1","report_type":"weekly_health","org_id":"org-1","sections":["summary"]}'::jsonb,
- '{}'::jsonb, TRUE, NULL, NOW())`, reportID); err != nil {
+INSERT INTO saved_reports (id, org_id, name, report_plan, parameters, is_active, last_run_status, updated_at)
+VALUES ($1, 'org-1', 'report',
+ '{"plan_id":"plan-1","report_type":"weekly_health","org_id":"org-1","sections":["summary"]}'::json,
+ '{}'::json, TRUE, NULL, NOW())`, reportID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO scheduled_jobs (id, next_run_at, updated_at)
-VALUES ($1, NOW() + INTERVAL '1 day', NOW())`, jobID); err != nil {
+INSERT INTO scheduled_jobs (id, org_id, name, job_type, schedule_cron, status, next_run_at, created_at, updated_at)
+VALUES ($1, 'org-1', 'job', 'report', '0 6 * * *', 0, NOW() + INTERVAL '1 day', NOW(), NOW())`, jobID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO scheduled_report_occurrences (
-    occurrence_id, report_id, scheduled_job_id, scheduled_for
-) VALUES ($1, $2, $3, NOW())`, occurrenceID, reportID, jobID); err != nil {
+    occurrence_id, identity_version, org_id, report_id, scheduled_job_id, scheduled_for
+) VALUES ($1, 'v1', 'org-1', $2, $3, NOW())`, occurrenceID, reportID, jobID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
@@ -185,8 +186,8 @@ VALUES ($1, $2, 'pending', 0, 'pending')`, retryRunID, reportID); err != nil {
 	)
 	if _, err := pool.Exec(ctx, `
 INSERT INTO scheduled_report_occurrences (
-    occurrence_id, report_id, scheduled_job_id, scheduled_for
-) VALUES ($1, $2, $3, NOW())`, failedOccurrenceID, reportID, jobID); err != nil {
+    occurrence_id, identity_version, org_id, report_id, scheduled_job_id, scheduled_for
+) VALUES ($1, 'v1', 'org-1', $2, $3, NOW())`, failedOccurrenceID, reportID, jobID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
@@ -233,13 +234,13 @@ func TestPostgresRunStoreReclaimsAnExpiredRunningRun(t *testing.T) {
 	)
 	now := time.Date(2026, 8, 13, 18, 0, 0, 0, time.UTC)
 	if _, err := pool.Exec(ctx, `
-INSERT INTO saved_reports (id, org_id, report_plan, parameters, is_active, updated_at)
-VALUES ($1, 'org-1', '{}'::jsonb, '{}'::jsonb, TRUE, $2)`, reportID, now); err != nil {
+INSERT INTO saved_reports (id, org_id, name, report_plan, parameters, is_active, updated_at)
+VALUES ($1, 'org-1', 'report', '{}'::json, '{}'::json, TRUE, $2)`, reportID, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO scheduled_jobs (id, next_run_at, updated_at)
-VALUES ($1, $2, $2)`, jobID, now.Add(24*time.Hour)); err != nil {
+INSERT INTO scheduled_jobs (id, org_id, name, job_type, schedule_cron, status, next_run_at, created_at, updated_at)
+VALUES ($1, 'org-1', 'job', 'report', '0 6 * * *', 0, $2, $2, $2)`, jobID, now.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
@@ -330,8 +331,8 @@ FROM report_runs WHERE id = $1::uuid`, runID).Scan(
 	const exhaustedRunID = "00000000-0000-4000-8000-000000000013"
 	if _, err := pool.Exec(ctx, `
 INSERT INTO scheduled_report_occurrences (
-    occurrence_id, report_id, scheduled_job_id, scheduled_for
-) VALUES ('scheduled-exhaustion', $1, $2, $3)`, reportID, jobID, now); err != nil {
+    occurrence_id, identity_version, org_id, report_id, scheduled_job_id, scheduled_for
+) VALUES ('scheduled-exhaustion', 'v1', 'org-1', $1, $2, $3)`, reportID, jobID, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
@@ -397,55 +398,8 @@ WHERE run.id = $1::uuid`, exhaustedRunID).Scan(
 
 func createReportTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE scheduled_jobs (
-	id uuid PRIMARY KEY,
-	next_run_at timestamptz NULL,
-	updated_at timestamptz NOT NULL
-);
-CREATE TABLE saved_reports (
-	id uuid PRIMARY KEY,
-	org_id text NOT NULL,
-	report_plan jsonb NULL,
-	parameters jsonb NULL,
-	is_active boolean NOT NULL,
-	last_run_at timestamptz NULL,
-	last_run_status text NULL,
-	updated_at timestamptz NOT NULL
-);
-CREATE TABLE scheduled_report_occurrences (
-	occurrence_id text PRIMARY KEY,
-	report_id uuid NOT NULL REFERENCES saved_reports(id),
-	scheduled_job_id uuid NOT NULL REFERENCES scheduled_jobs(id),
-	scheduled_for timestamptz NOT NULL
-);
-CREATE TABLE report_runs (
-	id uuid PRIMARY KEY,
-	report_id uuid NOT NULL REFERENCES saved_reports(id),
-	scheduled_occurrence_id text NULL REFERENCES scheduled_report_occurrences(occurrence_id),
-	status text NOT NULL,
-	started_at timestamptz NULL,
-	completed_at timestamptz NULL,
-	duration_seconds double precision NULL,
-	rendered_markdown text NULL,
-	artifact_url text NULL,
-	provenance_records json NULL,
-	error text NULL,
-	error_traceback text NULL,
-	attempt_count integer NOT NULL,
-	artifact_fingerprint text NULL,
-	execution_claim_token uuid NULL,
-	execution_lease_expires_at timestamptz NULL,
-	execution_reclaim_count integer NOT NULL DEFAULT 0,
-	notification_key text NULL UNIQUE,
-	notification_status text NOT NULL,
-	notification_sent_at timestamptz NULL,
-	notification_claim_token uuid NULL,
-	notification_lease_expires_at timestamptz NULL
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema: the report graph carries its real columns, foreign keys and constraints.
+	pgschema.Apply(ctx, t, pool)
 }
 
 func readReportNextRunAt(

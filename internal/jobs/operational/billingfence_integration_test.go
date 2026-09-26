@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 // CHAOS-5353: the completion fence is a claim/release protocol whose whole
@@ -28,40 +29,9 @@ import (
 // than running the full alembic chain.
 func applyBillingFenceSchema(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	statements := []string{
-		`CREATE EXTENSION IF NOT EXISTS pgcrypto`,
-		`CREATE TABLE public.billing_notifications (
-			id UUID PRIMARY KEY,
-			org_id UUID NOT NULL,
-			notification_type TEXT NOT NULL,
-			idempotency_key TEXT NOT NULL UNIQUE,
-			attributes JSONB NOT NULL DEFAULT '{}'::jsonb,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-			claimed_at TIMESTAMPTZ,
-			completed_at TIMESTAMPTZ
-		)`,
-		`CREATE TABLE public.organizations (
-			id UUID PRIMARY KEY,
-			name TEXT NOT NULL
-		)`,
-		`CREATE TABLE public.users (
-			id UUID PRIMARY KEY,
-			email TEXT NOT NULL,
-			full_name TEXT
-		)`,
-		`CREATE TABLE public.memberships (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			user_id UUID NOT NULL,
-			org_id UUID NOT NULL,
-			role TEXT NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		)`,
-	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatalf("schema statement failed: %v\n%s", err, statement)
-		}
-	}
+	// The migrated schema: billing_notifications, organizations, users and memberships carry their real
+	// columns, foreign keys and constraints (memberships reference both a user and an organization).
+	pgschema.Apply(ctx, t, pool)
 }
 
 func startFencePostgres(t *testing.T) (context.Context, *pgxpool.Pool, *PostgresStore) {
@@ -89,8 +59,8 @@ func seedNotification(
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.billing_notifications
-			(id, org_id, notification_type, idempotency_key, attributes)
-		VALUES ($1, $2, $3, $4, $5::jsonb)`,
+			(id, org_id, notification_type, idempotency_key, attributes, created_at)
+		VALUES ($1, $2, $3, $4, $5::json, now())`,
 		id, orgID, emailType, "billing:"+id, attributes); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +248,8 @@ func TestLoadOrgOwnerPicksTheEarliestOwnerAndOrgName(t *testing.T) {
 	ctx, pool, store := startFencePostgres(t)
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO public.organizations (id, name) VALUES ($1, $2)`,
+		`INSERT INTO public.organizations (id, slug, name, tier, is_active, created_at, updated_at)
+		 VALUES ($1, 'fence-org', $2, 'community', TRUE, now(), now())`,
 		fenceOrgID, "Élan Systèmes"); err != nil {
 		t.Fatal(err)
 	}
@@ -300,8 +271,8 @@ func TestLoadOrgOwnerPicksTheEarliestOwnerAndOrgName(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx,
-			`INSERT INTO public.memberships (user_id, org_id, role, created_at)
-			 VALUES ($1, $2, $3, $4)`,
+			`INSERT INTO public.memberships (id, user_id, org_id, role, created_at)
+			 VALUES (gen_random_uuid(), $1, $2, $3, $4)`,
 			member.id, fenceOrgID, member.role, member.created); err != nil {
 			t.Fatal(err)
 		}
@@ -322,13 +293,18 @@ func TestLoadOrgOwnerPicksTheEarliestOwnerAndOrgName(t *testing.T) {
 // fallback for a NULL full_name.
 func TestLoadOrgOwnerFallsBackToThereForABlankName(t *testing.T) {
 	ctx, pool, store := startFencePostgres(t)
+	// The test's premise is a membership whose organization row is missing (OrgName comes back empty).
+	// The migrated schema's foreign key makes that unrepresentable: drop it to simulate the drift.
+	if _, err := pool.Exec(ctx, `ALTER TABLE public.memberships DROP CONSTRAINT memberships_org_id_fkey`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO public.users (id, email, full_name) VALUES ($1, $2, NULL)`,
 		fenceUserID, "owner@example.test"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO public.memberships (user_id, org_id, role) VALUES ($1, $2, 'owner')`,
+		`INSERT INTO public.memberships (id, user_id, org_id, role) VALUES (gen_random_uuid(), $1, $2, 'owner')`,
 		fenceUserID, fenceOrgID); err != nil {
 		t.Fatal(err)
 	}

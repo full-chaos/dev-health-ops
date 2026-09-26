@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -104,7 +106,7 @@ func TestLeaseRepairPostgresContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createLeaseRepairIntegrationFixture(ctx, pool); err != nil {
+	if err := createLeaseRepairIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
@@ -275,116 +277,38 @@ func TestLeaseRepairPostgresContract(t *testing.T) {
 	})
 }
 
-func createLeaseRepairIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) error {
-	for _, statement := range []string{
-		// The finalizer's wakeup row. Every terminal-status write in this
-		// package now re-arms it in the same transaction
-		// (syncrunrollup.ArmFinalize) so a run whose LAST non-terminal unit a
-		// recovery path terminalizes still reaches the finalizer -- without
-		// this table the write is a 42P01 and the whole pass fails closed,
-		// which is how the gap was found. Shape copied from this package's
-		// materializer fixture, which derives it from alembic.
-		`CREATE TABLE public.sync_dispatch_outbox (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			sync_run_id uuid NOT NULL,
-			kind text NOT NULL,
-			status text NOT NULL,
-			available_at timestamptz NOT NULL,
-			attempts integer NOT NULL,
-			last_error text,
-			dispatched_at timestamptz,
-			claim_token text,
-			claim_expires_at timestamptz,
-			claim_transport text,
-			claim_route_generation bigint,
-			dispatched_transport text,
-			dispatched_route_generation bigint,
-			transport_job_id text,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL,
-			UNIQUE (sync_run_id, kind)
-		)`,
-		`CREATE TABLE public.sync_runs (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			status text NOT NULL,
-			completed_units int NOT NULL DEFAULT 0,
-			failed_units int NOT NULL DEFAULT 0,
-			total_units int NOT NULL DEFAULT 0
-		)`,
-		`CREATE TABLE public.sync_run_units (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			sync_run_id uuid NOT NULL REFERENCES public.sync_runs(id),
-			provider text NOT NULL,
-			dataset_key text NOT NULL,
-			cost_class text NOT NULL,
-			mode text NOT NULL,
-			status text NOT NULL,
-			attempts integer NOT NULL DEFAULT 0,
-			available_at timestamptz,
-			rate_limit_deferrals integer NOT NULL DEFAULT 0,
-			rate_limit_first_seen_at timestamptz,
-			budget_deferrals integer NOT NULL DEFAULT 0,
-			budget_first_deferred_at timestamptz,
-			first_blocked_at timestamptz,
-			expired_lease_retry_count integer NOT NULL DEFAULT 0,
-			last_retry_reason text,
-			retry_exhausted_at timestamptz,
-			error text,
-			result jsonb,
-			lease_owner text,
-			lease_expires_at timestamptz,
-			updated_at timestamptz NOT NULL
-		)`,
-		// CHAOS-4114: the maintained executed-proof projection. It is in
-		// domainPosture's manifest, and the scheduler/worker write paths stamp
-		// it inside the same transaction that writes sync_run_units, so a venue
-		// without it fails those writes outright.
-		`CREATE TABLE public.sync_executed_proof_ledger (
-			provider text NOT NULL,
-			dataset_key text NOT NULL,
-			attempted_at timestamptz NOT NULL,
-			proven_at timestamptz,
-			PRIMARY KEY (provider, dataset_key),
-			CONSTRAINT ck_sync_executed_proof_ledger_provider_normalized
-				CHECK (provider = lower(provider) AND btrim(provider) <> ''),
-			CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
-				CHECK (dataset_key = lower(dataset_key) AND btrim(dataset_key) <> '')
-		)`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			return err
-		}
-	}
+func createLeaseRepairIntegrationFixture(ctx context.Context, t *testing.T, pool *pgxpool.Pool) error {
+	t.Helper()
+	// The migrated schema carries the finalizer's wakeup outbox (every terminal-status write re-arms
+	// it in the same transaction: syncrunrollup.ArmFinalize, CHAOS-4586), the run/unit tables and the
+	// executed-proof projection (CHAOS-4114) with their real columns, constraints and foreign keys.
+	pgschema.Apply(ctx, t, pool)
 	return nil
 }
 
 func resetLeaseRepairTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, "TRUNCATE public.sync_run_units, public.sync_runs"); err != nil {
+	if _, err := pool.Exec(ctx, "TRUNCATE public.sync_run_units, public.sync_runs CASCADE"); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func seedLeaseRepairRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, orgID, status string) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `INSERT INTO public.sync_runs (id, org_id, status) VALUES ($1, $2, $3)`, id, orgID, status); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: id, OrgID: orgID, Status: status})
 }
 
 func seedLeaseRepairUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, runID, orgID, provider, mode, dataset string, retries int64, expiresAt time.Time) {
 	t.Helper()
+	integrationID, sourceID := pgseed.EnsureSyncIntegration(ctx, t, pool, orgID, "", "")
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_run_units (
-			id, org_id, sync_run_id, provider, dataset_key, cost_class, mode, status,
+			id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status, attempts,
 			rate_limit_deferrals, rate_limit_first_seen_at,
 			budget_deferrals, budget_first_deferred_at, first_blocked_at,
-			expired_lease_retry_count, lease_owner, lease_expires_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, 'standard', $6, 'running', 7, $7, 4, $7, $7, $8, 'worker-a', $9, $7)`,
-		id, orgID, runID, provider, dataset, mode, expiresAt.Add(-time.Hour), retries, expiresAt); err != nil {
+			expired_lease_retry_count, lease_owner, lease_expires_at, created_at, updated_at
+		) VALUES ($1, $2, $3, $10::uuid, $11::uuid, $4, $5, 'standard', $6, 'running', 0, 7, $7, 4, $7, $7, $8, 'worker-a', $9, $7, $7)`,
+		id, orgID, runID, provider, dataset, mode, expiresAt.Add(-time.Hour), retries, expiresAt, integrationID, sourceID); err != nil {
 		t.Fatal(err)
 	}
 }

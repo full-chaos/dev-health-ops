@@ -17,10 +17,11 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "goapi",
 		Kind:    cli.Group,
-		Summary: "Go-API rollout operator surface: routing, prove, rest-prove",
+		Summary: "Go-API rollout operator surface: routing, prove, prove-write, rest-prove",
 		Children: []cli.Command{
 			routing.Command(),
 			prove.Command(),
+			prove.WriteCommand(),
 			restprove.Command(),
 		},
 	}

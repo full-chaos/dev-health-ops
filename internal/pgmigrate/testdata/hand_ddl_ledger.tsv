@@ -71,39 +71,6 @@ internal/joboperator/postgres_integration_test.go	worker_job_completion_fences	P
 internal/joboperator/postgres_integration_test.go	worker_job_delivery_abandonments	PROBE	
 internal/joboperator/postgres_integration_test.go	worker_job_outbox	INVENTED	state
 internal/joboperator/postgres_integration_test.go	worker_job_runs	PROBE	
-internal/joboutbox/relay_integration_test.go	integrations	SUBSET	
-internal/joboutbox/relay_integration_test.go	sync_run_units	SUBSET	
-internal/joboutbox/relay_integration_test.go	sync_runs	SUBSET	
-internal/joboutbox/strand_repair_integration_test.go	daily_metrics_partitions	SUBSET	
-internal/joboutbox/strand_repair_integration_test.go	daily_metrics_runs	SUBSET	
-internal/jobroute/control_integration_test.go	sync_run_units	SUBSET	
-internal/jobroute/control_integration_test.go	worker_job_outbox	SUBSET	
-internal/jobroute/control_integration_test.go	worker_job_runs	SUBSET	
-internal/jobs/metrics/remaining/recommendations_readiness_integration_test.go	daily_metrics_partitions	SUBSET	
-internal/jobs/metrics/remaining/recommendations_readiness_integration_test.go	daily_metrics_runs	SUBSET	
-internal/jobs/operational/billingfence_integration_test.go	memberships	SUBSET	
-internal/jobs/operational/billingfence_integration_test.go	organizations	SUBSET	
-internal/jobs/operational/billingfence_integration_test.go	users	SUBSET	
-internal/jobs/operational/github_app_events_integration_test.go	integration_credentials	SUBSET	
-internal/jobs/repair/repair_integration_test.go	daily_metrics_partitions	SUBSET	
-internal/jobs/repair/repair_integration_test.go	daily_metrics_runs	SUBSET	
-internal/jobs/repair/repair_integration_test.go	remaining_metric_partitions	SUBSET	
-internal/jobs/repair/repair_integration_test.go	remaining_metric_runs	SUBSET	
-internal/jobs/report/postgres_integration_test.go	report_runs	SUBSET	
-internal/jobs/report/postgres_integration_test.go	saved_reports	SUBSET	
-internal/jobs/report/postgres_integration_test.go	scheduled_jobs	SUBSET	
-internal/jobs/report/postgres_integration_test.go	scheduled_report_occurrences	SUBSET	
-internal/jobs/system/heartbeat_native_integration_test.go	org_licenses	SUBSET	
-internal/jobs/system/heartbeat_native_integration_test.go	organizations	SUBSET	
-internal/jobs/system/heartbeat_native_integration_test.go	users	SUBSET	
-internal/jobs/system/retention_postgres_integration_test.go	external_ingest_batches	SUBSET	
-internal/jobs/system/retention_postgres_integration_test.go	external_ingest_rejections	SUBSET	
-internal/jobs/system/retention_postgres_integration_test.go	provider_rate_limit_observations	SUBSET	
-internal/jobs/system/retention_postgres_integration_test.go	worker_job_outbox	SUBSET	
-internal/jobs/workgraph/coalesce_integration_test.go	worker_job_outbox	SUBSET	
-internal/providerfoundation/pagerduty_oauth_postgres_integration_test.go	provider_oauth_credentials	SUBSET	
-internal/reconcilerservice/sync_dispatch_reference_integration_test.go	sync_dispatch_outbox	SUBSET	
-internal/reconcilerservice/sync_dispatch_reference_integration_test.go	sync_runs	SUBSET	
 internal/storage/postgres/api_authorization_integration_test.go	external_ingest_sources	SUBSET	
 internal/storage/postgres/api_authorization_integration_test.go	external_ingest_tokens	SUBSET	
 internal/storage/postgres/api_authorization_integration_test.go	feature_flags	SUBSET	
@@ -330,21 +297,6 @@ internal/storage/river/migrate_integration_test.go	worker_job_delivery_abandonme
 internal/storage/river/migrate_integration_test.go	worker_job_outbox	PROBE	state
 internal/storage/river/migrate_integration_test.go	worker_job_routes	PROBE	id
 internal/storage/river/migrate_integration_test.go	worker_job_runs	PROBE	
-internal/syncbudget/loader_integration_test.go	integration_credentials	SUBSET	
-internal/syncbudget/loader_integration_test.go	integration_datasets	SUBSET	
-internal/syncbudget/loader_integration_test.go	integration_sources	SUBSET	
-internal/syncbudget/loader_integration_test.go	integrations	SUBSET	
-internal/syncbudget/loader_integration_test.go	sync_run_units	SUBSET	
-internal/syncbudget/loader_integration_test.go	sync_runs	SUBSET	
-internal/synccoverage/invalidate_integration_test.go	sync_configurations	SUBSET	
-internal/synccoverage/invalidate_integration_test.go	sync_coverage_projections	SUBSET	
-internal/synccoverage/projector_integration_test.go	backfill_jobs	SUBSET	
-internal/synccoverage/projector_integration_test.go	integration_datasets	SUBSET	
-internal/synccoverage/projector_integration_test.go	integration_sources	SUBSET	
-internal/synccoverage/projector_integration_test.go	scheduled_jobs	SUBSET	
-internal/synccoverage/projector_integration_test.go	sync_configurations	SUBSET	
-internal/synccoverage/projector_integration_test.go	sync_run_units	SUBSET	
-internal/synccoverage/projector_integration_test.go	sync_runs	SUBSET	
 internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go	backfill_jobs	SUBSET	
 internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go	feature_flags	SUBSET	
 internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go	integration_datasets	SUBSET	
@@ -367,8 +319,6 @@ internal/syncdispatchruntime/native_dispatch_sync_run_service_integration_test.g
 internal/syncdispatchruntime/publisher_integration_test.go	sync_dispatch_outbox	PROBE	state
 internal/syncdispatchruntime/publisher_integration_test.go	sync_dispatch_transport_routes	PROBE	
 internal/syncdispatchruntime/publisher_integration_test.go	worker_job_outbox	PROBE	state
-internal/syncreconciler/failure_backoff_integration_test.go	sync_dispatch_outbox	SUBSET	
-internal/syncreconciler/failure_backoff_integration_test.go	sync_dispatch_transport_routes	SUBSET	
 internal/syncreconciler/kernel_integration_test.go	audit_logs	PROBE	
 internal/syncreconciler/kernel_integration_test.go	backfill_jobs	PROBE	
 internal/syncreconciler/kernel_integration_test.go	billing_notifications	PROBE	
@@ -425,38 +375,3 @@ internal/syncreconciler/kernel_integration_test.go	worker_job_delivery_abandonme
 internal/syncreconciler/kernel_integration_test.go	worker_job_outbox	PROBE	state
 internal/syncreconciler/kernel_integration_test.go	worker_job_routes	PROBE	id
 internal/syncreconciler/kernel_integration_test.go	worker_job_runs	PROBE	
-internal/syncreconciler/lease_repair_integration_test.go	sync_run_units	SUBSET	
-internal/syncreconciler/lease_repair_integration_test.go	sync_runs	SUBSET	
-internal/syncreconciler/materializer_finalize_backstop_integration_test.go	sync_dispatch_transport_routes	SUBSET	
-internal/syncreconciler/materializer_integration_test.go	scheduled_sync_occurrences	SUBSET	
-internal/syncreconciler/materializer_integration_test.go	sync_run_reference_discoveries	SUBSET	
-internal/syncreconciler/materializer_integration_test.go	sync_run_units	SUBSET	
-internal/syncreconciler/materializer_integration_test.go	sync_runs	SUBSET	
-internal/syncreconciler/orphaned_unit_repair_integration_test.go	sync_run_units	SUBSET	
-internal/syncreconciler/orphaned_unit_repair_integration_test.go	sync_runs	SUBSET	
-internal/syncreconciler/unreclaimable_sweep_integration_test.go	sync_run_units	SUBSET	
-internal/syncreconciler/unreclaimable_sweep_integration_test.go	sync_runs	SUBSET	
-internal/syncreconciler/unreclaimable_sweep_integration_test.go	worker_job_outbox	SUBSET	
-internal/syncreconciler/unreclaimable_sweep_role_split_integration_test.go	integration_sources	SUBSET	
-internal/syncreconciler/unreclaimable_sweep_role_split_integration_test.go	integrations	SUBSET	
-internal/syncreconciler/unreclaimable_sweep_role_split_integration_test.go	worker_job_outbox	SUBSET	
-internal/syncroute/control_integration_test.go	sync_dispatch_outbox	SUBSET	
-internal/syncroute/control_integration_test.go	sync_dispatch_transport_routes	SUBSET	
-internal/syncroute/fence_integration_test.go	sync_dispatch_transport_routes	SUBSET	
-internal/workersctl/main_integration_test.go	sync_run_units	SUBSET	
-internal/workersctl/main_integration_test.go	worker_job_outbox	SUBSET	
-internal/workersctl/main_integration_test.go	worker_job_runs	SUBSET	
-internal/workersctl/trigger_integration_test.go	worker_job_outbox	SUBSET	
-internal/workerservice/multi_replica_integration_test.go	org_licenses	SUBSET	
-internal/workerservice/multi_replica_integration_test.go	organizations	SUBSET	
-internal/workerservice/multi_replica_integration_test.go	provider_rate_limit_observations	SUBSET	
-internal/workerservice/multi_replica_integration_test.go	users	SUBSET	
-internal/workerservice/provider_sync_entitlement_integration_test.go	feature_flags	SUBSET	
-internal/workerservice/provider_sync_entitlement_integration_test.go	org_feature_overrides	SUBSET	
-internal/workerservice/provider_sync_entitlement_integration_test.go	org_licenses	SUBSET	
-internal/workerservice/provider_sync_entitlement_integration_test.go	organizations	SUBSET	
-internal/workerservice/team_catalog_clients_credential_stamp_integration_test.go	integrations	SUBSET	
-internal/workerservice/team_catalog_clients_credential_stamp_integration_test.go	sync_runs	SUBSET	
-internal/workerservice/team_catalog_clients_selections_integration_test.go	integrations	SUBSET	
-internal/workerservice/team_catalog_clients_selections_integration_test.go	sync_configurations	SUBSET	
-internal/workerservice/team_catalog_clients_selections_integration_test.go	sync_runs	SUBSET	

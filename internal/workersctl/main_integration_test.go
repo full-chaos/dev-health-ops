@@ -14,6 +14,7 @@ import (
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -99,37 +100,22 @@ func startJobRouteHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, str
 		"GRANT CONNECT ON DATABASE " + dbName + " TO " + roles.domain + ", " + roles.queue + ", " + roles.coordinator,
 		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
-		// Real production shapes: the three worker_job_* tables newJobRouteController's
-		// coordinator pool touches (control.go), and sync_run_units, which the
-		// domain pool's Celery quiescer reads (quiescer.go).
-		`CREATE TABLE public.worker_job_routes (
-			job_kind text PRIMARY KEY, transport text NOT NULL, paused boolean NOT NULL,
-			generation bigint NOT NULL, updated_at timestamptz NOT NULL
-		)`,
-		`CREATE TABLE public.worker_job_outbox (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		)`,
-		`CREATE TABLE public.worker_job_runs (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		)`,
-		`CREATE TABLE public.sync_run_units (
-			id uuid PRIMARY KEY, provider text NOT NULL, dataset_key text NOT NULL,
-			status text NOT NULL, updated_at timestamptz NOT NULL,
-			lease_expires_at timestamptz
-		)`,
 	}
 	for _, statement := range setup {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
+	// The migrated schema: the worker_job_* tables newJobRouteController's coordinator pool touches
+	// (control.go) and sync_run_units, which the domain pool's Celery quiescer reads (quiescer.go),
+	// with their real columns and constraints. Tables are created BEFORE the pinned migration below so
+	// its domain grants land on them.
+	pgschema.Apply(ctx, t, admin)
 
 	// Derived from CoordinatorPosture(), not restated: this is the same
 	// authority coordinatorGrantStatements uses in the real one-shot
 	// migration command and CheckCoordinatorAuthorization asserts readiness
-	// against. Every table in the posture that this harness never created
-	// (internal_service_credentials, scheduled_jobs, ...) is skipped by
-	// migrate.go's to_regclass guard rather than failing.
+	// against.
 	posture := postgresstore.CoordinatorPosture()
 	coordinatorGrants := make([]riverstore.TableGrant, 0, len(posture.RequiredTables))
 	for _, table := range posture.RequiredTables {
@@ -205,7 +191,9 @@ func TestNewJobRouteControllerWiresRealRoleScopedPools(t *testing.T) {
 	if _, err := admin.Exec(ctx, `
 		INSERT INTO public.worker_job_routes
 			(job_kind, transport, paused, generation, updated_at)
-		VALUES ('sync.provider_unit', 'river', TRUE, 1, statement_timestamp())`); err != nil {
+		VALUES ('sync.provider_unit', 'river', TRUE, 1, statement_timestamp())
+		ON CONFLICT (job_kind) DO UPDATE SET transport = 'river', paused = TRUE, generation = 1,
+			updated_at = statement_timestamp()`); err != nil {
 		t.Fatal(err)
 	}
 

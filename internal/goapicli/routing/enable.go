@@ -87,7 +87,7 @@ func runEnable(argv []string) error {
 	if err != nil {
 		return err
 	}
-	catalog, err := goapiproof.LoadOperationCatalog(common.catalogPath)
+	catalog, kinds, err := goapiproof.LoadOperationCatalogWithKinds(common.catalogPath)
 	if err != nil {
 		return refuse("%v -- refusing to enable anything on a catalog this process cannot read", err)
 	}
@@ -240,6 +240,7 @@ func runEnable(argv []string) error {
 		SchemaDigest:      registry.SchemaDigest,
 		RunningBuild:      running,
 		Operations:        operations,
+		OperationKinds:    kinds,
 		DocumentDigest:    registry.DocumentDigest,
 		Mode:              mode,
 		RolloutPercentage: rollout,

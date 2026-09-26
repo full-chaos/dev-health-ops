@@ -143,6 +143,9 @@ def _control_of(case: dict[str, Any]) -> dict[str, Any]:
     receipt = dict(case.get("receipt", {}))
     receipt.update(control.get("receipt", {}))
     derived["receipt"] = receipt
+    if "operation_kind" in control:
+        # The control of a case refused for an unknown kind supplies the kind.
+        derived["operation_kind"] = control["operation_kind"]
     if "key_override" in control:
         if control["key_override"] is None:
             derived.pop("key_override", None)
@@ -197,6 +200,7 @@ async def _seed(
             terminal_state=receipt["terminal_state"],
             measurement_route=receipt["measurement_route"],
             build_binding=receipt["build_binding"],
+            side_effect_digest=receipt["side_effect_digest"],
             baseline_defect=receipt["baseline_defect"],
             differences_outside_baseline_defect=receipt[
                 "differences_outside_baseline_defect"
@@ -204,6 +208,16 @@ async def _seed(
         )
     )
     await session.commit()
+
+
+def _kinds_for(case: dict[str, Any], operation: str) -> dict[str, str]:
+    """The kind map the ask carries: ``operation_kind`` absent = query,
+    ``"unknown"`` = no entry at all (the operation's kind is not known)."""
+    kind = case.get("operation_kind", "query")
+    if kind == "unknown":
+        return {}
+    assert kind in ("query", "mutation"), (case["name"], kind)
+    return {operation: kind}
 
 
 @requires_postgres
@@ -223,6 +237,9 @@ async def test_predicate_matches_the_shared_admission_table(
         candidate_build=wanted["candidate_build"],
         operations={wanted["selected_operation"]: wanted["document_digest"]},
         target_mode=case["target_mode"],
+        # CHAOS-6810: the operation's document kind, from the fixture (the
+        # fixture's operation names are not in the catalog).
+        operation_kinds=_kinds_for(case, wanted["selected_operation"]),
     )
     got = wanted["selected_operation"] in admitted
     assert got == case["admits"], (
@@ -281,13 +298,18 @@ def test_every_refused_case_names_the_control_that_removes_its_reason() -> None:
             f"refused case {case['name']!r} declares no control, so nothing shows "
             "it is refused for the reason it names rather than for another"
         )
-        assert set(control) <= {"receipt", "key_override"}, (
+        assert set(control) <= {"receipt", "key_override", "operation_kind"}, (
             f"control of {case['name']!r} has unknown keys {sorted(control)}"
         )
         derived = _control_of(case)
-        assert (derived.get("receipt"), derived.get("key_override")) != (
+        assert (
+            derived.get("receipt"),
+            derived.get("key_override"),
+            derived.get("operation_kind"),
+        ) != (
             case.get("receipt"),
             case.get("key_override"),
+            case.get("operation_kind"),
         ), f"control of {case['name']!r} changes nothing, so it cannot remove a reason"
         if case.get("ask_with_overridden_key"):
             assert case.get("key_override"), (

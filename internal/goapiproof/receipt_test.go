@@ -324,3 +324,35 @@ func TestEverySQLComposedValueIsVersionStable(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-6810: the write_executed receipt's own vocabulary, pinned before the
+// database (the DB carries the same rule as ck_go_api_proof_run_write_executed_shape).
+func TestValidateVocabularyForAWriteExecutedReceipt(t *testing.T) {
+	write := func(mutate func(*Receipt)) Receipt {
+		r := wellFormedReceipt()
+		r.Stage = EnablementWriteProofStage
+		r.SideEffectDigest = "sha256:6810write"
+		mutate(&r)
+		return r
+	}
+	if err := validateVocabulary(write(func(*Receipt) {})); err != nil {
+		t.Fatalf("a well-formed write receipt was refused: %v", err)
+	}
+	if err := validateVocabulary(write(func(r *Receipt) { r.MeasurementRoute = RouteProof })); err != nil {
+		t.Fatalf("a proof-route write receipt was refused (it is the only way a mutation not yet routed to Go can be measured): %v", err)
+	}
+	refused := map[string]func(*Receipt){
+		"no digest":         func(r *Receipt) { r.SideEffectDigest = "" },
+		"blank digest":      func(r *Receipt) { r.SideEffectDigest = " \t" },
+		"nbsp-only digest":  func(r *Receipt) { r.SideEffectDigest = " " },
+		"no route":          func(r *Receipt) { r.MeasurementRoute = "" },
+		"unknown route":     func(r *Receipt) { r.MeasurementRoute = "shadow" },
+		"digest on a query": func(r *Receipt) { r.Stage = "deployed_executed" },
+		"digest on shadow":  func(r *Receipt) { r.Stage = "shadow"; r.DataWatermark = "w" },
+	}
+	for name, mutate := range refused {
+		if err := validateVocabulary(write(mutate)); err == nil {
+			t.Errorf("%s: a receipt the database refuses (or that no reader can admit) passed the writer's own check", name)
+		}
+	}
+}

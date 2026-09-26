@@ -11,111 +11,11 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-const projectorDDL = `
-CREATE TABLE public.sync_configurations (
-    id UUID PRIMARY KEY,
-    org_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    provider TEXT NOT NULL,
-    sync_targets JSON NOT NULL DEFAULT '[]',
-    sync_options JSON NOT NULL DEFAULT '{}',
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    planner_managed BOOLEAN NOT NULL DEFAULT FALSE,
-    integration_id UUID,
-    source_id UUID,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE public.integration_sources (
-    id UUID PRIMARY KEY,
-    org_id TEXT NOT NULL,
-    integration_id UUID NOT NULL,
-    provider TEXT NOT NULL,
-    source_type TEXT NOT NULL,
-    external_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    full_name TEXT NOT NULL,
-    metadata JSON NOT NULL DEFAULT '{}',
-    is_enabled BOOLEAN NOT NULL DEFAULT TRUE
-);
-CREATE TABLE public.integration_datasets (
-    id UUID PRIMARY KEY,
-    org_id TEXT NOT NULL,
-    integration_id UUID NOT NULL,
-    dataset_key TEXT NOT NULL,
-    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-    options JSON NOT NULL DEFAULT '{}'
-);
-CREATE TABLE public.sync_runs (
-    id UUID PRIMARY KEY,
-    org_id TEXT NOT NULL,
-    integration_id UUID NOT NULL,
-    triggered_by TEXT NOT NULL DEFAULT 'manual',
-    mode TEXT NOT NULL DEFAULT 'incremental',
-    status TEXT NOT NULL,
-    started_at TIMESTAMPTZ,
-    completed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE public.sync_run_units (
-    id UUID PRIMARY KEY,
-    org_id TEXT NOT NULL,
-    sync_run_id UUID NOT NULL,
-    integration_id UUID NOT NULL,
-    source_id UUID NOT NULL,
-    provider TEXT NOT NULL,
-    dataset_key TEXT NOT NULL,
-    processor_flags JSON,
-    since_at TIMESTAMPTZ,
-    before_at TIMESTAMPTZ,
-    status TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE public.backfill_jobs (
-    id UUID PRIMARY KEY,
-    org_id TEXT NOT NULL,
-    sync_config_id UUID NOT NULL,
-    celery_task_id TEXT,
-    since_date DATE NOT NULL,
-    before_date DATE NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE public.scheduled_jobs (
-    id UUID PRIMARY KEY,
-    org_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    job_type TEXT NOT NULL,
-    provider TEXT NOT NULL DEFAULT '',
-    schedule_cron TEXT NOT NULL,
-    timezone TEXT NOT NULL DEFAULT 'UTC',
-    status INTEGER NOT NULL DEFAULT 0,
-    sync_config_id UUID,
-    next_run_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE public.sync_coverage_projections (
-    id UUID PRIMARY KEY,
-    org_id TEXT NOT NULL,
-    sync_config_id UUID NOT NULL,
-    history_lookback_days INTEGER NOT NULL,
-    projection_version INTEGER NOT NULL,
-    generated_at TIMESTAMPTZ NOT NULL,
-    source_updated_at TIMESTAMPTZ,
-    backfill_updated_at TIMESTAMPTZ,
-    invalidated_at TIMESTAMPTZ,
-    payload JSON NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_sync_coverage_projection_org_config_window
-      UNIQUE (org_id, sync_config_id, history_lookback_days)
-);`
 
 type projectorFixture struct {
 	OrgID         string
@@ -145,9 +45,7 @@ func TestProjectorPostgresLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, projectorDDL); err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 	now := time.Date(2026, time.August, 12, 8, 0, 0, 0, time.UTC)
 	projector, err := NewProjector(pool, WithClock(func() time.Time { return now }))
 	if err != nil {
@@ -186,8 +84,8 @@ func TestProjectorPostgresLifecycle(t *testing.T) {
 		if _, err := pool.Exec(ctx, `UPDATE sync_configurations SET sync_targets='["git","work-items"]' WHERE id=$1`, fixture.ConfigID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, `INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at)
-VALUES ($1,$2,$3,$4,$5,'github','work-items','["x"]',$6,$7,'success',$8,$8)`,
+		if _, err := pool.Exec(ctx, `INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at,cost_class,mode,attempts)
+VALUES ($1,$2,$3,$4,$5,'github','work-items','["x"]',$6,$7,'success',$8,$8,'rest_core','incremental',0)`,
 			uuid.New(), fixture.OrgID, fixture.RunID, fixture.IntegrationID, fixture.SourceID, now.Add(-24*time.Hour), now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
 			t.Fatal(err)
 		}
@@ -213,22 +111,24 @@ VALUES ($1,$2,$3,$4,$5,'github','work-items','["x"]',$6,$7,'success',$8,$8)`,
 		}{
 			{"active pair", func(fixture projectorFixture) (string, []any) {
 				return `WITH run AS (
-  INSERT INTO sync_runs (id,org_id,integration_id,status,created_at) VALUES ($3,$2,$4,'running',$6) RETURNING id
+  INSERT INTO sync_runs (id,org_id,integration_id,triggered_by,mode,status,total_units,completed_units,failed_units,created_at) VALUES ($3,$2,$4,'test','incremental','running',0,0,0,$6) RETURNING id
 )
-INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,status,created_at,updated_at)
-SELECT $1,$2,run.id,$4,$5,'github','work-items','["x"]','planned',$6,$6 FROM run`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,status,created_at,updated_at,cost_class,mode,attempts)
+SELECT $1,$2,run.id,$4,$5,'github','work-items','["x"]','planned',$6,$6,'rest_core','incremental',0 FROM run`,
 					[]any{uuid.New(), fixture.OrgID, uuid.New(), fixture.IntegrationID, fixture.SourceID, now}
 			}},
 			{"linked backfill unit", func(fixture projectorFixture) (string, []any) {
 				otherRun := uuid.New()
+				otherIntegration := uuid.New()
+				pgseed.Integration(ctx, t, pool, otherIntegration.String(), fixture.OrgID, "github")
 				return `WITH run AS (
-  INSERT INTO sync_runs (id,org_id,integration_id,status,created_at) VALUES ($1,$2,$3,'success',$6) RETURNING id
+  INSERT INTO sync_runs (id,org_id,integration_id,triggered_by,mode,status,total_units,completed_units,failed_units,created_at) VALUES ($1,$2,$3,'test','incremental','success',0,0,0,$6) RETURNING id
 ), job AS (
   INSERT INTO backfill_jobs (id,org_id,sync_config_id,celery_task_id,since_date,before_date) VALUES ($7,$2,$8,'sync_run:' || $1::text,$9::date,$10::date) RETURNING id
 )
-INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at)
-VALUES ($4,$2,$1,$3,$5,'github','work-items','["x"]',$9,$10,'success',$6,$6)`,
-					[]any{otherRun, fixture.OrgID, uuid.New(), uuid.New(), fixture.SourceID, now, uuid.New(), fixture.ConfigID,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at,cost_class,mode,attempts)
+VALUES ($4,$2,$1,$3,$5,'github','work-items','["x"]',$9,$10,'success',$6,$6,'rest_core','incremental',0)`,
+					[]any{otherRun, fixture.OrgID, otherIntegration, uuid.New(), fixture.SourceID, now, uuid.New(), fixture.ConfigID,
 						now.Add(-48 * time.Hour), now.Add(-24 * time.Hour)}
 			}},
 		} {
@@ -451,18 +351,19 @@ func seedDisabledDatasetFixture(t *testing.T, ctx context.Context, pool *pgxpool
 		OrgID: orgID, ConfigID: uuid.New(), IntegrationID: uuid.New(), SourceID: uuid.New(),
 		RunID: uuid.New(), UnitID: uuid.New(),
 	}
+	pgseed.Integration(ctx, t, pool, fixture.IntegrationID.String(), orgID, "github")
 	statements := []struct {
 		SQL  string
 		Args []any
 	}{
-		{`INSERT INTO sync_configurations (id,org_id,name,provider,sync_targets,is_active,planner_managed,integration_id) VALUES ($1,$2,'sync','github','["git", "work-items"]',TRUE,FALSE,$3)`, []any{fixture.ConfigID, orgID, fixture.IntegrationID}},
-		{`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name) VALUES ($1,$2,$3,'github','repository','acme/api','api','acme/api')`, []any{fixture.SourceID, orgID, fixture.IntegrationID}},
-		{`INSERT INTO sync_runs (id,org_id,integration_id,status,started_at,completed_at,created_at) VALUES ($1,$2,$3,'success',$4,$5,$4)`, []any{fixture.RunID, orgID, fixture.IntegrationID, now.Add(-2 * time.Hour), now.Add(-time.Hour)}},
+		{`INSERT INTO sync_configurations (id,org_id,name,provider,sync_targets,is_active,planner_managed,integration_id,created_at,updated_at) VALUES ($1,$2,'sync','github','["git", "work-items"]',TRUE,FALSE,$3,now(),now())`, []any{fixture.ConfigID, orgID, fixture.IntegrationID}},
+		{`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name,metadata,is_enabled,discovered_at,last_seen_at) VALUES ($1,$2,$3,'github','repository','acme/api','api','acme/api','{}'::json,TRUE,now(),now())`, []any{fixture.SourceID, orgID, fixture.IntegrationID}},
+		{`INSERT INTO sync_runs (id,org_id,integration_id,triggered_by,mode,status,total_units,completed_units,failed_units,started_at,completed_at,created_at) VALUES ($1,$2,$3,'test','incremental','success',0,0,0,$4,$5,$4)`, []any{fixture.RunID, orgID, fixture.IntegrationID, now.Add(-2 * time.Hour), now.Add(-time.Hour)}},
 		// commits is selected AND enabled: it must survive the narrowing.
-		{`INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,'github','commits','{}',$6,$7,'success',$8,$8)`, []any{fixture.UnitID, orgID, fixture.RunID, fixture.IntegrationID, fixture.SourceID, now.Add(-24 * time.Hour), now.Add(-time.Hour), now.Add(-time.Hour)}},
+		{`INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at,cost_class,mode,attempts) VALUES ($1,$2,$3,$4,$5,'github','commits','{}',$6,$7,'success',$8,$8,'rest_core','incremental',0)`, []any{fixture.UnitID, orgID, fixture.RunID, fixture.IntegrationID, fixture.SourceID, now.Add(-24 * time.Hour), now.Add(-time.Hour), now.Add(-time.Hour)}},
 		// work-items is selected but DISABLED, and has a failed window wide
 		// enough to clear the adjacency tolerance -- i.e. real advertisable history.
-		{`INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,'github','work-items','{}',$6,$7,'failed',$8,$8)`, []any{uuid.New(), orgID, fixture.RunID, fixture.IntegrationID, fixture.SourceID, now.Add(-240 * time.Hour), now.Add(-120 * time.Hour), now.Add(-time.Hour)}},
+		{`INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at,cost_class,mode,attempts) VALUES ($1,$2,$3,$4,$5,'github','work-items','{}',$6,$7,'failed',$8,$8,'rest_core','incremental',0)`, []any{uuid.New(), orgID, fixture.RunID, fixture.IntegrationID, fixture.SourceID, now.Add(-240 * time.Hour), now.Add(-120 * time.Hour), now.Add(-time.Hour)}},
 		{`INSERT INTO scheduled_jobs (id,org_id,name,job_type,provider,schedule_cron,status,sync_config_id,next_run_at,created_at,updated_at) VALUES ($1,$2,'sync','sync','github','0 * * * *',0,$3,$4,$5,$5)`, []any{uuid.New(), orgID, fixture.ConfigID, now.Add(time.Hour), now.Add(-24 * time.Hour)}},
 	}
 	// The intent plane: the git family stays on, the whole work-item family is off.
@@ -470,13 +371,13 @@ func seedDisabledDatasetFixture(t *testing.T, ctx context.Context, pool *pgxpool
 		statements = append(statements, struct {
 			SQL  string
 			Args []any
-		}{`INSERT INTO integration_datasets (id,org_id,integration_id,dataset_key,is_enabled) VALUES ($1,$2,$3,$4,TRUE)`, []any{uuid.New(), orgID, fixture.IntegrationID, key}})
+		}{`INSERT INTO integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options) VALUES ($1,$2,$3,$4,TRUE,'{}'::json)`, []any{uuid.New(), orgID, fixture.IntegrationID, key}})
 	}
 	for _, key := range []string{"work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"} {
 		statements = append(statements, struct {
 			SQL  string
 			Args []any
-		}{`INSERT INTO integration_datasets (id,org_id,integration_id,dataset_key,is_enabled) VALUES ($1,$2,$3,$4,FALSE)`, []any{uuid.New(), orgID, fixture.IntegrationID, key}})
+		}{`INSERT INTO integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options) VALUES ($1,$2,$3,$4,FALSE,'{}'::json)`, []any{uuid.New(), orgID, fixture.IntegrationID, key}})
 	}
 	for _, statement := range statements {
 		if _, err := pool.Exec(ctx, statement.SQL, statement.Args...); err != nil {
@@ -492,14 +393,15 @@ func seedProjectorFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 		OrgID: orgID, ConfigID: uuid.New(), IntegrationID: uuid.New(), SourceID: uuid.New(),
 		RunID: uuid.New(), UnitID: uuid.New(),
 	}
+	pgseed.Integration(ctx, t, pool, fixture.IntegrationID.String(), orgID, "github")
 	statements := []struct {
 		SQL  string
 		Args []any
 	}{
-		{`INSERT INTO sync_configurations (id,org_id,name,provider,sync_targets,is_active,planner_managed,integration_id) VALUES ($1,$2,'sync','github','["git"]',TRUE,FALSE,$3)`, []any{fixture.ConfigID, orgID, fixture.IntegrationID}},
-		{`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name) VALUES ($1,$2,$3,'github','repository','acme/api','api','acme/api')`, []any{fixture.SourceID, orgID, fixture.IntegrationID}},
-		{`INSERT INTO sync_runs (id,org_id,integration_id,status,started_at,completed_at,created_at) VALUES ($1,$2,$3,'success',$4,$5,$4)`, []any{fixture.RunID, orgID, fixture.IntegrationID, now.Add(-2 * time.Hour), now.Add(-time.Hour)}},
-		{`INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,'github','commits','{}',$6,$7,'success',$8,$8)`, []any{fixture.UnitID, orgID, fixture.RunID, fixture.IntegrationID, fixture.SourceID, now.Add(-24 * time.Hour), now.Add(-time.Hour), now.Add(-time.Hour)}},
+		{`INSERT INTO sync_configurations (id,org_id,name,provider,sync_targets,is_active,planner_managed,integration_id,created_at,updated_at) VALUES ($1,$2,'sync','github','["git"]',TRUE,FALSE,$3,now(),now())`, []any{fixture.ConfigID, orgID, fixture.IntegrationID}},
+		{`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name,metadata,is_enabled,discovered_at,last_seen_at) VALUES ($1,$2,$3,'github','repository','acme/api','api','acme/api','{}'::json,TRUE,now(),now())`, []any{fixture.SourceID, orgID, fixture.IntegrationID}},
+		{`INSERT INTO sync_runs (id,org_id,integration_id,triggered_by,mode,status,total_units,completed_units,failed_units,started_at,completed_at,created_at) VALUES ($1,$2,$3,'test','incremental','success',0,0,0,$4,$5,$4)`, []any{fixture.RunID, orgID, fixture.IntegrationID, now.Add(-2 * time.Hour), now.Add(-time.Hour)}},
+		{`INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at,cost_class,mode,attempts) VALUES ($1,$2,$3,$4,$5,'github','commits','{}',$6,$7,'success',$8,$8,'rest_core','incremental',0)`, []any{fixture.UnitID, orgID, fixture.RunID, fixture.IntegrationID, fixture.SourceID, now.Add(-24 * time.Hour), now.Add(-time.Hour), now.Add(-time.Hour)}},
 		{`INSERT INTO scheduled_jobs (id,org_id,name,job_type,provider,schedule_cron,status,sync_config_id,next_run_at,created_at,updated_at) VALUES ($1,$2,'sync','sync','github','0 * * * *',0,$3,$4,$5,$5)`, []any{uuid.New(), orgID, fixture.ConfigID, now.Add(time.Hour), now.Add(-24 * time.Hour)}},
 	}
 	for _, statement := range statements {
@@ -541,7 +443,7 @@ func assertHealthyProjection(t *testing.T, raw json.RawMessage, fixture projecto
 
 func resetProjectorTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `TRUNCATE sync_coverage_projections, scheduled_jobs, backfill_jobs, sync_run_units, sync_runs, integration_datasets, integration_sources, sync_configurations`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE sync_coverage_projections, scheduled_jobs, backfill_jobs, sync_run_units, sync_runs, integration_datasets, integration_sources, sync_configurations, integrations CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -31,23 +32,13 @@ func TestPostgresPagerDutyOAuthRefreshLockSerializesWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	// The migrated schema: provider_oauth_credentials with its real columns (created_at, account_*) and
+	// primary key.
+	pgschema.Apply(ctx, t, pool)
 	if _, err := pool.Exec(ctx, `
-CREATE TABLE provider_oauth_credentials (
-    org_id text NOT NULL,
-    provider text NOT NULL,
-    credential_name text NOT NULL,
-    token_encrypted text NOT NULL,
-    version integer NOT NULL,
-    binding_id text,
-    expires_at timestamptz,
-    granted_scopes json,
-    has_refresh_token boolean NOT NULL DEFAULT false,
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (org_id, provider, credential_name)
-);
 INSERT INTO provider_oauth_credentials (
-    org_id, provider, credential_name, token_encrypted, version, binding_id
-) VALUES ('org-1', 'pagerduty', 'operations', 'v1:ciphertext', 7, 'binding-1')`); err != nil {
+    org_id, provider, credential_name, token_encrypted, version, binding_id, created_at, updated_at
+) VALUES ('org-1', 'pagerduty', 'operations', 'v1:ciphertext', 7, 'binding-1', now(), now())`); err != nil {
 		t.Fatal(err)
 	}
 

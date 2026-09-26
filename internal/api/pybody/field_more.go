@@ -3,6 +3,7 @@ package pybody
 import (
 	"math/big"
 	"strconv"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
@@ -72,4 +73,48 @@ func SizedModelList[T any](minLength, maxLength int, item func(Model) (T, bool))
 		}
 		return items(e, raw, loc)
 	}
+}
+
+// AwareDatetime is pydantic's `AwareDatetime`: the lax datetime rule, then a
+// naive result is refused as timezone_aware ("Input should have timezone
+// info"), whose input is the raw value (pytime.ParseAwareDatetime).
+func AwareDatetime(e *Errors, raw pyjson.Value, loc []pyjson.Value) (pytime.DateTime, bool) {
+	parsed, failure := pytime.ParseAwareDatetime(datetimeInput(raw))
+	if failure != nil {
+		if failure.Type == "timezone_aware" {
+			*e = append(*e, Error{Type: "timezone_aware", Loc: loc, Msg: failure.Msg, Input: raw})
+		} else {
+			*e = append(*e, DatetimeError(loc, raw, failure))
+		}
+		return pytime.DateTime{}, false
+	}
+	return parsed, true
+}
+
+// Date is pydantic's lax `date` over a decoded JSON value: a YYYY-MM-DD string,
+// or a datetime string or unix timestamp at midnight (pytime.ParseDate).
+func Date(e *Errors, raw pyjson.Value, loc []pyjson.Value) (time.Time, bool) {
+	var input any
+	switch typed := raw.(type) {
+	case pyjson.Int:
+		input = new(big.Int).Set(typed.Int)
+	case pyjson.Float:
+		input = float64(typed)
+	case string:
+		input = typed
+	default:
+		input = raw
+	}
+	date, failure, _ := pytime.ParseDate(input)
+	if failure == nil {
+		return date, true
+	}
+	problem := Error{Type: failure.Type, Loc: loc, Msg: failure.Msg, Input: raw}
+	if failure.Reason != "" {
+		ctx := pyjson.NewObject()
+		ctx.Set("error", failure.Reason)
+		problem.Ctx = ctx
+	}
+	*e = append(*e, problem)
+	return time.Time{}, false
 }

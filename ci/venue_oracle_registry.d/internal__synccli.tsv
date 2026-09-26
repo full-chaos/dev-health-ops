@@ -1,3 +1,4 @@
+internal/synccli	TestBatchLoopMatchesLivePython	run
 internal/synccli	TestDBLookupsMatchLivePython	run
 internal/synccli	TestLocalSyncMatchesLivePython	run
 internal/synccli	TestLocalSyncRerunKeepsHeldColumnsUnlikePython	run

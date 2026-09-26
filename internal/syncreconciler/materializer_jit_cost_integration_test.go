@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -40,10 +41,19 @@ const jitCostSyncRuns = 4536
 
 func seedJITCostPopulation(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
+	seedOccurrenceParents(t, ctx, pool)
+	// The red baseline is the database as it stood at revision 0110: migration 0111 is what adds
+	// ix_sync_runs_active_candidates, the mitigation these cases treat as absent. Dropping exactly that
+	// index yields the real pre-0111 state; every other index stays.
+	if _, err := pool.Exec(ctx, `DROP INDEX public.ix_sync_runs_active_candidates`); err != nil {
+		t.Fatalf("drop the 0111 index: %v", err)
+	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.scheduled_sync_occurrences (occurrence_id, sync_run_id, job_run_id, reconcile_status)
-		SELECT 'jit-cost-occ-' || g, NULL, NULL, 'completed'
-		FROM generate_series(1, $1) AS g`, jitCostScheduledOccurrences); err != nil {
+		INSERT INTO public.scheduled_sync_occurrences (occurrence_id, identity_version, org_id, sync_config_id,
+			scheduled_job_id, scheduled_for, reconcile_status, created_at)
+		SELECT 'jit-cost-occ-' || g, 'v1', 'org-materializer', $2::uuid, $3::uuid,
+			timestamptz '2026-01-01 00:00:00+00' + make_interval(secs => g), 'pending', now()
+		FROM generate_series(1, $1) AS g`, jitCostScheduledOccurrences, materializerOccurrenceConfigID, materializerOccurrenceJobID); err != nil {
 		t.Fatalf("seed scheduled_sync_occurrences: %v", err)
 	}
 	// Every seeded sync_run is ALREADY TERMINAL -- the steady-state shape
@@ -53,12 +63,12 @@ func seedJITCostPopulation(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 	// scheduled_sync_occurrences is actually exercised by the planner's cost
 	// model, matching a real cron-driven provider mix.
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.sync_runs (id, org_id, triggered_by, status, created_at)
-		SELECT gen_random_uuid(), 'org-' || (g % 50),
+		INSERT INTO public.sync_runs (id, org_id, integration_id, mode, total_units, completed_units, failed_units, triggered_by, status, created_at)
+		SELECT gen_random_uuid(), 'org-' || (g % 50), $2::uuid, 'incremental', 0, 0, 0,
 			CASE WHEN g % 3 = 0 THEN 'schedule' ELSE 'manual' END,
 			(ARRAY['success','success','success','success','success','success','success','partial_failed','failed'])[1 + (g % 9)],
 			now() - (g || ' minutes')::interval
-		FROM generate_series(1, $1) AS g`, jitCostSyncRuns); err != nil {
+		FROM generate_series(1, $1) AS g`, jitCostSyncRuns, pgseed.DefaultSyncIntegrationID); err != nil {
 		t.Fatalf("seed sync_runs: %v", err)
 	}
 	for _, table := range []string{
@@ -103,7 +113,7 @@ func TestMaterializeFinalizeSQLPlannerCostCrossesJITThresholdWithoutAnIndex(t *t
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+	if err := createMaterializerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	seedJITCostPopulation(t, ctx, pool)
@@ -177,7 +187,7 @@ func TestMaterializeFinalizeSQLCancellationSurfacesSQLState57014(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+	if err := createMaterializerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	seedJITCostPopulation(t, ctx, pool)
@@ -233,7 +243,7 @@ func TestMaterializerStepCompletesUnderRealisticStageBudgetWithJITOnAtServerLeve
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+	if err := createMaterializerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	seedJITCostPopulation(t, ctx, pool)
@@ -307,17 +317,13 @@ func TestMaterializerStepContextDeadlineClassifiesAsStageContextDeadline(t *test
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+	if err := createMaterializerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 
 	const runID = "00000000-0000-4000-8000-000000004901"
 	now := time.Now().UTC()
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.sync_runs (id, org_id, status, created_at)
-		VALUES ($1, 'org-materializer', 'running', $2)`, runID, now); err != nil {
-		t.Fatal(err)
-	}
+	seedRun(t, ctx, pool, runID, "running", now)
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_dispatch_outbox (
 			id, org_id, sync_run_id, kind, status, available_at, attempts,

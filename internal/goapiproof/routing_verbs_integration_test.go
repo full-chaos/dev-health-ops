@@ -70,6 +70,7 @@ func enableRequest(operations ...string) EnableRequest {
 		RunningBuild:      verbsRunningBuild,
 		Operations:        operations,
 		DocumentDigest:    digests,
+		OperationKinds:    queryKinds(operations...),
 		Mode:              "canary",
 		RolloutPercentage: 100,
 		RecordedBy:        "lane-routing-verbs",
@@ -283,6 +284,7 @@ func TestEnableDryRunRunsTheGateAndWritesNothing(t *testing.T) {
 
 	request.DryRun = false
 	request.Operations = []string{"featureFlags", "hotspots"}
+	request.OperationKinds = queryKinds("featureFlags", "hotspots")
 	request.DocumentDigest["hotspots"] = "1111111111111111111111111111111111111111111111111111111111111111"
 	if _, err := Enable(ctx, pool, request); !errors.Is(err, ErrEnableUnproven) {
 		t.Fatalf("Enable = %v, want ErrEnableUnproven for the unproven half", err)

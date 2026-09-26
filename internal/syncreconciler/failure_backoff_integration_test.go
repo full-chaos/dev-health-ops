@@ -11,10 +11,13 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const failureIntegrationID = "00000000-0000-4000-8000-000000003901"
+const failureIntegrationRunID = "00000000-0000-4000-8000-000000003902"
 
 func TestPublishFailureRecorderPostgresCASAndPersistence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -36,7 +39,7 @@ func TestPublishFailureRecorderPostgresCASAndPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createFailureIntegrationFixture(ctx, pool); err != nil {
+	if err := createFailureIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	recorder, err := NewPublishFailureRecorder(pool)
@@ -118,7 +121,11 @@ func TestPublishFailureRecorderPostgresCASAndPersistence(t *testing.T) {
 			{name: "changed route generation", mutate: `
 				UPDATE public.sync_dispatch_transport_routes SET generation = 8
 				WHERE kind = 'dispatch_sync_run'`},
+			// The migrated schema's trigger refuses a transport change without a generation increase, so a
+			// same-generation transport change is a drifted state: disable the trigger for this case only
+			// (the recorder must still lose the lease on the transport mismatch alone).
 			{name: "changed route transport", mutate: `
+				ALTER TABLE public.sync_dispatch_transport_routes DISABLE TRIGGER trg_sync_dispatch_route_generation;
 				UPDATE public.sync_dispatch_transport_routes SET transport = 'celery'
 				WHERE kind = 'dispatch_sync_run'`},
 		}
@@ -155,32 +162,9 @@ func TestPublishFailureRecorderPostgresCASAndPersistence(t *testing.T) {
 	})
 }
 
-func createFailureIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) error {
-	for _, statement := range []string{
-		`CREATE TABLE public.sync_dispatch_transport_routes (
-			kind text PRIMARY KEY,
-			transport text NOT NULL,
-			generation bigint NOT NULL,
-			paused boolean NOT NULL
-		)`,
-		`CREATE TABLE public.sync_dispatch_outbox (
-			id uuid PRIMARY KEY,
-			kind text NOT NULL,
-			status text NOT NULL,
-			available_at timestamptz NOT NULL,
-			attempts integer NOT NULL,
-			last_error text,
-			claim_token text,
-			claim_expires_at timestamptz,
-			claim_transport text,
-			claim_route_generation bigint,
-			updated_at timestamptz NOT NULL
-		)`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			return err
-		}
-	}
+func createFailureIntegrationFixture(ctx context.Context, t *testing.T, pool *pgxpool.Pool) error {
+	t.Helper()
+	pgschema.Apply(ctx, t, pool)
 	return nil
 }
 
@@ -213,19 +197,17 @@ func seedFailureIntegrationClaim(
 		AvailableAt:     now.Add(-time.Minute),
 		Attempts:        attempts,
 	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.sync_dispatch_transport_routes (kind, transport, generation, paused)
-		VALUES ($1, 'river', $2, FALSE)`,
-		claim.Kind, claim.RouteGeneration); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema seeds every route as celery at generation 2 (the reset truncates them) and
+	// the outbox row points at a real run.
+	pgseed.SyncTransportRoute(ctx, t, pool, claim.Kind, "river", claim.RouteGeneration, false, "celery")
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: failureIntegrationRunID, OrgID: "org-failure"})
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_dispatch_outbox (
-			id, kind, status, available_at, attempts, claim_token,
-			claim_expires_at, claim_transport, claim_route_generation, updated_at
-		) VALUES ($3, $1, 'pending', $4, $5, $6, $7, 'river', $2, $4)`,
+			id, org_id, sync_run_id, kind, status, available_at, attempts, claim_token,
+			claim_expires_at, claim_transport, claim_route_generation, created_at, updated_at
+		) VALUES ($3, 'org-failure', $8::uuid, $1, 'pending', $4, $5, $6, $7, 'river', $2, $4, $4)`,
 		claim.Kind, claim.RouteGeneration, claim.ID, claim.AvailableAt, claim.Attempts,
-		claim.ClaimToken, now.Add(time.Minute)); err != nil {
+		claim.ClaimToken, now.Add(time.Minute), failureIntegrationRunID); err != nil {
 		t.Fatal(err)
 	}
 	return claim

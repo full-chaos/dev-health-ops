@@ -412,6 +412,12 @@ func RunInProcess(ctx context.Context, run InProcessRun) (CompleteRouteExecution
 		retry = providerfoundation.DefaultRetryPolicy()
 	}
 	budget := &InProcessBudgetStore{}
+	// The chunked routes (cicd, tests) need a chunk store; the rest use the plain
+	// single-attempt effect ledger.
+	var ledger EffectLedger = &InProcessEffectLedger{}
+	if descriptor.Chunked {
+		ledger = NewInProcessChunkLedger(claim)
+	}
 	executor := CompleteRouteExecutor{
 		Credentials: providerfoundation.CredentialResolver{
 			Repository: staticCredentialRepository{record: providerfoundation.EncryptedCredential{
@@ -427,10 +433,37 @@ func RunInProcess(ctx context.Context, run InProcessRun) (CompleteRouteExecution
 		},
 		Metrics: providerfoundation.NewMetrics(),
 		Handler: route.Handler, Comparator: ProductionContractComparator{},
-		Committer:         EffectCommitter{Ledger: &InProcessEffectLedger{}, Sink: route.Sink, Readback: route.Readback, Now: now},
+		Committer:         EffectCommitter{Ledger: ledger, Sink: route.Sink, Readback: route.Readback, Now: now},
 		HeartbeatInterval: 30 * time.Second, Now: now,
 	}
-	return executor.Execute(ctx, session, descriptor)
+	if !descriptor.Chunked {
+		return executor.Execute(ctx, session, descriptor)
+	}
+	// A chunked route stops at a durable continuation after its per-attempt bounds
+	// (chunks or wall time); the worker snoozes and runs the unit again. Here the
+	// store is the durable state and the next attempt is the next call: the chunks
+	// already committed are not fetched or written again.
+	return runToCompletion(ctx, func() (CompleteRouteExecutionResult, error) {
+		return executor.Execute(ctx, session, descriptor)
+	})
+}
+
+// runToCompletion calls attempt until it stops asking for a continuation. The
+// delay a continuation carries (ChunkContinuationDelay) is the worker's snooze
+// between attempts; in process nothing else needs the slot, so the next attempt
+// starts at once, and only the context ends the loop early.
+func runToCompletion(
+	ctx context.Context, attempt func() (CompleteRouteExecutionResult, error),
+) (CompleteRouteExecutionResult, error) {
+	for {
+		result, err := attempt()
+		if _, again := ChunkContinuationDelay(err); !again {
+			return result, err
+		}
+		if ctx.Err() != nil {
+			return CompleteRouteExecutionResult{}, ctx.Err()
+		}
+	}
 }
 
 // inProcessHTTPDoer is the caller's HTTP client, or the worker's own (45 s timeout,

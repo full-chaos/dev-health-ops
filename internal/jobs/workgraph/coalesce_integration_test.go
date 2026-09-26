@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -291,11 +292,7 @@ TRUNCATE work_graph_execution_requests, work_graph_execution_ledger,
 	}
 }
 
-// startCoalescePostgres stands up the schema with alembic 0060's CHECK
-// constraints AND its terminal-immutability trigger, which createExecutionTables
-// omits. Both are load-bearing here rather than incidental: the state CHECK is
-// what proves 'canceled' is a state the column actually admits, and the trigger
-// is what makes a superseded request unrecoverable by anything downstream.
+// startCoalescePostgres stands up the migrated schema.
 func startCoalescePostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
@@ -308,56 +305,9 @@ func startCoalescePostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `
-CREATE TABLE work_graph_execution_requests (
- id uuid PRIMARY KEY, org_id uuid NOT NULL,
- kind text NOT NULL CHECK (kind IN ('workgraph.build', 'investment.materialize')),
- scope jsonb NOT NULL,
- model_ref text NULL, prompt_ref text NULL,
- llm_concurrency integer NOT NULL CHECK (llm_concurrency BETWEEN 1 AND 16),
- spend_limit_microunits bigint NOT NULL CHECK (spend_limit_microunits >= 0),
- correlation_id text NOT NULL CHECK (length(correlation_id) BETWEEN 1 AND 128),
- idempotency_key text NOT NULL UNIQUE CHECK (length(idempotency_key) BETWEEN 1 AND 256),
- state text NOT NULL DEFAULT 'pending' CHECK (state IN (
-   'pending', 'running', 'succeeded', 'failed', 'ambiguous', 'canceled')),
- claim_token uuid NULL, lease_expires_at timestamptz NULL,
- attempt_count integer NOT NULL DEFAULT 0,
- created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
- updated_at timestamptz NOT NULL DEFAULT statement_timestamp(),
- CHECK ((state = 'running' AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL)
-     OR (state <> 'running' AND claim_token IS NULL AND lease_expires_at IS NULL))
-);
-CREATE TABLE work_graph_execution_ledger (
- request_id uuid PRIMARY KEY REFERENCES work_graph_execution_requests(id) ON DELETE CASCADE,
- claim_token uuid NOT NULL, state text NOT NULL, attempt_count integer NOT NULL DEFAULT 1,
- output_evidence jsonb NULL, failure_detail text NULL,
- last_attempt_at timestamptz NOT NULL DEFAULT statement_timestamp(), completed_at timestamptz NULL
-);
-CREATE TABLE worker_job_outbox (
- id uuid PRIMARY KEY, dedupe_key varchar(256) NOT NULL UNIQUE, job_kind varchar(96) NOT NULL,
- contract_version integer NOT NULL, args json NOT NULL, payload_hash varchar(71) NOT NULL,
- queue varchar(96) NOT NULL, priority smallint NOT NULL, max_attempts smallint NOT NULL,
- scheduled_at timestamptz NOT NULL, status varchar(16) NOT NULL, attempt_count integer NOT NULL,
- next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text NULL,
- created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
-);
-CREATE TABLE worker_job_completion_fences (
- completion_key text PRIMARY KEY,
- completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
-);
-CREATE OR REPLACE FUNCTION forbid_work_graph_terminal_mutation()
-RETURNS trigger AS $$
-BEGIN
-    IF OLD.state IN ('succeeded', 'failed', 'canceled') THEN
-        RAISE EXCEPTION 'terminal work graph execution request is immutable';
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-CREATE TRIGGER work_graph_execution_terminal_immutable
-BEFORE UPDATE ON work_graph_execution_requests
-FOR EACH ROW EXECUTE FUNCTION forbid_work_graph_terminal_mutation()`); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema carries alembic 0060's CHECK constraints AND its terminal-immutability
+	// trigger: the state CHECK proves 'canceled' is a state the column actually admits, and the
+	// trigger is what makes a superseded request unrecoverable by anything downstream.
+	pgschema.Apply(ctx, t, pool)
 	return pool
 }

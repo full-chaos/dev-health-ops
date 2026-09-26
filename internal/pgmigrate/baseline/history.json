@@ -8,11 +8,17 @@
   "doc": "Move the checked-in worker job kinds to the River transport."
  },
  {
-  "revision": "0142",
-  "down": "0141",
+  "revision": "0143",
+  "down": "0142",
   "labels": "application_schema",
   "realHead": true,
   "head": true,
+  "doc": "Add the single-plane write-proof receipt kind to ``go_api_proof_run``."
+ },
+ {
+  "revision": "0142",
+  "down": "0141",
+  "labels": "application_schema",
   "doc": "Add webhook_sync_requests (CHAOS-6695)."
  },
  {

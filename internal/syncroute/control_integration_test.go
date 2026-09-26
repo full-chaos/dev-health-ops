@@ -5,11 +5,14 @@ package syncroute
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -75,13 +78,13 @@ func TestRouteControlPostgresConcurrencyDrainAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, err := defaultController.Pause(ctx, syncdispatchcontract.KindPostSync)
-	if err != nil || !state.Paused || state.Generation != 2 {
+	if err != nil || !state.Paused || state.Generation != routeBaseGeneration+1 {
 		t.Fatalf("default post_sync pause state=%+v err=%v", state, err)
 	}
 	state, err = defaultController.Resume(
 		ctx, syncdispatchcontract.KindPostSync, syncdispatchcontract.RouteCelery, 0,
 	)
-	if err != nil || state.Paused || state.Generation != 3 ||
+	if err != nil || state.Paused || state.Generation != routeBaseGeneration+2 ||
 		state.Transport != syncdispatchcontract.RouteCelery {
 		t.Fatalf("default same-transport post_sync resume state=%+v err=%v", state, err)
 	}
@@ -107,7 +110,7 @@ FOR UPDATE OF route, outbox`).Scan(&celeryOutboxID); err != nil {
 	waitForRouteRowLockWait(t, ctx, pool)
 	if _, err := celeryTx.Exec(ctx, `
 UPDATE public.sync_dispatch_outbox
-SET status = 'dispatched'
+SET status = 'dispatched', dispatched_transport = 'celery', dispatched_route_generation = 3
 WHERE id = $1`, celeryOutboxID); err != nil {
 		t.Fatalf("Celery terminal update deadlocked with route controller: %v", err)
 	}
@@ -128,7 +131,7 @@ WHERE id = $1`, celeryOutboxID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := blockingTx.Exec(ctx, `
-UPDATE public.sync_dispatch_outbox SET status = 'dispatched'
+UPDATE public.sync_dispatch_outbox SET status = 'dispatched', dispatched_transport = 'celery', dispatched_route_generation = 3
 WHERE id = '00000000-0000-4000-8000-000000000401'`); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +159,7 @@ WHERE id = '00000000-0000-4000-8000-000000000401'`); err != nil {
 	if _, err := pool.Exec(ctx, `
 UPDATE public.sync_dispatch_outbox
 SET status = 'pending', claim_token = 'claim-1', claim_expires_at = NOW() + interval '1 minute',
-    claim_transport = 'celery', claim_route_generation = 1
+    claim_transport = 'celery', claim_route_generation = 3
 WHERE id = '00000000-0000-4000-8000-000000000401'`); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +176,7 @@ WHERE id = '00000000-0000-4000-8000-000000000401'`); err != nil {
 		t.Fatal(err)
 	}
 	state, err = controller.Resume(ctx, syncdispatchcontract.KindDispatchSyncRun, syncdispatchcontract.RouteRiver, time.Second)
-	if err != nil || state.Transport != syncdispatchcontract.RouteRiver || state.Generation != 3 || state.Paused {
+	if err != nil || state.Transport != syncdispatchcontract.RouteRiver || state.Generation != routeBaseGeneration+2 || state.Paused {
 		t.Fatalf("resumed state=%+v err=%v", state, err)
 	}
 
@@ -196,11 +199,11 @@ WHERE id = '00000000-0000-4000-8000-000000000401'`); err != nil {
 	state, err = noQuiescerController.Resume(
 		ctx, syncdispatchcontract.KindPostSync, syncdispatchcontract.RouteRiver, 0,
 	)
-	if err != nil || state.Transport != syncdispatchcontract.RouteRiver || state.Paused || state.Generation != 5 {
+	if err != nil || state.Transport != syncdispatchcontract.RouteRiver || state.Paused || state.Generation != routeBaseGeneration+4 {
 		t.Fatalf("post_sync ordinary claim-fenced resume state=%+v err=%v", state, err)
 	}
 	state, err = controller.Inspect(ctx, syncdispatchcontract.KindPostSync)
-	if err != nil || state.Paused || state.Generation != 5 {
+	if err != nil || state.Paused || state.Generation != routeBaseGeneration+4 {
 		t.Fatalf("post_sync ordinary resume state=%+v err=%v", state, err)
 	}
 }
@@ -246,7 +249,7 @@ func TestApplyCheckedInAtomicallyMovesAnUnpausedCeleryRouteToRiver(t *testing.T)
 	if _, err := pool.Exec(ctx, `
 UPDATE public.sync_dispatch_outbox
 SET claim_token = 'live-apply-claim', claim_expires_at = NOW() + interval '1 minute',
-    claim_transport = 'celery', claim_route_generation = 1
+    claim_transport = 'celery', claim_route_generation = 3
 WHERE id = '00000000-0000-4000-8000-000000000402'`); err != nil {
 		t.Fatal(err)
 	}
@@ -262,25 +265,29 @@ WHERE id = '00000000-0000-4000-8000-000000000402'`); err != nil {
 		t.Fatal(err)
 	}
 	state, err := controller.ApplyCheckedIn(ctx, syncdispatchcontract.KindReferenceDiscovery)
-	if err != nil || state.Transport != syncdispatchcontract.RouteRiver || state.Paused || state.Generation != 2 {
+	if err != nil || state.Transport != syncdispatchcontract.RouteRiver || state.Paused || state.Generation != routeBaseGeneration+1 {
 		t.Fatalf("applied route state=%+v err=%v", state, err)
 	}
 	idempotent, err := controller.ApplyCheckedIn(ctx, syncdispatchcontract.KindReferenceDiscovery)
 	if err != nil || idempotent != state {
 		t.Fatalf("idempotent apply state=%+v want=%+v err=%v", idempotent, state, err)
 	}
+	// An out-of-band pause -- an operator's direct UPDATE. The migrated route table's generation
+	// trigger (trg_sync_dispatch_route_generation) refuses any state change that does not raise the
+	// generation, so the reachable form of this drift is a pause that bumps the generation; that is the
+	// state ApplyCheckedIn must repair. No trigger is disabled.
 	if _, err := pool.Exec(ctx, `
 UPDATE public.sync_dispatch_transport_routes
-SET paused = TRUE, paused_at = NOW()
+SET paused = TRUE, paused_at = NOW(), generation = generation + 1
 WHERE kind = 'reference_discovery'`); err != nil {
 		t.Fatal(err)
 	}
 	unpaused, err := controller.ApplyCheckedIn(ctx, syncdispatchcontract.KindReferenceDiscovery)
-	if err != nil || unpaused.Transport != syncdispatchcontract.RouteRiver || unpaused.Paused || unpaused.Generation != 3 {
+	if err != nil || unpaused.Transport != syncdispatchcontract.RouteRiver || unpaused.Paused || unpaused.Generation != routeBaseGeneration+3 {
 		t.Fatalf("paused checked-in apply state=%+v err=%v", unpaused, err)
 	}
 	paused, err := controller.Pause(ctx, syncdispatchcontract.KindReferenceDiscovery)
-	if err != nil || !paused.Paused || paused.Transport != syncdispatchcontract.RouteRiver || paused.Generation != 4 {
+	if err != nil || !paused.Paused || paused.Transport != syncdispatchcontract.RouteRiver || paused.Generation != routeBaseGeneration+4 {
 		t.Fatalf("rollback pause state=%+v err=%v", paused, err)
 	}
 	rolledBack, err := controller.Resume(
@@ -288,7 +295,7 @@ WHERE kind = 'reference_discovery'`); err != nil {
 		syncdispatchcontract.RouteCelery, time.Second,
 	)
 	if err != nil || rolledBack.Transport != syncdispatchcontract.RouteCelery ||
-		rolledBack.Paused || rolledBack.Generation != 5 {
+		rolledBack.Paused || rolledBack.Generation != routeBaseGeneration+5 {
 		t.Fatalf("checked-in rollback state=%+v err=%v", rolledBack, err)
 	}
 }
@@ -338,33 +345,26 @@ SELECT EXISTS (
 	t.Fatal("route pause never waited on the uncommitted outbox terminal transaction")
 }
 
+// routeBaseGeneration is the generation every kind starts these tests at. The migrations seed each
+// route as celery at generation 2 with rollback "none"; the fixture sets the celery rollback the
+// controller's rollback path needs, and that state change bumps the generation once (trigger), so
+// the tests count generations from 3. The literals below are routeBaseGeneration + (old value - 1).
+const routeBaseGeneration = 3
+
 func createRouteControlSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	for _, statement := range []string{
-		`CREATE TABLE public.sync_dispatch_transport_routes (
-			kind text PRIMARY KEY, transport text NOT NULL, generation bigint NOT NULL,
-			paused boolean NOT NULL, paused_at timestamptz, rollback_transport text NOT NULL,
-			updated_at timestamptz NOT NULL
-		)`,
-		`CREATE TABLE public.sync_dispatch_outbox (
-			id uuid PRIMARY KEY, kind text NOT NULL, status text NOT NULL,
-			claim_token text, claim_expires_at timestamptz, claim_transport text,
-			claim_route_generation bigint
-		)`,
-		`INSERT INTO public.sync_dispatch_transport_routes
-			(kind, transport, generation, paused, paused_at, rollback_transport, updated_at)
-		VALUES
-			('dispatch_sync_run', 'celery', 1, FALSE, NULL, 'celery', NOW()),
-			('post_sync', 'celery', 1, FALSE, NULL, 'celery', NOW()),
-			('reference_discovery', 'celery', 1, FALSE, NULL, 'celery', NOW())`,
-		`INSERT INTO public.sync_dispatch_outbox
-			(id, kind, status)
-		VALUES
-			('00000000-0000-4000-8000-000000000401', 'dispatch_sync_run', 'pending'),
-			('00000000-0000-4000-8000-000000000402', 'reference_discovery', 'pending')`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
+	pgschema.Apply(ctx, t, pool)
+	for _, kind := range []string{"dispatch_sync_run", "post_sync", "reference_discovery"} {
+		if got := pgseed.SyncTransportRoute(ctx, t, pool, kind, "celery", routeBaseGeneration, false, "celery"); got != routeBaseGeneration {
+			t.Fatalf("%s route generation = %d, want %d", kind, got, routeBaseGeneration)
 		}
+	}
+	for index, row := range []struct{ id, kind string }{
+		{"00000000-0000-4000-8000-000000000401", "dispatch_sync_run"},
+		{"00000000-0000-4000-8000-000000000402", "reference_discovery"},
+	} {
+		runID := fmt.Sprintf("00000000-0000-4000-8000-00000000050%d", index)
+		pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: runID, OrgID: "org-route-control"})
+		pgseed.SyncDispatchOutbox(ctx, t, pool, row.id, runID, "org-route-control", row.kind, "pending", "", 0)
 	}
 }

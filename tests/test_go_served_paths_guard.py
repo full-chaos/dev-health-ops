@@ -10,6 +10,7 @@ to fail: a gate that cannot be shown to fail is not a gate.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import textwrap
 from pathlib import Path
@@ -97,6 +98,21 @@ SOURCE = textwrap.dedent(
 
     def stubbed_public_attribute():
         go_served.raise_served_by_go_api("/x", GO_API)
+
+    def stubbed_keyword_plane():
+        raise_served_by_go_api("/x", plane=GO_API)
+
+    def stubbed_query_constant():
+        raise_served_by_go_api("/x", QUERY_API)
+
+    def stubbed_attribute_plane():
+        raise_served_by_go_api("/x", go_served.GO_API)
+
+    def stubbed_unknown_literal_plane():
+        raise_served_by_go_api("/x", "python")
+
+    def stubbed_computed_plane():
+        raise_served_by_go_api("/x", pick_plane())
 
     def public_name_then_more():
         raise_served_by_go_api("/x", "go-api")
@@ -203,7 +219,9 @@ def test_routes_outside_the_ops_source_are_ignored(tree):
 def test_parameter_names_do_not_matter_but_the_path_does(tree, tmp_path):
     root, source, _ = tree
     manifest = {
-        "/api/v1/things/{}": checker.ManifestRow("rev1", "go-api", "/api/v1/things/{}")
+        "/api/v1/things/{}": checker.ManifestRow(
+            "rev1", "query-api", "/api/v1/things/{}"
+        )
     }
     same = _route(source, "stubbed", "/api/v1/things/{thing_id}")
     assert checker.check([same], manifest, root) == []
@@ -216,7 +234,7 @@ def test_parameter_names_do_not_matter_but_the_path_does(tree, tmp_path):
 
 def test_a_method_on_a_listed_path_is_covered_by_the_path(tree):
     root, source, _ = tree
-    manifest = {"/p": checker.ManifestRow("rev1", "go-api", "/p")}
+    manifest = {"/p": checker.ManifestRow("rev1", "query-api", "/p")}
     routes = [
         _route(source, "stubbed", "/p", method="GET"),
         _route(source, "stubbed_return", "/p", method="POST"),
@@ -261,7 +279,7 @@ def test_a_template_covers_its_static_sibling_as_the_ingress_does(tree):
     root, source, _ = tree
     manifest = {
         "/api/v1/billing/plans/{}": checker.ManifestRow(
-            "rev1", "go-api", "/api/v1/billing/plans/{}"
+            "rev1", "query-api", "/api/v1/billing/plans/{}"
         )
     }
     pull = _route(source, "stubbed", "/api/v1/billing/plans/pull-stripe", method="POST")
@@ -286,7 +304,7 @@ def test_a_template_row_is_satisfied_by_a_static_sibling_alone(tree):
     root, source, _ = tree
     manifest = {
         "/api/v1/billing/plans/{}": checker.ManifestRow(
-            "rev1", "go-api", "/api/v1/billing/plans/{}"
+            "rev1", "query-api", "/api/v1/billing/plans/{}"
         )
     }
     only_static = _route(
@@ -306,3 +324,180 @@ def test_covers_matches_one_non_empty_segment_and_escapes_the_rest():
     assert not checker.covers("/a.b/{}", "/aXb/x")  # a dot is a dot
     assert not checker.covers("/a+b/{}", "/aab/x")
     assert checker.covers("/a.b/{}", "/a.b/x")
+
+
+# --- CHAOS-6865: the stub's plane must be the plane the manifest routes the path to
+
+
+def _plane_check(tree, stub: str, plane: str) -> list[str]:
+    root, source, _ = tree
+    manifest = {"/p": checker.ManifestRow("rev1", plane, "/p")}
+    return checker.check([_route(source, stub, "/p")], manifest, root)
+
+
+@pytest.mark.parametrize(
+    ("stub", "stub_plane"),
+    [
+        ("stubbed", "query-api"),  # omitted plane = the function's own default
+        ("stubbed_return", "query-api"),
+        ("stubbed_query_constant", "query-api"),  # QUERY_API constant
+        ("stubbed_public_name", "go-api"),  # "go-api" literal
+        ("stubbed_public_attribute", "go-api"),  # go_served.GO_API attribute
+        ("stubbed_keyword_plane", "go-api"),  # plane=GO_API keyword
+        ("stubbed_attribute_plane", "go-api"),  # go_served.GO_API as the argument
+    ],
+)
+def test_a_stub_is_accepted_only_on_the_plane_it_names(tree, stub, stub_plane):
+    other = "go-api" if stub_plane == "query-api" else "query-api"
+    assert _plane_check(tree, stub, stub_plane) == []
+    problems = _plane_check(tree, stub, other)
+    assert len(problems) == 1, problems
+    assert f"the stub says {stub_plane} owns the route" in problems[0]
+    assert other in problems[0] and "wrong service" in problems[0]
+
+
+@pytest.mark.parametrize(
+    "stub", ["stubbed_computed_plane", "stubbed_unknown_literal_plane"]
+)
+def test_a_stub_plane_the_guard_cannot_read_is_refused_not_waved_through(tree, stub):
+    for plane in ("go-api", "query-api"):
+        problems = _plane_check(tree, stub, plane)
+        assert len(problems) == 1 and "cannot tell which" in problems[0], problems
+
+
+def test_a_mixed_plane_cover_accepts_the_stub_when_any_covering_row_agrees(tree):
+    root, source, _ = tree
+    manifest = {
+        "/p/{}": checker.ManifestRow("rev1", "go-api", "/p/{}"),
+        "/p/x": checker.ManifestRow("rev1", "query-api", "/p/x"),
+    }
+    route = _route(source, "stubbed", "/p/x")  # default plane query-api
+    assert checker.check([route], manifest, root) == []
+
+
+def test_swapping_every_manifest_plane_on_the_real_tree_fails(real_routes):
+    manifest, _ = checker.load_manifest(MANIFEST_PATH)
+    assert checker.check(real_routes, manifest, REPO_ROOT) == []
+    swapped = {
+        path: checker.ManifestRow(
+            row.rev, "go-api" if row.plane == "query-api" else "query-api", path
+        )
+        for path, row in manifest.items()
+    }
+    problems = checker.check(real_routes, swapped, REPO_ROOT)
+    stubs = checker.stub_routes(real_routes, REPO_ROOT)
+    wrong = [problem for problem in problems if "wrong service" in problem]
+    # one problem per stubbed route: a guard that ignores the plane reports none
+    assert len(wrong) == len(stubs) > 0, (len(wrong), len(stubs))
+
+
+# --- CHAOS-6870: the manifest is pinned to the ingress dump by its receipt line
+
+
+def _receipt_case(tmp_path: Path, mutate) -> list[str]:
+    """Problems for a copy of the real manifest after ``mutate(lines)``."""
+    lines = MANIFEST_PATH.read_text().splitlines()
+    mutate(lines)
+    copy = tmp_path / "manifest.tsv"
+    copy.write_text("\n".join(lines) + "\n")
+    rows, problems = checker.load_manifest(copy)
+    assert problems == []
+    return checker.check_receipt(copy, rows)
+
+
+def test_the_real_manifest_matches_its_receipt(tmp_path):
+    rows, problems = checker.load_manifest(MANIFEST_PATH)
+    assert problems == []
+    assert checker.check_receipt(MANIFEST_PATH, rows) == []
+    assert len(rows) >= 145  # the rev187 dump: a receipt over nothing proves nothing
+    assert _receipt_case(tmp_path, lambda lines: None) == []
+
+
+def _first_row(lines: list[str]) -> int:
+    return next(
+        index
+        for index, line in enumerate(lines)
+        if line and not line.startswith("#") and line.count("\t") == 2
+    )
+
+
+def test_a_dropped_row_fails_the_receipt(tmp_path):
+    problems = _receipt_case(tmp_path, lambda lines: lines.pop(_first_row(lines)))
+    assert any("records" in problem and "rows" in problem for problem in problems)
+    assert any("digest" in problem for problem in problems)
+
+
+def test_an_added_row_fails_the_receipt(tmp_path):
+    problems = _receipt_case(
+        tmp_path, lambda lines: lines.append("rev999\tgo-api\t/api/v1/admin/invented")
+    )
+    assert any("records" in problem for problem in problems)
+    assert any("digest" in problem for problem in problems)
+
+
+def test_a_changed_plane_keeps_the_count_but_fails_the_digest(tmp_path):
+    def flip(lines: list[str]) -> None:
+        index = _first_row(lines)
+        rev, plane, path = lines[index].split("\t")
+        lines[index] = "\t".join(
+            [rev, "query-api" if plane == "go-api" else "go-api", path]
+        )
+
+    problems = _receipt_case(tmp_path, flip)
+    assert len(problems) == 1 and "digest" in problems[0], problems
+
+
+def test_a_changed_path_keeps_the_count_but_fails_the_digest(tmp_path):
+    def rename(lines: list[str]) -> None:
+        index = _first_row(lines)
+        rev, plane, path = lines[index].split("\t")
+        lines[index] = "\t".join([rev, plane, path + "-x"])
+
+    problems = _receipt_case(tmp_path, rename)
+    assert len(problems) == 1 and "digest" in problems[0], problems
+
+
+def test_the_rev_column_is_not_part_of_the_receipt(tmp_path):
+    def relabel(lines: list[str]) -> None:
+        index = _first_row(lines)
+        _, plane, path = lines[index].split("\t")
+        lines[index] = "\t".join(["rev999", plane, path])
+
+    assert _receipt_case(tmp_path, relabel) == []
+
+
+@pytest.mark.parametrize("mode", ["missing", "duplicated", "malformed"])
+def test_a_missing_duplicated_or_malformed_receipt_line_fails(tmp_path, mode):
+    def mutate(lines: list[str]) -> None:
+        index = next(i for i, line in enumerate(lines) if line.startswith("# receipt:"))
+        if mode == "missing":
+            del lines[index]
+        elif mode == "duplicated":
+            lines.insert(index, lines[index])
+        else:
+            lines[index] = "# receipt: rev187 rows=many sha256=nothex"
+
+    problems = _receipt_case(tmp_path, mutate)
+    assert len(problems) == 1 and "exactly one" in problems[0], problems
+
+
+def test_the_cli_fails_on_a_receipt_mismatch(tmp_path, real_routes):
+    lines = MANIFEST_PATH.read_text().splitlines()
+    lines.pop(_first_row(lines))
+    copy = tmp_path / "manifest.tsv"
+    copy.write_text("\n".join(lines) + "\n")
+    routes_json = tmp_path / "routes.json"
+    routes_json.write_text(json.dumps({"routes": real_routes}))
+    assert (
+        checker.main(
+            [
+                "--root",
+                str(REPO_ROOT),
+                "--manifest",
+                str(copy),
+                "--routes-json",
+                str(routes_json),
+            ]
+        )
+        == 1
+    )

@@ -25,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -695,6 +696,12 @@ func writeMultiReplicaProof(t *testing.T, measuredJobs int) {
 
 func prepareMultiReplicaDatabase(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
+	// The migrated schema carries the worker tables (worker_job_runs, worker_concurrency_leases,
+	// worker_instances), provider_rate_limit_observations, and the tables the native heartbeat's
+	// compute reads (organizations, users, org_licenses -- empty on purpose apart from the
+	// migrations' own bootstrap rows; an empty organizations table means no audit_logs row is
+	// attempted, matching phone_home_heartbeat's org_id_for_audit=None branch).
+	pgschema.Apply(ctx, t, pool)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if _, err := pool.Exec(ctx, `CREATE SCHEMA river`); err != nil {
 		t.Fatal(err)
@@ -708,49 +715,10 @@ func prepareMultiReplicaDatabase(t *testing.T, ctx context.Context, pool *pgxpoo
 	if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
 		t.Fatal(err)
 	}
+	// The one test-owned relation: a trigger that records every retention delete.
 	if _, err := pool.Exec(ctx, `
-		CREATE TABLE public.worker_job_runs (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, idempotency_key text NOT NULL,
-			org_id uuid NULL, domain_type text NOT NULL, domain_id uuid NOT NULL,
-			status text NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
-			attempt_count integer NOT NULL, started_at timestamptz NOT NULL,
-			finished_at timestamptz NULL, result text NULL, error_category text NULL,
-			created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
-			UNIQUE (job_kind, idempotency_key)
-		);
-		CREATE TABLE public.worker_concurrency_leases (
-			id uuid PRIMARY KEY, budget_key varchar(320) NOT NULL,
-			job_kind varchar(96) NOT NULL, concurrency_scope varchar(16) NOT NULL,
-			organization_id uuid NULL, owner_token uuid NOT NULL UNIQUE,
-			lease_expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL
-		);
-		CREATE TABLE public.worker_instances (
-			instance_id uuid PRIMARY KEY, worker_group varchar(64) NOT NULL,
-			queues text NOT NULL CHECK (length(queues) > 2),
-			state varchar(16) NOT NULL CHECK (state IN ('accepting', 'draining')),
-			started_at timestamptz NOT NULL, heartbeat_at timestamptz NOT NULL,
-			expires_at timestamptz NOT NULL
-		);
-		CREATE TABLE public.provider_rate_limit_observations (
-			id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL,
-			integration_id uuid NOT NULL, sync_run_id uuid NOT NULL,
-			sync_run_unit_id uuid NOT NULL, observed_at timestamptz NOT NULL
-		);
 		CREATE TABLE public.multi_replica_retention_effects (
 			observation_id uuid PRIMARY KEY, deleted_at timestamptz NOT NULL DEFAULT statement_timestamp()
-		);
-		-- Tables the native heartbeat's compute reads (internal/jobs/system/
-		-- heartbeat_native.go queryHeartbeatFacts): counts and the org
-		-- license lookup. Left empty on purpose -- an empty organizations
-		-- table means no audit_logs row is attempted (matching
-		-- phone_home_heartbeat's own org_id_for_audit=None branch), which
-		-- this test does not otherwise need a schema for.
-		CREATE TABLE public.organizations (id uuid PRIMARY KEY, name text NOT NULL);
-		CREATE TABLE public.users (id uuid PRIMARY KEY, email text NOT NULL);
-		CREATE TABLE public.org_licenses (
-			id uuid PRIMARY KEY, org_id uuid NOT NULL,
-			license_key text, tier text NOT NULL DEFAULT 'community'
 		);
 		CREATE FUNCTION public.record_multi_replica_retention_effect() RETURNS trigger
 		LANGUAGE plpgsql AS $$ BEGIN

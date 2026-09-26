@@ -85,11 +85,11 @@ func TestLocalFailureIsTheVerbsFailure(t *testing.T) {
 	}
 }
 
-func TestLocalBlameIsStillRefusedAndNamesItsTicket(t *testing.T) {
+func TestLocalBlameRunsLikeTheOtherTargets(t *testing.T) {
 	h := &localHarness{}
-	code, _, stderr := runVerb(t, "blame", h.executor(), []string{"--provider", "local", "--org", "o"}, dbEnv)
-	if code != cli.ExitRefused || !strings.Contains(stderr, ticketLocalBlame) || h.opened != 0 || len(h.plans) != 0 {
-		t.Fatalf("exit %d opened %d plans %d: %s", code, h.opened, len(h.plans), stderr)
+	code, _, stderr := runVerb(t, "blame", h.executor(), []string{"--provider", "local", "--repo-path", "/repo", "--org", "o"}, dbEnv)
+	if code != cli.ExitOK || len(h.plans) != 1 || h.plans[0].Call != CallLocalBlame || h.plans[0].RepoPath != "/repo" {
+		t.Fatalf("exit %d plans %+v: %s", code, h.plans, stderr)
 	}
 }
 

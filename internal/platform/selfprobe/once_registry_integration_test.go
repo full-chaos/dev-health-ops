@@ -47,9 +47,22 @@ func TestDomainTransactionProbeOnABusyReadinessPoolIsATimeoutNotAHardFailure(t *
 	}
 	defer held.Release()
 
-	registry := health.NewRegistry(400 * time.Millisecond)
+	// r1 P3 (fixed): the registry's own checkTimeout governs TWO independent clocks that fire
+	// within microseconds of each other when they share one duration -- the context handed to the
+	// check function, and the registry's own fallback wait for an answer at all (registry.go's
+	// "wait_expired" branch). Giving both the SAME 400ms bound raced them: on the pre-fix code
+	// (which dropped the deadline cause), the registry's own fallback sometimes won that race and
+	// reported TimedOut=true regardless of what Once actually returned, letting the test pass on
+	// broken code about 1 run in 8. The registry here gets a bound many times longer than the
+	// probe's OWN internal deadline (imposed by the check function itself, not by checkTimeout), so
+	// the registry's fallback can never fire first: the result is attributable ONLY to what Once
+	// returns for its own, much shorter, deadline.
+	const probeBudget = 300 * time.Millisecond
+	registry := health.NewRegistry(5 * time.Second)
 	if err := registry.RegisterRequired("domain_transaction", func(checkCtx context.Context) error {
-		return selfprobe.Once(checkCtx, selfprobe.NewPool(pool))
+		boundedCtx, boundedCancel := context.WithTimeout(checkCtx, probeBudget)
+		defer boundedCancel()
+		return selfprobe.Once(boundedCtx, selfprobe.NewPool(pool))
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -61,5 +74,8 @@ func TestDomainTransactionProbeOnABusyReadinessPoolIsATimeoutNotAHardFailure(t *
 	if !readiness.Checks[0].TimedOut {
 		t.Fatalf("domain_transaction on a busy readiness pool was reported as a hard failure, not a timeout: %+v "+
 			"(the worker's preclaim-readiness retry runs only when every failed check timed out)", readiness.Checks[0])
+	}
+	if readiness.Checks[0].Cause != "timeout" {
+		t.Fatalf("Cause = %q, want %q (not the registry's own generic wait_expired fallback)", readiness.Checks[0].Cause, "timeout")
 	}
 }

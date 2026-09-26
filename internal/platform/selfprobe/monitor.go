@@ -116,21 +116,24 @@ func Once(ctx context.Context, opener TxOpener) (err error) {
 }
 
 // sanitizedProbeError is the bounded error Once returns: a fixed sentence, never the driver's text,
-// carrying ONLY the caller's own deadline or cancellation as the wrapped cause. health.Registry (and
-// the worker's preclaim-readiness retry, which retries only when every failed check timed out)
-// classify a timeout by errors.Is(err, context.DeadlineExceeded / Canceled); a probe that dropped
-// the cause turned "the one-connection readiness pool was busy for the whole deadline" into a hard
-// failure, and go-sync exited on attempt 1 during a roll (CHAOS-6955). Every other failure stays
-// an opaque hard failure: a wrong password must not read as "slow".
+// carrying ONLY the caller's own DEADLINE as the wrapped cause -- never cancellation. health.Registry
+// (and the worker's preclaim-readiness retry, which retries only when every failed check timed out)
+// classify a retryable timeout by errors.Is(err, context.DeadlineExceeded); a probe that dropped the
+// cause turned "the one-connection readiness pool was busy for the whole deadline" into a hard
+// failure, and go-sync exited on attempt 1 during a roll (CHAOS-6955).
+//
+// r1 P1 (fixed): this used to also preserve context.Canceled, which health.Registry classifies as
+// retryable too (the SAME bucket as a deadline) -- but a canceled probe has not merely run out of
+// time waiting on a busy pool, it stopped for some OTHER reason, and conflating the two made a
+// completed cancellation retry for the whole budget instead of failing fast like any other genuine
+// problem. Only a deadline is a "the pool was busy" signal; every other failure, cancellation
+// included, stays an opaque hard failure: a wrong password must not read as "slow", and neither
+// must a cancellation.
 func sanitizedProbeError(operation string, err error) error {
-	switch {
-	case errors.Is(err, context.DeadlineExceeded):
+	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%s: unavailable: %w", operation, context.DeadlineExceeded)
-	case errors.Is(err, context.Canceled):
-		return fmt.Errorf("%s: unavailable: %w", operation, context.Canceled)
-	default:
-		return fmt.Errorf("%s: unavailable", operation)
 	}
+	return fmt.Errorf("%s: unavailable", operation)
 }
 
 const (

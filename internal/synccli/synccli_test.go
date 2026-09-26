@@ -93,7 +93,7 @@ func run(t *testing.T, env map[string]string, d deps, args ...string) (int, stri
 func TestUsageErrorsRunNothing(t *testing.T) {
 	for name, args := range map[string][]string{
 		"no provider":    {"--org", "o"},
-		"wrong provider": {"--provider", "github", "--org", "o"},
+		"wrong provider": {"--provider", "gitlab", "--org", "o"},
 		"no org":         {"--provider", "jira"},
 		"blank org":      {"--provider", "jira", "--org", "  "},
 		"unknown flag":   {"--provider", "jira", "--org", "o", "--nope"},
@@ -259,5 +259,33 @@ func TestTheProductionClientRefusesIncompleteAnswers(t *testing.T) {
 				t.Fatalf("answer accepted as complete: %v", teams)
 			}
 		})
+	}
+}
+
+// The GitHub catalog verb refuses what Python's refuses, before it opens a store: no owner, no token.
+func TestGitHubCatalogRefusalsRunNothing(t *testing.T) {
+	env := validEnv()
+	delete(env, "GITHUB_TOKEN")
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		args []string
+		want string
+	}{
+		"no owner":    {env, []string{"--provider", "github", "--org", "o", "--auth", "tok"}, "--owner is required for github provider"},
+		"no token":    {env, []string{"--provider", "github", "--org", "o", "--owner", "acme"}, "GitHub token required"},
+		"blank owner": {env, []string{"--provider", "github", "--org", "o", "--owner", "  ", "--auth", "tok"}, "--owner is required for github provider"},
+	} {
+		rec := &recorded{}
+		code, stdout, stderr := run(t, tc.env, stubDeps(rec, failingClient{}, nil), tc.args...)
+		if code != cli.ExitFailure || !strings.Contains(stderr, tc.want) || stdout != "" || rec.opened != 0 {
+			t.Errorf("%s: exit %d stdout %q stderr %q opened %d", name, code, stdout, stderr, rec.opened)
+		}
+	}
+	// Without ClickHouse the verb is refused (exit 3) before anything is read.
+	noCH := validEnv()
+	delete(noCH, "CLICKHOUSE_URI")
+	rec := &recorded{}
+	if code, _, stderr := run(t, noCH, stubDeps(rec, failingClient{}, nil), "--provider", "github", "--org", "o", "--owner", "acme", "--auth", "tok"); code != cli.ExitRefused || !strings.Contains(stderr, "CLICKHOUSE_URI") {
+		t.Errorf("no ClickHouse: exit %d %s", code, stderr)
 	}
 }

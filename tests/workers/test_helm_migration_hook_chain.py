@@ -159,11 +159,15 @@ def test_provisioning_runs_dho_migrate_roles_on_the_operator_image() -> None:
         assert retired not in rendered, f"the hook still carries {retired!r}"
 
 
-def test_provisioning_image_prefers_its_own_then_the_river_then_the_route_image() -> None:
+def test_provisioning_image_prefers_its_own_then_the_river_then_the_route_image() -> (
+    None
+):
     own = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "1" * 64
     river = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "2" * 64
     jobs = _jobs(*_BOTH_ON, f"migrations.hook.riverMigrate.image={river}")
-    assert jobs[_PROVISION]["spec"]["template"]["spec"]["containers"][0]["image"] == river
+    assert (
+        jobs[_PROVISION]["spec"]["template"]["spec"]["containers"][0]["image"] == river
+    )
     jobs = _jobs(
         *_BOTH_ON,
         f"migrations.hook.riverMigrate.image={river}",
@@ -191,7 +195,10 @@ def test_provisioning_refuses_an_unpinned_image(image: str) -> None:
         f"migrations.hook.provisionRoles.image={image}",
     )
     assert code != 0, "an unpinned provision-roles hook image rendered"
-    assert "the provision-roles hook image" in stderr and "not a pinned dho image" in stderr, stderr
+    assert (
+        "the provision-roles hook image" in stderr
+        and "not a pinned dho image" in stderr
+    ), stderr
 
 
 def test_provisioning_refuses_a_lockstep_mismatch_with_the_api_image() -> None:

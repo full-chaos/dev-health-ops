@@ -661,3 +661,107 @@ func TestClaimLivenessStuckSlotIsIgnoredInPreclaim(t *testing.T) {
 		time.Sleep(40 * time.Millisecond)
 	}
 }
+
+// judgeQueue is one pure predicate over (backlog, slots-in-handler, activity
+// age, stuck-run age, preclaim). Table-driven over the input space the lead's
+// ruling names: Available x slots-in-handler x stuck-at-idempotency-Begin.
+func TestJudgeQueueOverTheWholeInputSpace(t *testing.T) {
+	t.Parallel()
+	const window = time.Minute
+	young, old := 10*time.Second, 5*time.Minute
+	fresh, stale := 10*time.Second, time.Hour
+	type slots struct {
+		name                      string
+		known                     bool
+		capacity, running, inside int64
+	}
+	shapes := []slots{
+		{"capacity unknown", false, 0, 0, 0},
+		{"idle, free capacity", true, 2, 0, 0},
+		{"free capacity, running job inside handler", true, 2, 1, 1},
+		{"free capacity, running job stuck before handler", true, 2, 1, 0},
+		{"full, every slot inside a handler", true, 1, 1, 1},
+		{"full, slot stuck before handler", true, 1, 1, 0},
+		{"full, some slots inside some stuck", true, 2, 2, 1},
+	}
+	build := func(available int64, shape slots, claimAge, stuckFor time.Duration, preclaim bool) queueFacts {
+		return queueFacts{
+			queue: "q", available: available, capacityKnown: shape.known,
+			capacity: shape.capacity, running: shape.running, inside: shape.inside,
+			claimAge: claimAge, stuckFor: stuckFor, window: window, preclaim: preclaim,
+		}
+	}
+
+	// Named rows: the cases that must FAIL, and the ones that must not.
+	named := []struct {
+		name  string
+		facts queueFacts
+		want  queueVerdict
+	}{
+		{"backlog, free capacity, no handler for the window: consumer not claiming",
+			build(3, shapes[1], stale, young, false), verdictStalledBacklog},
+		{"backlog, capacity unknown, no handler for the window",
+			build(3, shapes[0], stale, young, false), verdictStalledBacklog},
+		{"backlog, full queue with a stuck slot, no handler activity (r1b P1)",
+			build(3, shapes[5], stale, young, false), verdictStalledBacklog},
+		{"NO backlog, the only claimed job stuck before its handler, unbroken past the window (r2c P1)",
+			build(0, shapes[5], stale, old, false), verdictSlotStuck},
+		{"no backlog, free capacity, a stuck job, unbroken past the window",
+			build(0, shapes[3], stale, old, false), verdictSlotStuck},
+		{"no backlog, partly stuck full queue, unbroken past the window",
+			build(0, shapes[6], stale, old, false), verdictSlotStuck},
+		{"backlog behind a full queue whose every slot is inside a handler: long work",
+			build(9, shapes[4], stale, old, false), verdictHealthy},
+		{"no backlog, empty queue", build(0, shapes[1], stale, old, false), verdictHealthy},
+		{"no backlog, job just claimed on a sparse queue (young stuck run)",
+			build(0, shapes[5], stale, young, false), verdictHealthy},
+		{"no backlog, stuck-looking slot but handlers ran recently (busy queue)",
+			build(0, shapes[5], fresh, old, false), verdictHealthy},
+		{"backlog, free capacity, but a handler ran recently",
+			build(3, shapes[1], fresh, young, false), verdictHealthy},
+		{"exactly at the window is not yet past it: stuck run",
+			build(0, shapes[5], stale, window, false), verdictHealthy},
+		{"exactly at the window is not yet past it: no handler activity",
+			build(0, shapes[5], window, old, false), verdictHealthy},
+		{"exactly at the window is not yet past it: backlog arm",
+			build(3, shapes[1], window, young, false), verdictHealthy},
+		{"preclaim: a queue that would fail the backlog arm is a skip",
+			build(3, shapes[1], stale, young, true), verdictPreclaimSkip},
+		{"preclaim: the stuck arm cannot fail",
+			build(0, shapes[5], stale, old, true), verdictHealthy},
+	}
+	for _, test := range named {
+		if got := judgeQueue(test.facts); got != test.want {
+			t.Errorf("%s: verdict %d, want %d (%+v)", test.name, got, test.want, test.facts)
+		}
+	}
+
+	// Properties over the full grid (2 backlogs x 7 shapes x 2 x 2 x 2).
+	for _, available := range []int64{0, 3} {
+		for _, shape := range shapes {
+			for _, claimAge := range []time.Duration{fresh, stale} {
+				for _, stuckFor := range []time.Duration{young, old} {
+					for _, preclaim := range []bool{false, true} {
+						facts := build(available, shape, claimAge, stuckFor, preclaim)
+						verdict := judgeQueue(facts)
+						failing := verdict == verdictSlotStuck || verdict == verdictStalledBacklog
+						where := fmt.Sprintf("%s available=%d claimAge=%v stuckFor=%v preclaim=%v", shape.name, available, claimAge, stuckFor, preclaim)
+						if claimAge <= window && failing {
+							t.Errorf("recent handler activity must never fail (%s)", where)
+						}
+						if preclaim && failing {
+							t.Errorf("preclaim must never fail (%s)", where)
+						}
+						if shape.running <= shape.inside && shape.known && shape.capacity > 0 &&
+							(available <= 0 || shape.running >= shape.capacity) && failing {
+							t.Errorf("every running slot inside a handler on an empty-or-full queue is healthy (%s)", where)
+						}
+						if available <= 0 && shape.running <= shape.inside && failing {
+							t.Errorf("no backlog and no slot outside a handler is healthy (%s)", where)
+						}
+					}
+				}
+			}
+		}
+	}
+}

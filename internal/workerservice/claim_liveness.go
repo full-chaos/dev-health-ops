@@ -402,52 +402,142 @@ func (dependencies *workerDependencies) claimLivenessReady(claim *claimLiveness)
 			dependencies.logDependencyCheckFailure(ctx, "execution_liveness", err)
 			return dependencyCheckFailed(err)
 		}
-		capacityByQueue := make(map[string]riverstore.QueueCapacityTelemetry, len(snapshot.QueueCapacities))
-		for _, capacity := range snapshot.QueueCapacities {
-			capacityByQueue[capacity.Queue] = capacity
-		}
 		now := time.Now()
 		preclaim := claim.inPreclaim()
-		if !preclaim {
-			// A slot stuck before its handler with nothing waiting behind it
-			// (CHAOS-6818 r2c): judged whether or not the queue has a backlog.
-			// Both conditions are required so that a busy healthy queue (every
-			// poll catches some job between claim and handler, but handlers keep
-			// running) and a sparse one (a job claimed a moment ago after an
-			// idle hour) never flip.
-			for _, capacity := range snapshot.QueueCapacities {
-				stuck := claim.preHandlerStuckFor(capacity.Queue, capacity.Running, now)
-				if stuck > claim.staleness() && claim.since(capacity.Queue, now) > claim.staleness() {
-					return fmt.Errorf("%w: queue %q", errClaimLivenessSlotStuckBeforeHandler, capacity.Queue)
-				}
-			}
-		}
-		for _, job := range snapshot.Jobs {
-			if job.Available <= 0 {
-				continue // this queue is confirmed empty right now: idle, not broken.
-			}
-			if capacity, ok := capacityByQueue[job.Queue]; ok && capacity.Capacity > 0 && capacity.Running >= capacity.Capacity &&
-				claim.handlersInside(job.Queue) >= capacity.Running {
-				// Every running slot is inside a handler (long work): healthy. A
-				// full queue whose slots are NOT all in handlers has jobs stuck
-				// before their handler (a stale pooler failing at Begin, CHAOS-4029)
-				// and falls through to the claim-age check below.
-				continue
-			}
-			if claim.since(job.Queue, now) <= claim.staleness() {
-				continue // a real claim landed on this queue recently.
-			}
-			if preclaim {
+		for _, facts := range collectQueueFacts(snapshot, claim, now, preclaim) {
+			switch judgeQueue(facts) {
+			case verdictHealthy:
+			case verdictPreclaimSkip:
 				// River has not started yet, so no claim on this queue could
 				// possibly exist regardless of how long preclaim's own retry
 				// loop has been running against some other slow dependency.
-				dependencies.logClaimLivenessPreclaimSkip(ctx, job.Queue)
-				continue
+				dependencies.logClaimLivenessPreclaimSkip(ctx, facts.queue)
+			case verdictSlotStuck:
+				return fmt.Errorf("%w: queue %q", errClaimLivenessSlotStuckBeforeHandler, facts.queue)
+			case verdictStalledBacklog:
+				return fmt.Errorf("%w: queue %q", errClaimLivenessStalledWithBacklog, facts.queue)
 			}
-			return fmt.Errorf("%w: queue %q", errClaimLivenessStalledWithBacklog, job.Queue)
 		}
 		return nil
 	}
+}
+
+// queueFacts is everything the liveness predicate needs to know about one
+// queue at one poll, gathered in one place so the predicate itself is a pure
+// function of plain values (judgeQueue) and can be tested over its whole input
+// space.
+type queueFacts struct {
+	queue string
+	// available is the queue's jobs waiting to be claimed.
+	available int64
+	// capacityKnown / capacity / running: this process's claim slots for the
+	// queue and how many of them River counts as running. A job counts as
+	// running from claim, including one that has not reached (or has left) its
+	// handler.
+	capacityKnown     bool
+	capacity, running int64
+	// inside is how many of those slots are inside a handler right now.
+	inside int64
+	// claimAge is how long since a handler last ran on this queue.
+	claimAge time.Duration
+	// stuckFor is how long successive polls have CONTINUOUSLY seen a running
+	// slot outside a handler on this queue.
+	stuckFor time.Duration
+	window   time.Duration
+	preclaim bool
+}
+
+type queueVerdict int
+
+const (
+	verdictHealthy queueVerdict = iota
+	verdictPreclaimSkip
+	verdictSlotStuck
+	verdictStalledBacklog
+)
+
+// collectQueueFacts builds one queueFacts per queue the snapshot mentions
+// (job telemetry first, in order, then capacity-only queues). It is the only
+// place the stuck-slot tracker is advanced, and only outside preclaim.
+func collectQueueFacts(snapshot riverstore.QueueTelemetrySnapshot, claim *claimLiveness, now time.Time, preclaim bool) []queueFacts {
+	byQueue := map[string]*queueFacts{}
+	var order []string
+	get := func(queue string) *queueFacts {
+		if facts, ok := byQueue[queue]; ok {
+			return facts
+		}
+		facts := &queueFacts{queue: queue, window: claim.staleness(), preclaim: preclaim}
+		byQueue[queue] = facts
+		order = append(order, queue)
+		return facts
+	}
+	for _, job := range snapshot.Jobs {
+		if job.Available > 0 {
+			get(job.Queue).available += job.Available
+		} else {
+			get(job.Queue)
+		}
+	}
+	for _, capacity := range snapshot.QueueCapacities {
+		facts := get(capacity.Queue)
+		facts.capacityKnown, facts.capacity, facts.running = true, capacity.Capacity, capacity.Running
+	}
+	out := make([]queueFacts, 0, len(order))
+	for _, queue := range order {
+		facts := byQueue[queue]
+		facts.inside = claim.handlersInside(queue)
+		facts.claimAge = claim.since(queue, now)
+		if !preclaim {
+			facts.stuckFor = claim.preHandlerStuckFor(queue, facts.running, now)
+		}
+		out = append(out, *facts)
+	}
+	return out
+}
+
+// judgeQueue is the ONE liveness predicate, applied to every queue whatever its
+// backlog (CHAOS-6818; lead D2606):
+//
+//	work that should be reaching a handler is not, and nothing has run for a
+//	whole window.
+//
+// "Should be reaching a handler" is either a claimed slot that is not inside a
+// handler (running > inside) or a backlog with free capacity to claim it. The
+// queue is healthy exactly when every running slot is inside a handler (long
+// work, however deep the backlog behind a FULL queue) or nothing is waiting
+// at all. The two ways it is not:
+//
+//   - a running slot outside a handler, unbroken across polls for more than the
+//     window, with no handler activity for the window: a job stalled at its
+//     idempotency Begin (a stale or recreated pooler, CHAOS-4029), with or
+//     without a backlog behind it. The unbroken-run and no-activity conditions
+//     keep a job merely between claim and handler, and a busy queue whose polls
+//     each catch one, from ever counting;
+//   - a backlog with a slot to claim it (or one whose full slots are not all in
+//     handlers) and no handler activity for the window: the consumer is not
+//     claiming.
+//
+// Before River starts (preclaim) no handler can have run, so neither arm can
+// fail; a queue that WOULD have failed the backlog arm is reported as a skip.
+func judgeQueue(f queueFacts) queueVerdict {
+	outside := f.running > f.inside
+	if !f.preclaim && outside && f.stuckFor > f.window && f.claimAge > f.window {
+		return verdictSlotStuck
+	}
+	if f.available <= 0 {
+		return verdictHealthy // confirmed empty right now: idle, not broken.
+	}
+	full := f.capacityKnown && f.capacity > 0 && f.running >= f.capacity
+	if full && !outside {
+		return verdictHealthy // every slot is inside a handler: busy, not wedged.
+	}
+	if f.claimAge <= f.window {
+		return verdictHealthy // a real claim landed on this queue recently.
+	}
+	if f.preclaim {
+		return verdictPreclaimSkip
+	}
+	return verdictStalledBacklog
 }
 
 // logClaimLivenessPreclaimSkip explains why a queue with backlog and idle

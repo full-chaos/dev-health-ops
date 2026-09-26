@@ -1,3 +1,4 @@
+internal/adminops	TestBillingReconcileVenueOracleMatchesThePythonProducer	run
 internal/adminops	TestBillingVenueOracleMatchesThePythonProducer	run
 internal/adminops	TestBundlesVenueOracleMatchesThePythonProducer	run
 internal/adminops	TestLLMSettingsVenueOracleMatchesThePythonProducer	run

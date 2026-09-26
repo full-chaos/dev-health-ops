@@ -292,8 +292,13 @@ func inTransaction(ctx context.Context, conn *pgx.Conn, fn func(pgx.Tx) error) e
 	return tx.Commit(ctx)
 }
 
+// readOnlyTransaction runs fn in one READ ONLY, REPEATABLE READ transaction: every
+// query in it reads the same snapshot. Under the default READ COMMITTED each query
+// takes its own, so a migrator that commits between two of them tears what fn reads
+// (no alembic_version from before, objects and revisions from after) into a state
+// that never existed. Nothing is written and no lock beyond ACCESS SHARE is taken.
 func readOnlyTransaction(ctx context.Context, conn *pgx.Conn, fn func(pgx.Tx) error) error {
-	tx, err := conn.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return err
 	}

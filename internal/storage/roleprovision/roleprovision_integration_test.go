@@ -419,3 +419,26 @@ func TestVerifyNamesEachBrokenPostconditionAndSeparatesThePublicCreateWarning(t 
 		}
 	}
 }
+
+// r1 P1: a role name is used EXACTLY as configured. The script took --set values
+// verbatim, so a name with leading or trailing spaces, quotes, upper case or
+// non-ASCII characters is that exact role; the Go leg must provision the same one.
+func TestGoLegMatchesTheScriptForUnusualRoleNames(t *testing.T) {
+	t.Parallel()
+	options := Options{
+		Domain:      Role{` Edge Domain "quoted "`, "pw-1"},
+		Queue:       Role{`Queue.With.Dots`, `p"w'\2`},
+		Coordinator: Role{"Cördénator", "pw-3"},
+	}
+	script, golang := startSide(t), startSide(t)
+	script.runScript(t, options)
+	golang.runGo(t, options)
+	diff(t, "unusual names", script.snapshot(t, options), golang.snapshot(t, options))
+	for _, entry := range options.configured() {
+		var exact bool
+		if err := golang.admin.QueryRow(context.Background(),
+			`SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, entry.role.Name).Scan(&exact); err != nil || !exact {
+			t.Errorf("the role %q was not created under exactly that name: %v", entry.role.Name, err)
+		}
+	}
+}

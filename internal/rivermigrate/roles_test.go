@@ -33,11 +33,21 @@ func TestRolesOptionsFromEnvironment(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected refusal: %s", stderr.String())
 	}
-	if options.Domain.Name != "devhealth_domain" || options.Queue.Password != "from-file" {
-		t.Fatalf("names are trimmed and _FILE passwords resolved: %+v", options)
+	if options.Domain.Name != " devhealth_domain " || options.Queue.Password != "from-file" {
+		t.Fatalf("names are used EXACTLY as configured (never trimmed) and _FILE passwords resolved: %+v", options)
 	}
 	if options.Coordinator.Name != defaultCoordinatorRole {
 		t.Fatalf("the coordinator role defaults to %q like `migrate river`, got %q", defaultCoordinatorRole, options.Coordinator.Name)
+	}
+	// A blank optional role name means "not set", not a role named "   ".
+	blank, ok := rolesOptionsFromEnvironment(envLookup(map[string]string{
+		"RIVER_DOMAIN_DATABASE_ROLE": "d", "RIVER_DOMAIN_DATABASE_PASSWORD": "x",
+		"RIVER_QUEUE_DATABASE_ROLE": "q", "RIVER_QUEUE_DATABASE_PASSWORD": "x",
+		"RIVER_COORDINATOR_DATABASE_PASSWORD": "x",
+		"RIVER_KEDA_READONLY_DATABASE_ROLE":   "   ",
+	}), &stderr)
+	if !ok || blank.Keda.Name != "" {
+		t.Fatalf("a blank optional role is unset: ok=%v %+v", ok, blank.Keda)
 	}
 	if options.API.Name != "" || options.QueryAPI.Name != "" || options.Keda.Name != "" {
 		t.Fatalf("an optional role is provisioned only when named: %+v", options)

@@ -163,9 +163,15 @@ func rolesOptionsFromEnvironment(lookup platformsecrets.LookupEnv, stderr io.Wri
 		}
 		return value.Reveal(), nil
 	}
+	// A role name is used EXACTLY as configured (the script took --set values
+	// verbatim, and `dho migrate river` uses the raw value too): trimming it would
+	// provision a different role. A blank value is "not set".
 	name := func(key string) string {
 		value, _ := lookup(key)
-		return strings.TrimSpace(value)
+		if strings.TrimSpace(value) == "" {
+			return ""
+		}
+		return value
 	}
 	role := func(roleKey, passwordKey string, required bool, fallback string) (roleprovision.Role, error) {
 		roleName := name(roleKey)

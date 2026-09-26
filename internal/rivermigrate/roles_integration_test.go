@@ -288,3 +288,44 @@ func TestMigrateRolesFailsLoudlyOnAnOverPrivilegedPreExistingRoleAndCheckChanges
 		t.Fatalf("the apply step must have committed the other roles: %d %v", created, err)
 	}
 }
+
+// r1 P1: through the real command, a role name with leading/trailing spaces is
+// provisioned under EXACTLY that name (the script took its variables verbatim).
+func TestMigrateRolesUsesRoleNamesExactlyAsConfigured(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	names := []string{` Edge Domain "quoted "`, "Queue.Exact ", " coord"}
+	settings := map[string]string{
+		"MIGRATION_DATABASE_URI":              instance.URI,
+		"RIVER_DOMAIN_DATABASE_ROLE":          names[0],
+		"RIVER_QUEUE_DATABASE_ROLE":           names[1],
+		"RIVER_COORDINATOR_DATABASE_ROLE":     names[2],
+		"RIVER_DOMAIN_DATABASE_PASSWORD":      "exact-pw-1",
+		"RIVER_QUEUE_DATABASE_PASSWORD":       "exact-pw-2",
+		"RIVER_COORDINATOR_DATABASE_PASSWORD": "exact-pw-3",
+	}
+	lookup := func(key string) (string, bool) { value, ok := settings[key]; return value, ok }
+	var stdout, stderr bytes.Buffer
+	if code := rivermigrate.ExecuteRoles(ctx, "dho", nil, lookup, &stdout, &stderr); code != cli.ExitOK {
+		t.Fatalf("migrate roles: exit %d\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+	for _, name := range names {
+		var exact bool
+		if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, name).Scan(&exact); err != nil || !exact {
+			t.Errorf("no role named exactly %q was created: %v", name, err)
+		}
+	}
+	var total int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname !~ '^pg_' AND rolname <> current_user`).Scan(&total); err != nil || total != 3 {
+		t.Errorf("exactly the three configured roles must exist (a trimmed twin would make it more or different): %d %v", total, err)
+	}
+}

@@ -152,7 +152,8 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 	SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user
 )
 SELECT
-	current_user = $1
+	session_user = $1
+	AND current_user = $1
 	AND EXISTS (
 		SELECT 1
 		FROM pg_catalog.pg_roles
@@ -1283,6 +1284,27 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 	}
 }
 
+// loginIdentityMismatch names the cause when the pool's login is not the expected
+// runtime role, or "" when it is (or the identity could not be read). CHAOS-6862:
+// the posture queries bind BOTH session_user (the credential the DSN carries) and
+// current_user (who the session acts as) to the expected role, so a session that
+// merely ACTS as the role (a startup option `-c role=...`, a role setting in the
+// DSN) on a wider credential reads as refused, and the cause is named here. Role
+// names are checked-in runtime identifiers, never connection material.
+func loginIdentityMismatch(ctx context.Context, pool *pgxpool.Pool, expectedRole string) string {
+	identityCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postureDiagnoseTimeout)
+	defer cancel()
+	var sessionUser, currentUser string
+	if err := pool.QueryRow(identityCtx, "SELECT session_user::text, current_user::text").Scan(&sessionUser, &currentUser); err != nil {
+		return ""
+	}
+	if sessionUser == expectedRole && currentUser == expectedRole {
+		return ""
+	}
+	return fmt.Sprintf("the pool authenticated as %q (session_user) and acts as %q (current_user), not the expected role: the login itself must be the role",
+		sessionUser, currentUser)
+}
+
 // postureDiagnoseTimeout bounds the diagnostic pass that names the first
 // mismatched privilege once rolePostureQuery has refused. The caller's own
 // context may already be spent by the slow refusing query, so the pass runs
@@ -1300,6 +1322,9 @@ const postureDiagnoseTimeout = 5 * time.Second
 func firstPostureMismatch(ctx context.Context, pool *pgxpool.Pool, expectedRole string, posture RolePosture) string {
 	diagnoseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postureDiagnoseTimeout)
 	defer cancel()
+	if mismatch := loginIdentityMismatch(ctx, pool, expectedRole); mismatch != "" {
+		return mismatch
+	}
 	gaps, err := DiagnoseRolePosture(diagnoseCtx, pool, expectedRole, posture)
 	switch {
 	case err != nil:

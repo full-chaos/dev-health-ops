@@ -80,7 +80,8 @@ WITH river_tables AS (
 	WHERE role.rolname <> current_user
 )
 SELECT
-	current_user = $1
+	session_user = $1
+	AND current_user = $1
 	AND EXISTS (
 		SELECT 1
 		FROM pg_catalog.pg_roles
@@ -420,6 +421,9 @@ func CheckQueueAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRo
 		// not match queueAuthorizationQuery's requirements. A role name is a
 		// checked-in runtime identifier (config, not connection material),
 		// so it is always safe to name here.
+		if mismatch := loginIdentityMismatch(ctx, pool, expectedRole); mismatch != "" {
+			return fmt.Errorf("%w: %w for role %q: %s", ErrUnavailable, ErrPostureRefused, expectedRole, mismatch)
+		}
 		return fmt.Errorf("%w: %w for role %q", ErrUnavailable, ErrPostureRefused, expectedRole)
 	default:
 		return nil

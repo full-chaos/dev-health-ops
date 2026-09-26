@@ -39,6 +39,10 @@ const (
 	// not refresh in lockstep and load the pooler at the same instant. It only
 	// ever shortens: TTL stays the upper bound on staleness.
 	defaultPostureJitter = 0.2
+	// defaultRunCheckTTL and defaultRunCheckMaxStale are the freshness of a cached check that is NOT a
+	// role-posture statement (NewCachedRunCheck): the pre-CHAOS-6937 values.
+	defaultRunCheckTTL      = 30 * time.Second
+	defaultRunCheckMaxStale = 5 * time.Minute
 	// defaultPostureMaxStale is how long a passing answer may still be served
 	// while a background refresh runs or keeps failing to answer. Past it the
 	// probe must see a live answer (or fail): drift cannot hide indefinitely.
@@ -137,8 +141,32 @@ func NewCachedPostureCheck(
 // without the probe ever waiting on a connection pool (CHAOS-6934). name is a checked-in label for
 // the log line. run should wrap a DEFINITIVE "no" in ErrPostureRefused (it invalidates the cached
 // pass at once); any other error is an unanswered query, not an answer.
+//
+// Its freshness defaults are the generic ones (30 s fresh, 5 min stale): what a run checks (the
+// River schema, the queued contract versions) can change after a pass, unlike provisioned role
+// grants. A run that IS a role-posture statement (the queue and coordinator checks) opts into the
+// role-posture cadence with AsRolePosture.
 func NewCachedRunCheck(name string, run func(context.Context) error, options PostureCheckOptions) *CachedPostureCheck {
+	if options.TTL <= 0 {
+		options.TTL = defaultRunCheckTTL
+		if options.MaxStale <= 0 {
+			options.MaxStale = defaultRunCheckMaxStale
+		}
+	}
 	return newCachedPostureCheck(name, run, options)
+}
+
+// AsRolePosture returns options whose freshness is the role-posture cadence (defaultPostureTTL,
+// defaultPostureMaxStale, CHAOS-6937) unless the caller set its own. Use it for a run that is a
+// role's posture statement; every other run keeps NewCachedRunCheck's generic defaults.
+func AsRolePosture(options PostureCheckOptions) PostureCheckOptions {
+	if options.TTL <= 0 {
+		options.TTL = defaultPostureTTL
+	}
+	if options.MaxStale <= 0 {
+		options.MaxStale = defaultPostureMaxStale
+	}
+	return options
 }
 
 func newCachedPostureCheck(role string, run func(context.Context) error, options PostureCheckOptions) *CachedPostureCheck {

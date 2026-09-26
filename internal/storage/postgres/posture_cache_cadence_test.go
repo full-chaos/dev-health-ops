@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -101,4 +102,50 @@ func TestPostureJitterIsDrawnAfreshForEveryPass(t *testing.T) {
 	if first != 100*time.Second || second < 80*time.Second || second > 80*time.Second+time.Millisecond {
 		t.Fatalf("pass windows = %s then %s, want 100s then ~80s from the two draws", first, second)
 	}
+}
+
+// CHAOS-6937 r1 P1: the 300 s cadence is the ROLE-POSTURE cadence (provisioned grants
+// change at provisioning time). A cached check that is not a role-posture statement -- the
+// River schema, the queued contract versions -- can change after a pass, so it keeps the
+// generic 30 s / 5 min freshness unless its caller opts into the posture cadence.
+func TestGenericRunChecksKeepThirtySecondFreshnessAndOnlyRolePostureRunsGetTheFiveMinuteCadence(t *testing.T) {
+	generic := NewCachedRunCheck("river_schema", func(context.Context) error { return nil }, PostureCheckOptions{})
+	if generic.ttl != 30*time.Second || generic.maxStale != 5*time.Minute {
+		t.Fatalf("a generic run check has ttl=%s maxStale=%s, want 30s/5m", generic.ttl, generic.maxStale)
+	}
+	posture := NewCachedRunCheck("queue_postgres", func(context.Context) error { return nil }, AsRolePosture(PostureCheckOptions{}))
+	if posture.ttl != defaultPostureTTL || posture.maxStale != defaultPostureMaxStale {
+		t.Fatalf("a role-posture run check has ttl=%s maxStale=%s, want the posture defaults", posture.ttl, posture.maxStale)
+	}
+	// An explicit choice always wins.
+	explicit := NewCachedRunCheck("x", func(context.Context) error { return nil },
+		AsRolePosture(PostureCheckOptions{TTL: 7 * time.Second, MaxStale: 9 * time.Second}))
+	if explicit.ttl != 7*time.Second || explicit.maxStale != 9*time.Second {
+		t.Fatalf("explicit options were overridden: ttl=%s maxStale=%s", explicit.ttl, explicit.maxStale)
+	}
+}
+
+// The reviewer's scenario, executed: a generic readiness result that changes after a pass
+// (an unsupported contract version appears) is seen once its 30 s window closes, not 5 minutes
+// later.
+func TestAGenericRunCheckSeesAChangedResultAfterThirtySecondsNotFiveMinutes(t *testing.T) {
+	var changed atomic.Bool
+	var runs atomic.Int32
+	check := NewCachedRunCheck("queued_contract_versions", func(context.Context) error {
+		runs.Add(1)
+		if changed.Load() {
+			return errors.Join(ErrPostureRefused, errors.New("unsupported contract"))
+		}
+		return nil
+	}, PostureCheckOptions{Jitter: -1})
+	clock := &postureClock{now: time.Unix(1_700_000_000, 0)}
+	check.now = clock.Now
+	if err := check.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	changed.Store(true)
+	clock.Advance(31 * time.Second)
+	_ = check.CheckNoWait() // stale pass served, refresh starts
+	waitFor(t, "the refresh after the 30 s window", func() bool { return runs.Load() == 2 })
+	waitFor(t, "the refusal", func() bool { return errors.Is(check.CheckNoWait(), ErrPostureRefused) })
 }

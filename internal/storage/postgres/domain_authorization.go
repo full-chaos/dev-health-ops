@@ -1396,28 +1396,47 @@ func rolePostureArgs(expectedRole, riverSchema string, posture RolePosture) ([]a
 // to 14 s. It is a variable only so a test can shorten it.
 var rolePostureStatementTimeout = 10 * time.Second
 
-// queryPostureAnswer runs one posture statement that returns a single boolean
-// inside a read-only transaction whose statement_timeout is set LOCAL to the
-// given bound, so it can neither outlive its caller on the server nor leak the
-// setting to whatever else uses the pooled connection. A timeout surfaces as
-// the driver error (SQLSTATE 57014), which the callers already treat as "the
-// database never answered".
-func queryPostureAnswer(
-	ctx context.Context, pool *pgxpool.Pool, timeout time.Duration, query string, args ...any,
-) (bool, error) {
+// postureQuerier is the slice of pgx a posture check needs: a pool, or the
+// read-only transaction runInPostureTx opens.
+type postureQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// runInPostureTx runs fn inside a read-only transaction whose statement_timeout
+// is set LOCAL to the given bound, so every statement fn issues (one, or a
+// sequence) can neither outlive its caller on the server nor leak the setting to
+// whatever else uses the pooled connection. A timeout surfaces as the driver
+// error (SQLSTATE 57014), which the callers already treat as "the database never
+// answered". The errors it returns for opening the transaction and setting the
+// timeout are the driver's own, unwrapped.
+func runInPostureTx(
+	ctx context.Context, pool *pgxpool.Pool, timeout time.Duration, fn func(postureQuerier) error,
+) error {
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return false, err
+		return err
 	}
 	// Rollback, not Commit: nothing was written, and it must succeed even if
 	// ctx is already done.
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if _, err := tx.Exec(ctx, "SELECT set_config('statement_timeout', $1, true)",
 		strconv.FormatInt(timeout.Milliseconds(), 10)); err != nil {
-		return false, err
+		return err
 	}
+	return fn(tx)
+}
+
+// queryPostureAnswer runs one posture statement that returns a single boolean
+// under runInPostureTx.
+func queryPostureAnswer(
+	ctx context.Context, pool *pgxpool.Pool, timeout time.Duration, query string, args ...any,
+) (bool, error) {
 	var answer bool
-	if err := tx.QueryRow(ctx, query, args...).Scan(&answer); err != nil {
+	err := runInPostureTx(ctx, pool, timeout, func(q postureQuerier) error {
+		return q.QueryRow(ctx, query, args...).Scan(&answer)
+	})
+	if err != nil {
 		return false, err
 	}
 	return answer, nil

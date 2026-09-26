@@ -136,6 +136,24 @@ func TestRolePostureQueryReadsScopedCatalogAclsNotSystemViewsOrPerRowSweeps(t *t
 			t.Fatalf("rolePostureQuery calls %s: per-row privilege sweeps over the catalog are what made the check cost 1.8 s", sweep)
 		}
 	}
+	// Forbidding text is not enough (a statement of just `SELECT TRUE` contains none of it):
+	// the statement must actually read the three ACL columns through aclexplode, scoped to the
+	// two governed schemas, and consume what it read.
+	for _, required := range []string{
+		"aclexplode(", "relacl", "attacl", "proacl",
+		"nspname in ('public', $2)",
+		"governed_relations", "relation_held", "column_held", "caller_column_grants",
+		"from relation_held", "from column_held", "from caller_column_grants",
+	} {
+		if !strings.Contains(code, required) {
+			t.Fatalf("rolePostureQuery omits %q: the scoped ACL read is what replaced the per-row sweeps", required)
+		}
+	}
+	for _, cte := range []string{"governed_relations", "relation_held", "column_held", "caller_column_grants"} {
+		if strings.Count(code, cte) < 2 {
+			t.Fatalf("CTE %s is defined but not consumed (it appears %d times)", cte, strings.Count(code, cte))
+		}
+	}
 }
 
 func TestCoordinatorPostureRequiresOnlyItsAuditSequence(t *testing.T) {

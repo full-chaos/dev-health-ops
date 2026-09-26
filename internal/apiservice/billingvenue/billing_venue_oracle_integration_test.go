@@ -435,10 +435,11 @@ type billingFixture struct {
 func billingSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) billingFixture {
 	t.Helper()
 	var f billingFixture
-	for _, id := range []*uuid.UUID{&f.orgA, &f.orgB, &f.orgC, &f.orgD, &f.super, &f.ownerA, &f.memberA, &f.adminB, &f.adminC, &f.noOrg,
+	resetSeedSequence(t, ctx, pool)
+	for index, id := range []*uuid.UUID{&f.orgA, &f.orgB, &f.orgC, &f.orgD, &f.super, &f.ownerA, &f.memberA, &f.adminB, &f.adminC, &f.noOrg,
 		&f.bundleA, &f.bundleB, &f.planTeam, &f.planLegacy, &f.planEnterprise, &f.planBasic, &f.planEmptyIDs,
 		&f.priceTeamM, &f.priceTeamY, &f.priceTeamEUR, &f.priceEntY, &f.priceEntM} {
-		*id = uuid.New()
+		*id = venueID(fmt.Sprintf("billing-seed-%d", index))
 	}
 	statements := []struct {
 		sql  string
@@ -451,12 +452,12 @@ func billingSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) billingF
 			($4,'bill-b@x',false,true,0), ($5,'bill-c@x',false,true,0), ($6,'bill-noorg@x',false,true,0)`,
 			[]any{f.super, f.ownerA, f.memberA, f.adminB, f.adminC, f.noOrg}},
 		{`INSERT INTO memberships (id, user_id, org_id, role) VALUES
-			(gen_random_uuid(),$1,$4,'owner'), (gen_random_uuid(),$2,$4,'member'), (gen_random_uuid(),$3,$5,'admin'),
-			(gen_random_uuid(),$6,$7,'admin')`, []any{f.ownerA, f.memberA, f.adminB, f.orgA, f.orgB, f.adminC, f.orgC}},
+			(md5(nextval('venue_seed_seq')::text)::uuid,$1,$4,'owner'), (md5(nextval('venue_seed_seq')::text)::uuid,$2,$4,'member'), (md5(nextval('venue_seed_seq')::text)::uuid,$3,$5,'admin'),
+			(md5(nextval('venue_seed_seq')::text)::uuid,$6,$7,'admin')`, []any{f.ownerA, f.memberA, f.adminB, f.orgA, f.orgB, f.adminC, f.orgC}},
 		{`INSERT INTO org_licenses (id, org_id, tier, licensed_users, licensed_repos, is_valid, customer_id, created_at, updated_at) VALUES
-			(gen_random_uuid(), $1, 'team', 5, 5, true, 'cus_A', now(), now()),
-			(gen_random_uuid(), $2, 'team', 5, 5, true, NULL, now(), now()),
-			(gen_random_uuid(), $3, 'team', 5, 5, true, 'cus_fail', now(), now())`, []any{f.orgA, f.orgB, f.orgC}},
+			(md5(nextval('venue_seed_seq')::text)::uuid, $1, 'team', 5, 5, true, 'cus_A', now(), now()),
+			(md5(nextval('venue_seed_seq')::text)::uuid, $2, 'team', 5, 5, true, NULL, now(), now()),
+			(md5(nextval('venue_seed_seq')::text)::uuid, $3, 'team', 5, 5, true, 'cus_fail', now(), now())`, []any{f.orgA, f.orgB, f.orgC}},
 		{`INSERT INTO feature_bundles (id, key, name, description, features, created_at, updated_at) VALUES
 			($1, 'b-analytics', 'Analytics', NULL, '["a", "b", 1]', now(), now()),
 			($2, 'a-core', 'Core', 'Core features', '{"x": 1}', now(), now())`, []any{f.bundleA, f.bundleB}},
@@ -472,9 +473,9 @@ func billingSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) billingF
 		// what an explicit null prices list must leave alone, and the
 		// blank Stripe ids are what sync treats as missing.
 		{`INSERT INTO billing_prices (id, plan_id, interval, amount, currency, is_active, stripe_price_id, created_at, updated_at) VALUES
-			(gen_random_uuid(), $1, 'yearly', 3000, 'usd', true, 'price_legacy_y', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
-			(gen_random_uuid(), $2, 'monthly', 700, 'usd', true, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
-			(gen_random_uuid(), $3, 'monthly', 400, 'usd', true, '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+			(md5(nextval('venue_seed_seq')::text)::uuid, $1, 'yearly', 3000, 'usd', true, 'price_legacy_y', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+			(md5(nextval('venue_seed_seq')::text)::uuid, $2, 'monthly', 700, 'usd', true, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+			(md5(nextval('venue_seed_seq')::text)::uuid, $3, 'monthly', 400, 'usd', true, '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
 			[]any{f.planLegacy, f.planBasic, f.planEmptyIDs}},
 		{`INSERT INTO billing_prices (id, plan_id, interval, amount, currency, is_active, stripe_price_id, created_at, updated_at) VALUES
 			($1, $6, 'monthly', 1000, 'usd', true, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
@@ -483,7 +484,7 @@ func billingSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) billingF
 			($4, $7, 'yearly', 50000, 'usd', true, 'price_ent_y', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
 			($5, $7, 'monthly', 5000, 'usd', true, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
 			[]any{f.priceTeamM, f.priceTeamY, f.priceTeamEUR, f.priceEntY, f.priceEntM, f.planTeam, f.planEnterprise}},
-		{`INSERT INTO plan_feature_bundles (id, plan_id, bundle_id) VALUES (gen_random_uuid(), $1, $2), (gen_random_uuid(), $1, $3)`,
+		{`INSERT INTO plan_feature_bundles (id, plan_id, bundle_id) VALUES (md5(nextval('venue_seed_seq')::text)::uuid, $1, $2), (md5(nextval('venue_seed_seq')::text)::uuid, $1, $3)`,
 			[]any{f.planTeam, f.bundleA, f.bundleB}},
 		{`INSERT INTO subscriptions (id, org_id, billing_plan_id, billing_price_id, stripe_subscription_id, stripe_customer_id, status,
 			current_period_start, current_period_end, cancel_at_period_end, canceled_at, trial_start, trial_end, created_at, updated_at) VALUES
@@ -497,13 +498,13 @@ func billingSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) billingF
 			 false, NULL, NULL, NULL, '2026-07-01T00:00:00Z', '2026-08-13T00:00:00Z')`,
 			[]any{f.orgA, f.orgB, f.orgC, f.planTeam, f.priceTeamM, f.planEnterprise, f.priceEntY}},
 		{`INSERT INTO subscription_events (id, subscription_id, stripe_event_id, event_type, previous_status, new_status, payload, processed_at) VALUES
-			(gen_random_uuid(), '11111111-0000-4000-8000-000000000001', 'evt_1', 'customer.subscription.created', NULL, 'active',
+			(md5(nextval('venue_seed_seq')::text)::uuid, '11111111-0000-4000-8000-000000000001', 'evt_1', 'customer.subscription.created', NULL, 'active',
 			 '{"id": "evt_1", "data": {"b": 1, "a": [true, 2.50, "\u00e9"]}}', '2026-09-01T00:00:01Z'),
-			(gen_random_uuid(), '11111111-0000-4000-8000-000000000002', 'evt_2', 'customer.subscription.updated', 'incomplete', 'trialing',
+			(md5(nextval('venue_seed_seq')::text)::uuid, '11111111-0000-4000-8000-000000000002', 'evt_2', 'customer.subscription.updated', 'incomplete', 'trialing',
 			 '{}', '2026-09-10T00:00:01.000500Z'),
-			(gen_random_uuid(), '11111111-0000-4000-8000-000000000001', 'evt_3', 'customer.subscription.updated', 'active', 'active',
+			(md5(nextval('venue_seed_seq')::text)::uuid, '11111111-0000-4000-8000-000000000001', 'evt_3', 'customer.subscription.updated', 'active', 'active',
 			 'null', '2026-09-02T00:00:00Z'),
-			(gen_random_uuid(), '11111111-0000-4000-8000-000000000003', 'evt_4', 'customer.subscription.updated', NULL, 'active',
+			(md5(nextval('venue_seed_seq')::text)::uuid, '11111111-0000-4000-8000-000000000003', 'evt_4', 'customer.subscription.updated', NULL, 'active',
 			 '{"k": 1}', '2026-09-13T00:00:00Z')`, nil},
 	}
 	for _, statement := range statements {
@@ -566,7 +567,7 @@ func billingRequests(f billingFixture, tokens map[string]string) (main, deviatio
 	}
 	p := "/api/v1/billing"
 	team, legacy, ent, basic := f.planTeam.String(), f.planLegacy.String(), f.planEnterprise.String(), f.planBasic.String()
-	missing := uuid.New().String()
+	missing := venueID("billing-missing").String()
 
 	// Plan reads: the optional principal never refuses; include_inactive
 	// needs a superuser.
@@ -832,6 +833,7 @@ var billingEnv = map[string]string{
 func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
+	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name(), goldenDigest(t.Name())))
 	start := time.Now().UTC()
 	fake := newFakeStripe()
 	pyStripe, goStripe := httptest.NewServer(fake.plane("py")), httptest.NewServer(fake.plane("go"))
@@ -843,7 +845,7 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	}
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			return seed.tokenSpecs()
@@ -887,17 +889,25 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	}
 	base := startBillingVenueAPI(t, ctx, cfg, venue, goStripe.URL)
 	main, deviations := billingRequests(seed, venue.Tokens)
-	python := venue.ServePython(t, append(append([]venueoracle.Request(nil), main...), deviations...))
 	normalize := billingNormalizer(seeded, start)
+	all := append(append([]venueoracle.Request(nil), main...), deviations...)
+	rawPython := golden.Python(t, venue, all)
+	normalizePython := billingNormalizer(seeded, recordedAt(t, golden, start))
+	python := normalizeAnswers(rawPython, normalizePython)
 	receipt := venueoracle.Diff(t, base, main, python[:len(main)], venueoracle.DiffOptions{
 		Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
+		Golden:    golden,
 	})
+	// The deviation requests' Python answers are inspected below (their status
+	// goes in the receipt), not compared by Diff.
+	golden.Consumed(t, python[len(main):]...)
 
 	// The Stripe calls: Go's are Python's, one for one; Python's surplus is
 	// exactly what its deviation requests did.
 	fake.mu.Lock()
-	pyCalls, goCalls := append([]string(nil), fake.calls["py"]...), append([]string(nil), fake.calls["go"]...)
+	goCalls := append([]string(nil), fake.calls["go"]...)
 	fake.mu.Unlock()
+	pyCalls := pythonCalls(t, golden, fake)
 	callsSame := len(pyCalls) >= len(goCalls) && strings.Join(pyCalls[:len(goCalls)], "\n") == strings.Join(goCalls, "\n")
 	if !callsSame {
 		t.Errorf("stripe calls differ:\n python %s\n go     %s", strings.Join(pyCalls, "\n        "), strings.Join(goCalls, "\n        "))
@@ -948,18 +958,21 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		pyRows := normalize(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), tables[name]))
 		goRows := normalize(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), tables[name]))
+		pyRows := golden.CompareRows(t, "rows:"+name, func() string {
+			return normalizePython(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), tables[name]))
+		}, goRows)
 		same := pyRows == goRows && pyRows != ""
 		receipt += fmt.Sprintf("%s rows after writes: %s\n", name, venueoracle.Mark(same))
-		if !same {
-			t.Errorf("%s rows differ (or are empty):\n python %s\n go     %s", name, pyRows, goRows)
+		if pyRows == "" {
+			t.Errorf("%s rows are empty on both planes", name)
 		}
 	}
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	golden.Finish(t)
 }
 
 // billingBareEnv is the other side of every billing configuration knob: no
@@ -980,6 +993,8 @@ var billingBareEnv = map[string]string{
 func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
+	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name(), goldenDigest(t.Name())))
+	start := time.Now().UTC()
 	var pythonEnv []string
 	for key, value := range billingBareEnv {
 		pythonEnv = append(pythonEnv, key+"="+value)
@@ -987,7 +1002,7 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 	pythonEnv = append(pythonEnv, "VENUE_STRIPE_API_BASE=http://127.0.0.1:9/unreachable")
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			ledgerSeed(t, ctx, admin, seed)
@@ -1027,7 +1042,7 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 		{Name: "portal: no key", Method: "POST", Path: p + "/portal", Headers: headers("ownerA")},
 		{Name: "portal: no customer, no key", Method: "POST", Path: p + "/portal", Headers: headers("adminB")},
 		{Name: "sync: no key", Method: "POST", Path: p + "/plans/" + seed.planTeam.String() + "/sync-stripe", Headers: headers("super")},
-		{Name: "sync: missing plan, no key", Method: "POST", Path: p + "/plans/" + uuid.NewString() + "/sync-stripe", Headers: headers("super")},
+		{Name: "sync: missing plan, no key", Method: "POST", Path: p + "/plans/" + venueID("bare-missing-plan").String() + "/sync-stripe", Headers: headers("super")},
 		{Name: "pull: no key", Method: "POST", Path: p + "/plans/pull-stripe", Headers: headers("super")},
 		{Name: "change plan: no key", Method: "POST", Path: p + "/subscriptions/change-plan", Headers: headers("ownerA"), Body: venueoracle.B64(`{"price_id":"x"}`)},
 		{Name: "cancel: no key", Method: "POST", Path: p + "/subscriptions/cancel", Headers: headers("ownerA"), Body: venueoracle.B64(`{}`)},
@@ -1036,19 +1051,27 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 		{Name: "plans: no key needed", Method: "GET", Path: p + "/plans", Headers: headers("ownerA")},
 	}
 	requests = append(requests, ledgerBareRequests(venue.Tokens)...)
-	python := venue.ServePython(t, requests)
-	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{})
+	// The recording holds normalized text: seeded ids stay, the ids a plane
+	// generates and the times near the run are blanked, on both sides.
+	seeded := seededIDs(t, ctx, venue)
+	normalize := billingNormalizer(seeded, start)
+	rawPython := golden.Python(t, venue, requests)
+	normalizePython := billingNormalizer(seeded, recordedAt(t, golden, start))
+	python := normalizeAnswers(rawPython, normalizePython)
+	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
+		Golden:    golden,
+	})
 	for _, table := range []string{
 		`SELECT key, stripe_product_id, updated_at FROM billing_plans ORDER BY key`,
 		`SELECT action, org_id::text, local_state::text FROM billing_audit_log ORDER BY org_id, created_at, action`,
 		`SELECT id::text, status, voided_at, updated_at FROM invoices ORDER BY id`,
 	} {
-		pyRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table)
-		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table)
+		goRows := normalize(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table))
+		pyRows := golden.CompareRows(t, "rows:"+table, func() string {
+			return normalizePython(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table))
+		}, goRows)
 		receipt += fmt.Sprintf("rows %.40s: %s\n", table, venueoracle.Mark(pyRows == goRows))
-		if pyRows != goRows {
-			t.Errorf("rows differ:\n python %s\n go     %s", pyRows, goRows)
-		}
 	}
 	// Go-only: the refund route reaches Stripe only past its balance check,
 	// so without a key it answers the key error as a 500 detail, as checkout
@@ -1066,4 +1089,5 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 		_ = os.WriteFile(path+".bare", []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	golden.Finish(t)
 }

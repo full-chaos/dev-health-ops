@@ -442,6 +442,24 @@ func TestQueryAPILegRefusesARoleItMustNeverRevoke(t *testing.T) {
 		{"database", func(r string) []string {
 			return []string{"CREATE DATABASE qapi_owned_db OWNER " + r}
 		}, func(string) []string { return []string{"DROP DATABASE IF EXISTS qapi_owned_db"} }},
+		// r3b P1-1: classes with no ACL entry the enumeration could see.
+		{"collation", func(r string) []string {
+			return []string{
+				"CREATE COLLATION public.qapi_owned_coll (provider = libc, locale = 'C')",
+				"ALTER COLLATION public.qapi_owned_coll OWNER TO " + r,
+			}
+		}, func(string) []string { return []string{"DROP COLLATION IF EXISTS public.qapi_owned_coll"} }},
+		{"enum type", func(r string) []string {
+			return []string{"CREATE TYPE public.qapi_owned_enum AS ENUM ('a')", "ALTER TYPE public.qapi_owned_enum OWNER TO " + r}
+		}, func(string) []string { return []string{"DROP TYPE IF EXISTS public.qapi_owned_enum"} }},
+		{"text search configuration", func(r string) []string {
+			return []string{
+				"CREATE TEXT SEARCH CONFIGURATION public.qapi_owned_ts (COPY = simple)",
+				"ALTER TEXT SEARCH CONFIGURATION public.qapi_owned_ts OWNER TO " + r,
+			}
+		}, func(string) []string {
+			return []string{"DROP TEXT SEARCH CONFIGURATION IF EXISTS public.qapi_owned_ts"}
+		}},
 	}
 	for index, owned := range suffixes {
 		owner := fmt.Sprintf("%s_o%d", roles.domain, index)

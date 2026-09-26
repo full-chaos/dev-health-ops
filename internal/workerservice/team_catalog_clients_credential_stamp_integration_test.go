@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -21,17 +23,9 @@ import (
 // createReferenceDiscoveryTables for the same reason.
 func createTeamCatalogCredentialStampTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-CREATE TABLE integrations (
-  id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, credential_id uuid NULL
-);
-CREATE TABLE sync_runs (
-  id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
-  credential_id uuid NULL, credential_fingerprint text NULL, auth_source text NULL
-);
-`); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema: integrations, sync_runs and sync_configurations carry their real columns,
+	// foreign keys and constraints.
+	pgschema.Apply(ctx, t, pool)
 }
 
 // TestResolveTeamCatalogIntegrationUsesTheRunFrozenCredentialWhenStamped
@@ -64,13 +58,14 @@ func TestResolveTeamCatalogIntegrationUsesTheRunFrozenCredentialWhenStamped(t *t
 		mutatedLiveCred = "00000000-0000-4000-8000-0000000000bb"
 	)
 	const stampedFingerprintValue = "deadbeef-fingerprint"
+	pgseed.Credential(ctx, t, pool, mutatedLiveCred, orgID, "linear")
 	for _, statement := range []string{
-		`INSERT INTO integrations (id,org_id,provider,credential_id) VALUES ('` + integrationID + `','` + orgID + `','linear','` + mutatedLiveCred + `')`,
+		`INSERT INTO integrations (name,is_active,config,created_at,updated_at,id,org_id,provider,credential_id) VALUES ('integration',TRUE,'{}'::json,now(),now(),'` + integrationID + `','` + orgID + `','linear','` + mutatedLiveCred + `')`,
 		// Run was planned/stamped against stampedCredID (CHAOS-2755); the
 		// integration's OWN credential_id was rotated to a DIFFERENT value
 		// after the run started -- resolveTeamCatalogIntegration must still
 		// report the run's own stamp, not the now-mutated live value.
-		`INSERT INTO sync_runs (id,org_id,integration_id,credential_id,credential_fingerprint,auth_source) VALUES ('` + runID + `','` + orgID + `','` + integrationID + `','` + stampedCredID + `','` + stampedFingerprintValue + `','integration_credential')`,
+		`INSERT INTO sync_runs (triggered_by,mode,status,total_units,completed_units,failed_units,created_at,id,org_id,integration_id,credential_id,credential_fingerprint,auth_source) VALUES ('test','incremental','running',0,0,0,now(),'` + runID + `','` + orgID + `','` + integrationID + `','` + stampedCredID + `','` + stampedFingerprintValue + `','integration_credential')`,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -118,10 +113,11 @@ func TestResolveTeamCatalogIntegrationFallsBackToLiveCredentialWhenUnstamped(t *
 		runID         = "00000000-0000-4000-8000-000000000012"
 		liveCredID    = "00000000-0000-4000-8000-0000000000cc"
 	)
+	pgseed.Credential(ctx, t, pool, liveCredID, orgID, "linear")
 	for _, statement := range []string{
-		`INSERT INTO integrations (id,org_id,provider,credential_id) VALUES ('` + integrationID + `','` + orgID + `','linear','` + liveCredID + `')`,
+		`INSERT INTO integrations (name,is_active,config,created_at,updated_at,id,org_id,provider,credential_id) VALUES ('integration',TRUE,'{}'::json,now(),now(),'` + integrationID + `','` + orgID + `','linear','` + liveCredID + `')`,
 		// auth_source and credential_id left NULL: a legacy/in-flight run.
-		`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ('` + runID + `','` + orgID + `','` + integrationID + `')`,
+		`INSERT INTO sync_runs (triggered_by,mode,status,total_units,completed_units,failed_units,created_at,id,org_id,integration_id) VALUES ('test','incremental','running',0,0,0,now(),'` + runID + `','` + orgID + `','` + integrationID + `')`,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -177,8 +173,8 @@ func TestResolveTeamCatalogIntegrationFailsClosedOnEnvironmentStampedAuth(t *tes
 	)
 	for _, statement := range []string{
 		// Integration.credential_id is NULL -- an environment-auth integration.
-		`INSERT INTO integrations (id,org_id,provider) VALUES ('` + integrationID + `','` + orgID + `','linear')`,
-		`INSERT INTO sync_runs (id,org_id,integration_id,auth_source) VALUES ('` + runID + `','` + orgID + `','` + integrationID + `','environment')`,
+		`INSERT INTO integrations (name,is_active,config,created_at,updated_at,id,org_id,provider) VALUES ('integration',TRUE,'{}'::json,now(),now(),'` + integrationID + `','` + orgID + `','linear')`,
+		`INSERT INTO sync_runs (triggered_by,mode,status,total_units,completed_units,failed_units,created_at,id,org_id,integration_id,auth_source) VALUES ('test','incremental','running',0,0,0,now(),'` + runID + `','` + orgID + `','` + integrationID + `','environment')`,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

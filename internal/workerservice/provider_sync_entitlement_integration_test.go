@@ -18,7 +18,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/providersyncschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -55,36 +56,12 @@ func TestProviderUnitRefusedByEntitlementTerminalizesAsFeatureDisabled(t *testin
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if err := providersyncschema.Create(ctx, pool); err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		// The shared fixture keeps integration_credentials minimal; the
-		// worker's credential resolver reads these columns (alembic 0015).
-		`ALTER TABLE public.integration_credentials
-		   ADD COLUMN org_id text, ADD COLUMN provider text, ADD COLUMN name text,
-		   ADD COLUMN is_active boolean NOT NULL DEFAULT TRUE,
-		   ADD COLUMN credentials_encrypted text, ADD COLUMN config jsonb`,
-		`CREATE TABLE organizations (id uuid PRIMARY KEY, tier text NOT NULL)`,
-		`CREATE TABLE feature_flags (
-		   id uuid PRIMARY KEY, key text UNIQUE NOT NULL, min_tier text NOT NULL,
-		   is_enabled boolean NOT NULL)`,
-		`CREATE TABLE org_feature_overrides (
-		   org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean NOT NULL,
-		   expires_at timestamptz, config json, PRIMARY KEY (org_id, feature_id))`,
-		`CREATE TABLE org_licenses (
-		   org_id uuid PRIMARY KEY, tier text NOT NULL, features_override json)`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// The migrated schema: the worker's credential resolver, the provider-sync repository and the
+	// entitlement gate all read real columns, foreign keys and constraints.
+	pgschema.Apply(ctx, t, pool)
 	featureID := uuid.NewString()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO feature_flags (id, key, min_tier, is_enabled)
-VALUES ($1, 'canonical_incident_ingestion', 'community', true)`, featureID); err != nil {
-		t.Fatal(err)
-	}
+	// The migrations pre-register canonical_incident_ingestion; the test drives it enabled by tier.
+	pgseed.SetFeatureFlag(ctx, t, pool, featureID, "canonical_incident_ingestion", "community", true)
 	cipher, err := newWorkerCredentialCipher(config.Config{
 		SettingsEncryptionKey: secrets.NewValue("test-master-key"),
 	})
@@ -141,39 +118,39 @@ VALUES ($1, 'canonical_incident_ingestion', 'community', true)`, featureID); err
 				sql  string
 				args []any
 			}{
-				{`INSERT INTO organizations (id, tier) VALUES ($1, 'community')`, []any{orgID}},
+				{`INSERT INTO organizations (id, slug, name, tier, is_active, created_at, updated_at) VALUES ($1::uuid, 'org-' || $1::uuid::text, 'org', 'community', TRUE, now(), now())`, []any{orgID}},
 				// Enabled by tier, then disabled by an org override: the
 				// exact "disable committed after the dispatch gate's read"
 				// shape the execution-time re-check exists for.
-				{`INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled) VALUES ($1, $2, false)`,
+				{`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, created_at, updated_at) VALUES (gen_random_uuid(), $1, $2, false, now(), now())`,
 					[]any{orgID, featureID}},
 				{`INSERT INTO public.integration_credentials
-				   (id, org_id, provider, name, is_active, credentials_encrypted, config)
-				   VALUES ($1, $2, $3, 'default', TRUE, $4, $5::jsonb)`,
+				   (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
+				   VALUES ($1, $2, $3, 'default', TRUE, $4, $5::json, now(), now())`,
 					[]any{credentialID, orgID, test.provider, ciphertext.Reveal(), string(credentialConfig)}},
-				{`INSERT INTO public.integrations (id, org_id, credential_id, config)
-				   VALUES ($1, $2, $3, '{}'::jsonb)`, []any{integrationID, orgID, credentialID}},
+				{`INSERT INTO public.integrations (id, org_id, provider, name, credential_id, config, is_active, created_at, updated_at)
+				   VALUES ($1, $2, '` + test.provider + `', 'integration', $3, '{}'::json, TRUE, now(), now())`, []any{integrationID, orgID, credentialID}},
 				{`INSERT INTO public.integration_sources
-				   (id, org_id, integration_id, external_id, full_name, metadata)
-				   VALUES ($1, $2, $3, $4, $4, '{}'::jsonb)`,
+				   (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
+				   VALUES ($1, $2, $3, '` + test.provider + `', 'repository', $4, $4, $4, '{}'::json, TRUE, now(), now())`,
 					[]any{sourceID, orgID, integrationID, test.sourceExternalID}},
 				{`INSERT INTO public.integration_datasets
-				   (id, org_id, integration_id, dataset_key, options)
-				   VALUES ($1, $2, $3, $4, '{}'::jsonb)`,
+				   (id, org_id, integration_id, dataset_key, is_enabled, options)
+				   VALUES ($1, $2, $3, $4, TRUE, '{}'::json)`,
 					[]any{uuid.NewString(), orgID, integrationID, test.dataset}},
 				{`INSERT INTO public.sync_runs
-				   (id, org_id, integration_id, status, credential_id, credential_fingerprint, auth_source,
-				    total_units, completed_units, failed_units)
-				   VALUES ($1, $2, $3, 'running', $4, 'fingerprint', 'integration_credential', 0, 0, 0)`,
+				   (id, org_id, integration_id, triggered_by, mode, status, credential_id, credential_fingerprint, auth_source,
+				    total_units, completed_units, failed_units, created_at)
+				   VALUES ($1, $2, $3, 'test', 'incremental', 'running', $4, 'fingerprint', 'integration_credential', 0, 0, 0, now())`,
 					[]any{runID, orgID, integrationID, credentialID}},
 				{`INSERT INTO public.sync_run_units (
 				     id, org_id, sync_run_id, integration_id, source_id, provider,
 				     dataset_key, cost_class, mode, since_at, before_at, status,
-				     processor_flags, updated_at
+				     processor_flags, attempts, created_at, updated_at
 				   ) VALUES (
 				     $1, $2, $3, $4, $5, $6, $7, $8, 'incremental',
 				     '2026-08-01T00:00:00Z', '2026-08-02T00:00:00Z', 'dispatching',
-				     '{}'::jsonb, NOW()
+				     '{}'::json, 0, NOW(), NOW()
 				   )`,
 					[]any{unitID, orgID, runID, integrationID, sourceID, test.provider, test.dataset, string(capability.CostClass)}},
 			} {

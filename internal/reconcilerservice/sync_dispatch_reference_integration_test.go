@@ -10,22 +10,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-const syncDispatchReferenceDDL = `
-CREATE TABLE public.sync_runs (
-    id UUID PRIMARY KEY,
-    trace_parent TEXT
-);
-CREATE TABLE public.sync_dispatch_outbox (
-    id UUID PRIMARY KEY,
-    org_id TEXT NOT NULL,
-    sync_run_id UUID NOT NULL REFERENCES public.sync_runs (id),
-    kind TEXT NOT NULL
-);
-`
 
 // TestSyncDispatchReferenceJoinsTraceParentFromSyncRuns proves the
 // sync_dispatch_outbox/sync_runs JOIN added for CHAOS-3996 actually resolves
@@ -54,9 +43,9 @@ func TestSyncDispatchReferenceJoinsTraceParentFromSyncRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, syncDispatchReferenceDDL); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema: sync_runs (with trace_parent) and sync_dispatch_outbox with its real
+	// columns, foreign keys and constraints.
+	pgschema.Apply(ctx, t, pool)
 
 	orgID := uuid.New()
 	tracedRun := uuid.New()
@@ -73,8 +62,9 @@ func TestSyncDispatchReferenceJoinsTraceParentFromSyncRuns(t *testing.T) {
 		{untracedRun, nil},
 	}
 	for _, row := range seed {
+		pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: row.runID.String(), OrgID: orgID.String()})
 		if _, err := pool.Exec(ctx,
-			`INSERT INTO public.sync_runs (id, trace_parent) VALUES ($1, $2)`,
+			`UPDATE public.sync_runs SET trace_parent = $2 WHERE id = $1`,
 			row.runID, row.traceParent,
 		); err != nil {
 			t.Fatal(err)
@@ -88,12 +78,7 @@ func TestSyncDispatchReferenceJoinsTraceParentFromSyncRuns(t *testing.T) {
 		{untracedOutbox, untracedRun},
 	}
 	for _, row := range outboxRows {
-		if _, err := pool.Exec(ctx,
-			`INSERT INTO public.sync_dispatch_outbox (id, org_id, sync_run_id, kind) VALUES ($1, $2, $3, 'dispatch_sync_run')`,
-			row.id, orgID.String(), row.runID,
-		); err != nil {
-			t.Fatal(err)
-		}
+		pgseed.SyncDispatchOutbox(ctx, t, pool, row.id.String(), row.runID.String(), orgID.String(), "dispatch_sync_run", "pending", "", 0)
 	}
 
 	t.Run("a run with a captured trace_parent resolves it", func(t *testing.T) {

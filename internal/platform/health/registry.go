@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
 	"sort"
 	"sync"
@@ -38,7 +39,27 @@ type Registry struct {
 	metricsSource map[string]MetricsSource
 	ready         atomic.Bool
 	live          atomic.Bool
+
+	// refusals reports, to the process log, which required check refused
+	// readiness and how (CHAOS-6883): the 503 body carries only the names and
+	// kubelet keeps no body, so without a server-side line a refusal that
+	// clears is undiagnosable afterwards.
+	refusalMu  sync.Mutex
+	refusalLog *slog.Logger
+	refusing   map[string]*refusalState
 }
+
+// refusalState is one check's run of consecutive refusals.
+type refusalState struct {
+	since     time.Time
+	count     int64
+	lastLog   time.Time
+	lastCause string
+}
+
+// refusalLogInterval bounds how often a check that KEEPS refusing is logged;
+// the first refusal and the recovery are always logged.
+const refusalLogInterval = 30 * time.Second
 
 type requiredCheck struct {
 	check CheckFunc
@@ -60,6 +81,9 @@ type checkExecution struct {
 	// started microseconds apart, which made "whichever context fires
 	// first" decide the classification at random.
 	timedOut bool
+	// cause is the bounded class of a failure: "timeout", "canceled", "panic"
+	// or "error". Never the error text, which can carry a DSN.
+	cause string
 }
 
 // Readiness is a sanitized snapshot suitable for logs, metrics, and HTTP.
@@ -228,6 +252,81 @@ func (r *Registry) WriteMetrics(output io.Writer) error {
 	return nil
 }
 
+// SetRefusalLogger makes the registry log which required check refuses
+// readiness, and why in bounded terms (CHAOS-6883). The HTTP body names the
+// failing checks and nothing else, and a refusal that clears leaves no trace
+// anywhere; this is the only durable record of it. Each check logs its first
+// refusal, then at most once per refusalLogInterval while it keeps refusing,
+// then once when it recovers. Only the check name, the bounded cause class and
+// counters are logged, never the error text.
+func (r *Registry) SetRefusalLogger(logger *slog.Logger) {
+	r.refusalMu.Lock()
+	defer r.refusalMu.Unlock()
+	r.refusalLog = logger
+}
+
+func (r *Registry) reportRefusals(ctx context.Context, statuses []CheckStatus, causes map[string]string) {
+	r.refusalMu.Lock()
+	logger := r.refusalLog
+	if logger == nil {
+		r.refusalMu.Unlock()
+		return
+	}
+	if r.refusing == nil {
+		r.refusing = make(map[string]*refusalState, len(statuses))
+	}
+	type line struct {
+		message string
+		attrs   []any
+		warn    bool
+	}
+	var lines []line
+	now := time.Now()
+	for _, status := range statuses {
+		state := r.refusing[status.Name]
+		if !status.Failed {
+			if state != nil {
+				lines = append(lines, line{"readiness check recovered", []any{
+					"check", status.Name,
+					"refused_for_ms", now.Sub(state.since).Milliseconds(),
+					"consecutive_refusals", state.count,
+					"last_cause", state.lastCause,
+				}, false})
+				delete(r.refusing, status.Name)
+			}
+			continue
+		}
+		cause := causes[status.Name]
+		if cause == "" {
+			cause = "error"
+		}
+		if state == nil {
+			state = &refusalState{since: now}
+			r.refusing[status.Name] = state
+		}
+		state.count++
+		state.lastCause = cause
+		if state.count == 1 || now.Sub(state.lastLog) >= refusalLogInterval {
+			state.lastLog = now
+			lines = append(lines, line{"readiness check refused", []any{
+				"check", status.Name,
+				"cause", cause,
+				"timed_out", status.TimedOut,
+				"refused_for_ms", now.Sub(state.since).Milliseconds(),
+				"consecutive_refusals", state.count,
+			}, true})
+		}
+	}
+	r.refusalMu.Unlock()
+	for _, l := range lines {
+		if l.warn {
+			logger.WarnContext(ctx, l.message, l.attrs...)
+		} else {
+			logger.InfoContext(ctx, l.message, l.attrs...)
+		}
+	}
+}
+
 // RegisterRequired adds a fail-closed readiness dependency. Names are bounded
 // metric-safe identifiers, and duplicate registration is rejected.
 func (r *Registry) RegisterRequired(name string, check CheckFunc) error {
@@ -309,8 +408,10 @@ func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 
 	failed := make([]string, 0)
 	statuses := make([]CheckStatus, 0, len(checks))
+	causes := make(map[string]string, len(checks))
 	for range checks {
 		result := <-results
+		causes[result.name] = result.result.cause
 		statuses = append(statuses, CheckStatus{
 			Name:     result.name,
 			Failed:   result.result.failed,
@@ -322,6 +423,7 @@ func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 	}
 	sort.Strings(failed)
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].Name < statuses[j].Name })
+	r.reportRefusals(ctx, statuses, causes)
 	return Readiness{Ready: len(failed) == 0, Failed: failed, Checks: statuses}
 }
 
@@ -333,6 +435,9 @@ func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 type checkResult struct {
 	failed   bool
 	timedOut bool
+	// cause is the bounded failure class (see checkExecution.cause), or
+	// "wait_expired" when the caller's own wait ended before any answer.
+	cause string
 }
 
 // run shares a single in-flight execution across callers. A check that ignores
@@ -342,7 +447,7 @@ func (c *requiredCheck) run(parent context.Context, timeout time.Duration) check
 	waitCtx, waitCancel := context.WithTimeout(parent, timeout)
 	defer waitCancel()
 	if waitCtx.Err() != nil {
-		return checkResult{failed: true, timedOut: true}
+		return checkResult{failed: true, timedOut: true, cause: "wait_expired"}
 	}
 
 	c.mu.Lock()
@@ -357,12 +462,12 @@ func (c *requiredCheck) run(parent context.Context, timeout time.Duration) check
 
 	select {
 	case <-execution.done:
-		return checkResult{failed: !execution.passed, timedOut: !execution.passed && execution.timedOut}
+		return checkResult{failed: !execution.passed, timedOut: !execution.passed && execution.timedOut, cause: execution.cause}
 	case <-waitCtx.Done():
 		// The caller's own wait expired with no answer at all -- whatever the
 		// check eventually returns, THIS caller never saw it in time, which is
 		// the definition of a timeout from its perspective.
-		return checkResult{failed: true, timedOut: true}
+		return checkResult{failed: true, timedOut: true, cause: "wait_expired"}
 	}
 }
 
@@ -372,23 +477,31 @@ func (c *requiredCheck) execute(
 	execution *checkExecution,
 ) {
 	defer cancel()
-	passed, timedOut := func() (passed, timedOut bool) {
+	passed, timedOut, cause := func() (passed, timedOut bool, cause string) {
 		defer func() {
 			if recover() != nil {
 				// A panic is a bug in the check, never a transient timeout.
-				passed, timedOut = false, false
+				passed, timedOut, cause = false, false, "panic"
 			}
 		}()
 		err := c.check(ctx)
 		if err == nil {
-			return true, false
+			return true, false, ""
 		}
-		return false, errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			return false, true, "timeout"
+		case errors.Is(err, context.Canceled):
+			return false, true, "canceled"
+		default:
+			return false, false, "error"
+		}
 	}()
 
 	c.mu.Lock()
 	execution.passed = passed
 	execution.timedOut = timedOut
+	execution.cause = cause
 	close(execution.done)
 	if c.active == execution {
 		c.active = nil

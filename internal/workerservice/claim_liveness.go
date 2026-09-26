@@ -54,6 +54,9 @@ type claimLiveness struct {
 	// until its backoff elapses, so between two failures the queue reads
 	// Available=0 and Running=0 and every snapshot-driven arm calls it idle.
 	gateFailures map[string]gateFailureRun
+	// refusalLogged is, per queue, when its execution_liveness refusal was last
+	// logged (claimRefusalDue).
+	refusalLogged map[string]time.Time
 	// staleWindow defaults to claimStalenessWindow in newClaimLiveness.
 	// Exposed via SetStaleWindow so a test can shrink it from the
 	// production 60s to a real-but-small duration (mirroring
@@ -504,10 +507,13 @@ func (dependencies *workerDependencies) claimLivenessReady(claim *claimLiveness)
 				// loop has been running against some other slow dependency.
 				dependencies.logClaimLivenessPreclaimSkip(ctx, facts.queue)
 			case verdictSlotStuck:
+				dependencies.logClaimLivenessRefusal(ctx, claim, "slot_stuck_before_handler", facts, now)
 				return fmt.Errorf("%w: queue %q", errClaimLivenessSlotStuckBeforeHandler, facts.queue)
 			case verdictGateFailing:
+				dependencies.logClaimLivenessRefusal(ctx, claim, "gate_failures_without_handler", facts, now)
 				return fmt.Errorf("%w: queue %q", errClaimLivenessGateFailing, facts.queue)
 			case verdictStalledBacklog:
+				dependencies.logClaimLivenessRefusal(ctx, claim, "backlog_without_handler", facts, now)
 				return fmt.Errorf("%w: queue %q", errClaimLivenessStalledWithBacklog, facts.queue)
 			}
 		}
@@ -652,6 +658,54 @@ func judgeQueue(f queueFacts) queueVerdict {
 		return verdictPreclaimSkip
 	}
 	return verdictStalledBacklog
+}
+
+// claimRefusalLogInterval bounds how often one queue's execution_liveness
+// refusal is logged while it keeps refusing.
+const claimRefusalLogInterval = 30 * time.Second
+
+// claimRefusalDue reports whether queue's refusal should be logged now, and
+// records that it was. The first refusal after a healthy stretch is always due.
+func (c *claimLiveness) claimRefusalDue(queue string, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.refusalLogged == nil {
+		c.refusalLogged = make(map[string]time.Time, 1)
+	}
+	if last, ok := c.refusalLogged[queue]; ok && now.Sub(last) < claimRefusalLogInterval {
+		return false
+	}
+	c.refusalLogged[queue] = now
+	return true
+}
+
+// logClaimLivenessRefusal names the clause that failed execution_liveness and
+// every fact the predicate judged (CHAOS-6883). The 503 body carries only the
+// check name, and refusals otherwise left no log line, so a refusal that
+// cleared could not be attributed to the stuck-slot arm, the backlog arm or the
+// gate-failure arm afterwards. Only bounded numbers and the queue name: never
+// an error string. Rate-limited per queue; the first refusal always logs.
+func (dependencies *workerDependencies) logClaimLivenessRefusal(
+	ctx context.Context, claim *claimLiveness, clause string, facts queueFacts, now time.Time,
+) {
+	if dependencies == nil || dependencies.logger == nil || claim == nil || !claim.claimRefusalDue(facts.queue, now) {
+		return
+	}
+	dependencies.logger.WarnContext(ctx, "execution liveness refused",
+		"check", "execution_liveness",
+		"queue", facts.queue,
+		"clause", clause,
+		"available", facts.available,
+		"capacity_known", facts.capacityKnown,
+		"capacity", facts.capacity,
+		"running", facts.running,
+		"inside_handler", facts.inside,
+		"claim_age_ms", facts.claimAge.Milliseconds(),
+		"stuck_for_ms", facts.stuckFor.Milliseconds(),
+		"gate_failures", facts.gateFails,
+		"gate_failure_span_ms", facts.gateFailSpan.Milliseconds(),
+		"window_ms", facts.window.Milliseconds(),
+	)
 }
 
 // logClaimLivenessPreclaimSkip explains why a queue with backlog and idle

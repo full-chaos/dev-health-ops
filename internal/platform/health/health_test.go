@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -550,5 +552,136 @@ func TestServerStartsOnEphemeralPortAndShutsDown(t *testing.T) {
 	}
 	if registry.Readiness(context.Background()).Ready {
 		t.Fatal("shutdown must close readiness")
+	}
+}
+
+// CHAOS-6883: the registry's refusal log.
+func TestRegistryLogsRefusalsOnFirstRepeatRecoveryAndNeverTheErrorText(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	registry := NewRegistry(time.Second)
+	registry.SetRefusalLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
+	var failing atomic.Bool
+	failing.Store(true)
+	if err := registry.RegisterRequired("dep_a", func(context.Context) error {
+		if failing.Load() {
+			return errors.New("dial postgres://u:secret@db.internal/x: refused")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterRequired("dep_ok", func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	registry.SetReady(true)
+
+	for range 5 {
+		if status := registry.Readiness(context.Background()); status.Ready {
+			t.Fatal("dep_a must refuse")
+		}
+	}
+	if got := strings.Count(logs.String(), `"msg":"readiness check refused"`); got != 1 {
+		t.Fatalf("5 consecutive refusals inside one interval logged %d lines, want 1 (first only): %s", got, logs.String())
+	}
+	if strings.Contains(logs.String(), "dep_ok") {
+		t.Fatal("a passing check must not be logged as refused")
+	}
+	for _, want := range []string{`"check":"dep_a"`, `"cause":"error"`, `"timed_out":false`, `"consecutive_refusals":1`} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("first refusal line lacks %s: %s", want, logs.String())
+		}
+	}
+	for _, forbidden := range []string{"secret", "db.internal", "postgres://"} {
+		if strings.Contains(logs.String(), forbidden) {
+			t.Errorf("the refusal log leaked %q", forbidden)
+		}
+	}
+
+	// A check that keeps refusing is logged again once the interval has passed.
+	registry.refusalMu.Lock()
+	registry.refusing["dep_a"].lastLog = time.Now().Add(-2 * refusalLogInterval)
+	registry.refusalMu.Unlock()
+	registry.Readiness(context.Background())
+	if got := strings.Count(logs.String(), `"msg":"readiness check refused"`); got != 2 {
+		t.Fatalf("a refusal past the interval logged %d lines total, want 2", got)
+	}
+	if !strings.Contains(logs.String(), `"consecutive_refusals":6`) {
+		t.Errorf("the repeat line must carry the running count: %s", logs.String())
+	}
+
+	// Recovery is logged once, and the next refusal starts a fresh run.
+	failing.Store(false)
+	registry.Readiness(context.Background())
+	registry.Readiness(context.Background())
+	if got := strings.Count(logs.String(), `"msg":"readiness check recovered"`); got != 1 {
+		t.Fatalf("recovery logged %d lines, want 1: %s", got, logs.String())
+	}
+	for _, want := range []string{`"last_cause":"error"`, `"consecutive_refusals":6`} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("recovery line lacks %s: %s", want, logs.String())
+		}
+	}
+	failing.Store(true)
+	registry.Readiness(context.Background())
+	if got := strings.Count(logs.String(), `"msg":"readiness check refused"`); got != 3 {
+		t.Fatalf("a new refusal after recovery must log immediately, total %d want 3", got)
+	}
+}
+
+func TestRegistryRefusalCauseIsBounded(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name  string
+		check CheckFunc
+		cause string
+		timed bool
+	}{
+		{"deadline", func(context.Context) error { return fmt.Errorf("query: %w", context.DeadlineExceeded) }, "timeout", true},
+		{"canceled", func(context.Context) error { return context.Canceled }, "canceled", true},
+		{"panic", func(context.Context) error { panic("boom") }, "panic", false},
+		{"error", func(context.Context) error { return errors.New("x") }, "error", false},
+	} {
+		var logs bytes.Buffer
+		registry := NewRegistry(time.Second)
+		registry.SetRefusalLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
+		if err := registry.RegisterRequired("dep", test.check); err != nil {
+			t.Fatal(err)
+		}
+		registry.SetReady(true)
+		registry.Readiness(context.Background())
+		if want := fmt.Sprintf(`"cause":%q`, test.cause); !strings.Contains(logs.String(), want) {
+			t.Errorf("%s: want %s in %s", test.name, want, logs.String())
+		}
+		if want := fmt.Sprintf(`"timed_out":%t`, test.timed); !strings.Contains(logs.String(), want) {
+			t.Errorf("%s: want %s in %s", test.name, want, logs.String())
+		}
+	}
+	// The caller's own wait expiring before any answer.
+	var logs bytes.Buffer
+	registry := NewRegistry(30 * time.Millisecond)
+	registry.SetRefusalLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
+	release := make(chan struct{})
+	defer close(release)
+	if err := registry.RegisterRequired("slow", func(context.Context) error { <-release; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	registry.SetReady(true)
+	registry.Readiness(context.Background())
+	if !strings.Contains(logs.String(), `"cause":"wait_expired"`) {
+		t.Errorf("a check that never answered must log wait_expired: %s", logs.String())
+	}
+}
+
+// Without a logger the registry behaves exactly as before.
+func TestRegistryWithoutARefusalLoggerStaysSilent(t *testing.T) {
+	t.Parallel()
+	registry := NewRegistry(time.Second)
+	if err := registry.RegisterRequired("dep", func(context.Context) error { return errors.New("x") }); err != nil {
+		t.Fatal(err)
+	}
+	registry.SetReady(true)
+	if status := registry.Readiness(context.Background()); status.Ready {
+		t.Fatal("dep must refuse")
 	}
 }

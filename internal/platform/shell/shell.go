@@ -322,6 +322,7 @@ func Execute(
 		tracingComponent = tracing.Init(logger)
 	}
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)
+	registry.SetRefusalLogger(logger)
 	// Every binary exports the OTel instruments its code declares (the
 	// counters ported from the Python api, the coverage and ingest families
 	// declared through otel.Meter) on its own /metrics, as the api and the

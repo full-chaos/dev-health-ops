@@ -949,3 +949,111 @@ func TestClaimLivenessReadyFailsOnAGateFailureRunWhileTheQueueLooksIdle(t *testi
 		t.Fatalf("a handler reaching its work must clear the verdict: %v", err)
 	}
 }
+
+// CHAOS-6883: an execution_liveness refusal names the clause and every fact the
+// predicate judged. The 503 body carries only the check name and refusals used to
+// leave no log line, so a refusal that cleared could not be attributed to the
+// stuck-slot arm, the backlog arm or the gate-failure arm.
+func TestClaimLivenessRefusalLogNamesTheClauseAndTheFacts(t *testing.T) {
+	t.Parallel()
+	type scenario struct {
+		name     string
+		clause   string
+		snapshot riverstore.QueueTelemetrySnapshot
+		prepare  func(*claimLiveness)
+		polls    int
+		want     []string
+	}
+	idle := riverstore.QueueTelemetrySnapshot{
+		Jobs:            []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: 0}},
+		QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "heartbeat", Capacity: 2, Running: 0}},
+	}
+	for _, test := range []scenario{
+		{
+			name: "backlog arm", clause: "backlog_without_handler", polls: 1,
+			snapshot: riverstore.QueueTelemetrySnapshot{
+				Jobs:            []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: 3}},
+				QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "heartbeat", Capacity: 2, Running: 0}},
+			},
+			want: []string{`"available":3`, `"capacity":2`, `"running":0`, `"inside_handler":0`},
+		},
+		{
+			name: "stuck slot arm", clause: "slot_stuck_before_handler", polls: 2,
+			snapshot: riverstore.QueueTelemetrySnapshot{
+				Jobs:            []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: 0}},
+				QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "heartbeat", Capacity: 1, Running: 1}},
+			},
+			want: []string{`"running":1`, `"inside_handler":0`, `"available":0`},
+		},
+		{
+			name: "gate failure arm", clause: "gate_failures_without_handler", polls: 1, snapshot: idle,
+			prepare: func(c *claimLiveness) {
+				now := time.Now()
+				c.recordGateFailure("heartbeat", true, now.Add(-90*time.Second))
+				c.recordGateFailure("heartbeat", true, now.Add(-time.Second))
+			},
+			want: []string{`"gate_failures":2`, `"available":0`},
+		},
+	} {
+		var logs bytes.Buffer
+		telemetry := &fakeQueueTelemetry{snapshot: test.snapshot}
+		dependencies := &workerDependencies{
+			queueTelemetryRequired: true, queueTelemetry: telemetry,
+			logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+		}
+		claim := newClaimLiveness(time.Now().Add(-time.Hour), []string{"heartbeat"})
+		claim.SetStaleWindow(40 * time.Millisecond)
+		if test.prepare != nil {
+			claim.SetStaleWindow(time.Minute)
+			test.prepare(claim)
+		}
+		claim.markRuntimeLive()
+		ready := dependencies.claimLivenessReady(claim)
+		var err error
+		for poll := 0; poll < test.polls; poll++ {
+			if poll > 0 {
+				time.Sleep(80 * time.Millisecond)
+			}
+			err = ready(context.Background())
+		}
+		if err == nil {
+			t.Fatalf("%s: expected a refusal", test.name)
+		}
+		out := logs.String()
+		for _, want := range append([]string{
+			`"msg":"execution liveness refused"`, `"check":"execution_liveness"`, `"queue":"heartbeat"`,
+			`"clause":"` + test.clause + `"`,
+		}, test.want...) {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s: refusal log lacks %s: %s", test.name, want, out)
+			}
+		}
+		// Rate limit: a repeat inside the interval adds no second line.
+		before := strings.Count(out, "execution liveness refused")
+		_ = ready(context.Background())
+		if after := strings.Count(logs.String(), "execution liveness refused"); after != before {
+			t.Errorf("%s: a repeat inside the interval logged again (%d -> %d)", test.name, before, after)
+		}
+	}
+}
+
+func TestClaimLivenessHealthyQueueLogsNoRefusal(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true,
+		queueTelemetry: &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
+			Jobs:            []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: 0}},
+			QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "heartbeat", Capacity: 2, Running: 0}},
+		}},
+		logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	claim := newClaimLiveness(time.Now().Add(-time.Hour), []string{"heartbeat"})
+	claim.markRuntimeLive()
+	if err := dependencies.claimLivenessReady(claim)(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), "refused") {
+		t.Fatalf("a healthy queue logged a refusal: %s", logs.String())
+	}
+}

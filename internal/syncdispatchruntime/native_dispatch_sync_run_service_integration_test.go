@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -72,6 +73,11 @@ func providerUnitDescriptor(route string) jobruntime.Descriptor {
 
 const (
 	dispatchServiceTestOutbox = "00000000-0000-4000-8000-0000000000e9"
+	// The migrations seed each route as celery at generation 2 and the route table's trigger demands
+	// an increase for a state change, so the river route lands at 3.
+	dispatchRouteGeneration = 3
+	dispatchTestSource      = "00000000-0000-4000-8000-0000000000ed"
+	dispatchTestSourceB     = "00000000-0000-4000-8000-0000000000ec"
 )
 
 func withDispatchServicePool(t *testing.T, fn func(ctx context.Context, pool *pgxpool.Pool)) {
@@ -88,62 +94,12 @@ func withDispatchServicePool(t *testing.T, fn func(ctx context.Context, pool *pg
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTablesLegacy(t, ctx, pool)
-	// DispatchGuard.authorize_run's total-cap resolution
-	// (scheduledsync.ResolveMaxSyncUnitsCap -> loadPlanLimits) queries
-	// organizations/org_licenses -- absent in production only for a
-	// malformed org id, never for a real one, so these tables must exist
-	// here too: a missing-relation ERROR poisons the whole enclosing
-	// Postgres transaction (25P02), which Go-level fallback-to-default
-	// error handling cannot undo without a savepoint. Production always has
-	// these tables; this is a test-fixture-completeness requirement, not a
-	// production behavior this port needs to defend against.
-	//
-	// organizations/org_licenses/tier_limits are created by
-	// createReferenceDiscoveryTables above (CHAOS-6286: the same tables the
-	// non-locking canonical-incident gate now reads via internal/api/licensing
-	// need to exist for every test in this package, not only this cap-resolution
-	// one, so they moved to the shared fixture) -- only the seed row is local.
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.organizations (id, tier) VALUES ('`+discoveryTestOrg+`', 'community');`); err != nil {
-		t.Fatal(err)
-	}
-	// joboutbox.Producer.Publish's own table. Deliberately no worker_job_routes
-	// here (CHAOS-4175 ruling, superseding an earlier one on this branch):
-	// Dispatch's write path never reads the live route store -- the domain
-	// role has no grant on it in production -- so this fixture doesn't need
-	// it either. See NativeDispatchSyncRunService's doc comment.
-	if _, err := pool.Exec(ctx, `
-CREATE TABLE public.worker_job_outbox (
-  id uuid PRIMARY KEY, dedupe_key text NOT NULL UNIQUE, job_kind text NOT NULL,
-  contract_version int NOT NULL, args json NOT NULL, payload_hash text NOT NULL,
-  queue text NOT NULL, priority int NOT NULL, max_attempts int NOT NULL,
-  scheduled_at timestamptz NOT NULL, status text NOT NULL, attempt_count int NOT NULL,
-  next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text NULL,
-  -- Both columns exist in alembic 0046 and are read by Producer.Publish's
-  -- conflict branch (it reports ErrDeliveryAlreadyTerminal with the row's
-  -- status and its River job id). This fixture omitted them, which made every
-  -- publish onto an existing row fail as 42703 rather than answering.
-  river_job_id bigint NULL, delivered_at timestamptz NULL,
-  created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
-);`); err != nil {
-		t.Fatal(err)
-	}
-	// activeCooldowns (inside enforceRun) reads this table and is
-	// deliberately fail-open on a query error -- but the underlying
-	// Postgres ERROR (missing relation) still poisons the enclosing
-	// transaction (25P02) even though the Go-level error is swallowed.
-	// Same fixture-completeness class as organizations/tier_limits above.
-	if _, err := pool.Exec(ctx, `
-CREATE TABLE public.provider_rate_limit_observations (
- id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, host text NULL,
- integration_id uuid NOT NULL, sync_run_id uuid NOT NULL, sync_run_unit_id uuid NOT NULL,
- route_family text NULL, route_family_attribution text NULL, dimension text NULL,
- retry_after_seconds double precision NULL, reset_at timestamptz NULL, reason text NULL,
- request_id text NULL, observed_at timestamptz NOT NULL
-);`); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema: organizations/org_licenses/tier_limits (the cap resolution and the
+	// canonical-incident gate read them), the producer's worker_job_outbox, and the rate-limit
+	// observations table activeCooldowns reads. A missing relation would poison the whole enclosing
+	// transaction (25P02), so the real tables must exist -- and now they do, with their real shape.
+	createReferenceDiscoveryTables(t, ctx, pool)
+	pgseed.Org(ctx, t, pool, discoveryTestOrg, "community")
 	fn(ctx, pool)
 }
 
@@ -152,36 +108,28 @@ CREATE TABLE public.provider_rate_limit_observations (
 // business logic.
 func seedDispatchRoute(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	statements := []string{
-		`INSERT INTO sync_dispatch_transport_routes (kind,transport,generation,paused,rollback_transport)
-		 VALUES ('dispatch_sync_run','river',1,false,'celery')`,
-		`INSERT INTO sync_dispatch_outbox
-		    (id,sync_run_id,org_id,kind,status,available_at,dispatched_transport,dispatched_route_generation,created_at,updated_at)
-		 VALUES ('` + dispatchServiceTestOutbox + `','` + discoveryTestRun + `','` + discoveryTestOrg + `',
-		         'dispatch_sync_run','dispatched',now(),'river',1,now(),now())`,
-		`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ('` + discoveryTestRun + `','` +
-			discoveryTestOrg + `','` + discoveryTestIntegration + `')`,
-		`INSERT INTO integrations (id,org_id,provider) VALUES ('` + discoveryTestIntegration + `','` + discoveryTestOrg + `','github')`,
+	if got := pgseed.SyncTransportRoute(ctx, t, pool, "dispatch_sync_run", "river", dispatchRouteGeneration, false, "celery"); got != dispatchRouteGeneration {
+		t.Fatalf("dispatch_sync_run route generation = %d, want %d", got, dispatchRouteGeneration)
 	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// Run, its integration and the source every unit below points at (foreign keys).
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: discoveryTestRun, OrgID: discoveryTestOrg, IntegrationID: discoveryTestIntegration})
+	pgseed.EnsureSyncIntegration(ctx, t, pool, discoveryTestOrg, discoveryTestIntegration, dispatchTestSource)
+	pgseed.EnsureSyncIntegration(ctx, t, pool, discoveryTestOrg, discoveryTestIntegration, dispatchTestSourceB)
+	pgseed.SyncDispatchOutbox(ctx, t, pool, dispatchServiceTestOutbox, discoveryTestRun, discoveryTestOrg, "dispatch_sync_run", "dispatched", "river", dispatchRouteGeneration)
 }
 
 func dispatchTestArgs() DispatchSyncRunArgs {
 	return DispatchSyncRunArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: discoveryTestRun,
-		DispatchOutbox: dispatchServiceTestOutbox, RouteGeneration: 1,
+		DispatchOutbox: dispatchServiceTestOutbox, RouteGeneration: dispatchRouteGeneration,
 	}}
 }
 
 func markReferenceDiscoverySucceeded(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at)
-VALUES ('00000000-0000-4000-8000-0000000000ea',$1,$2,$3,1,now())`,
+INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,created_at,updated_at)
+VALUES ('00000000-0000-4000-8000-0000000000ea',$1,$2,$3,1,now(),now(),now())`,
 		discoveryTestRun, discoveryTestOrg, discoveryStatusSuccess); err != nil {
 		t.Fatal(err)
 	}
@@ -234,8 +182,8 @@ func TestDispatchReportsAPublishOntoATerminalDelivery(t *testing.T) {
 		unitID := "00000000-0000-4000-8000-0000000000fd"
 		// markReferenceDiscoverySucceeded already inserts the run row.
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
 			t.Fatal(err)
 		}
@@ -332,10 +280,7 @@ func TestDispatchReturnsNilWhenTheTransportReferenceIsStale(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		// Deliberately do NOT seed the route -- currentTransportReference's
 		// EXISTS query then has nothing to match.
-		if _, err := pool.Exec(ctx, `INSERT INTO sync_runs (id,org_id,integration_id) VALUES ($1,$2,$3)`,
-			discoveryTestRun, discoveryTestOrg, discoveryTestIntegration); err != nil {
-			t.Fatal(err)
-		}
+		pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: discoveryTestRun, OrgID: discoveryTestOrg, IntegrationID: discoveryTestIntegration})
 		service := newTestDispatchService(t, pool)
 		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
 			t.Fatalf("Dispatch: %v, want nil (stale reference is a silent no-op)", err)
@@ -343,29 +288,13 @@ func TestDispatchReturnsNilWhenTheTransportReferenceIsStale(t *testing.T) {
 	})
 }
 
-// TestDispatchCommitsAndReturnsNilForAMissingRun pins the missing-run
-// branch: Python returns {"status": "missing", ...} without error; the Go
-// port commits a no-op and returns nil.
-func TestDispatchCommitsAndReturnsNilForAMissingRun(t *testing.T) {
-	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		// Seed the route/outbox but NOT the sync_runs row itself.
-		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_dispatch_transport_routes (kind,transport,generation,paused,rollback_transport)
-VALUES ('dispatch_sync_run','river',1,false,'celery')`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_dispatch_outbox (id,sync_run_id,org_id,kind,status,available_at,dispatched_transport,dispatched_route_generation,created_at,updated_at)
-VALUES ($1,$2,$3,'dispatch_sync_run','dispatched',now(),'river',1,now(),now())`,
-			dispatchServiceTestOutbox, discoveryTestRun, discoveryTestOrg); err != nil {
-			t.Fatal(err)
-		}
-		service := newTestDispatchService(t, pool)
-		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
-			t.Fatalf("Dispatch: %v, want nil", err)
-		}
-	})
-}
+// NOTE (CHAOS-6769): a former TestDispatchCommitsAndReturnsNilForAMissingRun pinned Dispatch's
+// missing-run branch by seeding a dispatched outbox wakeup for a run that has no sync_runs row. The
+// migrated sync_dispatch_outbox has a foreign key to sync_runs (created with the table), so no
+// deployable database can hold that pair; the test dropped the constraint to keep the premise and
+// modelled no real state, so it is deleted. A Dispatch for a run that is gone has no outbox row either
+// and ends at the stale-reference no-op that TestDispatchReturnsNilWhenTheTransportReferenceIsStale
+// covers. Residual: the missing-run branch itself is unexercised.
 
 // TestDispatchBlocksOnReferenceDiscoveryAndArmsAWakeup pins the
 // reference-discovery gate: with no success ledger row, Dispatch() must
@@ -403,9 +332,9 @@ func TestDispatchDeniesWithActiveUnitsFailsOnlyStrandedOnes(t *testing.T) {
 		strandedUnit := "00000000-0000-4000-8000-0000000000eb"
 		runningUnit := "00000000-0000-4000-8000-0000000000ec"
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$5),
-       ($4,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','running',$5)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$5,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now()),
+($4,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','running',$5,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			strandedUnit, discoveryTestOrg, discoveryTestRun, runningUnit, now); err != nil {
 			t.Fatal(err)
 		}
@@ -474,9 +403,9 @@ func TestDispatchDeniesWithActiveUnitsRecordsTheRollupBumpMetric(t *testing.T) {
 		strandedUnit := "00000000-0000-4000-8000-0000000000fb"
 		runningUnit := "00000000-0000-4000-8000-0000000000fc"
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$5),
-       ($4,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','running',$5)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$5,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now()),
+($4,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','running',$5,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			strandedUnit, discoveryTestOrg, discoveryTestRun, runningUnit, now); err != nil {
 			t.Fatal(err)
 		}
@@ -562,10 +491,8 @@ func TestDispatchTerminalizesAPermanentlyOversizedUnitRecordsTheRollupBumpMetric
 		// or ValidateClaim rejects it as invalid_claim before this test's own
 		// oversized-estimate path is ever reached.
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,processor_flags,source_id,status,updated_at,budget_deferrals,result)
-VALUES ($1,$2,$3,'github','work-items',
-        '{"family_dataset_work_items":true,"family_dataset_work_item_labels":true,"family_dataset_work_item_projects":true,"family_dataset_work_item_history":true,"family_dataset_work_item_comments":true}'::json,
-        '00000000-0000-4000-8000-0000000000ed','planned',$4,$5,'{"error_category":"budget_deferred"}'::json)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,processor_flags,source_id,status,updated_at,budget_deferrals,result,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','work-items','{"family_dataset_work_items":true,"family_dataset_work_item_labels":true,"family_dataset_work_item_projects":true,"family_dataset_work_item_history":true,"family_dataset_work_item_comments":true}'::json,'00000000-0000-4000-8000-0000000000ed','planned',$4,$5,'{"error_category":"budget_deferred"}'::json,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			unitID, discoveryTestOrg, discoveryTestRun, now, budgetMaxDeferrals()); err != nil {
 			t.Fatal(err)
 		}
@@ -628,18 +555,17 @@ func TestDispatchTerminalizesAFeatureDisabledRunRecordsTheRollupBumpMetric(t *te
 		featureID := "00000000-0000-4000-8000-0000000000e7"
 		unitID := "00000000-0000-4000-8000-0000000000e8"
 		for _, statement := range []string{
-			`INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-			 VALUES ('` + unitID + `','` + discoveryTestOrg + `','` + discoveryTestRun + `','pagerduty','incidents',
-			         '00000000-0000-4000-8000-0000000000ec','planned',now())`,
-			`INSERT INTO feature_flags (id,key,min_tier,is_enabled)
-			 VALUES ('` + featureID + `','canonical_incident_ingestion','enterprise',true)`,
-			`INSERT INTO org_feature_overrides (id,org_id,feature_id,is_enabled,expires_at)
-			 VALUES ('00000000-0000-4000-8000-0000000000ee','` + discoveryTestOrg + `','` + featureID + `',false,NULL)`,
+			`INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ('` + unitID + `','` + discoveryTestOrg + `','` + discoveryTestRun + `','pagerduty','incidents','00000000-0000-4000-8000-0000000000ec','planned',now(),(SELECT integration_id FROM sync_runs WHERE id = '` + discoveryTestRun + `'::uuid),'rest_core','incremental',0,now())`,
 		} {
 			if _, err := pool.Exec(ctx, statement); err != nil {
 				t.Fatalf("seed %s: %v", statement, err)
 			}
 		}
+		// The migrations register this shipped flag; the case needs it enterprise-gated with the org
+		// switched off, so the row is replaced.
+		pgseed.SetFeatureFlag(ctx, t, pool, featureID, "canonical_incident_ingestion", "enterprise", true)
+		pgseed.OrgOverride(ctx, t, pool, discoveryTestOrg, featureID, false)
 
 		service := newTestDispatchService(t, pool)
 		metrics := providerfoundation.NewMetrics()
@@ -689,9 +615,9 @@ func TestDispatchDeniesWithNoActiveUnitsFailsTheWholeRun(t *testing.T) {
 		unitA := "00000000-0000-4000-8000-0000000000ee"
 		unitB := "00000000-0000-4000-8000-0000000000ef"
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$5),
-       ($4,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$5)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$5,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now()),
+($4,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$5,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			unitA, discoveryTestOrg, discoveryTestRun, unitB, now); err != nil {
 			t.Fatal(err)
 		}
@@ -737,8 +663,8 @@ func TestDispatchEnqueuesARoutableUnitAndMarksTheRunDispatching(t *testing.T) {
 		now := pgNow()
 		unitID := "00000000-0000-4000-8000-0000000000f1"
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
 			t.Fatal(err)
 		}
@@ -784,8 +710,8 @@ func TestDispatchTerminalizesAnUnroutableUnitAndArmsFinalize(t *testing.T) {
 		now := pgNow()
 		unitID := "00000000-0000-4000-8000-0000000000f2"
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'unknown-provider','unknown-dataset','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'unknown-provider','unknown-dataset','00000000-0000-4000-8000-0000000000ed','planned',$4,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
 			t.Fatal(err)
 		}
@@ -842,8 +768,8 @@ func TestDispatchTerminalizesAnUnroutableUnitRecordsTheRollupBumpMetric(t *testi
 		now := pgNow()
 		unitID := "00000000-0000-4000-8000-0000000000fd"
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'unknown-provider','unknown-dataset','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'unknown-provider','unknown-dataset','00000000-0000-4000-8000-0000000000ed','planned',$4,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
 			t.Fatal(err)
 		}
@@ -894,8 +820,8 @@ func TestDispatchTerminalizesANonCanonicalAtomicFamilyAliasAndArmsFinalize(t *te
 		now := pgNow()
 		unitID := "00000000-0000-4000-8000-0000000000f4"
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'github','work-item-labels','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','work-item-labels','00000000-0000-4000-8000-0000000000ed','planned',$4,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
 			t.Fatal(err)
 		}
@@ -947,8 +873,8 @@ func TestDispatchTerminalizesANonCanonicalAtomicFamilyAliasRecordsTheRollupBumpM
 		now := pgNow()
 		unitID := "00000000-0000-4000-8000-0000000000fe"
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'github','work-item-labels','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','work-item-labels','00000000-0000-4000-8000-0000000000ed','planned',$4,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
 			t.Fatal(err)
 		}
@@ -988,8 +914,8 @@ func TestDispatchTerminalizesAnAtomicCanonicalClaimMissingFamilyFlags(t *testing
 		now := pgNow()
 		unitID := "00000000-0000-4000-8000-0000000000f5"
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,processor_flags,source_id,status,updated_at)
-VALUES ($1,$2,$3,'linear','work-items','{"family_dataset_work_items": true}'::json,'00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,processor_flags,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'linear','work-items','{"family_dataset_work_items": true}'::json,'00000000-0000-4000-8000-0000000000ed','planned',$4,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
 			t.Fatal(err)
 		}
@@ -1069,14 +995,14 @@ func TestDispatchTerminalizesAnInvalidClaimEvenWhenConcurrencyCapped(t *testing.
 		validUnit := "00000000-0000-4000-8000-0000000000f6"
 		malformedUnit := "00000000-0000-4000-8000-0000000000f7"
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			validUnit, discoveryTestOrg, discoveryTestRun, now); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,processor_flags,source_id,status,updated_at)
-VALUES ($1,$2,$3,'github','work-items','{"family_dataset_work_items": true}'::json,'00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,processor_flags,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','work-items','{"family_dataset_work_items": true}'::json,'00000000-0000-4000-8000-0000000000ed','planned',$4,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			malformedUnit, discoveryTestOrg, discoveryTestRun, now); err != nil {
 			t.Fatal(err)
 		}
@@ -1139,8 +1065,8 @@ func TestDispatchFailsClosedWhenTheProviderUnitKindIsNotCheckedInAsExecutable(t 
 		now := pgNow()
 		unitID := "00000000-0000-4000-8000-0000000000f3"
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
 			t.Fatal(err)
 		}
@@ -1177,7 +1103,7 @@ const (
 func isolationJiraDispatchArgs() DispatchSyncRunArgs {
 	return DispatchSyncRunArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: isolationTestJiraRun,
-		DispatchOutbox: isolationTestJiraOutbox, RouteGeneration: 1,
+		DispatchOutbox: isolationTestJiraOutbox, RouteGeneration: dispatchRouteGeneration,
 	}}
 }
 
@@ -1206,8 +1132,8 @@ func TestDispatchIsolatesReferenceDiscoveryPerRunAcrossProviders(t *testing.T) {
 		now := pgNow()
 		unitID := "00000000-0000-4000-8000-0000000000c4"
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
 			t.Fatal(err)
 		}
@@ -1218,23 +1144,14 @@ VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','plan
 		// (the exact shape handleFailure leaves a still-retryable, not-yet-
 		// exhausted failure in -- e.g. the Jira board 400 from scope item 2,
 		// before this run's own retry has had a chance to succeed).
+		pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: isolationTestJiraRun, OrgID: discoveryTestOrg, IntegrationID: isolationTestJiraIntegration})
+		if _, err := pool.Exec(ctx, `UPDATE integrations SET provider='jira' WHERE id=$1`, isolationTestJiraIntegration); err != nil {
+			t.Fatal(err)
+		}
+		pgseed.SyncDispatchOutbox(ctx, t, pool, isolationTestJiraOutbox, isolationTestJiraRun, discoveryTestOrg, "dispatch_sync_run", "dispatched", "river", dispatchRouteGeneration)
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_dispatch_outbox (id,sync_run_id,org_id,kind,status,available_at,dispatched_transport,dispatched_route_generation,created_at,updated_at)
-VALUES ($1,$2,$3,'dispatch_sync_run','dispatched',now(),'river',1,now(),now())`,
-			isolationTestJiraOutbox, isolationTestJiraRun, discoveryTestOrg); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, `INSERT INTO sync_runs (id,org_id,integration_id) VALUES ($1,$2,$3)`,
-			isolationTestJiraRun, discoveryTestOrg, isolationTestJiraIntegration); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, `INSERT INTO integrations (id,org_id,provider) VALUES ($1,$2,'jira')`,
-			isolationTestJiraIntegration, discoveryTestOrg); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,error)
-VALUES ('00000000-0000-4000-8000-0000000000c5',$1,$2,$3,1,now(),'Reference discovery failed')`,
+INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,error,created_at,updated_at)
+VALUES ('00000000-0000-4000-8000-0000000000c5',$1,$2,$3,1,now(),'Reference discovery failed',now(),now())`,
 			isolationTestJiraRun, discoveryTestOrg, discoveryStatusRetrying); err != nil {
 			t.Fatal(err)
 		}
@@ -1327,20 +1244,20 @@ func TestDispatchTailPreservesAnEarlierDeferralWhenWorkIsStillDispatchable(t *te
 		leaseUntil := now.Add(time.Hour)
 
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,lease_owner,lease_expires_at)
-VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','running',$4,'live-worker',$5)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,lease_owner,lease_expires_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','running',$4,'live-worker',$5,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			"00000000-0000-4000-8000-0000000000fa", discoveryTestOrg, discoveryTestRun, now, leaseUntil); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			"00000000-0000-4000-8000-0000000000fb", discoveryTestOrg, discoveryTestRun, now); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,available_at)
-VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','retrying',$4,$5)`,
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,available_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','retrying',$4,$5,(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'rest_core','incremental',0,now())`,
 			"00000000-0000-4000-8000-0000000000fc", discoveryTestOrg, discoveryTestRun, now, deferredUntil); err != nil {
 			t.Fatal(err)
 		}

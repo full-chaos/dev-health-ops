@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -17,6 +18,65 @@ import (
 )
 
 var ErrWorkerRegistration = errors.New("sync dispatch worker registration failed")
+
+// WorkerOption configures how this package's bare River workers are registered.
+type WorkerOption func(*workerOptions)
+
+type workerOptions struct{ observer jobruntime.Observer }
+
+// WithHandlerObserver reports every job these workers run to observer's optional
+// handler taps (jobruntime.HandlerInvocationObserver / HandlerReturnObserver).
+//
+// These workers are bare River workers, NOT jobruntime.Adapter, so nothing fired
+// the taps for the `sync` queue and the worker's execution_liveness readiness
+// check (claim evidence, CHAOS-4029/6818) read a healthy busy sync queue as
+// wedged: every running job counted as "outside a handler" and the claim clock
+// never advanced (prod go-sync, 2026-09-26, CHAOS-6883). Without this option the
+// workers behave exactly as before and feed no evidence.
+func WithHandlerObserver(observer jobruntime.Observer) WorkerOption {
+	return func(options *workerOptions) { options.observer = observer }
+}
+
+func resolveWorkerOptions(options []WorkerOption) workerOptions {
+	var resolved workerOptions
+	for _, option := range options {
+		if option != nil {
+			option(&resolved)
+		}
+	}
+	return resolved
+}
+
+// handlerTaps is the claim-liveness tap point of one bare worker.
+type handlerTaps struct{ observer jobruntime.Observer }
+
+// middleware brackets the worker's whole Work with HandlerInvoked/HandlerReturned.
+// A bare worker has no pre-handler gate the way the Adapter does (validation,
+// tenant scope, budget, idempotency Begin), so its Work IS the handler; River
+// runs the middleware around it on the work pool, and a panic still returns.
+func (taps handlerTaps) middleware(*rivertype.JobRow) []rivertype.WorkerMiddleware {
+	if taps.observer == nil {
+		return nil
+	}
+	return []rivertype.WorkerMiddleware{river.WorkerMiddlewareFunc(
+		func(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) error {
+			labels := jobruntime.JobLabels{Queue: job.Queue, Kind: job.Kind}
+			if invoked, ok := taps.observer.(jobruntime.HandlerInvocationObserver); ok {
+				observeTap(func() { invoked.HandlerInvoked(ctx, labels) })
+			}
+			if returned, ok := taps.observer.(jobruntime.HandlerReturnObserver); ok {
+				defer observeTap(func() { returned.HandlerReturned(ctx, labels) })
+			}
+			return doInner(ctx)
+		},
+	)}
+}
+
+// observeTap runs a telemetry call so that a fault in it can never fail a job.
+func observeTap(call func()) {
+	defer func() { _ = recover() }()
+	call()
+}
 
 // coordinatorTracerName scopes this package's spans.
 //
@@ -75,14 +135,16 @@ func RegisterWorkers(
 	postSync *NativePostSyncService,
 	finalizeSyncRun *NativeFinalizeSyncRunService,
 	referenceDiscovery *NativeReferenceDiscoveryService,
+	options ...WorkerOption,
 ) error {
 	if workers == nil || dispatchSyncRun == nil || postSync == nil || finalizeSyncRun == nil || referenceDiscovery == nil {
 		return ErrWorkerRegistration
 	}
-	if river.AddWorkerSafely(workers, &dispatchWorker{service: dispatchSyncRun}) != nil ||
-		river.AddWorkerSafely(workers, &finalizeWorker{service: finalizeSyncRun}) != nil ||
-		river.AddWorkerSafely(workers, &postSyncWorker{service: postSync}) != nil ||
-		river.AddWorkerSafely(workers, &referenceDiscoveryWorker{service: referenceDiscovery}) != nil {
+	taps := handlerTaps{observer: resolveWorkerOptions(options).observer}
+	if river.AddWorkerSafely(workers, &dispatchWorker{service: dispatchSyncRun, taps: taps}) != nil ||
+		river.AddWorkerSafely(workers, &finalizeWorker{service: finalizeSyncRun, taps: taps}) != nil ||
+		river.AddWorkerSafely(workers, &postSyncWorker{service: postSync, taps: taps}) != nil ||
+		river.AddWorkerSafely(workers, &referenceDiscoveryWorker{service: referenceDiscovery, taps: taps}) != nil {
 		return ErrWorkerRegistration
 	}
 	return nil
@@ -102,11 +164,12 @@ type TeamAutoImporter interface {
 // runtime hosts. The caller must first prove the kind is executable and must
 // report the constructed handler spec to startup validation, so capability is
 // observable no matter which River client hosts the worker.
-func RegisterTeamAutoimportWorker(workers *river.Workers, bridge TeamAutoImporter) error {
+func RegisterTeamAutoimportWorker(workers *river.Workers, bridge TeamAutoImporter, options ...WorkerOption) error {
 	if workers == nil || bridge == nil {
 		return ErrWorkerRegistration
 	}
-	if river.AddWorkerSafely(workers, &teamAutoimportWorker{bridge: bridge}) != nil {
+	taps := handlerTaps{observer: resolveWorkerOptions(options).observer}
+	if river.AddWorkerSafely(workers, &teamAutoimportWorker{bridge: bridge, taps: taps}) != nil {
 		return ErrWorkerRegistration
 	}
 	return nil
@@ -148,11 +211,13 @@ func RegisterTeamRepoOwnershipDerivationWorker(
 	workers *river.Workers,
 	service TeamRepoOwnershipDerivationRunner,
 	observer jobruntime.TeamRepoOwnershipDerivationObserver,
+	options ...WorkerOption,
 ) error {
 	if workers == nil || service == nil {
 		return ErrWorkerRegistration
 	}
-	if river.AddWorkerSafely(workers, &teamRepoOwnershipDerivationWorker{service: service, observer: observer}) != nil {
+	taps := handlerTaps{observer: resolveWorkerOptions(options).observer}
+	if river.AddWorkerSafely(workers, &teamRepoOwnershipDerivationWorker{service: service, observer: observer, taps: taps}) != nil {
 		return ErrWorkerRegistration
 	}
 	return nil
@@ -171,6 +236,15 @@ func RouteCapabilities() []syncroute.Capability {
 type dispatchWorker struct {
 	river.WorkerDefaults[DispatchSyncRunArgs]
 	service *NativeDispatchSyncRunService
+	taps    handlerTaps
+}
+
+// Middleware feeds the claim-liveness taps (WithHandlerObserver).
+func (worker *dispatchWorker) Middleware(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
+	if worker == nil {
+		return nil
+	}
+	return worker.taps.middleware(job)
 }
 
 func (worker *dispatchWorker) Work(ctx context.Context, job *river.Job[DispatchSyncRunArgs]) (err error) {
@@ -190,6 +264,15 @@ func (worker *dispatchWorker) Work(ctx context.Context, job *river.Job[DispatchS
 type finalizeWorker struct {
 	river.WorkerDefaults[FinalizeSyncRunArgs]
 	service *NativeFinalizeSyncRunService
+	taps    handlerTaps
+}
+
+// Middleware feeds the claim-liveness taps (WithHandlerObserver).
+func (worker *finalizeWorker) Middleware(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
+	if worker == nil {
+		return nil
+	}
+	return worker.taps.middleware(job)
 }
 
 func (worker *finalizeWorker) Work(ctx context.Context, job *river.Job[FinalizeSyncRunArgs]) (err error) {
@@ -205,6 +288,15 @@ func (worker *finalizeWorker) Work(ctx context.Context, job *river.Job[FinalizeS
 type postSyncWorker struct {
 	river.WorkerDefaults[PostSyncArgs]
 	service *NativePostSyncService
+	taps    handlerTaps
+}
+
+// Middleware feeds the claim-liveness taps (WithHandlerObserver).
+func (worker *postSyncWorker) Middleware(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
+	if worker == nil {
+		return nil
+	}
+	return worker.taps.middleware(job)
 }
 
 func (worker *postSyncWorker) Work(ctx context.Context, job *river.Job[PostSyncArgs]) (err error) {
@@ -220,11 +312,29 @@ func (worker *postSyncWorker) Work(ctx context.Context, job *river.Job[PostSyncA
 type referenceDiscoveryWorker struct {
 	river.WorkerDefaults[ReferenceDiscoveryArgs]
 	service *NativeReferenceDiscoveryService
+	taps    handlerTaps
+}
+
+// Middleware feeds the claim-liveness taps (WithHandlerObserver).
+func (worker *referenceDiscoveryWorker) Middleware(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
+	if worker == nil {
+		return nil
+	}
+	return worker.taps.middleware(job)
 }
 
 type teamAutoimportWorker struct {
 	river.WorkerDefaults[TeamAutoimportJobArgs]
 	bridge TeamAutoImporter
+	taps   handlerTaps
+}
+
+// Middleware feeds the claim-liveness taps (WithHandlerObserver).
+func (worker *teamAutoimportWorker) Middleware(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
+	if worker == nil {
+		return nil
+	}
+	return worker.taps.middleware(job)
 }
 
 func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[TeamAutoimportJobArgs]) (err error) {
@@ -250,6 +360,15 @@ type teamRepoOwnershipDerivationWorker struct {
 	river.WorkerDefaults[TeamRepoOwnershipDerivationJobArgs]
 	service  TeamRepoOwnershipDerivationRunner
 	observer jobruntime.TeamRepoOwnershipDerivationObserver
+	taps     handlerTaps
+}
+
+// Middleware feeds the claim-liveness taps (WithHandlerObserver).
+func (worker *teamRepoOwnershipDerivationWorker) Middleware(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
+	if worker == nil {
+		return nil
+	}
+	return worker.taps.middleware(job)
 }
 
 func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *river.Job[TeamRepoOwnershipDerivationJobArgs]) (err error) {

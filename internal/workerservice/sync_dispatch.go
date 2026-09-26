@@ -700,7 +700,10 @@ func buildSyncCoordinatorWorker(
 	// syncCoordinatorMetrics never needs to be scraped itself.
 	dispatchSyncRun.WithMetrics(syncCoordinatorMetrics)
 	referenceDiscovery.WithMetrics(syncCoordinatorMetrics)
-	if err := syncdispatchruntime.RegisterWorkers(workers, dispatchSyncRun, postSync, finalizeSyncRun, referenceDiscovery); err != nil {
+	if err := syncdispatchruntime.RegisterWorkers(
+		workers, dispatchSyncRun, postSync, finalizeSyncRun, referenceDiscovery,
+		syncdispatchruntime.WithHandlerObserver(observer),
+	); err != nil {
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
@@ -737,7 +740,9 @@ func buildSyncCoordinatorWorker(
 			sources:    teamCatalogSources,
 			observer:   teamCatalogObserver,
 		}
-		if err := syncdispatchruntime.RegisterTeamAutoimportWorker(workers, teamAutoimportDispatcher); err != nil {
+		if err := syncdispatchruntime.RegisterTeamAutoimportWorker(
+			workers, teamAutoimportDispatcher, syncdispatchruntime.WithHandlerObserver(observer),
+		); err != nil {
 			closeClickHouse()
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}
@@ -761,6 +766,7 @@ func buildSyncCoordinatorWorker(
 		workers,
 		providersync.TeamRepoOwnershipDerivationService{Conn: clickhouseConnection},
 		teamRepoOwnershipDerivationObserver,
+		syncdispatchruntime.WithHandlerObserver(observer),
 	); err != nil {
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable

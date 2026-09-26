@@ -138,11 +138,11 @@ internal/jobs/metrics/daily	1200
 internal/jobs/metrics/daily/benchmarking	33
 internal/jobs/metrics/daily/icfinalize	76
 internal/jobs/metrics/remaining	1030
-internal/jobs/operational	71
+internal/jobs/operational	165
 internal/jobs/pagerduty	8
-internal/jobs/repair	13
-internal/jobs/report	74
-internal/jobs/system	18
+internal/jobs/repair	20
+internal/jobs/report	100
+internal/jobs/system	28
 internal/jobs/workgraph	45
 internal/jobs/workgraph/edges	81
 internal/jobs/workgraph/issuecommitedges	33

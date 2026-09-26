@@ -37,6 +37,9 @@ type Deps struct {
 	// LICENSE_PRIVATE_KEY (the Stripe webhook's two secrets).
 	WebhookSecret     secrets.Value
 	LicensePrivateKey secrets.Value
+	// StripeKey is STRIPE_SECRET_KEY, read by the billing edge's /health
+	// only (the routes call Stripe through Stripe).
+	StripeKey secrets.Value
 	// Producer publishes the billing notification handoffs the webhook
 	// queues (nil: an enqueue fails and is logged, as a route failure is
 	// in Python).
@@ -52,23 +55,31 @@ type handlers struct {
 	config        config.BillingConfig
 	webhookSecret secrets.Value
 	licenseKey    secrets.Value
+	stripeKey     secrets.Value
 	producer      *joboutbox.Producer
 	logger        *slog.Logger
 	now           func() time.Time
 }
 
-// Routes returns the area's routes, in the Python router's registration
-// order. Allow names the first route Starlette would find for a path, which
-// is the method its 405 reports.
-func Routes(deps Deps) []httpapi.Route {
+// newHandlers is the handlers of deps, with the defaults a nil logger and
+// clock take.
+func newHandlers(deps Deps) handlers {
 	h := handlers{pool: deps.Pool, stripe: deps.Stripe, config: deps.Config, webhookSecret: deps.WebhookSecret,
-		licenseKey: deps.LicensePrivateKey, producer: deps.Producer, logger: deps.Logger, now: deps.Now}
+		licenseKey: deps.LicensePrivateKey, stripeKey: deps.StripeKey, producer: deps.Producer, logger: deps.Logger, now: deps.Now}
 	if h.logger == nil {
 		h.logger = slog.Default()
 	}
 	if h.now == nil {
 		h.now = time.Now
 	}
+	return h
+}
+
+// Routes returns the area's routes, in the Python router's registration
+// order. Allow names the first route Starlette would find for a path, which
+// is the method its 405 reports.
+func Routes(deps Deps) []httpapi.Route {
+	h := newHandlers(deps)
 	g := deps.Guard
 	body := func(level policy.Authz, handler http.HandlerFunc) http.Handler { return g.BodyFirst(level, handler) }
 	wrap := func(level policy.Authz, handler http.HandlerFunc) http.Handler { return g.Wrap(level, handler) }

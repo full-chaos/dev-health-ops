@@ -238,7 +238,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, sso.Routes(sso.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Now: deps.Now, Write: WriteError})...)
 		routes = append(routes, billing.Routes(billing.Deps{
 			Pool: deps.Pool, Guard: deps.Guard, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger,
-			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, Producer: deps.Producer,
+			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, StripeKey: deps.StripeSecretKey, Producer: deps.Producer,
 		})...)
 		routes = append(routes, admin.Routes(admin.Deps{
 			Pool:          deps.Pool,
@@ -332,6 +332,7 @@ func configureWith(
 	deps.Stripe = stripeclient.New(stripeclient.Options{Key: cfg.StripeSecretKey.Reveal()})
 	deps.BillingConfig = cfg.APIBilling
 	deps.StripeWebhookSecret = cfg.StripeWebhookSecret
+	deps.StripeSecretKey = cfg.StripeSecretKey
 	deps.LicensePrivateKey = cfg.LicensePrivateKey
 	deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: cfg.PagerDutyOAuthClientID.Reveal(), ClientSecret: cfg.PagerDutyOAuthSecret.Reveal(), RedirectURI: cfg.PagerDutyOAuthRedirectURI}
 	// deps.ClickHouseDSN: see Deps' own doc comment for why this is
@@ -353,6 +354,25 @@ func configureWith(
 	server, err := NewServer(cfg, logger, Routes(deps, logger), scope...)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_server_config_failed", err)
+	}
+	// The billing-edge listener (CHAOS-6520): opt-in, its own address.
+	if cfg.APIBillingEdgeAddress != "" {
+		edge, err := NewEdgeServer(cfg, logger, billing.EdgeRoutes(billing.Deps{
+			Pool: deps.Pool, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger.With(slog.String("listener", "billing-edge")),
+			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, StripeKey: deps.StripeSecretKey, Producer: deps.Producer,
+		}))
+		if err != nil {
+			return nil, dependencyFailure(ctx, logger, "api_server", "api_billing_edge_server_config_failed", err)
+		}
+		if err := registry.RegisterRequired("billing_edge_listener", func(context.Context) error {
+			if edge.Address() == "" {
+				return errors.New("billing-edge listener is not bound")
+			}
+			return nil
+		}); err != nil {
+			return nil, dependencyFailure(ctx, logger, "api_server", "api_billing_edge_listener_check_register_failed", err)
+		}
+		depComponents = append(depComponents, edge)
 	}
 	// The rate-limit store error counter is scraped from the operator
 	// /metrics: the api installs no OTel meter provider, so this is the one
@@ -454,6 +474,30 @@ func NewServer(
 		// uvicorn trusts: FORWARDED_ALLOW_IPS, default 127.0.0.1.
 		ForwardedAllowIPs: forwardedAllowIPs(),
 		Middleware:        middleware,
+	})
+}
+
+// NewEdgeServer is the billing-edge listener: the Python billing edge
+// (dev_health_ops.api.billing_edge:app) is a bare FastAPI app, with none of
+// the main app's middleware, so this server carries none of its origin check,
+// security headers or CORS, and redirects no slash.
+func NewEdgeServer(cfg config.Config, logger *slog.Logger, routes []httpapi.Route) (*httpapi.Server, error) {
+	return httpapi.NewServer(httpapi.ServerOptions{
+		Name:                 "billing-edge-http",
+		Address:              cfg.APIBillingEdgeAddress,
+		Logger:               logger,
+		Routes:               routes,
+		RequestTimeout:       requestTimeout,
+		MaxBodyBytes:         maxBodyBytes,
+		ErrorWriter:          WriteError,
+		StrictPaths:          true,
+		MaxHeaderBytes:       maxHeaderBytes,
+		MaxHeaderValueCount:  maxHeaderValueCount,
+		IdleTimeout:          idleTimeout,
+		ExplicitHead:         true,
+		NotAllowedIsNotFound: true,
+		ForwardedAllowIPs:    forwardedAllowIPs(),
+		Middleware:           []func(http.Handler) http.Handler{EdgeUnhandledErrorShape, CloseHTTP10, DecodedPathRouting},
 	})
 }
 

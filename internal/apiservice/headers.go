@@ -1,6 +1,7 @@
 package apiservice
 
 import (
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 
@@ -167,3 +168,57 @@ func (w *unhandledWriter) Write(body []byte) (int, error) {
 
 // Unwrap lets http.ResponseController reach the underlying writer.
 func (w *unhandledWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// EdgeUnhandledErrorShape gives the billing edge's 500 for an unhandled
+// error the shape of a bare Starlette app: ServerErrorMiddleware answers with
+// the plain text "Internal Server Error" (the main app's JSON body comes
+// from an exception handler the edge app does not have), carrying only its
+// content headers.
+func EdgeUnhandledErrorShape(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(&edgeUnhandledWriter{ResponseWriter: w}, r)
+	})
+}
+
+type edgeUnhandledWriter struct {
+	http.ResponseWriter
+	decided, plain, written bool
+}
+
+const edgeUnhandledBody = "Internal Server Error"
+
+func (w *edgeUnhandledWriter) decide() {
+	if w.decided {
+		return
+	}
+	w.decided = true
+	header := w.Header()
+	if header.Get(policy.UnhandledErrorHeader) == "" {
+		return
+	}
+	w.plain = true
+	for key := range header {
+		delete(header, key)
+	}
+	header.Set("Content-Type", "text/plain; charset=utf-8")
+	header.Set("Content-Length", fmt.Sprint(len(edgeUnhandledBody)))
+}
+
+func (w *edgeUnhandledWriter) WriteHeader(status int) {
+	w.decide()
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *edgeUnhandledWriter) Write(body []byte) (int, error) {
+	w.decide()
+	if !w.plain {
+		return w.ResponseWriter.Write(body)
+	}
+	if !w.written {
+		w.written = true
+		if _, err := w.ResponseWriter.Write([]byte(edgeUnhandledBody)); err != nil {
+			return 0, err
+		}
+	}
+	return len(body), nil
+}

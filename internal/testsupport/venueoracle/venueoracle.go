@@ -277,7 +277,12 @@ elif mode == "serve":
             if _module_name:
                 setattr(_importlib.import_module(_module_name), "time", lambda: _pin.timestamp())
     from fastapi.testclient import TestClient
-    from dev_health_ops.api.main import app
+    # VENUE_PY_APP names another app to serve, "module:attribute" (for
+    # example dev_health_ops.api.billing_edge:app, the billing edge's own
+    # FastAPI app); the default is the main api.
+    import importlib as _app_importlib
+    _app_module, _, _app_attribute = os.environ.get("VENUE_PY_APP", "dev_health_ops.api.main:app").partition(":")
+    app = getattr(_app_importlib.import_module(_app_module), _app_attribute)
     # VENUE_STRIPE_SUBSCRIPTION_HANDLERS_AS_DICT=1 hands the router's
     # subscription updated/deleted/trial_will_end handlers the subscription
     # as what they were written against: a dict (isinstance, .get) whose
@@ -696,6 +701,17 @@ func (v *Venue) ServePython(t *testing.T, requests []Request) []Response {
 		out[index].Body = string(raw)
 	}
 	return out
+}
+
+// ServePythonWithEnv is ServePython with extra environment for this call
+// only (each entry KEY=value, later entries winning over the venue's own):
+// the same Python app under another configuration, for example the same
+// requests with a secret unset.
+func (v *Venue) ServePythonWithEnv(t *testing.T, extra []string, requests []Request) []Response {
+	t.Helper()
+	clone := *v
+	clone.pythonEnv = append(append([]string(nil), v.pythonEnv...), extra...)
+	return clone.ServePython(t, requests)
 }
 
 func (v *Venue) runPython(t *testing.T, stdin any, args ...string) []byte {

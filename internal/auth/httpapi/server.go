@@ -194,6 +194,10 @@ type ServerOptions struct {
 	// mux default): HEAD then gets the pattern's 405 unless a HEAD route is
 	// registered for it.
 	ExplicitHead bool
+	// NotAllowedIsNotFound answers a known path's wrong method with the
+	// not-found envelope instead of a 405: an app whose catch-all route
+	// takes every method (the Python billing edge) never answers 405.
+	NotAllowedIsNotFound bool
 	// RedirectSlashes answers a request no route matches with Starlette's
 	// redirect_slashes 307 when the same path with its trailing slash
 	// toggled matches a route (for any method); see slashRedirector.
@@ -372,7 +376,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		// A method-free pattern answers as it did in the route mux: its
 		// 405, or net/http's own trailing-slash redirect to it; no match at
 		// all is the not-found path.
-		if handler, pattern := pathMux.Handler(r); pattern != "" {
+		if handler, pattern := pathMux.Handler(r); pattern != "" && !options.NotAllowedIsNotFound {
 			handler.ServeHTTP(w, r)
 			return
 		}

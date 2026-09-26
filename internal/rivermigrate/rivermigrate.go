@@ -38,7 +38,7 @@ const (
 
 // Command is `dho migrate`: the `postgres` and `clickhouse` groups (each
 // schema's head, internal/pgmigrate and internal/chmigrate), the `upgrade`
-// verb that runs the migrate Job's steps in order, the `river` verb, and the flat
+// verb that runs the migrate Job's steps in order, the `river` and `roles` verbs, and the flat
 // aliases of the Alembic verbs the Python CLI registers directly under `migrate`.
 func Command() cli.Command {
 	return cli.Command{
@@ -62,6 +62,7 @@ func Command() cli.Command {
 					return Execute(ctx, "dho", env.Args, env.Lookup, env.Stdout, env.Stderr)
 				},
 			},
+			rolesCommand(),
 			// The Python CLI's flat aliases of the Alembic verbs (dev-hops migrate
 			// current|heads|history|status|downgrade).
 		}, pgmigrate.Aliases(migrationDatabaseResolver)...),

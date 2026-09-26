@@ -9,9 +9,10 @@
 # roll starts until it is green again.
 #
 # ONE PRODUCER. The job lives only in this workflow (go.yml must not declare
-# it again). It is a 7-leg matrix (CHAOS-6574: one sequential job outgrew its
-# timeout; CHAOS-6891: cost-balanced legs), so a commit carries seven
-# `venue-oracles (shard K/7)` contexts, all informational (R430), none required.
+# it again). It is an 8-leg matrix (CHAOS-6574: one sequential job outgrew its
+# timeout; CHAOS-6891: cost-balanced legs; CHAOS-6947: the eighth leg is headroom:
+# seven legs planned 1737-1738 s of the 1800 s budget, eight plan 1520-1521 s), so a
+# commit carries eight `venue-oracles (shard K/8)` contexts, all informational (R430), none required.
 #
 # RELEVANCE. A push to main decides relevance INSIDE the job, not with a
 # trigger path filter: `ci/go_relevance.py` (the decider go-quality.yml
@@ -65,9 +66,9 @@ jobs:
     runs-on: ubuntu-latest
     # SHARDED (CHAOS-6574), COST-BALANCED (CHAOS-6891). One sequential job took 67
     # min at 87 tests and was CANCELLED at its 75-minute timeout on two
-    # consecutive main pushes (a cancel reads as no signal). The matrix runs 7
+    # consecutive main pushes (a cancel reads as no signal). The matrix runs 8
     # legs; leg K runs the rows the cost-balanced plan gives it (`check_go.sh
-    # venue-oracles K 7`: longest-processing-time assignment by the measured
+    # venue-oracles K 8`: longest-processing-time assignment by the measured
     # seconds in ci/venue_oracle_weights.tsv), so one package's tests spread over
     # the legs (apiservice/admin alone is ~36 min). It was every 5th row of the
     # sorted registry, blind to cost: at 154 rows (~10,000 s of tests) the legs
@@ -81,12 +82,12 @@ jobs:
     # its planned and actual test seconds and warns over the budget. When the
     # guard fails: regenerate the weights from a saved run log
     # (ci/venue_oracle_weights.py) or add a leg here.
-    name: venue-oracles (shard ${{ matrix.shard }}/7)
+    name: venue-oracles (shard ${{ matrix.shard }}/8)
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
       # Test seconds one leg may plan and run: the 2400 s job cap minus ~200 s of
@@ -214,7 +215,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"
-          bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 7 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
+          bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 8 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
 
       - name: Upload the venue oracle receipt
         if: steps.relevance.outputs.relevant == 'true' && always()

@@ -355,15 +355,15 @@ def main() -> int:
                     {"email": email, "password": pw, "full_name": "Venue Probe"},
                 ),
             )
-            uid = (r.get("json") or {}).get("user_id")
-            if uid:
-                created_user_ids.append(uid)
+            new_user_id = (r.get("json") or {}).get("user_id")
+            if new_user_id:
+                created_user_ids.append(new_user_id)
 
             row = (
                 sql(
-                    f"SELECT id FROM email_verification_tokens WHERE user_id = '{uid}' ORDER BY created_at DESC LIMIT 1;"
+                    f"SELECT id FROM email_verification_tokens WHERE user_id = '{new_user_id}' ORDER BY created_at DESC LIMIT 1;"
                 )
-                if uid
+                if new_user_id
                 else ""
             )
             if row:
@@ -393,9 +393,9 @@ def main() -> int:
             )
             row = (
                 sql(
-                    f"SELECT id FROM password_reset_tokens WHERE user_id = '{uid}' ORDER BY created_at DESC LIMIT 1;"
+                    f"SELECT id FROM password_reset_tokens WHERE user_id = '{new_user_id}' ORDER BY created_at DESC LIMIT 1;"
                 )
-                if uid
+                if new_user_id
                 else ""
             )
             current_pw = pw
@@ -419,7 +419,7 @@ def main() -> int:
 
             # onboard: this user registered with no org_name, so it holds no membership yet -- login
             # (register's own response carries no bearer) then create_org through /onboard.
-            if uid:
+            if new_user_id:
                 r = record(
                     "r-onboard-login",
                     plane,
@@ -655,16 +655,18 @@ def main() -> int:
                 {"email": email, "password": pw, "org_id": ORG},
             ),
         )
-        tok = (r.get("json") or {}).get("access_token")
+        cross_plane_token = (r.get("json") or {}).get("access_token")
         record(
             "x-me-on-python",
             "python",
-            http("python", "GET", "/api/v1/auth/me", bearer=tok),
+            http("python", "GET", "/api/v1/auth/me", bearer=cross_plane_token),
         )
         record(
             "x-validate-on-python",
             "python",
-            http("python", "POST", "/api/v1/auth/validate", {"token": tok}),
+            http(
+                "python", "POST", "/api/v1/auth/validate", {"token": cross_plane_token}
+            ),
         )
 
         # ============= Part A: garbage-token verify, both planes (no side effect, deterministic) =============

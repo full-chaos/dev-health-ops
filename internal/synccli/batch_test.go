@@ -305,6 +305,31 @@ func TestBatchReportsAListedItemItCannotRun(t *testing.T) {
 	}
 }
 
+// The chunked targets run per listed repository like every other target: one
+// dataset each, through the same in-process route.
+func TestBatchRunsTheChunkedTargetsPerRepository(t *testing.T) {
+	cases := []struct {
+		target string
+		args   []string
+		repos  []providersync.ListedRepository
+		want   map[string][]string
+	}{
+		{"cicd", githubBatchArgs, githubRepos("acme/api"), map[string][]string{"acme/api": {"cicd"}}},
+		{"tests", []string{"--provider", "gitlab", "-s", "a/*", "--auth", "t", "--group", "a"},
+			[]providersync.ListedRepository{{Name: "one", FullName: "a/one", ProjectID: 5}}, map[string][]string{"5": {"cicd"}}},
+	}
+	for _, tc := range cases {
+		h := &batchHarness{repos: tc.repos}
+		code, stdout, stderr := runVerb(t, tc.target, h.executor(), tc.args, inlineEnv)
+		if code != cli.ExitOK || stdout != "" {
+			t.Fatalf("%s: exit %d stdout %q stderr %q", tc.target, code, stdout, stderr)
+		}
+		if got := h.ran(); !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: ran %v, want %v", tc.target, got, tc.want)
+		}
+	}
+}
+
 // TestBatchRefusalsRunAndListNothing: what single mode refuses, batch refuses
 // before it lists or opens the store.
 func TestBatchRefusalsRunAndListNothing(t *testing.T) {
@@ -316,8 +341,6 @@ func TestBatchRefusalsRunAndListNothing(t *testing.T) {
 		want         string
 	}{
 		{"github incidents", "incidents", githubBatchArgs, inlineEnv, cli.ExitFailure, githubIncidentsRefusal},
-		{"chunked cicd", "cicd", githubBatchArgs, inlineEnv, cli.ExitRefused, ticketChunked},
-		{"chunked tests", "tests", []string{"--provider", "gitlab", "-s", "a/*", "--auth", "t"}, inlineEnv, cli.ExitRefused, ticketChunked},
 		{"no org", "git", githubBatchArgs, map[string]string{"CLICKHOUSE_URI": inlineEnv["CLICKHOUSE_URI"]}, cli.ExitRefused, ticketDBLookups},
 	}
 	for _, tc := range cases {

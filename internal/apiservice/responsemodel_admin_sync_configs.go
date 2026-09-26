@@ -15,6 +15,8 @@ func init() {
 		"PATCH /api/v1/admin/sync-configs/{config_id}":            true,
 		"POST /api/v1/admin/sync-configs":                         true,
 		"POST /api/v1/admin/sync-configs/batch":                   true,
+		"POST /api/v1/admin/sync-configs/{config_id}/backfill":    true,
+		"POST /api/v1/admin/sync-configs/{config_id}/trigger":     true,
 		"PUT /api/v1/admin/sync-configs/{config_id}/repositories": true,
 	})
 }

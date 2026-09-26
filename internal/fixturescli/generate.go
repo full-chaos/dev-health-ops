@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -46,6 +48,16 @@ import (
 //
 //go:embed testdata/generate/*.json.gz
 var worldFiles embed.FS
+
+// frozenWorldDigests pins the frozen worlds by content: the sha256 of the exact embedded bytes.
+// LoadFrozenWorld checks it on every load, not only in CI, because the parameters alone (RepoName,
+// Days, Seed, ...) name a world but say nothing about whether its rows are the ones the digest was
+// taken over -- a corrupted, truncated or hand-edited file with the same parameters would otherwise
+// load silently. A file changes only by re-running TestFreezeGenerateWorlds against the live Python
+// producer, and then its digest here is updated in the same commit.
+var frozenWorldDigests = map[string]string{
+	"testdata/generate/synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz": "f97e2e36842a69783189a82d27549d0f873d6e0a4e95764dc042300bfc1d6029",
+}
 
 // GenerateParams are the parameters of one frozen `fixtures generate` run: the flags that change
 // what the Python verb writes. A seed is required, because an unseeded run is not repeatable.
@@ -147,9 +159,14 @@ func WorldNames() []string {
 // LoadFrozenWorld reads the frozen world for the parameters, or names the worlds that exist.
 func LoadFrozenWorld(p GenerateParams) (FrozenWorld, error) {
 	refuse := fmt.Errorf("no frozen world for %s; the frozen worlds are:\n  %s", p, strings.Join(WorldNames(), "\n  "))
-	raw, err := worldFiles.ReadFile(WorldFile(p))
+	file := WorldFile(p)
+	raw, err := worldFiles.ReadFile(file)
 	if err != nil {
 		return FrozenWorld{}, refuse
+	}
+	sum := sha256.Sum256(raw)
+	if digest, pinned := frozenWorldDigests[file]; !pinned || hex.EncodeToString(sum[:]) != digest {
+		return FrozenWorld{}, fmt.Errorf("%s does not match its pinned digest: the frozen world is not the one it was proved against", file)
 	}
 	world, err := decodeWorld(raw)
 	if err != nil {
@@ -275,10 +292,16 @@ func (world FrozenWorld) WholeDays(now time.Time) (int, error) {
 }
 
 // LoadWorld inserts the world's rows into conn's database for org, table by table in frozen order,
-// moved so the world ends on the day of now, and returns the rows inserted per table.
+// moved so the world ends on the day of now, and returns the rows inserted per table. Every non-derived
+// table is confirmed to exist before any row is written, so a table missing later in the frozen order
+// (a partially migrated database) refuses the whole load instead of leaving the earlier tables' rows
+// behind with no way for the caller to know the world is incomplete.
 func LoadWorld(ctx context.Context, conn driver.Conn, world FrozenWorld, org string, now time.Time) (map[string]int, error) {
 	days, err := world.WholeDays(now)
 	if err != nil {
+		return nil, err
+	}
+	if err := preflightTables(ctx, conn, world); err != nil {
 		return nil, err
 	}
 	counts := map[string]int{}
@@ -312,6 +335,41 @@ func LoadWorld(ctx context.Context, conn driver.Conn, world FrozenWorld, org str
 		}
 	}
 	return counts, nil
+}
+
+// preflightTables refuses to start a load unless every non-derived table the world expects to write
+// already exists, so a table missing later in the frozen order is caught before the first INSERT
+// rather than after some earlier tables already hold rows.
+func preflightTables(ctx context.Context, conn driver.Conn, world FrozenWorld) error {
+	rows, err := conn.Query(ctx, "SELECT name FROM system.tables WHERE database = currentDatabase()")
+	if err != nil {
+		return err
+	}
+	existing := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		existing[name] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	var missing []string
+	for _, table := range world.Tables {
+		if table.Derived || existing[table.Name] {
+			continue
+		}
+		missing = append(missing, table.Name)
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("missing table(s), nothing written: %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // liveProviders are the providers whose rows in an organization mean it holds connector-synced data
@@ -350,6 +408,19 @@ func syncedProviders(ctx context.Context, conn driver.Conn, org string) ([]strin
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// serverTimezone is the ClickHouse server's default timezone: the zone a Date/DateTime/DateTime64
+// column without an explicit one is read and written in. The frozen worlds were captured against a
+// UTC server (the freezer refuses otherwise) and Transform's Date/DateTime values carry no zone
+// suffix, so loading into a server whose default zone is not UTC would silently reinterpret every
+// shifted value at the wrong offset instead of failing.
+func serverTimezone(ctx context.Context, conn driver.Conn) (string, error) {
+	var zone string
+	if err := conn.QueryRow(ctx, "SELECT timezone()").Scan(&zone); err != nil {
+		return "", err
+	}
+	return zone, nil
 }
 
 // normalizeSink lets a caller of the Python verb pass what it passed there. Python's client spoke
@@ -515,6 +586,13 @@ func runGenerate(ctx context.Context, env cli.Env) int {
 			return writeError(env.Stderr, cli.ExitRefused, "mixed_org",
 				fmt.Sprintf("Org %s already holds synced data from %v. Generating synthetic fixtures into it would pollute Investment/team/repo rollups with demo repos and teams. Use a dedicated demo org, or pass --allow-mixed-org to override.", orgID, providers))
 		}
+	}
+
+	if zone, err := serverTimezone(ctx, conn); err != nil {
+		return writeError(env.Stderr, cli.ExitFailure, "clickhouse_unavailable", boundary.Redact(err).Error())
+	} else if zone != "UTC" {
+		return writeError(env.Stderr, cli.ExitRefused, "non_utc_server",
+			fmt.Sprintf("the ClickHouse server runs in %s: the frozen world's Date/DateTime columns without an explicit zone were captured as UTC, and loading them into a non-UTC server would silently shift every value by the offset", zone))
 	}
 
 	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)

@@ -12,15 +12,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
-// frozenWorldDigests pins the frozen `fixtures generate` worlds (CHAOS-6468). Each file is everything
-// the real Python verb wrote for one parameter set, at the commit its "producer" field names; the
-// producer is deleted with the Python CLI, so this is a rot guard, not a freshness check: a file
-// changes only by re-running TestFreezeGenerateWorlds against the live producer, and then its digest
-// is updated here.
-var frozenWorldDigests = map[string]string{
-	"testdata/generate/synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz": "f97e2e36842a69783189a82d27549d0f873d6e0a4e95764dc042300bfc1d6029",
-}
-
+// frozenWorldDigests (declared in generate.go) pins the frozen `fixtures generate` worlds
+// (CHAOS-6468) by content: LoadFrozenWorld checks it on every load, not only here. This test
+// additionally pins that testdata/generate holds exactly the pinned files and that each one decodes
+// to a well-formed world.
 func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 	entries, err := os.ReadDir("testdata/generate")
 	if err != nil {
@@ -99,6 +94,28 @@ func TestLoadFrozenWorldRefusesAnUnfrozenSetNamingTheFrozenOnes(t *testing.T) {
 				t.Fatalf("an unfrozen set was loaded or the refusal does not name the frozen ones: %v", err)
 			}
 		})
+	}
+}
+
+func TestLoadFrozenWorldRefusesAContentDigestMismatch(t *testing.T) {
+	frozen := GenerateParams{Provider: "synthetic", RepoName: "acme/live-e2e", RepoCount: 1, Days: 14, CommitsPerDay: 6, PRCount: 24, TeamCount: 10, Seed: 20260219, WithMetrics: true, WithWorkGraph: true}
+	file := WorldFile(frozen)
+	real, pinned := frozenWorldDigests[file]
+	if !pinned {
+		t.Fatalf("%s is not pinned: fix the test fixture", file)
+	}
+	t.Cleanup(func() { frozenWorldDigests[file] = real })
+
+	frozenWorldDigests[file] = strings.Repeat("0", len(real))
+	_, err := LoadFrozenWorld(frozen)
+	if err == nil || !strings.Contains(err.Error(), "does not match its pinned digest") {
+		t.Fatalf("a wrong digest should refuse the load and say so, got: %v", err)
+	}
+
+	delete(frozenWorldDigests, file)
+	_, err = LoadFrozenWorld(frozen)
+	if err == nil || !strings.Contains(err.Error(), "does not match its pinned digest") {
+		t.Fatalf("an unpinned file should refuse the load, got: %v", err)
 	}
 }
 

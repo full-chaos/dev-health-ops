@@ -545,3 +545,52 @@ func TestGenerateVerbOnAnUnmigratedClickHouseFailsOnTheLoadNotTheGuard(t *testin
 		t.Fatalf("an unmigrated ClickHouse: exit %d %s", code, stderr)
 	}
 }
+
+// A table missing later in the frozen insert order (a partially migrated database, as opposed to an
+// entirely unmigrated one) is caught by the preflight before any row is written, naming the table and
+// leaving every other table exactly as it was, not merely the tables ahead of the missing one in
+// frozen order.
+func TestGenerateVerbOnAPartiallyMigratedClickHouseWritesNothing(t *testing.T) {
+	set := generateParameterSets[0]
+	world, err := LoadFrozenWorld(set.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dropped string
+	for i := len(world.Tables) - 1; i >= 0; i-- {
+		if !world.Tables[i].Derived {
+			dropped = world.Tables[i].Name
+			break
+		}
+	}
+	if dropped == "" {
+		t.Fatal("no non-derived table to drop")
+	}
+	ch := startClickHouse(t)
+	stopMerges(t, ch.httpDSN)
+	clickHouseHTTP(t, ch.httpDSN, "DROP TABLE `"+dropped+"`")
+	before := rowCounts(t, ch.httpDSN)
+	code, stdout, stderr := runGenerateVerb(t, nil, acrArgs(ch.instance.URI)...)
+	if code != cli.ExitFailure || stdout != "" || !strings.Contains(stderr, "load_failed") || !strings.Contains(stderr, dropped) {
+		t.Fatalf("a table missing later in the frozen order: exit %d stdout %q stderr %q", code, stdout, stderr)
+	}
+	if after := rowCounts(t, ch.httpDSN); !reflect.DeepEqual(before, after) {
+		t.Fatalf("a refused partial-schema load wrote rows: %v -> %v", before, after)
+	}
+}
+
+// The frozen worlds hold Date/DateTime/DateTime64 values with no zone suffix, captured against a
+// server the freezer required to run in UTC. Loading them into a server whose default zone is not UTC
+// must refuse before writing anything, not reinterpret every shifted value at the server's offset.
+func TestGenerateVerbRefusesANonUTCServer(t *testing.T) {
+	t.Setenv(containers.ClickHouseTimezoneEnv, "America/Los_Angeles")
+	ch := startClickHouse(t)
+	before := rowCounts(t, ch.httpDSN)
+	code, stdout, stderr := runGenerateVerb(t, nil, acrArgs(ch.instance.URI)...)
+	if code != cli.ExitRefused || stdout != "" || !strings.Contains(stderr, "non_utc_server") || !strings.Contains(stderr, "America/Los_Angeles") {
+		t.Fatalf("a non-UTC server: exit %d stdout %q stderr %q", code, stdout, stderr)
+	}
+	if after := rowCounts(t, ch.httpDSN); !reflect.DeepEqual(before, after) {
+		t.Fatalf("a refused non-UTC load wrote rows: %v -> %v", before, after)
+	}
+}

@@ -27,8 +27,22 @@ Kubernetes shape. Compose expresses the serialization as five one-shot
 containers sharing a named Docker volume via `depends_on:
 condition: service_completed_successfully`. Helm hook Jobs have no
 depends_on between sibling Jobs at the same weight, so the equivalent here is
-ONE Job whose initContainers run in the same order, sharing one emptyDir for
-the route DSN files instead of a persistent volume.
+ONE Job whose initContainers run in the same order.
+
+No DSN is built in the chart and no shell or Python runs in this Job
+(CHAOS-6902). Every step is the operator image (distroless, `dho`) and is given
+the COMPONENT form of the three River DSNs -- DEV_HEALTH_PG_{DOMAIN,QUEUE,
+COORDINATOR}_{HOST,PORT,USER,PASSWORD} and DEV_HEALTH_PG_DB, the password from
+the Secret by secretKeyRef -- and `dho workers` assembles each DSN in Go
+(internal/platform/config ResolveDSN: stdlib net/url percent-encoding of every
+component, IPv6 literals bracketed, the result round-tripped through pgx's own
+parser). This replaces a first init container that ran the ops runtime image's
+python3 to percent-encode the same parts into DSN files; its encoding rules
+(a `#` in a password or database name, every RFC 3986 reserved character in a
+role, password, database or host, an IPv6 host in brackets) are pinned by the
+oracle internal/platform/config TestRouteDSNVenueOracleMatchesThePythonProducer,
+which runs the deleted script's exact text against the component form and
+compares what pgx reads from each.
 
 Direct-to-Postgres, not through the goWorkers pgbouncer poolers: those
 poolers are REGULAR chart resources, created only after pre-install/
@@ -153,163 +167,14 @@ spec:
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
-        {{- /*
-        codex review (r1, P1 -- executed): the ops-runtime container (UID
-        10001) writes the DSN files, the operator container (UID
-        65532, distroless, no shell to chown/chmod with even if it wanted
-        to) only reads them -- with no fsGroup, Kubernetes mounts a fresh
-        emptyDir root:root and the WRITER'S OWN non-root UID cannot create
-        files in it either (reproduced: "Permission denied"). fsGroup makes
-        every container in this pod a supplementary member of GID 65532 and
-        chowns/chmods each volume to that group, so both the writer and the
-        distroless reader can use the SAME emptyDirs regardless of their
-        differing primary UIDs.
-        */}}
-        fsGroup: 65532
-      volumes:
-        - name: route-dsn
-          emptyDir: {}
       initContainers:
-        - name: route-dsn
-          {{- /*
-          codex review (r1, P1 -- executed) found TWO defects this step
-          exists to fix:
-
-          1. The operator image (docker/go-worker.Dockerfile's `operator`
-          target) is built FROM gcr.io/distroless/static-debian12:nonroot --
-          confirmed: no /bin/sh at all, so every route-activate container
-          below invoking `/bin/sh -ec` failed outright
-          (`exec: "/bin/sh": stat /bin/sh: no such file or directory`). DSN
-          construction therefore cannot happen INSIDE those containers --
-          it happens HERE, in the ops runtime image (which has a shell and
-          python3), and is handed to the operator containers as plain files
-          via the existing `_FILE`-suffix convention
-          (internal/platform/secrets) -- no shell needed in the distroless
-          containers at all.
-
-          2. The prior in-shell DSN interpolated RIVER_*_DATABASE_PASSWORD
-          directly into a postgresql:// URI with no percent-encoding --
-          confirmed: a password containing `#` produced
-          `{"error":{"code":"database_unavailable"}}` from workerctl,
-          because `#` starts a URI fragment and everything after it (the
-          rest of the password, `@host:port/db`) was silently dropped from
-          the parsed authority. python3's `urllib.parse.quote` (present in
-          the ops runtime image, which already runs the Python CLI) is the
-          correct percent-encoder for a URI's userinfo component; a POSIX
-          shell has no equivalent built in.
-
-          codex review (r3, P1 -- executed, fixed): the fix above encoded
-          every PASSWORD but left POSTGRES_DB (goWorkers.pgbouncer.postgres.
-          database, operator-settable via --set) interpolated raw into the
-          URI PATH. Confirmed: a database name containing `#` (e.g.
-          "review#db") starts a URI fragment the same way an unencoded `#`
-          in a password did -- `urllib.parse.urlsplit` on the resulting URI
-          parses path=/review, fragment=db, and workerctl's own real-DB
-          repro activated the route against the TRUNCATED "review" database
-          while the intended "review#db" stayed on its prior transport, with
-          NO error (transport=river reported successfully) -- the exact
-          invisible-at-Info regression a truncated-but-valid path produces.
-          Encoding the database component the same way the password is
-          encoded is the fix.
-          */}}
-          image: {{ include "dev-health.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          securityContext:
-            allowPrivilegeEscalation: false
-          command:
-            - /bin/sh
-            - -ec
-            - |
-              encode() {
-                python3 -c 'import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
-              }
-              # codex review (r4, P1 -- executed, fixed): a URI host is NOT
-              # just another percent-encoded component -- an IPv6 literal
-              # (RFC 3986 IP-literal) is syntax the AUTHORITY part carries
-              # verbatim inside brackets, "[<addr>]". Percent-encoding it
-              # (e.g. the domain encode() above, applied to the host in r3)
-              # escapes the colons that make it parseable as an address at
-              # all -- confirmed: a real operator connect against an
-              # unbracketed IPv4-mapped IPv6 host returns
-              # {"error":{"code":"database_unavailable"}}, the SAME class of
-              # silent-wrong-target failure as r3's unencoded database name,
-              # just for a host the operator legitimately needs to reach
-              # (docker/k8s IPv6-only networking). ipaddress.IPv6Address
-              # correctly classifies genuine IPv6 literals (DNS names and
-              # IPv4 dotted-quads both raise ValueError there); only THOSE
-              # get bracketed, verbatim, no percent-encoding -- everything
-              # else still goes through the same encode() as before.
-              encode_host() {
-                python3 -c 'import ipaddress, sys, urllib.parse
-              h = sys.argv[1]
-              try:
-                  ipaddress.IPv6Address(h)
-                  sys.stdout.write("[" + h + "]")
-              except ValueError:
-                  sys.stdout.write(urllib.parse.quote(h, safe=""))' "$1"
-              }
-              # codex review (r3, P1 -- executed, fixed, class-swept): the r3
-              # P1 fix encoded ONLY the database name -- team-lead/chris's
-              # amendment to the prompt of record names this exact shape
-              # (an encoding fix applied to one field of a class, never swept
-              # to its siblings) as its own method failure. Every remaining
-              # URI component an operator can set to an arbitrary string --
-              # the three roles and the host, same as the three passwords and
-              # the database -- now goes through the SAME encoder (host uses
-              # the authority-aware encode_host above). Port is excluded: it
-              # is always numeric (dev-health.goPgbouncerPostgresPort),
-              # never operator-set to an arbitrary string.
-              domain_role=$(encode "$RIVER_DOMAIN_DATABASE_ROLE")
-              queue_role=$(encode "$RIVER_QUEUE_DATABASE_ROLE")
-              coordinator_role=$(encode "$RIVER_COORDINATOR_DATABASE_ROLE")
-              domain_pw=$(encode "$RIVER_DOMAIN_DATABASE_PASSWORD")
-              queue_pw=$(encode "$RIVER_QUEUE_DATABASE_PASSWORD")
-              coordinator_pw=$(encode "$RIVER_COORDINATOR_DATABASE_PASSWORD")
-              host=$(encode_host "$POSTGRES_HOST")
-              db=$(encode "$POSTGRES_DB")
-              printf '%s' "postgresql://${domain_role}:${domain_pw}@${host}:${POSTGRES_PORT}/${db}" > /run/route-dsn/POSTGRES_URI
-              printf '%s' "postgresql://${queue_role}:${queue_pw}@${host}:${POSTGRES_PORT}/${db}" > /run/route-dsn/WORKER_DATABASE_URI
-              printf '%s' "postgresql://${coordinator_role}:${coordinator_pw}@${host}:${POSTGRES_PORT}/${db}" > /run/route-dsn/COORDINATOR_DATABASE_URI
-          env:
-            - name: POSTGRES_HOST
-              value: {{ $postgresHost | quote }}
-            - name: POSTGRES_PORT
-              value: {{ $postgresPort | quote }}
-            - name: POSTGRES_DB
-              value: {{ $postgresDatabase | quote }}
-            - name: RIVER_DOMAIN_DATABASE_ROLE
-              value: {{ $.Values.config.RIVER_DOMAIN_DATABASE_ROLE | quote }}
-            - name: RIVER_QUEUE_DATABASE_ROLE
-              value: {{ $.Values.config.RIVER_QUEUE_DATABASE_ROLE | quote }}
-            - name: RIVER_COORDINATOR_DATABASE_ROLE
-              value: {{ $.Values.config.RIVER_COORDINATOR_DATABASE_ROLE | quote }}
-            - name: RIVER_DOMAIN_DATABASE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $routeActivateSecretName }}
-                  key: RIVER_DOMAIN_DATABASE_PASSWORD
-            - name: RIVER_QUEUE_DATABASE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $routeActivateSecretName }}
-                  key: RIVER_QUEUE_DATABASE_PASSWORD
-            - name: RIVER_COORDINATOR_DATABASE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $routeActivateSecretName }}
-                  key: RIVER_COORDINATOR_DATABASE_PASSWORD
-          volumeMounts:
-            - name: route-dsn
-              mountPath: /run/route-dsn
-          resources:
-            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
         {{- range $kind := $routeKinds }}
         - name: route-activate-{{ $kind | replace "_" "-" }}
           {{- /*
           No `command:` override -- the operator image's own ENTRYPOINT
           (dho; `workers` selects the operator verbs) runs directly with these args, since the
-          image has no shell to run a wrapper script in anyway (see the
-          route-dsn step's comment above).
+          image has no shell (and none is needed: the DSNs are assembled by
+          `dho workers` from the component env below).
           */}}
           image: {{ $operatorImage }}
           imagePullPolicy: {{ $operatorPullPolicy }}
@@ -333,16 +198,21 @@ spec:
               value: {{ $.Values.config.RIVER_QUEUE_DATABASE_ROLE | quote }}
             - name: RIVER_COORDINATOR_DATABASE_ROLE
               value: {{ $.Values.config.RIVER_COORDINATOR_DATABASE_ROLE | quote }}
-            - name: POSTGRES_URI_FILE
-              value: /run/route-dsn/POSTGRES_URI
-            - name: WORKER_DATABASE_URI_FILE
-              value: /run/route-dsn/WORKER_DATABASE_URI
-            - name: COORDINATOR_DATABASE_URI_FILE
-              value: /run/route-dsn/COORDINATOR_DATABASE_URI
-          volumeMounts:
-            - name: route-dsn
-              mountPath: /run/route-dsn
-              readOnly: true
+            - name: DEV_HEALTH_PG_DB
+              value: {{ $postgresDatabase | quote }}
+            {{- range $role := list "DOMAIN" "QUEUE" "COORDINATOR" }}
+            - name: DEV_HEALTH_PG_{{ $role }}_HOST
+              value: {{ $postgresHost | quote }}
+            - name: DEV_HEALTH_PG_{{ $role }}_PORT
+              value: {{ $postgresPort | quote }}
+            - name: DEV_HEALTH_PG_{{ $role }}_USER
+              value: {{ index $.Values.config (printf "RIVER_%s_DATABASE_ROLE" $role) | quote }}
+            - name: DEV_HEALTH_PG_{{ $role }}_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $routeActivateSecretName }}
+                  key: RIVER_{{ $role }}_DATABASE_PASSWORD
+            {{- end }}
           resources:
             {{- toYaml $.Values.migrations.hook.resources | nindent 12 }}
         {{- end }}
@@ -353,11 +223,11 @@ spec:
         order (Compose's depends_on chain) is honoured. This is a no-op.
         */}}
         - name: done
-          image: {{ include "dev-health.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: {{ $operatorImage }}
+          imagePullPolicy: {{ $operatorPullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
-          command: ["/bin/sh", "-ec", "exit 0"]
+          args: ["version"]
           resources:
             {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
 {{- end }}

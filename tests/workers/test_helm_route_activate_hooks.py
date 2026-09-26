@@ -32,7 +32,6 @@ idempotency does not depend on the token being reused.
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import textwrap
@@ -209,29 +208,29 @@ def test_all_four_kinds_are_present_as_ordered_initcontainers() -> None:
         "initContainers"
     ]
     names = [c["name"] for c in init_containers]
-    # No operator-credential step: `dho workers` takes no token.
-    assert names[0] == "route-dsn", (
-        "the DSN-building step (ops runtime image, has a shell) must run "
-        f"before any route-activate-* step (distroless, no shell): {names}"
+    # No operator-credential step (`dho workers` takes no token) and, since
+    # CHAOS-6902, no DSN-building step either: `dho workers` assembles the DSNs
+    # from the component env each step is given.
+    assert names == [f"route-activate-{k.replace('_', '-')}" for k in _KINDS], (
+        f"the four routes must run in Compose's own serialized order: {names}"
     )
-    route_names = names[1:]
-    assert route_names == [f"route-activate-{k.replace('_', '-')}" for k in _KINDS], (
-        f"the four routes must run in Compose's own serialized order: {route_names}"
-    )
+    assert "route-dsn" not in names
 
 
 def test_the_no_op_done_container_actually_exits_zero() -> None:
-    """codex review (r3, P3 -- executed, fixed): NOTHING pinned this
-    container's command -- mutating it from `exit 0` to `exit 1` survived
-    the entire runnable suite. Kubernetes Jobs require a `containers` entry
-    even though every real step here is an initContainer (see the
-    template's own comment); a non-zero exit on this no-op would fail an
-    otherwise fully-succeeded activation Job for no reason."""
+    """Kubernetes Jobs require a `containers` entry even though every real
+    step here is an initContainer (see the template's own comment); a non-zero
+    exit on this no-op would fail an otherwise fully-succeeded activation Job
+    for no reason. Since CHAOS-6902 it is the operator image (distroless: no
+    shell, no Python) running `dho version`, which prints the build metadata
+    and exits 0."""
     jobs = _jobs(*_FULL_CHAIN_ON)
     containers = jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["containers"]
     assert len(containers) == 1, containers
     assert containers[0]["name"] == "done", containers
-    assert containers[0]["command"] == ["/bin/sh", "-ec", "exit 0"], containers[0]
+    assert containers[0]["image"] == _PINNED_OPERATOR_IMAGE, containers[0]
+    assert "command" not in containers[0], containers[0]
+    assert containers[0]["args"] == ["version"], containers[0]
 
 
 @pytest.mark.parametrize("kind", _KINDS)
@@ -256,23 +255,37 @@ def test_each_kind_invokes_routes_apply_with_that_exact_kind(kind: str) -> None:
     assert "--reason" in args and "--correlation-id" in args, (
         f"routes apply requires both flags: {args!r}"
     )
-    # codex review (r3, P3 -- executed, fixed): NOTHING previously asserted
-    # these four env values -- a mutation redirecting any one of them to a
-    # nonexistent path survived the entire runnable suite (75 passed, 1
-    # skipped) and was only caught by the reviewer's separate real-operator
-    # execution (`configuration_error`/`authentication_failed`). Pin the
-    # literal paths at the template level too, so this class of mutation is
-    # killed cheaply, without needing a live container.
-    env = {item["name"]: item.get("value") for item in container["env"]}
-    assert env["POSTGRES_URI_FILE"] == "/run/route-dsn/POSTGRES_URI", env
-    assert env["WORKER_DATABASE_URI_FILE"] == "/run/route-dsn/WORKER_DATABASE_URI", env
-    assert (
-        env["COORDINATOR_DATABASE_URI_FILE"]
-        == "/run/route-dsn/COORDINATOR_DATABASE_URI"
-    ), env
-    # No operator token: `dho workers` has none to read.
-    assert "WORKER_OPERATOR_TOKEN_FILE" not in env, env
-    assert env["RIVER_DATABASE_SCHEMA"] == "river", env
+    # CHAOS-6902: the three DSNs are assembled by `dho workers` from the
+    # component form; nothing in the pod builds or reads a DSN file. Pin every
+    # component key at the template level: host/port/database/user as plain
+    # values, the password only by secretKeyRef, and no pre-built URI key (the
+    # component form and the URI form are mutually exclusive in ResolveDSN).
+    env = {item["name"]: item for item in container["env"]}
+    assert env["DEV_HEALTH_PG_DB"]["value"] == "devhealth", env
+    for role, secret_key in (
+        ("DOMAIN", "RIVER_DOMAIN_DATABASE_PASSWORD"),
+        ("QUEUE", "RIVER_QUEUE_DATABASE_PASSWORD"),
+        ("COORDINATOR", "RIVER_COORDINATOR_DATABASE_PASSWORD"),
+    ):
+        prefix = f"DEV_HEALTH_PG_{role}_"
+        assert env[prefix + "HOST"]["value"] == "postgres.example.com", env
+        assert env[prefix + "PORT"]["value"] == "5432", env
+        assert env[prefix + "USER"]["value"] == f"devhealth_{role.lower()}", env
+        password = env[prefix + "PASSWORD"]
+        assert "value" not in password, password
+        assert password["valueFrom"]["secretKeyRef"]["key"] == secret_key, password
+    for forbidden in (
+        "POSTGRES_URI",
+        "WORKER_DATABASE_URI",
+        "COORDINATOR_DATABASE_URI",
+        "POSTGRES_URI_FILE",
+        "WORKER_DATABASE_URI_FILE",
+        "COORDINATOR_DATABASE_URI_FILE",
+        "WORKER_OPERATOR_TOKEN_FILE",
+    ):
+        assert forbidden not in env, (forbidden, env)
+    assert env["RIVER_DATABASE_SCHEMA"]["value"] == "river", env
+    assert "volumeMounts" not in container, container.get("volumeMounts")
 
 
 def test_route_activate_uses_the_published_operator_image() -> None:
@@ -333,21 +346,30 @@ def test_route_activate_containers_never_invoke_a_shell(kind: str) -> None:
     ), container["args"]
 
 
-def test_pod_sets_fsgroup_so_non_root_containers_share_emptydirs() -> None:
-    """codex review (r1, P1 -- executed): a fresh emptyDir is root:root by
-    default; without fsGroup, the non-root writer (operator-credential /
-    route-dsn, ops image UID 10001) cannot create files in it either --
-    confirmed executing the real image against a fresh emptyDir-equivalent
-    volume: `cannot create /run/go-worker-operator/token: Permission
-    denied`. fsGroup makes every container in the pod (regardless of its
-    own primary UID) a supplementary member of that GID, and Kubernetes
-    chowns/chmods each mounted volume to it."""
+def test_pod_shares_no_volumes_and_needs_no_fsgroup() -> None:
+    """CHAOS-6902: the DSN files (and the emptyDir and fsGroup that let a
+    root:root emptyDir be written by a non-root init container and read by a
+    distroless one) are gone: every step assembles its own DSNs in memory."""
     jobs = _jobs(*_FULL_CHAIN_ON)
-    pod_security_context = jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"][
-        "securityContext"
-    ]
-    assert pod_security_context.get("fsGroup") is not None, pod_security_context
-    assert pod_security_context["runAsNonRoot"] is True
+    pod = jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]
+    assert pod["securityContext"] == {"runAsNonRoot": True}, pod["securityContext"]
+    assert "volumes" not in pod, pod.get("volumes")
+    for container in pod["initContainers"] + pod["containers"]:
+        assert "volumeMounts" not in container, container["name"]
+
+
+def test_route_activate_hook_runs_no_python_and_no_shell() -> None:
+    """The point of CHAOS-6902: the route-activate hook Job references no Python
+    image and no shell. Every container is the operator image; nothing in the
+    rendered Job names the ops runtime image, /bin/sh or python3."""
+    jobs = _jobs(*_FULL_CHAIN_ON)
+    job = jobs[_ROUTE_ACTIVATE]
+    pod = job["spec"]["template"]["spec"]
+    images = {c["image"] for c in pod["initContainers"] + pod["containers"]}
+    assert images == {_PINNED_OPERATOR_IMAGE}, images
+    rendered = yaml.safe_dump(job)
+    for needle in ("/bin/sh", "python3", "dev-hops-api", "urllib"):
+        assert needle not in rendered, (needle, rendered[:200])
 
 
 # --- CHAOS-4455: EXPECTED_WORKER_GROUPS and the deployed groups agree -------
@@ -523,23 +545,25 @@ def test_role_passwords_reach_only_the_route_activate_secret_via_secretkeyref() 
         c["name"]: c
         for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
     }
-    dsn_env = {item["name"]: item for item in init_containers["route-dsn"]["env"]}
-    assert "secretKeyRef" in dsn_env["RIVER_DOMAIN_DATABASE_PASSWORD"]["valueFrom"]
     for kind in _KINDS:
-        route_env_names = {
-            item["name"]
+        route_env = {
+            item["name"]: item
             for item in init_containers[f"route-activate-{kind.replace('_', '-')}"][
                 "env"
             ]
         }
-        assert not route_env_names & {
+        # CHAOS-6902: each step holds the passwords for `dho workers` to assemble
+        # its DSNs, only ever by secretKeyRef, never as a value, and never under
+        # the old RIVER_* password names.
+        for role in ("DOMAIN", "QUEUE", "COORDINATOR"):
+            password = route_env[f"DEV_HEALTH_PG_{role}_PASSWORD"]
+            assert "secretKeyRef" in password["valueFrom"], (kind, password)
+            assert "value" not in password, (kind, password)
+        assert not set(route_env) & {
             "RIVER_DOMAIN_DATABASE_PASSWORD",
             "RIVER_QUEUE_DATABASE_PASSWORD",
             "RIVER_COORDINATOR_DATABASE_PASSWORD",
-        }, (
-            f"route-activate-{kind} must not carry password env at all -- "
-            f"DSN construction moved to route-dsn: {route_env_names}"
-        )
+        }, (kind, sorted(route_env))
 
 
 def test_route_activate_secret_is_created_before_the_job_that_reads_it() -> None:
@@ -566,15 +590,19 @@ def test_route_activate_accepts_a_pre_created_external_secret() -> None:
         c["name"]: c
         for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
     }
-    env = {item["name"]: item for item in init_containers["route-dsn"]["env"]}
-    for key in (
-        "RIVER_DOMAIN_DATABASE_PASSWORD",
-        "RIVER_QUEUE_DATABASE_PASSWORD",
-        "RIVER_COORDINATOR_DATABASE_PASSWORD",
-    ):
-        assert (
-            env[key]["valueFrom"]["secretKeyRef"]["name"] == "river-role-credentials"
-        ), key
+    for kind in _KINDS:
+        env = {
+            item["name"]: item
+            for item in init_containers[f"route-activate-{kind.replace('_', '-')}"][
+                "env"
+            ]
+        }
+        for role in ("DOMAIN", "QUEUE", "COORDINATOR"):
+            reference = env[f"DEV_HEALTH_PG_{role}_PASSWORD"]["valueFrom"][
+                "secretKeyRef"
+            ]
+            assert reference["name"] == "river-role-credentials", (kind, role)
+            assert reference["key"] == f"RIVER_{role}_DATABASE_PASSWORD", (kind, role)
     secrets = _secrets(
         *_FULL_CHAIN_ON,
         "goWorkers.pgbouncer.secret.create=false",
@@ -608,291 +636,17 @@ def test_route_activate_without_any_password_secret_fails_the_render() -> None:
     assert "RIVER_" in completed.stderr
 
 
-# --- entrypoint execution: idempotent mint, DSN built from parts -----------
-
-
-def _run_route_dsn_script(tmp_path: Path, **env: str) -> Path:
-    """Execute the real route-dsn script (ops image: has /bin/sh AND
-    python3) and return the directory it wrote POSTGRES_URI/
-    WORKER_DATABASE_URI/COORDINATOR_DATABASE_URI into."""
-    jobs = _jobs(*_FULL_CHAIN_ON)
-    init_containers = {
-        c["name"]: c
-        for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
-    }
-    container = init_containers["route-dsn"]
-    command = container["command"]
-    assert command[:2] == ["/bin/sh", "-ec"], command
-    script = command[2]
-
-    out_dir = tmp_path / "run" / "route-dsn"
-    out_dir.mkdir(parents=True)
-    script = script.replace("/run/route-dsn", str(out_dir))
-
-    base_env = {
-        "PATH": os.environ["PATH"],
-        "POSTGRES_HOST": "postgres.internal",
-        "POSTGRES_PORT": "5432",
-        "POSTGRES_DB": "devhealth",
-        "RIVER_DOMAIN_DATABASE_ROLE": "devhealth_domain",
-        "RIVER_QUEUE_DATABASE_ROLE": "devhealth_queue",
-        "RIVER_COORDINATOR_DATABASE_ROLE": "devhealth_coordinator",
-        "RIVER_DOMAIN_DATABASE_PASSWORD": "d-pw",
-        "RIVER_QUEUE_DATABASE_PASSWORD": "q-pw",
-        "RIVER_COORDINATOR_DATABASE_PASSWORD": "c-pw",
-    }
-    base_env.update(env)
-    completed = subprocess.run(
-        ["/bin/sh", "-ec", script], capture_output=True, text=True, env=base_env
-    )
-    assert completed.returncode == 0, completed.stderr
-    return out_dir
-
-
-def test_route_dsn_script_builds_dsns_from_parts_and_never_from_a_dsn_value(
-    tmp_path: Path,
-) -> None:
-    """DSNs are built in-shell from role/host/port/db + a secretKeyRef'd
-    password -- never templated as one plaintext Secret value -- so the
-    script must actually construct them at runtime, into files the
-    distroless route-activate-* containers read via the `_FILE` convention
-    (they have no shell to build a DSN in themselves)."""
-    out_dir = _run_route_dsn_script(tmp_path)
-    postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
-    worker_uri = (out_dir / "WORKER_DATABASE_URI").read_text(encoding="utf-8")
-    coordinator_uri = (out_dir / "COORDINATOR_DATABASE_URI").read_text(encoding="utf-8")
-    assert (
-        postgres_uri
-        == "postgresql://devhealth_domain:d-pw@postgres.internal:5432/devhealth"
-    )
-    assert (
-        worker_uri
-        == "postgresql://devhealth_queue:q-pw@postgres.internal:5432/devhealth"
-    )
-    assert (
-        coordinator_uri
-        == "postgresql://devhealth_coordinator:c-pw@postgres.internal:5432/devhealth"
-    )
-
-
-# --- input-domain: passwords containing URI-special characters -------------
+# --- the DSN encoding, formerly a shell + python3 init container ------------
 #
-# codex review (r1, P1 -- executed): an unencoded `#` in a password truncates
-# the URI at the fragment delimiter, dropping everything after it (including
-# the host/port/db) -- confirmed against the real `dho workers`
-# binary: `{"error":{"code":"database_unavailable"}}` with the raw password,
-# success once percent-encoded. Every RFC 3986 reserved/sub-delim character
-# that can appear in a generated password is exercised here, in ONE pass.
-
-
-_RFC3986_GEN_DELIMS = list(":/?#[]@")
-_RFC3986_SUB_DELIMS = list("!$&'()*+,;=")
-
-_URI_SPECIAL_PASSWORD_CASES = (
-    [
-        ("simple", "plainpassword123"),
-        ("percent", "pw%with%percent"),
-        ("space", "pw with space"),
-        ("unicode", "pw☃snowman"),
-        ("empty", ""),
-        ("all-gen-delims-combined", "".join(_RFC3986_GEN_DELIMS)),
-        ("all-sub-delims-combined", "".join(_RFC3986_SUB_DELIMS)),
-    ]
-    + [(f"gen-delim-{ord(c)}-{c!r}", f"pw{c}with{c}char") for c in _RFC3986_GEN_DELIMS]
-    + [(f"sub-delim-{ord(c)}-{c!r}", f"pw{c}with{c}char") for c in _RFC3986_SUB_DELIMS]
-)
-
-
-@pytest.mark.parametrize(("case_id", "password"), _URI_SPECIAL_PASSWORD_CASES)
-def test_route_dsn_script_percent_encodes_every_uri_special_password(
-    tmp_path: Path, case_id: str, password: str
-) -> None:
-    import urllib.parse
-
-    out_dir = _run_route_dsn_script(tmp_path, RIVER_DOMAIN_DATABASE_PASSWORD=password)
-    postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
-    expected_pw = urllib.parse.quote(password, safe="")
-    expected = (
-        f"postgresql://devhealth_domain:{expected_pw}@postgres.internal:5432/devhealth"
-    )
-    assert postgres_uri == expected, (case_id, postgres_uri, expected)
-
-    # The written URI must actually PARSE to the original password -- the
-    # real proof the encoding round-trips, not just that some encoding ran.
-    parsed = urllib.parse.urlsplit(postgres_uri)
-    assert urllib.parse.unquote(parsed.username or "") == "devhealth_domain"
-    assert urllib.parse.unquote(parsed.password or "") == password, (
-        case_id,
-        postgres_uri,
-    )
-
-
-def test_route_dsn_script_percent_encodes_the_queue_and_coordinator_passwords_too(
-    tmp_path: Path,
-) -> None:
-    """codex review (r3, P3 -- executed, fixed): the sweep above only ever
-    varied RIVER_DOMAIN_DATABASE_PASSWORD -- encode() is called separately
-    for all three roles, so a defect isolated to the queue or coordinator
-    call site survived the whole domain sweep. One reserved-character case
-    per remaining role, same round-trip proof as the domain sweep."""
-    import urllib.parse
-
-    out_dir = _run_route_dsn_script(
-        tmp_path,
-        RIVER_QUEUE_DATABASE_PASSWORD="q#pw",
-        RIVER_COORDINATOR_DATABASE_PASSWORD="c#pw",
-    )
-    worker_uri = (out_dir / "WORKER_DATABASE_URI").read_text(encoding="utf-8")
-    coordinator_uri = (out_dir / "COORDINATOR_DATABASE_URI").read_text(encoding="utf-8")
-    assert (
-        worker_uri
-        == "postgresql://devhealth_queue:q%23pw@postgres.internal:5432/devhealth"
-    ), worker_uri
-    assert (
-        coordinator_uri
-        == "postgresql://devhealth_coordinator:c%23pw@postgres.internal:5432/devhealth"
-    ), coordinator_uri
-    assert (
-        urllib.parse.unquote(urllib.parse.urlsplit(worker_uri).password or "") == "q#pw"
-    )
-    assert (
-        urllib.parse.unquote(urllib.parse.urlsplit(coordinator_uri).password or "")
-        == "c#pw"
-    )
-
-
-def test_route_dsn_script_percent_encodes_the_queue_and_coordinator_roles_too(
-    tmp_path: Path,
-) -> None:
-    """codex review (r4, P3 -- executed, fixed): the r3 class-sweep test
-    (`test_route_dsn_script_percent_encodes_every_uri_component`) varies
-    ONLY `RIVER_DOMAIN_DATABASE_ROLE` and reads ONLY `POSTGRES_URI` -- the
-    domain role's own encode() call site is a DIFFERENT line from the
-    queue/coordinator role call sites, same shape as the password-sweep gap
-    the sibling test above already closes. Independently confirmed
-    (mutation): replacing `${queue_role}`/`${coordinator_role}` with the raw
-    env vars in their own printf lines survived the entire file -- this is
-    the regression pin that closes it."""
-    out_dir = _run_route_dsn_script(
-        tmp_path,
-        RIVER_QUEUE_DATABASE_ROLE="queue#role",
-        RIVER_COORDINATOR_DATABASE_ROLE="coordinator#role",
-    )
-    worker_uri = (out_dir / "WORKER_DATABASE_URI").read_text(encoding="utf-8")
-    coordinator_uri = (out_dir / "COORDINATOR_DATABASE_URI").read_text(encoding="utf-8")
-    assert (
-        worker_uri == "postgresql://queue%23role:q-pw@postgres.internal:5432/devhealth"
-    ), worker_uri
-    assert (
-        coordinator_uri
-        == "postgresql://coordinator%23role:c-pw@postgres.internal:5432/devhealth"
-    ), coordinator_uri
-
-
-def test_route_dsn_script_brackets_an_ipv6_host_instead_of_percent_encoding_it(
-    tmp_path: Path,
-) -> None:
-    """codex review (r4, P1 -- executed, fixed): a URI host is authority
-    syntax, not a percent-encodable component like the userinfo/path parts
-    -- an IPv6 literal MUST be wrapped in brackets, `[<addr>]`, verbatim.
-    Percent-encoding it (the r3 fix's treatment of the host, same as every
-    other component) escapes the colons that make it parseable as an
-    address at all -- reproduced against the real operator: an unbracketed
-    IPv4-mapped IPv6 host returns `database_unavailable`; only the bracketed
-    form connects. DNS names and IPv4 dotted-quads are unaffected -- they
-    still go through the ordinary percent-encoder (a no-op for their
-    always-safe characters)."""
-    import urllib.parse
-
-    for host, expected_authority in (
-        ("postgres.internal", "postgres.internal"),
-        ("127.0.0.1", "127.0.0.1"),
-        ("::ffff:127.0.0.1", "[::ffff:127.0.0.1]"),
-        ("::1", "[::1]"),
-        ("2001:db8::1", "[2001:db8::1]"),
-    ):
-        out_dir = _run_route_dsn_script(
-            tmp_path / host.replace(":", "_"), POSTGRES_HOST=host
-        )
-        postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
-        expected = (
-            f"postgresql://devhealth_domain:d-pw@{expected_authority}:5432/devhealth"
-        )
-        assert postgres_uri == expected, (host, postgres_uri, expected)
-        # The written URI must actually PARSE back to the original host --
-        # the real proof a Postgres client can extract it, not just that
-        # brackets appear somewhere in the string.
-        parsed = urllib.parse.urlsplit(postgres_uri)
-        assert parsed.hostname == host.lower(), (host, parsed.hostname)
-        assert parsed.port == 5432, (host, parsed.port)
-
-
-def test_route_dsn_script_percent_encodes_the_database_name(tmp_path: Path) -> None:
-    """codex review (r3, P1 -- executed, fixed, regression pin): a database
-    name containing a URI-reserved character truncated the DSN at that
-    character (a `#` starts a fragment) -- the operator then activated the
-    route against the TRUNCATED database while the intended one, silently,
-    stayed on its prior transport. This is the r1 password class recurring
-    on the database-name component, which the r1 fix never touched."""
-    import urllib.parse
-
-    out_dir = _run_route_dsn_script(tmp_path, POSTGRES_DB="review#db")
-    postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
-    assert (
-        postgres_uri
-        == "postgresql://devhealth_domain:d-pw@postgres.internal:5432/review%23db"
-    ), postgres_uri
-    parsed = urllib.parse.urlsplit(postgres_uri)
-    assert parsed.fragment == "", (
-        "an unencoded `#` in the database name starts a URI fragment and "
-        f"truncates the path silently: {postgres_uri}"
-    )
-    assert urllib.parse.unquote(parsed.path.lstrip("/")) == "review#db", postgres_uri
-
-
-# --- CLASS SWEEP (r3 amendment): every URI-embedded component, not just ----
-# the password or the database name in isolation. The r3 P1 fix encoded ONLY
-# the database name; team-lead/chris's amendment to the prompt of record
-# names this exact shape (a fix for one field of a class, never swept to its
-# siblings) as its own method failure. The three roles and the host are the
-# remaining operator-settable URI components (port is always numeric). Every
-# cell of the SAME RFC 3986 set already proven against the password is
-# re-executed here against role and host too -- one parametrized sweep,
-# reusing _URI_SPECIAL_PASSWORD_CASES so no sibling of the class is sampled.
-
-_URI_COMPONENT_ENV_VAR = {
-    "role": "RIVER_DOMAIN_DATABASE_ROLE",
-    "host": "POSTGRES_HOST",
-}
-_URI_COMPONENT_BASE = {
-    "role": "devhealth_domain",
-    "host": "postgres.internal",
-}
-
-
-@pytest.mark.parametrize("component", sorted(_URI_COMPONENT_ENV_VAR))
-@pytest.mark.parametrize(("case_id", "value"), _URI_SPECIAL_PASSWORD_CASES)
-def test_route_dsn_script_percent_encodes_every_uri_component(
-    tmp_path: Path, component: str, case_id: str, value: str
-) -> None:
-    import urllib.parse
-
-    env_var = _URI_COMPONENT_ENV_VAR[component]
-    out_dir = _run_route_dsn_script(tmp_path, **{env_var: value})
-    postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
-
-    role = (
-        urllib.parse.quote(value, safe="")
-        if component == "role"
-        else _URI_COMPONENT_BASE["role"]
-    )
-    host = (
-        urllib.parse.quote(value, safe="")
-        if component == "host"
-        else _URI_COMPONENT_BASE["host"]
-    )
-    expected = f"postgresql://{role}:d-pw@{host}:5432/devhealth"
-    assert postgres_uri == expected, (component, case_id, postgres_uri, expected)
+# CHAOS-6902 deleted the route-dsn init container. What it pinned (a `#` in a
+# password or database name, every RFC 3986 reserved character in a role,
+# password, database or host, an IPv6 host in brackets, the queue and
+# coordinator call sites separately) is now pinned where the encoding lives:
+# internal/platform/config TestRouteDSNVenueOracleMatchesThePythonProducer runs
+# the deleted script's exact text (testdata/route_dsn_init.sh, sha256-pinned)
+# and the component form `dho workers` reads over the same grid and compares
+# the identity pgx reads from each DSN; the frozen golden replays it without a
+# shell.
 
 
 # --- input-domain table: migrations.hook.routeActivate.enabled -------------
@@ -1101,10 +855,11 @@ def test_route_activate_operator_pull_policy_is_independent_of_image_pull_policy
             f"{name} inherited image.pullPolicy=Never, the exact "
             "ErrImageNeverPull class this fix exists to prevent"
         )
-    # The ops-runtime containers (the side-loaded APPLICATION image) must
-    # still inherit image.pullPolicy -- this fix is scoped to the operator
-    # image only, not a blanket override.
-    assert init_containers["route-dsn"]["imagePullPolicy"] == "Never"
+    # Since CHAOS-6902 no container of this Job is the side-loaded APPLICATION
+    # image: the no-op `done` container is the operator image too, so it takes
+    # the same pull policy (a local profile's `Never` on it would fail the Job).
+    containers = jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["containers"]
+    assert containers[0]["imagePullPolicy"] == "IfNotPresent", containers[0]
 
 
 def test_route_activate_operator_pull_policy_override_still_wins() -> None:

@@ -180,10 +180,10 @@ func TestMigrateSecretCarriesANativeClickHouseURI(t *testing.T) {
 	}
 }
 
-// Role provisioning and the route-activate DSN init container need a shell
-// and the SQL/Python the ops runtime image carries; they keep that image
-// (image.repository/image.tag), not the distroless dho image the migrate Job
-// now runs.
+// Role provisioning needs a shell and the SQL/Python the ops runtime image
+// carries; it keeps that image (image.repository/image.tag), not the
+// distroless dho image the migrate Job now runs. The route-activate hook no
+// longer does (CHAOS-6902): see TestRouteActivateRunsOnlyTheOperatorImage.
 func TestShellHooksKeepTheOpsRuntimeImage(t *testing.T) {
 	jobs, _, refusal := renderJobs(t,
 		"migrations.hook.provisionRoles.enabled=true", "migrations.hook.riverMigrate.enabled=true",
@@ -193,7 +193,6 @@ func TestShellHooksKeepTheOpsRuntimeImage(t *testing.T) {
 	}
 	for _, testCase := range []struct{ job, container string }{
 		{"t-dev-health-provision-roles", "provision-roles"},
-		{"t-dev-health-route-activate", "route-dsn"},
 	} {
 		image := container(t, jobs[testCase.job], testCase.container)["image"].(string)
 		if !strings.HasPrefix(image, "ghcr.io/full-chaos/dev-hops-api:") {
@@ -202,5 +201,68 @@ func TestShellHooksKeepTheOpsRuntimeImage(t *testing.T) {
 	}
 	if image := container(t, jobs["t-dev-health-migrate"], "migrate")["image"]; image != pinnedOperatorImage {
 		t.Fatalf("migrate image = %v, want the operator image the River hook runs", image)
+	}
+}
+
+// The route-activate hook Job runs no Python and no shell (CHAOS-6902): every
+// container, init and main, is the operator image, none has a command override,
+// none mounts a volume, and each `routes apply` step is given the component form
+// of the three River DSNs (host, port, user, database as plain values, the
+// password by secretKeyRef) for `dho workers` to assemble.
+func TestRouteActivateRunsOnlyTheOperatorImage(t *testing.T) {
+	jobs, _, refusal := renderJobs(t,
+		"migrations.hook.provisionRoles.enabled=true", "migrations.hook.riverMigrate.enabled=true",
+		"migrations.hook.routeActivate.enabled=true", "migrations.hook.routeActivate.image="+pinnedOperatorImage)
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	pod := jobs["t-dev-health-route-activate"]["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if _, has := pod["volumes"]; has {
+		t.Fatalf("the pod declares volumes: %v", pod["volumes"])
+	}
+	steps := append(append([]any{}, pod["initContainers"].([]any)...), pod["containers"].([]any)...)
+	if len(steps) != 5 {
+		t.Fatalf("%d containers, want the four routes and the no-op main container", len(steps))
+	}
+	for _, raw := range steps {
+		step := raw.(map[string]any)
+		name := step["name"].(string)
+		if step["image"] != pinnedOperatorImage {
+			t.Errorf("%s image = %v, want the operator image", name, step["image"])
+		}
+		if _, has := step["command"]; has {
+			t.Errorf("%s has a command override (a shell) the distroless image cannot run: %v", name, step["command"])
+		}
+		if _, has := step["volumeMounts"]; has {
+			t.Errorf("%s mounts a volume: %v", name, step["volumeMounts"])
+		}
+	}
+	for _, raw := range pod["initContainers"].([]any) {
+		step := raw.(map[string]any)
+		name := step["name"].(string)
+		env := map[string]map[string]any{}
+		for _, item := range step["env"].([]any) {
+			entry := item.(map[string]any)
+			env[entry["name"].(string)] = entry
+		}
+		if env["DEV_HEALTH_PG_DB"]["value"] != "devhealth" {
+			t.Errorf("%s DEV_HEALTH_PG_DB = %v", name, env["DEV_HEALTH_PG_DB"])
+		}
+		for _, role := range []string{"DOMAIN", "QUEUE", "COORDINATOR"} {
+			for _, part := range []string{"HOST", "PORT", "USER"} {
+				if _, ok := env["DEV_HEALTH_PG_"+role+"_"+part]["value"]; !ok {
+					t.Errorf("%s lacks DEV_HEALTH_PG_%s_%s as a plain value", name, role, part)
+				}
+			}
+			password := env["DEV_HEALTH_PG_"+role+"_PASSWORD"]
+			if _, inlined := password["value"]; inlined || password["valueFrom"] == nil {
+				t.Errorf("%s DEV_HEALTH_PG_%s_PASSWORD must come from a secretKeyRef only: %v", name, role, password)
+			}
+		}
+		for _, forbidden := range []string{"POSTGRES_URI", "WORKER_DATABASE_URI", "COORDINATOR_DATABASE_URI", "POSTGRES_URI_FILE", "WORKER_DATABASE_URI_FILE", "COORDINATOR_DATABASE_URI_FILE"} {
+			if _, has := env[forbidden]; has {
+				t.Errorf("%s sets %s: the component form and the URI form are mutually exclusive", name, forbidden)
+			}
+		}
 	}
 }

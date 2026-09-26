@@ -249,6 +249,15 @@ side cannot be compared this way (a digest does not encode which commit
 it came from), so keeping those in step is the operator's own
 responsibility, same as any other digest pin.
 
+Every container of that Job is the operator image: there is no shell and no
+Python in it. The four `dho workers routes apply` steps are given the
+component form of the three River database connections
+(`DEV_HEALTH_PG_{DOMAIN,QUEUE,COORDINATOR}_{HOST,PORT,USER,PASSWORD}` and
+`DEV_HEALTH_PG_DB`; the passwords come from the chart's Secret by
+`secretKeyRef`), and `dho` builds and percent-encodes each connection string
+itself. A password or database name with a reserved character (`#`, `@`, `/`,
+`?`, `%`, a space) and an IPv6 host need no escaping by the operator.
+
 ### billing-edge: Stripe webhook forwarding in local dev
 
 `billing-edge` (root `compose.yml`, port `8010`) needs three secrets to

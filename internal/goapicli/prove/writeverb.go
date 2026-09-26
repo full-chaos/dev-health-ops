@@ -22,6 +22,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof/writeproof"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	// The saved-report write cases (CHAOS-6098) register themselves here: a case
+	// the verb cannot look up cannot be run, so linking is what makes it provable.
+	_ "github.com/full-chaos/dev-health-ops/internal/queryapi/reports/writeproofcases"
 )
 
 // fixtureOrgEnvVar names the per-environment Fixture Org the write proof may

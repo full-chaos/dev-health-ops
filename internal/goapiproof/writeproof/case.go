@@ -73,8 +73,14 @@ type Case struct {
 	// JSON text, never decoded and re-encoded (key order, repeated keys, lone
 	// surrogates and big integers are exactly what a re-encoding would change).
 	VariablesJSON string
-	Seeder        Seeder
-	Tables        []Table
+	// Variables builds the same raw JSON text for a case whose variables depend
+	// on the run: every saved-report mutation carries the org id, which is only
+	// known when the verb runs (the Fixture Org), and a created row is best named
+	// by the RunTag. Exactly one of VariablesJSON and Variables is set. Its result
+	// is sent VERBATIM like VariablesJSON.
+	Variables func(org string, run RunTag) string
+	Seeder    Seeder
+	Tables    []Table
 	// KeepIDs are seeded ids that stay visible in the normalized effects (a
 	// fixed fixture id is data, not noise). Every other UUID-shaped value is
 	// masked and numbered by first appearance.
@@ -90,7 +96,9 @@ func (c Case) Validate() error {
 		return fmt.Errorf("writeproof: a case needs a name")
 	case strings.TrimSpace(c.Operation) == "":
 		return fmt.Errorf("writeproof: case %q names no operation", c.Name)
-	case strings.TrimSpace(c.VariablesJSON) == "":
+	case c.Variables != nil && strings.TrimSpace(c.VariablesJSON) != "":
+		return fmt.Errorf("writeproof: case %q sets both VariablesJSON and Variables: which one is sent would be a guess", c.Name)
+	case c.Variables == nil && strings.TrimSpace(c.VariablesJSON) == "":
 		return fmt.Errorf("writeproof: case %q sends no variables value (send {} explicitly)", c.Name)
 	case c.Seeder == nil:
 		return fmt.Errorf("writeproof: case %q has no seeder", c.Name)
@@ -110,4 +118,13 @@ func (c Case) Validate() error {
 		seen[table.Label] = true
 	}
 	return nil
+}
+
+// VariablesText is the raw variables JSON this execution sends: Variables when
+// the case builds them, else VariablesJSON.
+func (c Case) VariablesText(org string, run RunTag) string {
+	if c.Variables != nil {
+		return c.Variables(org, run)
+	}
+	return c.VariablesJSON
 }

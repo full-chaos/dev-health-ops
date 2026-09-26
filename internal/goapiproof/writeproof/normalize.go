@@ -43,6 +43,21 @@ func NewNormalizer(keep []string, run RunTag, start time.Time) *Normalizer {
 
 // String masks generated ids and the run tag inside one string.
 func (n *Normalizer) String(value string) string {
+	// A DateTime scalar reaches the digest as a JSON string, not as a time.Time:
+	// a mutation's response says when it ran, and the two planes spell one instant
+	// differently (Go "Z", Python "+00:00"). A string that is wholly an RFC 3339
+	// instant is treated exactly like the column value it stands for, so the
+	// digest sees the instant and not its spelling. Free text is never parsed
+	// piecewise: only a whole-string match is touched.
+	if instant, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return n.instant(instant)
+	}
+	return n.mask(value)
+}
+
+// mask replaces the run tag and generated ids. Map KEYS go through it alone:
+// an instant is a value, and a key that happens to spell one is a name.
+func (n *Normalizer) mask(value string) string {
 	if n.run != "" {
 		value = strings.ReplaceAll(value, n.run, "<run>")
 	}
@@ -57,6 +72,15 @@ func (n *Normalizer) String(value string) string {
 		}
 		return fmt.Sprintf("<uuid#%d>", n.uuids[lower])
 	})
+}
+
+// instant is "<now>" for a time within nowWindow of the run's start, else the
+// UTC RFC 3339 text of it.
+func (n *Normalizer) instant(v time.Time) string {
+	if d := v.Sub(n.start); d < nowWindow && d > -nowWindow {
+		return "<now>"
+	}
+	return v.UTC().Format(time.RFC3339Nano)
 }
 
 // Value normalizes one decoded value (a column value or a JSON node) into a
@@ -74,10 +98,7 @@ func (n *Normalizer) Value(value any) (any, error) {
 	case json.Number:
 		return v, nil
 	case time.Time:
-		if d := v.Sub(n.start); d < nowWindow && d > -nowWindow {
-			return "<now>", nil
-		}
-		return v.UTC().Format(time.RFC3339Nano), nil
+		return n.instant(v), nil
 	case [16]byte:
 		return n.String(fmt.Sprintf("%x-%x-%x-%x-%x", v[0:4], v[4:6], v[6:8], v[8:10], v[10:16])), nil
 	case []byte:
@@ -113,7 +134,7 @@ func (n *Normalizer) Value(value any) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			out[n.String(key)] = normalized
+			out[n.mask(key)] = normalized
 		}
 		return out, nil
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:

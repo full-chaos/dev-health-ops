@@ -152,7 +152,8 @@ func Execute(ctx context.Context, db goapiproof.Querier, org string, c Case, run
 	if strings.TrimSpace(org) == "" || run == "" || strings.TrimSpace(document) == "" || post == nil {
 		return Result{}, fmt.Errorf("%w: an org, a run tag, the registered document and a poster are all required", ErrNotExecuted)
 	}
-	if !json.Valid([]byte(c.VariablesJSON)) {
+	variables := c.VariablesText(org, run)
+	if !json.Valid([]byte(variables)) {
 		return Result{}, fmt.Errorf("%w: case %q variables are not valid JSON", ErrNotExecuted, c.Name)
 	}
 
@@ -166,7 +167,7 @@ func Execute(ctx context.Context, db goapiproof.Querier, org string, c Case, run
 
 	// THE post. One call, no retry, whatever it returns.
 	result.Posts = 1
-	response, postErr := post(ctx, document, c.VariablesJSON)
+	response, postErr := post(ctx, document, variables)
 	normalizer := NewNormalizer(c.KeepIDs, run, start)
 
 	effects := Effects{Case: c.Name, Tables: map[string][]any{}}

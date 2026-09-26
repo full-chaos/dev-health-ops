@@ -25,7 +25,8 @@ import (
 // and Compose's go-river-provision ran through psql. It reads the same variables the
 // script took (as environment, like every other migrate step) and creates and
 // bootstraps the same logins; see internal/storage/roleprovision for exactly what
-// that is, and what it never does (no table privilege, no DROP OWNED BY).
+// that is, and what it never does (no runtime-role table privilege, no DROP OWNED BY; the one table
+// grant is the KEDA login's SELECT on public.sync_run_units, CHAOS-6946).
 func rolesCommand() cli.Command {
 	return cli.Command{
 		Name:    "roles",

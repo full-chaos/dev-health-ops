@@ -19,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,7 +49,9 @@ type side struct {
 	admin    *pgxpool.Pool
 }
 
-// startSide brings up one PostgreSQL with the River schema (KEDA reads river_job).
+// startSide brings up one PostgreSQL with the River schema (KEDA reads river_job) and
+// the REAL migrated application schema (KEDA reads public.sync_run_units, CHAOS-6946;
+// the chart runs Alembic before provisioning, so the table exists there too).
 func startSide(t *testing.T) *side {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -67,6 +70,8 @@ func startSide(t *testing.T) *side {
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
+	// Application schema first, River second: the order of the chart's hooks.
+	pgschema.Apply(ctx, t, admin)
 	if _, err := admin.Exec(ctx, "CREATE SCHEMA river"); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +102,22 @@ func testOptions(withOptional bool) Options {
 	return options
 }
 
+// runScript runs the psql script and then the ONE documented difference between it
+// and the Go leg (CHAOS-6946): the KEDA login's SELECT on public.sync_run_units,
+// which only `dho migrate roles` grants (the script is frozen and retires with the
+// chart's psql Job). Applying it here keeps every parity test a parity test;
+// runScriptOnly is the script alone, for the test that pins the difference.
 func (s *side) runScript(t *testing.T, options Options) {
+	t.Helper()
+	s.runScriptOnly(t, options)
+	if options.Keda.Name != "" {
+		if _, err := s.admin.Exec(context.Background(), "GRANT SELECT ON public.sync_run_units TO "+ident(options.Keda.Name)); err != nil {
+			t.Fatalf("the documented KEDA sync_run_units delta: %v", err)
+		}
+	}
+}
+
+func (s *side) runScriptOnly(t *testing.T, options Options) {
 	t.Helper()
 	args := []string{
 		s.instance.URI,
@@ -397,15 +417,16 @@ func TestVerifyNamesEachBrokenPostconditionAndSeparatesThePublicCreateWarning(t 
 		detail  string
 		warning bool
 	}{
-		"CONNECT revoked":        {"REVOKE CONNECT ON DATABASE " + database + " FROM parity_queue, PUBLIC", "GRANT CONNECT ON DATABASE " + database + " TO parity_queue, PUBLIC", "queue", "cannot CONNECT", false},
-		"TEMPORARY granted":      {"GRANT TEMPORARY ON DATABASE " + database + " TO parity_coordinator", "REVOKE TEMPORARY ON DATABASE " + database + " FROM parity_coordinator", "coordinator", "holds TEMPORARY", false},
-		"USAGE revoked":          {"REVOKE USAGE ON SCHEMA public FROM parity_domain, PUBLIC", "GRANT USAGE ON SCHEMA public TO parity_domain, PUBLIC", "domain", "lacks USAGE", false},
-		"CREATE granted":         {"GRANT CREATE ON SCHEMA public TO parity_api", "REVOKE CREATE ON SCHEMA public FROM parity_api", "api", "holds CREATE on schema public in its own name", false},
-		"CREATE only via PUBLIC": {"GRANT CREATE ON SCHEMA public TO PUBLIC", "REVOKE CREATE ON SCHEMA public FROM PUBLIC", "query_api", "only through PUBLIC", true},
-		"KEDA cannot read":       {"REVOKE SELECT ON river.river_job FROM parity_keda", "GRANT SELECT ON river.river_job TO parity_keda", "keda", "cannot SELECT river_job", false},
-		"role made superuser":    {"ALTER ROLE parity_queue SUPERUSER", "ALTER ROLE parity_queue NOSUPERUSER", "queue", "not an unprivileged login", false},
-		"role made NOLOGIN":      {"ALTER ROLE parity_domain NOLOGIN", "ALTER ROLE parity_domain LOGIN", "domain", "not an unprivileged login", false},
-		"role missing":           {"ALTER ROLE parity_keda RENAME TO parity_keda_gone", "ALTER ROLE parity_keda_gone RENAME TO parity_keda", "keda", "not an unprivileged login", false},
+		"CONNECT revoked":                 {"REVOKE CONNECT ON DATABASE " + database + " FROM parity_queue, PUBLIC", "GRANT CONNECT ON DATABASE " + database + " TO parity_queue, PUBLIC", "queue", "cannot CONNECT", false},
+		"TEMPORARY granted":               {"GRANT TEMPORARY ON DATABASE " + database + " TO parity_coordinator", "REVOKE TEMPORARY ON DATABASE " + database + " FROM parity_coordinator", "coordinator", "holds TEMPORARY", false},
+		"USAGE revoked":                   {"REVOKE USAGE ON SCHEMA public FROM parity_domain, PUBLIC", "GRANT USAGE ON SCHEMA public TO parity_domain, PUBLIC", "domain", "lacks USAGE", false},
+		"CREATE granted":                  {"GRANT CREATE ON SCHEMA public TO parity_api", "REVOKE CREATE ON SCHEMA public FROM parity_api", "api", "holds CREATE on schema public in its own name", false},
+		"CREATE only via PUBLIC":          {"GRANT CREATE ON SCHEMA public TO PUBLIC", "REVOKE CREATE ON SCHEMA public FROM PUBLIC", "query_api", "only through PUBLIC", true},
+		"KEDA cannot read":                {"REVOKE SELECT ON river.river_job FROM parity_keda", "GRANT SELECT ON river.river_job TO parity_keda", "keda", "cannot SELECT river_job", false},
+		"KEDA cannot read sync_run_units": {"REVOKE SELECT ON public.sync_run_units FROM parity_keda", "GRANT SELECT ON public.sync_run_units TO parity_keda", "keda", "cannot SELECT sync_run_units", false},
+		"role made superuser":             {"ALTER ROLE parity_queue SUPERUSER", "ALTER ROLE parity_queue NOSUPERUSER", "queue", "not an unprivileged login", false},
+		"role made NOLOGIN":               {"ALTER ROLE parity_domain NOLOGIN", "ALTER ROLE parity_domain LOGIN", "domain", "not an unprivileged login", false},
+		"role missing":                    {"ALTER ROLE parity_keda RENAME TO parity_keda_gone", "ALTER ROLE parity_keda_gone RENAME TO parity_keda", "keda", "not an unprivileged login", false},
 	} {
 		if _, err := s.admin.Exec(ctx, test.break_); err != nil {
 			t.Fatalf("%s: break: %v", name, err)
@@ -570,7 +591,14 @@ func TestVerifyRefusesAKedaRoleThatHoldsAnythingBeyondItsReadOnlyGrants(t *testi
 		"UPDATE on river_job":        {"GRANT UPDATE ON river.river_job TO parity_keda", "REVOKE UPDATE ON river.river_job FROM parity_keda"},
 		"SELECT on another table":    {"GRANT SELECT ON river.river_leader TO parity_keda", "REVOKE SELECT ON river.river_leader FROM parity_keda"},
 		"CREATE on the river schema": {"GRANT CREATE ON SCHEMA river TO parity_keda", "REVOKE CREATE ON SCHEMA river FROM parity_keda"},
-		"CREATE on the database":     {"GRANT CREATE ON DATABASE " + database + " TO parity_keda", "REVOKE CREATE ON DATABASE " + database + " FROM parity_keda"},
+		// CHAOS-6946: SELECT on public.sync_run_units is the ONLY grant beyond river_job.
+		"UPDATE on sync_run_units":           {"GRANT UPDATE ON public.sync_run_units TO parity_keda", "REVOKE UPDATE ON public.sync_run_units FROM parity_keda"},
+		"INSERT on sync_run_units":           {"GRANT INSERT ON public.sync_run_units TO parity_keda", "REVOKE INSERT ON public.sync_run_units FROM parity_keda"},
+		"a grant option on sync_run_units":   {"GRANT SELECT ON public.sync_run_units TO parity_keda WITH GRANT OPTION", "REVOKE GRANT OPTION FOR SELECT ON public.sync_run_units FROM parity_keda"},
+		"a column UPDATE on sync_run_units":  {"GRANT UPDATE (status) ON public.sync_run_units TO parity_keda", "REVOKE UPDATE (status) ON public.sync_run_units FROM parity_keda"},
+		"SELECT on another public table":     {"GRANT SELECT ON public.sync_runs TO parity_keda", "REVOKE SELECT ON public.sync_runs FROM parity_keda"},
+		"SELECT on a sync_run_units sibling": {"GRANT SELECT ON public.sync_run_unit_effect_chunks TO parity_keda", "REVOKE SELECT ON public.sync_run_unit_effect_chunks FROM parity_keda"},
+		"CREATE on the database":             {"GRANT CREATE ON DATABASE " + database + " TO parity_keda", "REVOKE CREATE ON DATABASE " + database + " FROM parity_keda"},
 	} {
 		if _, err := s.admin.Exec(ctx, test.break_); err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -685,6 +713,9 @@ func TestVerifyRefusesAKedaRoleThatCanWriteThroughPublicOrAMembership(t *testing
 		"UPDATE through PUBLIC": {
 			[]string{"GRANT UPDATE ON river.river_job TO PUBLIC"},
 			[]string{"REVOKE UPDATE ON river.river_job FROM PUBLIC"}, "unexpected privilege"},
+		"UPDATE on sync_run_units through PUBLIC": {
+			[]string{"GRANT UPDATE ON public.sync_run_units TO PUBLIC"},
+			[]string{"REVOKE UPDATE ON public.sync_run_units FROM PUBLIC"}, "unexpected privilege"},
 		"a membership that carries UPDATE": {
 			[]string{"CREATE ROLE writers NOLOGIN", "GRANT UPDATE ON river.river_job TO writers", "GRANT writers TO parity_keda"},
 			[]string{"REVOKE writers FROM parity_keda", "REVOKE UPDATE ON river.river_job FROM writers", "DROP ROLE writers"}, "member of another role"},
@@ -940,5 +971,105 @@ func TestVerifyReportsAnUnexpectedPublicGrantForEveryConfiguredRole(t *testing.T
 		if !found {
 			t.Errorf("%s: an UPDATE on river_job through PUBLIC must be a problem: %v", entry.label, problems)
 		}
+	}
+}
+
+// CHAOS-6946: the KEDA login reads public.sync_run_units (the go-sync ScaledObject's
+// planned-backlog trigger), granted by `dho migrate roles` and by nothing else. The
+// psql script (frozen) never granted it, so this is the deliberate difference the
+// parity harness applies by hand (runScript). The state the grant exists to reach is
+// the LOGIN running the trigger's query, not a catalog row.
+func TestGoLegGrantsTheKedaLoginSelectOnSyncRunUnitsAndNothingMore(t *testing.T) {
+	t.Parallel()
+	options := testOptions(true)
+	script, golang := startSide(t), startSide(t)
+	script.runScriptOnly(t, options)
+	golang.runGo(t, options)
+	const triggerQuery = `SELECT count(*) FROM public.sync_run_units WHERE status = 'planned' AND (available_at IS NULL OR available_at <= now())`
+	kedaRun := func(s *side, query string) error {
+		t.Helper()
+		config, err := pgx.ParseConfig(s.instance.URI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config.User, config.Password = options.Keda.Name, options.Keda.Password
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		connection, err := pgx.ConnectConfig(ctx, config)
+		if err != nil {
+			t.Fatalf("the KEDA login cannot connect: %v", err)
+		}
+		defer connection.Close(ctx)
+		var ignored any
+		return connection.QueryRow(ctx, query).Scan(&ignored)
+	}
+	// The baseline: the script alone leaves the login unable to run the trigger query.
+	var denied *pgconn.PgError
+	if err := kedaRun(script, triggerQuery); !errors.As(err, &denied) || denied.Code != "42501" {
+		t.Fatalf("(baseline) the psql script alone must leave the KEDA login without SELECT on sync_run_units: %v", err)
+	}
+	if err := kedaRun(golang, triggerQuery); err != nil {
+		t.Fatalf("after `migrate roles` the KEDA login must run the go-sync trigger query: %v", err)
+	}
+	// Nothing more: no other privilege on the table, no other public table.
+	for _, query := range []string{
+		`SELECT count(*) FROM public.sync_runs`,
+		`SELECT count(*) FROM public.sync_run_unit_effect_chunks`,
+		`SELECT count(*) FROM public.integrations`,
+	} {
+		if err := kedaRun(golang, query); !errors.As(err, &denied) || denied.Code != "42501" {
+			t.Errorf("the KEDA login must not read anything else (%s): %v", query, err)
+		}
+	}
+	var writes bool
+	if err := golang.admin.QueryRow(context.Background(), `SELECT has_table_privilege($1, 'public.sync_run_units', 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+		OR has_any_column_privilege($1, 'public.sync_run_units', 'INSERT, UPDATE, REFERENCES')`, options.Keda.Name).Scan(&writes); err != nil || writes {
+		t.Fatalf("the KEDA login holds a non-SELECT privilege on sync_run_units: %v %v", writes, err)
+	}
+	// Idempotent, and Verify is green (the closure names the new privilege as EXPECTED).
+	golang.runGo(t, options)
+	if problems, warnings, err := Verify(context.Background(), golang.admin, options); err != nil || len(problems)+len(warnings) != 0 {
+		t.Fatalf("Verify: %v %v %v", problems, warnings, err)
+	}
+	if !strings.Contains(strings.Join(golang.snapshot(t, options), "\n"), "keda grant SELECT on relation public.sync_run_units") {
+		t.Errorf("the enumeration must list the KEDA login's sync_run_units SELECT:\n%s", strings.Join(golang.snapshot(t, options), "\n"))
+	}
+}
+
+// The table is Alembic's, created before provisioning in the chart and in Compose. If
+// it is missing, Apply must fail (all or nothing, label only) and Verify must NAME the
+// missing read, never return an error or pass.
+func TestKedaSyncRunUnitsMissingFailsApplyAtomicallyAndVerifyNamesIt(t *testing.T) {
+	t.Parallel()
+	golang := startSide(t)
+	options := testOptions(true)
+	golang.runGo(t, options)
+	if _, err := golang.admin.Exec(context.Background(), "DROP TABLE public.sync_run_units CASCADE"); err != nil {
+		t.Fatal(err)
+	}
+	problems, _, err := Verify(context.Background(), golang.admin, options)
+	if err != nil {
+		t.Fatalf("Verify must report a missing table as a problem, not an error: %v", err)
+	}
+	named := false
+	for _, item := range problems {
+		if item.Role == "keda" && strings.Contains(item.Detail, "cannot SELECT sync_run_units") {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("Verify must name the KEDA login's missing sync_run_units read: %v", problems)
+	}
+	fresh := startSide(t)
+	if _, err := fresh.admin.Exec(context.Background(), "DROP TABLE public.sync_run_units CASCADE"); err != nil {
+		t.Fatal(err)
+	}
+	err = Apply(context.Background(), fresh.admin, options)
+	if err == nil || !strings.Contains(err.Error(), "sync_run_units") || strings.Contains(err.Error(), options.Keda.Name) || strings.Contains(err.Error(), options.Keda.Password) {
+		t.Fatalf("Apply without the table must fail naming the step, never the role or password: %v", err)
+	}
+	var roles int
+	if err := fresh.admin.QueryRow(context.Background(), `SELECT count(*) FROM pg_roles WHERE rolname LIKE 'parity_%'`).Scan(&roles); err != nil || roles != 0 {
+		t.Fatalf("a failed Apply left %d role(s) behind: %v", roles, err)
 	}
 }

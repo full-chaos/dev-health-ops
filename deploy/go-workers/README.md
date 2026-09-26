@@ -404,7 +404,8 @@ are event consumers with their own backpressure, not River queue consumers
 to read. Size those by fixed `replicas` instead.
 
 `RIVER_KEDA_READONLY_DATABASE_ROLE` (`devhealth_keda_readonly`,
-SELECT-only on `river_job`) is provisioned by the same
+SELECT-only on `river_job` and on `public.sync_run_units`, the go-sync planned-backlog
+trigger's table, CHAOS-6946) is provisioned by the same
 `…-provision-roles` Helm hook as the three runtime logins
 (`provision_river_roles.sql`), whenever a `goWorkers` group has
 `autoscaling.enabled: true` -- no hand-run script needed.
@@ -1044,8 +1045,11 @@ It does what the script did and nothing else: create a login only when missing
 not an unprivileged login, e.g. NOLOGIN or with CREATEDB, is REFUSED before any
 statement runs, naming the role label, where the script left it alone), CONNECT on the database,
 TEMPORARY revoked (from PUBLIC too), USAGE and no CREATE on schema `public`.
-It never grants a table privilege (those are `dho migrate river`'s, derived from
-the posture manifests), never runs `DROP OWNED BY`, and applies everything in ONE
+It grants exactly one table privilege, the KEDA login's SELECT on
+`public.sync_run_units` (CHAOS-6946; the table is Alembic's, so it must exist, and a
+missing table fails the run and `--check` names it), and no other: the runtime
+roles' table privileges are `dho migrate river`'s, derived from
+the posture manifests. It never runs `DROP OWNED BY`, and applies everything in ONE
 transaction, so a failure leaves nothing half-applied (the script ran each
 statement on its own). It refuses two roles with the same name (including the KEDA
 role named like another), a role without a password, a name over 63 bytes, a runtime
@@ -1058,7 +1062,8 @@ bootstrap postconditions on the live catalog and exits 1, naming role labels and
 never a password, if one is unmet (each role is an unprivileged login with CONNECT,
 no TEMPORARY, USAGE and no CREATE on `public`; each runtime role is a member of no
 role and owns nothing, which is what its readiness check requires; the KEDA login
-holds exactly CONNECT, USAGE on the River schema and SELECT on `river_job`, and every
+holds exactly CONNECT, USAGE on the River schema, SELECT on `river_job` and SELECT on
+`public.sync_run_units` (nothing else, not even a column privilege), and every
 role is judged on what it holds through PUBLIC too (beyond the ambient CONNECT and
 USAGE on `public`, a privilege through PUBLIC is a problem, relation privileges
 included), counting what a role inherits through a membership, and an extra grant it already
@@ -1075,7 +1080,9 @@ role's password EQUAL to its role name (CHAOS-6904 changes that default); `dho m
 CREATE on `public` that a role holds only through PUBLIC (the PostgreSQL default
 before v15) is logged as a warning: revoking it is a human decision.
 
-Parity with the script is executed, not argued: the integration tests run the real
+Parity with the script is executed, not argued (with ONE deliberate difference, the
+KEDA login's `public.sync_run_units` SELECT, which the frozen script never granted;
+the harness applies it to the script side and a separate test pins the baseline): the integration tests run the real
 `provision_river_roles.sql` through psql on one PostgreSQL and the Go leg on a
 second identical one, and compare every role attribute, whether the password was
 set and works, every effective grant (the `roleacl` enumeration the readiness

@@ -183,4 +183,11 @@ func TestMigrateRolesThenRiverLeavesEveryRoleHoldingExactlyItsManifest(t *testin
 	if err := loginPool(names["keda"], kedaPass).QueryRow(ctx, `SELECT count(*) >= 0 FROM river.river_job`).Scan(&kedaReads); err != nil || !kedaReads {
 		t.Fatalf("the KEDA login must read river_job with its file-supplied password: %v", err)
 	}
+	// CHAOS-6946: and it runs the go-sync planned-backlog trigger's query, the state the
+	// grant exists to reach (on the real migrated schema, through the real commands).
+	var planned int
+	if err := loginPool(names["keda"], kedaPass).QueryRow(ctx,
+		`SELECT count(*) FROM public.sync_run_units WHERE status = 'planned' AND (available_at IS NULL OR available_at <= now())`).Scan(&planned); err != nil {
+		t.Fatalf("the KEDA login must read public.sync_run_units after `migrate roles`: %v", err)
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -27,23 +28,25 @@ const settingsVenueEncryptionKey = "venue-settings-admin-fernet-key-32-bytes!"
 // (an encrypted value by decrypting each plane's ciphertext with the shared
 // key through the Python api's own decrypt, since Fernet output is random).
 func TestSettingsRoutesVenueOracle(t *testing.T) {
-	runSettingsOracle(t, true)
+	runSettingsOracle(t, true, "keyed", "043008b7ec6aefc7ba2703dc572d5fea5155f5232734f1bf3cdeda8d16a36019")
 }
 
 // TestSettingsRoutesWithoutEncryptionKeyVenueOracle runs the same routes on
 // planes that hold no SETTINGS_ENCRYPTION_KEY: encrypting or decrypting then
 // raises in Python, an unhandled 500.
 func TestSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
-	runSettingsOracle(t, false)
+	runSettingsOracle(t, false, "nokey", "2951db643e9ff726eea2d61732033ee4cd246a743d7b3870476f5abf13a8a291")
 }
 
-func runSettingsOracle(t *testing.T, withKey bool) {
+func runSettingsOracle(t *testing.T, withKey bool, mode, digest string) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, governanceGolden("settings_"+mode, t.Name(), digest))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("set")
 	const jwtKey = "venue-oracle-test-secret-key-for-settings-flow-32-bytes!"
 
-	orgA, orgB := uuid.New(), uuid.New()
-	adminA, adminB, memberA, superID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	orgA, orgB := nextID(), nextID()
+	adminA, adminB, memberA, superID := nextID(), nextID(), nextID(), nextID()
 
 	var pythonEnv []string
 	if withKey {
@@ -89,7 +92,7 @@ VALUES ($1, $2, true, true, $3, 0, now(), now())`, id, email, super)
 			row := func(org uuid.UUID, category, key string, value any, encrypted bool, desc any) {
 				exec(`INSERT INTO settings (id, org_id, category, key, value, is_encrypted, description, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:00:00+00:00')`,
-					uuid.New(), org.String(), category, key, value, encrypted, desc)
+					nextID(), org.String(), category, key, value, encrypted, desc)
 			}
 			row(orgA, "general", "site_name", "Acme", false, "the name")
 			row(orgA, "general", "empty_value", "", false, nil)
@@ -245,7 +248,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 		get("W get after deletes", "/settings/general/site_name", "adminA"),
 	}
 
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		if withKey {
 			decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(settingsVenueEncryptionKey), "")
@@ -255,12 +258,14 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 			deps.Decryptor = decryptor
 		}
 	})
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 
 	compare := func(name, query string) {
 		t.Helper()
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		source := golden.Rows(t, name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		})
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
 		if source == "" {
 			t.Errorf("%s: the query matched no rows on the Python plane; the comparison proves nothing", name)
@@ -276,6 +281,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 FROM settings ORDER BY org_id, category, key`)
 
 	if !withKey {
+		golden.Finish(t)
 		return
 	}
 	ciphertexts := func(db string) map[string]string {
@@ -289,10 +295,6 @@ FROM settings ORDER BY org_id, category, key`)
 		}
 		return out
 	}
-	source, goSide := ciphertexts(venue.SourceDB), ciphertexts(venue.GoDB)
-	if len(source) == 0 || len(source) != len(goSide) {
-		t.Fatalf("encrypted rows: python %d, go %d", len(source), len(goSide))
-	}
 	decrypt := func(token string) string {
 		results := venue.CallPython(t, venueoracle.PythonCall{Target: "dev_health_ops.core.encryption:decrypt_value", Args: []any{token}})
 		var plaintext string
@@ -301,9 +303,31 @@ FROM settings ORDER BY org_id, category, key`)
 		}
 		return plaintext
 	}
-	for name, token := range source {
-		if decrypt(token) != decrypt(goSide[name]) {
-			t.Errorf("encrypted setting %s decrypts differently: python %q, go %q", name, decrypt(token), decrypt(goSide[name]))
+	// Each plane's encrypted values, opened with Python's own decrypt and
+	// listed by setting name; the Python plane's list is frozen with the golden.
+	opened := func(db string) (string, int) {
+		found := ciphertexts(db)
+		names := make([]string, 0, len(found))
+		for name := range found {
+			names = append(names, name)
 		}
+		sort.Strings(names)
+		lines := make([]string, len(names))
+		for i, name := range names {
+			lines[i] = name + " => " + decrypt(found[name])
+		}
+		return strings.Join(lines, "\n"), len(names)
 	}
+	source := golden.Rows(t, "encrypted settings opened", func() string {
+		text, _ := opened(venue.SourceDB)
+		return text
+	})
+	goText, goCount := opened(venue.GoDB)
+	if goCount == 0 || source == "" {
+		t.Fatalf("no encrypted rows to compare: python %q, go %d rows", source, goCount)
+	}
+	if source != goText {
+		t.Errorf("encrypted settings decrypt differently:\n python:\n%s\n go:\n%s", source, goText)
+	}
+	golden.Finish(t)
 }

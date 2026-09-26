@@ -3,7 +3,7 @@
 // means the same thing in both binaries: long options with an `=` or a
 // following value, unique-prefix abbreviations (`--back 3`), attached short
 // values (`-sorg/*`), combined short flags, and argparse's own classification
-// of every argument (an ambiguous abbreviation is an error wherever it stands).
+// of every argument (an ambiguous abbreviation is an error where it is taken).
 //
 // It is proven against the real argparse by the live oracles of its users
 // (internal/synccli, internal/cli); anything it cannot express is listed there.
@@ -83,6 +83,9 @@ type optionMatch struct {
 	optionStr   string
 	sep         string // "=" when the explicit argument followed an equals sign
 	explicitArg *string
+	// ambiguous is set when the argument abbreviates more than one option: argparse (3.14) notes it
+	// as an option and raises the error only when it takes that option, so an earlier --help still exits 0.
+	ambiguous *Error
 }
 
 // classify mirrors ArgumentParser._parse_optional: nil means "positional"
@@ -110,7 +113,7 @@ func (p *Parser) classify(arg string) (*optionMatch, *Error) {
 		for i, m := range matches {
 			names[i] = m.optionStr
 		}
-		return nil, &Error{fmt.Sprintf("ambiguous option: %s could match %s", arg, strings.Join(names, ", "))}
+		return &optionMatch{optionStr: arg, ambiguous: &Error{fmt.Sprintf("ambiguous option: %s could match %s", arg, strings.Join(names, ", "))}}, nil
 	}
 	if len(matches) == 1 {
 		return &matches[0], nil
@@ -240,6 +243,9 @@ func (p *Parser) parse(args []string, act func(spec *Spec, value string) *Error,
 			result.Rest = args[i:]
 			return result, nil
 		}
+		if m != nil && m.ambiguous != nil {
+			return nil, m.ambiguous
+		}
 		if root && m.spec == nil {
 			return nil, &Error{fmt.Sprintf("unrecognized arguments: %s", args[i])}
 		}
@@ -352,4 +358,114 @@ func (p *Parser) consumeOptional(
 		}
 	}
 	return next, nil
+}
+
+// ParseWithPositional is Parse for a parser with exactly one positional after its optionals
+// (nargs=None, required), as `service-credentials rotate <credential_id> ...` has: argparse's
+// consume_positionals over the A/O/- pattern of the arguments, where everything after the first
+// "--" is an argument ('A') and the "--" itself ('-') is absorbed by the positional next to it
+// (`-*A-*`) and dropped. The positional is nil when none was consumed (the caller reports the
+// missing required argument); every argument left over is in Parsed.Unrecognized.
+//
+// It mirrors _parse_known_args of Python 3.14's argparse, not a reading of its documentation; the
+// live oracle of its users compares it with the real parser over a generated corpus.
+func (p *Parser) ParseWithPositional(args []string, act func(spec *Spec, value string) *Error) (*Parsed, *string, *Error) {
+	result := &Parsed{Values: map[string]string{}, Flags: map[string]bool{}}
+	pattern := make([]byte, len(args))
+	classes := make([]*optionMatch, len(args))
+	afterTerminator := false
+	max := -1
+	for i, arg := range args {
+		switch {
+		case afterTerminator:
+			pattern[i] = 'A'
+		case arg == "--":
+			pattern[i] = '-'
+			afterTerminator = true
+		default:
+			match, err := p.classify(arg)
+			if err != nil {
+				return nil, nil, err
+			}
+			if match == nil {
+				pattern[i] = 'A'
+			} else {
+				classes[i] = match
+				pattern[i] = 'O'
+				max = i
+			}
+		}
+	}
+	isOption := func(i int) bool { return classes[i] != nil }
+
+	var positional *string
+	consume := func(start int) int {
+		if positional != nil {
+			return start
+		}
+		i := start
+		for i < len(pattern) && pattern[i] == '-' {
+			i++
+		}
+		if i >= len(pattern) || pattern[i] != 'A' {
+			return start
+		}
+		end := i + 1
+		for end < len(pattern) && pattern[end] == '-' {
+			end++
+		}
+		taken := append([]string(nil), args[start:end]...)
+		if strings.ContainsRune(string(pattern[start:end]), '-') {
+			for k, item := range taken {
+				if item == "--" {
+					taken = append(taken[:k], taken[k+1:]...)
+					break
+				}
+			}
+		}
+		value := taken[0] // only the first "--" is ever '-', so exactly one argument is left
+		positional = &value
+		return end
+	}
+
+	var extras []string
+	start := 0
+	for start <= max {
+		next := start
+		for next <= max && classes[next] == nil {
+			next++
+		}
+		if start != next {
+			end := consume(start)
+			if end > start {
+				start = end
+				continue
+			}
+		}
+		if classes[start] == nil {
+			extras = append(extras, args[start:next]...)
+			start = next
+		}
+		match := classes[start]
+		if match.ambiguous != nil {
+			return nil, nil, match.ambiguous
+		}
+		if match.spec == nil { // an option the parser does not know
+			extras = append(extras, args[start])
+			start++
+			continue
+		}
+		stop, err := p.consumeOptional(args, start, match, isOption, result, act)
+		if err != nil {
+			return nil, nil, err
+		}
+		start = stop
+		if result.Help {
+			return result, positional, nil
+		}
+	}
+	stop := consume(start)
+	extras = append(extras, args[stop:]...)
+	result.Unrecognized = extras
+	return result, positional, nil
 }

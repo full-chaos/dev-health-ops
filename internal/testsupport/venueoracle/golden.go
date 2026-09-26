@@ -44,6 +44,13 @@ import (
 // answer Python returned must be compared by Diff or declared with Consumed;
 // every frozen row comparison is consumed once.
 //
+// Threat model: this harness defends against accidental drift by honest
+// authors (a stale producer, a moved build, reused rows, partial writes); a
+// hostile author of golden inputs or a hostile committer is OUT OF SCOPE,
+// defended by human PR review. A guard exists because an honest mistake would
+// otherwise pass silently, not because a determined attacker could not get
+// around it.
+//
 // A frozen test compares no Python response, so it writes the Go-only proof
 // (WriteGoOnlyProof) naming the build the truth was executed on.
 //

@@ -32,17 +32,7 @@ type CommitStat struct {
 func (r Repo) CommitStats(ctx context.Context, commit Commit) []CommitStat {
 	stats := r.numstatFiles(ctx, commit)
 
-	var raw []byte
-	var err error
-	if len(commit.Parents) > 0 {
-		raw, err = r.run(ctx, "diff-tree", commit.Parents[0], commit.Hash, "-r", "--abbrev=40", "--full-index", "-M", "--raw", "-z", "--no-color")
-	} else {
-		raw, err = r.run(ctx, "diff", commit.Hash, "--abbrev=40", "--full-index", "-M", "--raw", "-z", "--no-color")
-	}
-	if err != nil {
-		return nil
-	}
-	diffs, ok := parseRawDiff(raw)
+	diffs, ok := r.commitDiffs(ctx, commit)
 	if !ok {
 		return nil
 	}
@@ -63,6 +53,23 @@ func (r Repo) CommitStats(ctx context.Context, commit Commit) []CommitStat {
 		})
 	}
 	return rows
+}
+
+// commitDiffs is `commit.parents[0].diff(commit, create_patch=False)` (or
+// `commit.diff(None)` for a root commit: against the working tree), parsed like
+// GitPython. false means Python would have raised.
+func (r Repo) commitDiffs(ctx context.Context, commit Commit) ([]RawDiff, bool) {
+	var raw []byte
+	var err error
+	if len(commit.Parents) > 0 {
+		raw, err = r.run(ctx, "diff-tree", commit.Parents[0], commit.Hash, "-r", "--abbrev=40", "--full-index", "-M", "--raw", "-z", "--no-color")
+	} else {
+		raw, err = r.run(ctx, "diff", commit.Hash, "--abbrev=40", "--full-index", "-M", "--raw", "-z", "--no-color")
+	}
+	if err != nil {
+		return nil, false
+	}
+	return parseRawDiff(raw)
 }
 
 // modeText is `str(diff.a_mode) if diff.a_mode else "000000"` where a_mode is

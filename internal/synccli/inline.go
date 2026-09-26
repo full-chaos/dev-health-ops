@@ -30,7 +30,7 @@ import (
 //     Python does; with no organization at all the sync is refused);
 //   - the chunked targets cicd and tests (they need a chunk store the
 //     in-process ledger does not implement yet);
-//   - --provider local blame (CHAOS-6776) and --provider synthetic (their own tickets).
+//   - --provider synthetic (its own ticket).
 //
 // `--search` batch mode is batch.go: the listing, then this same per-dataset
 // run for each listed repository.
@@ -41,9 +41,8 @@ const githubIncidentsRefusal = "GitHub does not expose a native incident source;
 
 // Tickets the refusals point at.
 const (
-	ticketDBLookups  = "CHAOS-6710"
-	ticketChunked    = "CHAOS-6711"
-	ticketLocalBlame = "CHAOS-6776"
+	ticketDBLookups = "CHAOS-6710"
+	ticketChunked   = "CHAOS-6711"
 )
 
 // InlineDeps are the executor's outside connections, replaceable in tests.
@@ -103,7 +102,7 @@ func InlineExecutor(deps InlineDeps) Executor {
 	}
 	lookups := dbLookups{FirstOrg: deps.FirstOrg, GitHubCredential: deps.GitHubCredential}
 	return func(ctx context.Context, plan Plan, env cli.Env) error {
-		if plan.Call == CallLocalRepo {
+		if plan.Call == CallLocalRepo || plan.Call == CallLocalBlame {
 			return runLocalRepo(ctx, deps, lookups, plan, env)
 		}
 		datasets, refusal := inlineDatasets(plan)
@@ -159,8 +158,6 @@ func notYet(plan Plan, what, ticket string) *Refusal {
 func inlineDatasets(plan Plan) ([]string, *Refusal) {
 	switch plan.Call {
 	case CallGitHubSingle, CallGitLabSingle, CallGitHubBatch, CallGitLabBatch:
-	case CallLocalBlame:
-		return nil, notYet(plan, "the local provider's blame target", ticketLocalBlame)
 	default:
 		return nil, notYet(plan, "this provider", "chris-pending")
 	}

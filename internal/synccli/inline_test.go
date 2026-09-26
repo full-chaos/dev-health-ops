@@ -147,7 +147,6 @@ func TestInlineRefusesWhatItCannotRunWithoutOpeningAnything(t *testing.T) {
 		env    map[string]string
 		want   string
 	}{
-		{"local blame", "blame", []string{"--provider", "local"}, inlineEnv, ticketLocalBlame},
 		{"cicd", "cicd", gh, inlineEnv, ticketChunked},
 		{"tests", "tests", gl, inlineEnv, ticketChunked},
 		{"first org from Postgres", "git", gh, map[string]string{"CLICKHOUSE_URI": inlineEnv["CLICKHOUSE_URI"]}, ticketDBLookups},

@@ -32,12 +32,12 @@ import (
 //go:embed testdata/local_sync_oracle.py
 var localSyncOracleProgram string
 
-// The tables `sync git|prs --provider local` writes. Compared columns come from
+// The tables `sync git|prs|blame --provider local` writes. Compared columns come from
 // the real table schema (system.columns), never a hand list; the only ones left
 // out are last_synced and, for repos, created_at (both are the sync time and
 // differ between the two runs): for repos, created_at = last_synced is compared
 // instead, and every last_synced must be inside the run's window.
-var localTables = []string{"repos", "git_commits", "git_commit_stats", "git_pull_requests"}
+var localTables = []string{"repos", "git_commits", "git_commit_stats", "git_pull_requests", "git_files", "git_blame"}
 
 // fixture builds one repository with fixed dates, so both planes read the same
 // bytes.
@@ -517,6 +517,109 @@ func localScenarios() []localScenario {
 			f.run(nil, stream.String(), "fast-import", "--quiet")
 			f.git("reset", "-q", "--hard", "HEAD")
 		}},
+		{name: "blame: line endings, whitespace, tabs, empty and no-newline files", build: func(f *fixture) {
+			f.write("crlf.txt", "one\r\ntwo\r\nthree\r\n", 0o644)
+			f.write("cr.txt", "a\rb\rc", 0o644)
+			f.write("trailing.txt", "keep  \n\tindented\t\n   \n\n", 0o644)
+			f.write("empty.txt", "", 0o644)
+			f.write("nonewline.txt", "no newline at the end", 0o644)
+			f.write("unicode.txt", "héllo ✓\n日本語\n\u2028sep\n\x1cfs\n", 0o644)
+			f.write("form\ffeed.txt", "a\fb\n\x0bvt\n", 0o644)
+			f.commit("line shapes\n")
+		}},
+		{name: "blame: header-looking content and carriage returns inside lines", build: func(f *fixture) {
+			f.write("tricky.txt", "author Mallory\nfilename evil\nsummary evil\n0123456789012345678901234567890123456789 1 1 1\nx\rauthor evil\rauthor-mail <e@e>\rauthor-time 5\n", 0o644)
+			f.commit("header lookalikes\n")
+			f.write("tricky.txt", "author Mallory\nfilename evil2\nsummary evil\n0123456789012345678901234567890123456789 1 1 1\ny\r\rz\n", 0o644)
+			f.commit("second\n")
+		}},
+		{name: "blame: invalid UTF-8, NUL, binary and large files", build: func(f *fixture) {
+			f.write("invalid.txt", "ok line\nbad \xff\xfe bytes\nmore \xe2\x82 trunc\n", 0o644)
+			f.write("nul.dat", "a\x00b\nc\x00\n", 0o644)
+			f.write("big-999999.txt", strings.Repeat("x", 999_998)+"\n", 0o644)
+			f.write("big-1000000.txt", strings.Repeat("y", 999_999)+"\n", 0o644)
+			f.write("big-1000001.txt", strings.Repeat("z", 1_000_000)+"\n", 0o644)
+			f.commit("odd contents\n")
+		}},
+		{name: "blame: interleaved authors and repeated commit groups", build: func(f *fixture) {
+			f.write("a.txt", "l1\nl2\nl3\nl4\nl5\nl6\n", 0o644)
+			f.commit("first\n", commitAt{author: "Alice <alice@example.com>", tz: "-0800"})
+			f.write("a.txt", "l1\nL2 bob\nl3\nl4\nL5 bob\nl6\n", 0o644)
+			f.commit("second\n", commitAt{author: "Bob B <bob@example.com>", tz: "+0530"})
+			f.write("a.txt", "l1\nL2 bob\nl3\nL4 carol\nL5 bob\nl6\n", 0o644)
+			f.commit("third\n", commitAt{author: "Carol <>", committerNamed: "Somebody Else"})
+			f.write("b.txt", "only\n", 0o755)
+			f.commit("fourth\n", commitAt{author: "No Email"})
+		}},
+		{name: "blame: --since selects the changed files only", args: []string{"--since", "2023-11-01"}, build: func(f *fixture) {
+			f.write("old.txt", "old\n", 0o644)
+			f.write("also-old.txt", "old too\n", 0o644)
+			f.write(".png", "dotfile named like an extension\n", 0o644)
+			f.write("shot.PNG", "an image\n", 0o644)
+			f.write("notes.txt", "notes\n", 0o644)
+			f.commit("old\n", commitAt{committerDate: 1_690_000_000})
+			f.write("new.txt", "new\n", 0o644)
+			f.write("old.txt", "old changed\n", 0o644)
+			f.write(".png", "dotfile changed\n", 0o644)
+			f.write("shot.PNG", "image changed\n", 0o644)
+			f.commit("recent\n", commitAt{committerDate: 1_700_000_000})
+		}},
+		{name: "blame: changed files skippable or deleted fall back to all files", args: []string{"--since", "2023-11-01"}, build: func(f *fixture) {
+			f.write("keep.txt", "keep\n", 0o644)
+			f.write("image.png", "png\n", 0o644)
+			f.write("gone.txt", "gone\n", 0o644)
+			f.commit("base\n", commitAt{committerDate: 1_690_000_000})
+			f.write("image.png", "png changed\n", 0o644)
+			f.write("node_modules/dep/index.js", "dep\n", 0o644)
+			f.git("rm", "-q", "gone.txt")
+			f.commit("recent: skippable and deleted only\n", commitAt{committerDate: 1_700_000_000})
+		}},
+		{name: "blame: working tree differs from HEAD", build: func(f *fixture) {
+			f.write("a.txt", "committed 1\ncommitted 2\n", 0o644)
+			f.commit("root\n")
+			f.write("a.txt", "committed 1\nedited in tree\nextra\n", 0o644)
+			f.write("untracked.txt", "untracked\n", 0o644)
+			f.write("staged.txt", "staged\n", 0o644)
+			f.git("add", "staged.txt")
+		}},
+		{name: "blame: symlinks (file, directory, broken, outside) and dotfiles", build: func(f *fixture) {
+			f.write("real.txt", "real\n", 0o644)
+			f.write(".hidden", "hidden\n", 0o644)
+			f.write("dir/inner.txt", "inner\n", 0o644)
+			mustSymlink := func(target, link string) {
+				if err := os.Symlink(target, filepath.Join(f.dir, link)); err != nil {
+					f.t.Fatal(err)
+				}
+			}
+			mustSymlink("real.txt", "link-to-file")
+			mustSymlink("dir", "link-to-dir")
+			mustSymlink("nowhere.txt", "broken-link")
+			outside := filepath.Join(filepath.Dir(f.dir), "outside.txt")
+			if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+				f.t.Fatal(err)
+			}
+			mustSymlink(outside, "link-outside")
+			f.commit("links\n")
+		}},
+		{name: "blame: a .git file and a nested .git directory", build: func(f *fixture) {
+			f.write("a.txt", "a\n", 0o644)
+			f.commit("root\n")
+			f.write("nested/.git/config", "[core]\n", 0o644)
+			f.write("nested/file.txt", "nested\n", 0o644)
+			f.write("gitfile/.git", "gitdir: ../elsewhere\n", 0o644)
+		}},
+		{name: "blame: skippable extensions and suffix corners", build: func(f *fixture) {
+			for _, name := range []string{"a.PNG", "b.Jpeg", "noext", ".gitignore", "trailing.", "dots..txt", "x.tar.gz", "vendor/lib.go", "bin/tool", "src/build/out.txt", "UPPER.SVG"} {
+				f.write(name, "content of "+name+"\n", 0o644)
+			}
+			f.commit("suffix corners\n")
+		}},
+		{name: "blame: many files", build: func(f *fixture) {
+			for i := 0; i < 120; i++ {
+				f.write(fmt.Sprintf("d%d/f%03d.txt", i%5, i), strings.Repeat(fmt.Sprintf("line %d\n", i), 1+i%4), 0o644)
+			}
+			f.commit("many\n")
+		}},
 		{name: "packed objects", build: func(f *fixture) {
 			basic(f)
 			f.git("gc", "-q")
@@ -734,7 +837,7 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 		scenario.build(f)
 		targets := scenario.targets
 		if len(targets) == 0 {
-			targets = []string{"git", "prs"}
+			targets = []string{"git", "prs", "blame"}
 		}
 		for _, target := range targets {
 			truncate()
@@ -806,7 +909,7 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 			pythonRows := tablesSnapshot(ctx, t, admin, pythonDatabase)
 			goRows := tablesSnapshot(ctx, t, admin, goDatabase)
 			compared++
-			if strings.HasPrefix(scenario.name, "crafted") && target == "git" {
+			if strings.HasPrefix(scenario.name, "crafted") && target == "git" && false {
 				for _, line := range pythonRows["git_commits"] {
 					t.Logf("python %s: %s", scenario.name, strings.ReplaceAll(line, "\x1f", " | "))
 				}

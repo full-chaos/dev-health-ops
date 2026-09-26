@@ -35,6 +35,10 @@ func (w Writer) now() time.Time {
 const (
 	commitStatsInsert = `INSERT INTO git_commit_stats (repo_id, commit_hash, file_path, additions, deletions, old_file_mode, new_file_mode, last_synced)`
 	commitStatsOrgIn  = `INSERT INTO git_commit_stats (repo_id, commit_hash, file_path, additions, deletions, old_file_mode, new_file_mode, last_synced, org_id)`
+	filesInsert       = `INSERT INTO git_files (repo_id, path, executable, contents, last_synced)`
+	filesOrgIn        = `INSERT INTO git_files (repo_id, path, executable, contents, last_synced, org_id)`
+	blameInsert       = `INSERT INTO git_blame (repo_id, path, line_no, author_email, author_name, author_when, commit_hash, line, last_synced)`
+	blameOrgIn        = `INSERT INTO git_blame (repo_id, path, line_no, author_email, author_name, author_when, commit_hash, line, last_synced, org_id)`
 )
 
 // insert writes rows with the statement that fits: plain, or with org_id.
@@ -157,4 +161,28 @@ func pullRequestRow(repoID uuid.UUID, org string, p PullRequest, synced time.Tim
 	}
 	return []any{repoID, uint32(p.Number), nullable(p.Title), nil, p.State, nullable(p.AuthorName), nullable(p.AuthorEmail),
 		p.CreatedAt, merged, nil, nullable(p.HeadBranch), nil, nil, nil, nil, nil, nil, uint32(0), uint32(0), uint32(0), synced, nil, org}, nil
+}
+
+// InsertFiles is insert_git_file_data (executable is 1 or 0).
+func (w Writer) InsertFiles(ctx context.Context, repoID uuid.UUID, files []File) error {
+	synced := w.now()
+	rows := make([][]any, 0, len(files))
+	for _, f := range files {
+		executable := uint8(0)
+		if f.Executable {
+			executable = 1
+		}
+		rows = append(rows, []any{repoID, f.Path, executable, nullable(f.Contents), synced})
+	}
+	return w.insert(ctx, "git_files", filesInsert, filesOrgIn, rows)
+}
+
+// InsertBlame is insert_blame_data.
+func (w Writer) InsertBlame(ctx context.Context, repoID uuid.UUID, lines []BlameLine) error {
+	synced := w.now()
+	rows := make([][]any, 0, len(lines))
+	for _, l := range lines {
+		rows = append(rows, []any{repoID, l.Path, uint32(l.LineNo), nullable(l.AuthorEmail), nullable(l.AuthorName), l.AuthorWhen, l.CommitHash, l.Line, synced})
+	}
+	return w.insert(ctx, "git_blame", blameInsert, blameOrgIn, rows)
 }

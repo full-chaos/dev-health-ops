@@ -258,19 +258,23 @@ component form of the three River database connections
 itself. A password or database name with a reserved character (`#`, `@`, `/`,
 `?`, `%`, a space) and an IPv6 host need no escaping by the operator.
 
-### billing-edge: Stripe webhook forwarding in local dev
+### Stripe webhook forwarding in local dev
 
-`billing-edge` (root `compose.yml`, port `8010`) needs three secrets to
-report healthy readiness in its own `/health` payload:
-`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `LICENSE_PRIVATE_KEY`. On
-the real deployed stack these are configured, and `/health`'s overall
-`ok`/`down` status does not depend on Stripe's own outbound reachability
-(a blocked egress path shows up as `stripe_client: "down"` in the JSON
-body without flipping the container's compose healthcheck, which is a
-liveness probe on `:8000`, not a readiness one). In local dev, webhook
-delivery uses the Stripe CLI's own forwarder beside the stack: `stripe
-listen --forward-to http://localhost:8010/api/v1/billing/webhooks/stripe`
-(run from a host shell, not part of this repo).
+The root `compose.yml` serves the billing edge from the Go api: the `go-api`
+service (the operator image, `dho api`) runs a second listener on `:8010`,
+published on host port `8010`, that answers only the Stripe webhook
+(`POST /api/v1/billing/webhooks/stripe`), `GET|HEAD /health` and a JSON 404 for
+every other path. It needs three secrets in your own `ops/.env`:
+`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `LICENSE_PRIVATE_KEY`. With
+any of them unset `/health` answers 503 and names which one is
+`not_configured`; that is the designed bare bring-up, not a fault. Webhook
+delivery uses the Stripe CLI's own forwarder beside the stack: `stripe listen
+--forward-to http://localhost:8010/api/v1/billing/webhooks/stripe` (run from a
+host shell, not part of this repo). The api listener itself is not published
+(the Python `api` service owns host port 8000). `go-api` connects as its own
+least-privilege login, `devhealth_api`, which `go-river-provision` creates and
+`go-river-migrate` grants; `API_DATABASE_ROLE` / `API_DATABASE_PASSWORD` change
+it.
 
 ## Known divergences: local vs prod worker topology
 

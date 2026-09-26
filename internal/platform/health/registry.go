@@ -123,6 +123,12 @@ type CheckStatus struct {
 	// Callers that want to retry only the former, not the latter, use this
 	// bit to tell them apart without the check ever exposing its error text.
 	TimedOut bool
+	// Cause is the bounded failure class of a failed check -- "timeout", "canceled", "error",
+	// "panic", or "wait_expired" (the caller's own wait ended before any answer) -- and "" for a
+	// check that passed. It is never error text: a startup path that cannot serve the HTTP surface
+	// (the worker's preclaim-readiness) logs it, so an exit names WHICH class of failure each check
+	// hit instead of only which checks failed (CHAOS-6955).
+	Cause string
 }
 
 func NewRegistry(checkTimeout time.Duration) *Registry {
@@ -444,6 +450,7 @@ func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 			Name:     result.name,
 			Failed:   result.result.failed,
 			TimedOut: result.result.timedOut,
+			Cause:    failedCause(result.result),
 		})
 		if result.result.failed {
 			failed = append(failed, result.name)
@@ -460,6 +467,17 @@ func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 // timeout (the check itself hit its own bounded context, or the caller never
 // got an answer at all before its own wait expired) as opposed to the check
 // running to completion and reporting a real error.
+// failedCause is the CheckStatus.Cause of a result: empty for a pass.
+func failedCause(result checkResult) string {
+	if !result.failed {
+		return ""
+	}
+	if result.cause == "" {
+		return "error"
+	}
+	return result.cause
+}
+
 type checkResult struct {
 	failed   bool
 	timedOut bool

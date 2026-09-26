@@ -132,7 +132,11 @@ func CheckPostureManifestLockstep(ctx context.Context, pool *pgxpool.Pool, binar
 	if err := pool.QueryRow(
 		ctx, `SELECT to_regclass('public.`+PostureManifestAppliedTable+`') IS NOT NULL`,
 	).Scan(&tableExists); err != nil {
-		return PostureManifestLockstepResult{}, ErrUnavailable
+		// %w of the cause, not a bare ErrUnavailable: health.Registry and the worker's
+		// preclaim-readiness retry classify a timeout by errors.Is(err, context.DeadlineExceeded)
+		// (CHAOS-6955), and a check that waited on the busy readiness pool until its deadline is a
+		// slow check, not a hard failure.
+		return PostureManifestLockstepResult{}, fmt.Errorf("%w: reading the applied-manifest table: %w", ErrUnavailable, err)
 	}
 	if !tableExists {
 		return PostureManifestLockstepResult{BinaryDigest: binaryDigest, Lockstep: true}, nil
@@ -168,7 +172,7 @@ FROM latest`
 		return PostureManifestLockstepResult{BinaryDigest: binaryDigest, Lockstep: true}, nil
 	}
 	if err != nil {
-		return PostureManifestLockstepResult{}, ErrUnavailable
+		return PostureManifestLockstepResult{}, fmt.Errorf("%w: reading the applied manifest: %w", ErrUnavailable, err)
 	}
 	if latestDigest == binaryDigest {
 		return PostureManifestLockstepResult{

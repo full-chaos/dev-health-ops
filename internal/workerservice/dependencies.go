@@ -570,14 +570,14 @@ func (component preclaimReadinessComponent) Start(ctx context.Context) error {
 		},
 		func(error) bool { return preclaimReadinessRetryable(latest) },
 		func(attempt int, elapsed, wait time.Duration, _ error) {
-			component.logRetry(ctx, latest.Failed, attempt, elapsed, wait)
+			component.logRetry(ctx, latest, attempt, elapsed, wait)
 		},
 		func(attempt int, elapsed time.Duration, _ error, budgetExhausted bool) {
 			reason := "dependency_check_failed"
 			if budgetExhausted {
 				reason = "retry_budget_exhausted"
 			}
-			component.logRefusal(ctx, latest.Failed, reason, attempt, elapsed)
+			component.logRefusal(ctx, latest, reason, attempt, elapsed)
 		},
 	)
 	if err != nil {
@@ -696,7 +696,7 @@ func preclaimReadinessSleep(ctx context.Context, wait time.Duration) {
 // reach it. Joined the way every other multi-valued worker startup attribute
 // is (see the "queues" attribute).
 func (component preclaimReadinessComponent) logRefusal(
-	ctx context.Context, failed []string, reason string, attempt int, elapsed time.Duration,
+	ctx context.Context, latest health.Readiness, reason string, attempt int, elapsed time.Duration,
 ) {
 	if component.logger == nil {
 		return
@@ -705,7 +705,8 @@ func (component preclaimReadinessComponent) logRefusal(
 		ctx,
 		"preclaim readiness refused",
 		"error_category", "dependency_unavailable",
-		"failed_checks", strings.Join(failed, ","),
+		"failed_checks", strings.Join(latest.Failed, ","),
+		"failed_causes", failedCauses(latest),
 		"reason", reason,
 		"attempts", attempt,
 		"elapsed", elapsed.String(),
@@ -718,7 +719,7 @@ func (component preclaimReadinessComponent) logRefusal(
 // of a roll storm, not a failure an operator needs to act on unless it keeps
 // recurring until the budget is exhausted (see logRefusal above).
 func (component preclaimReadinessComponent) logRetry(
-	ctx context.Context, failed []string, attempt int, elapsed, wait time.Duration,
+	ctx context.Context, latest health.Readiness, attempt int, elapsed, wait time.Duration,
 ) {
 	if component.logger == nil {
 		return
@@ -727,11 +728,27 @@ func (component preclaimReadinessComponent) logRetry(
 		ctx,
 		"preclaim readiness timed out, retrying",
 		"error_category", "dependency_unavailable",
-		"failed_checks", strings.Join(failed, ","),
+		"failed_checks", strings.Join(latest.Failed, ","),
+		"failed_causes", failedCauses(latest),
 		"attempt", attempt,
 		"elapsed", elapsed.String(),
 		"retry_in", wait.String(),
 	)
+}
+
+// failedCauses names each failed check with its bounded failure class ("name=timeout"), sorted by
+// check name: the readiness detail an exit needs when the HTTP surface that would show it is never
+// served (CHAOS-6955). At rev 191 the refusal named four failed checks and nothing said which of them
+// had failed as a hard error rather than a timeout -- the only reason preclaim-readiness exits on
+// attempt 1 instead of retrying.
+func failedCauses(readiness health.Readiness) string {
+	causes := make([]string, 0, len(readiness.Checks))
+	for _, check := range readiness.Checks {
+		if check.Failed {
+			causes = append(causes, check.Name+"="+check.Cause)
+		}
+	}
+	return strings.Join(causes, ",")
 }
 
 func (preclaimReadinessComponent) Shutdown(context.Context) error { return nil }

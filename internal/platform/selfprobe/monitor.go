@@ -36,6 +36,7 @@ package selfprobe
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -106,12 +107,30 @@ func Once(ctx context.Context, opener TxOpener) (err error) {
 	}
 	tx, beginErr := opener.Begin(ctx)
 	if beginErr != nil {
-		return fmt.Errorf("begin probe transaction: unavailable")
+		return sanitizedProbeError("begin probe transaction", beginErr)
 	}
 	if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-		return fmt.Errorf("rollback probe transaction: unavailable")
+		return sanitizedProbeError("rollback probe transaction", rollbackErr)
 	}
 	return nil
+}
+
+// sanitizedProbeError is the bounded error Once returns: a fixed sentence, never the driver's text,
+// carrying ONLY the caller's own deadline or cancellation as the wrapped cause. health.Registry (and
+// the worker's preclaim-readiness retry, which retries only when every failed check timed out)
+// classify a timeout by errors.Is(err, context.DeadlineExceeded / Canceled); a probe that dropped
+// the cause turned "the one-connection readiness pool was busy for the whole deadline" into a hard
+// failure, and go-sync exited on attempt 1 during a roll (CHAOS-6955). Every other failure stays
+// an opaque hard failure: a wrong password must not read as "slow".
+func sanitizedProbeError(operation string, err error) error {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%s: unavailable: %w", operation, context.DeadlineExceeded)
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("%s: unavailable: %w", operation, context.Canceled)
+	default:
+		return fmt.Errorf("%s: unavailable", operation)
+	}
 }
 
 const (

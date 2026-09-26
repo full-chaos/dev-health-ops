@@ -183,7 +183,7 @@ func TestPinnedCheckoutMustBeTheBuildItsSourceByteForByte(t *testing.T) {
 		}
 	}
 	run("init", "-q")
-	write("src/app/routes.py", "ROUTE = 1\n")
+	write("src/app/probe_module.py", "ROUTE = 1\n")
 	write("README.md", "docs\n")
 	run("add", ".")
 	run("commit", "-q", "-m", "one")
@@ -199,18 +199,18 @@ func TestPinnedCheckoutMustBeTheBuildItsSourceByteForByte(t *testing.T) {
 		t.Fatalf("a checkout at another build was accepted: %v", err)
 	}
 	// A tracked file edited.
-	write("src/app/routes.py", "ROUTE = 2\n")
+	write("src/app/probe_module.py", "ROUTE = 2\n")
 	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "uncommitted or untracked") {
 		t.Fatalf("a dirty checkout was accepted: %v", err)
 	}
 	// The same edit hidden from git status: the planted producer drift. Only the
 	// byte-for-byte comparison with the commit's blobs sees it.
-	run("update-index", "--assume-unchanged", "src/app/routes.py")
+	run("update-index", "--assume-unchanged", "src/app/probe_module.py")
 	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "differs from the pinned commit's blob") {
 		t.Fatalf("a source edit hidden by assume-unchanged was accepted: %v", err)
 	}
-	run("update-index", "--no-assume-unchanged", "src/app/routes.py")
-	run("checkout", "-q", "--", "src/app/routes.py")
+	run("update-index", "--no-assume-unchanged", "src/app/probe_module.py")
+	run("checkout", "-q", "--", "src/app/probe_module.py")
 	if _, err := verifyPinnedCheckout(dir, head); err != nil {
 		t.Fatalf("the restored checkout was refused: %v", err)
 	}

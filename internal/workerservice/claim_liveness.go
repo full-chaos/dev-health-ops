@@ -498,6 +498,11 @@ func (dependencies *workerDependencies) claimLivenessReady(claim *claimLiveness)
 		}
 		now := time.Now()
 		preclaim := claim.inPreclaim()
+		// Every queue is judged and logged even after one refuses: a later queue's
+		// healthy verdict must still end its own refusal run (CHAOS-6883 r2), and an
+		// operator needs every refusing queue named. The FIRST refusal is what is
+		// returned, exactly as before.
+		var refused error
 		for _, facts := range collectQueueFacts(snapshot, claim, now, preclaim) {
 			switch judgeQueue(facts) {
 			case verdictHealthy:
@@ -512,16 +517,22 @@ func (dependencies *workerDependencies) claimLivenessReady(claim *claimLiveness)
 				dependencies.logClaimLivenessPreclaimSkip(ctx, facts.queue)
 			case verdictSlotStuck:
 				dependencies.logClaimLivenessRefusal(ctx, claim, "slot_stuck_before_handler", facts, now)
-				return fmt.Errorf("%w: queue %q", errClaimLivenessSlotStuckBeforeHandler, facts.queue)
+				if refused == nil {
+					refused = fmt.Errorf("%w: queue %q", errClaimLivenessSlotStuckBeforeHandler, facts.queue)
+				}
 			case verdictGateFailing:
 				dependencies.logClaimLivenessRefusal(ctx, claim, "gate_failures_without_handler", facts, now)
-				return fmt.Errorf("%w: queue %q", errClaimLivenessGateFailing, facts.queue)
+				if refused == nil {
+					refused = fmt.Errorf("%w: queue %q", errClaimLivenessGateFailing, facts.queue)
+				}
 			case verdictStalledBacklog:
 				dependencies.logClaimLivenessRefusal(ctx, claim, "backlog_without_handler", facts, now)
-				return fmt.Errorf("%w: queue %q", errClaimLivenessStalledWithBacklog, facts.queue)
+				if refused == nil {
+					refused = fmt.Errorf("%w: queue %q", errClaimLivenessStalledWithBacklog, facts.queue)
+				}
 			}
 		}
-		return nil
+		return refused
 	}
 }
 

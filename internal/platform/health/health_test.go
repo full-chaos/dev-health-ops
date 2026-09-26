@@ -580,6 +580,7 @@ func TestRegistryLogsRefusalsOnFirstRepeatRecoveryAndNeverTheErrorText(t *testin
 		if status := registry.Readiness(context.Background()); status.Ready {
 			t.Fatal("dep_a must refuse")
 		}
+		registry.flushRefusalLogs()
 	}
 	if got := strings.Count(logs.String(), `"msg":"readiness check refused"`); got != 1 {
 		t.Fatalf("5 consecutive refusals inside one interval logged %d lines, want 1 (first only): %s", got, logs.String())
@@ -603,6 +604,7 @@ func TestRegistryLogsRefusalsOnFirstRepeatRecoveryAndNeverTheErrorText(t *testin
 	registry.refusing["dep_a"].lastLog = time.Now().Add(-2 * refusalLogInterval)
 	registry.refusalMu.Unlock()
 	registry.Readiness(context.Background())
+	registry.flushRefusalLogs()
 	if got := strings.Count(logs.String(), `"msg":"readiness check refused"`); got != 2 {
 		t.Fatalf("a refusal past the interval logged %d lines total, want 2", got)
 	}
@@ -613,6 +615,7 @@ func TestRegistryLogsRefusalsOnFirstRepeatRecoveryAndNeverTheErrorText(t *testin
 	// Recovery is logged once, and the next refusal starts a fresh run.
 	failing.Store(false)
 	registry.Readiness(context.Background())
+	registry.flushRefusalLogs()
 	registry.Readiness(context.Background())
 	if got := strings.Count(logs.String(), `"msg":"readiness check recovered"`); got != 1 {
 		t.Fatalf("recovery logged %d lines, want 1: %s", got, logs.String())
@@ -630,6 +633,7 @@ func TestRegistryLogsRefusalsOnFirstRepeatRecoveryAndNeverTheErrorText(t *testin
 	}
 	failing.Store(true)
 	registry.Readiness(context.Background())
+	registry.flushRefusalLogs()
 	if got := strings.Count(logs.String(), `"msg":"readiness check refused"`); got != 3 {
 		t.Fatalf("a new refusal after recovery must log immediately, total %d want 3", got)
 	}
@@ -656,6 +660,7 @@ func TestRegistryRefusalCauseIsBounded(t *testing.T) {
 		}
 		registry.SetReady(true)
 		registry.Readiness(context.Background())
+		registry.flushRefusalLogs()
 		if want := fmt.Sprintf(`"cause":%q`, test.cause); !strings.Contains(logs.String(), want) {
 			t.Errorf("%s: want %s in %s", test.name, want, logs.String())
 		}
@@ -674,6 +679,7 @@ func TestRegistryRefusalCauseIsBounded(t *testing.T) {
 	}
 	registry.SetReady(true)
 	registry.Readiness(context.Background())
+	registry.flushRefusalLogs()
 	if !strings.Contains(logs.String(), `"cause":"wait_expired"`) {
 		t.Errorf("a check that never answered must log wait_expired: %s", logs.String())
 	}
@@ -690,4 +696,106 @@ func TestRegistryWithoutARefusalLoggerStaysSilent(t *testing.T) {
 	if status := registry.Readiness(context.Background()); status.Ready {
 		t.Fatal("dep must refuse")
 	}
+}
+
+// r2 P1: the refusal log must never hold up (or break) /readyz. A sink that
+// blocks or panics is written by a bounded background goroutine.
+type blockingSink struct {
+	release chan struct{}
+	mu      sync.Mutex
+	buf     bytes.Buffer
+}
+
+func (b *blockingSink) Write(p []byte) (int, error) {
+	<-b.release
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *blockingSink) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestRegistryReadinessDoesNotWaitForABlockedRefusalLogSink(t *testing.T) {
+	t.Parallel()
+	sink := &blockingSink{release: make(chan struct{})}
+	registry := NewRegistry(time.Second)
+	registry.SetRefusalLogger(slog.New(slog.NewJSONHandler(sink, nil)))
+	if err := registry.RegisterRequired("dep", func(context.Context) error { return errors.New("x") }); err != nil {
+		t.Fatal(err)
+	}
+	registry.SetReady(true)
+	returned := make(chan Readiness, 1)
+	go func() { returned <- registry.Readiness(context.Background()) }()
+	select {
+	case status := <-returned:
+		if status.Ready {
+			t.Fatal("dep must refuse")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Readiness waited on a blocked log sink")
+	}
+	close(sink.release)
+	registry.flushRefusalLogs()
+	if !strings.Contains(sink.String(), `"msg":"readiness check refused"`) {
+		t.Fatalf("the refusal line must still be written once the sink unblocks: %s", sink.String())
+	}
+}
+
+type panickingHandler struct{ slog.Handler }
+
+func (panickingHandler) Enabled(context.Context, slog.Level) bool  { return true }
+func (panickingHandler) Handle(context.Context, slog.Record) error { panic("log sink panic") }
+func (h panickingHandler) WithAttrs([]slog.Attr) slog.Handler      { return h }
+func (h panickingHandler) WithGroup(string) slog.Handler           { return h }
+
+func TestRegistryReadinessSurvivesAPanickingRefusalLogSink(t *testing.T) {
+	t.Parallel()
+	registry := NewRegistry(time.Second)
+	registry.SetRefusalLogger(slog.New(panickingHandler{}))
+	if err := registry.RegisterRequired("dep", func(context.Context) error { return errors.New("x") }); err != nil {
+		t.Fatal(err)
+	}
+	registry.SetReady(true)
+	if status := registry.Readiness(context.Background()); status.Ready || len(status.Failed) != 1 {
+		t.Fatalf("readiness outcome changed under a panicking sink: %+v", status)
+	}
+	registry.flushRefusalLogs() // must return: the panic is recovered, the slot is released.
+	if got := registry.refusalInFlight.Load(); got != 0 {
+		t.Fatalf("the in-flight slot leaked after a panic: %d", got)
+	}
+}
+
+func TestRegistryDropsRefusalLogsInsteadOfStackingGoroutinesBehindAStuckSink(t *testing.T) {
+	t.Parallel()
+	sink := &blockingSink{release: make(chan struct{})}
+	registry := NewRegistry(time.Second)
+	registry.SetRefusalLogger(slog.New(slog.NewJSONHandler(sink, nil)))
+	for i := range refusalMaxInFlight + 3 {
+		name := fmt.Sprintf("dep_%d", i)
+		if err := registry.RegisterRequired(name, func(context.Context) error { return errors.New("x") }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry.SetReady(true)
+	// Each Readiness call refuses every dep once; repeated calls with fresh
+	// per-check state would log again only past the interval, so drive distinct
+	// batches by clearing the limiter between polls.
+	for range refusalMaxInFlight + 3 {
+		registry.Readiness(context.Background())
+		registry.refusalMu.Lock()
+		registry.refusing = nil
+		registry.refusalMu.Unlock()
+	}
+	if got := registry.refusalInFlight.Load(); got > refusalMaxInFlight {
+		t.Fatalf("%d refusal writers in flight, cap %d", got, refusalMaxInFlight)
+	}
+	if registry.refusalDropped.Load() == 0 {
+		t.Fatal("writes beyond the cap must be dropped and counted")
+	}
+	close(sink.release)
+	registry.flushRefusalLogs()
 }

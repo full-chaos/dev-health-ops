@@ -1053,6 +1053,11 @@ func TestShellLogsWhichRequiredCheckRefusedReadinessWithoutTheErrorText(t *testi
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	// The refusal line is written off the readiness path: wait for it.
+	for logDeadline := time.Now().Add(3 * time.Second); !strings.Contains(stdout.String(), `"msg":"readiness check refused"`) &&
+		time.Now().Before(logDeadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
 	logs := stdout.String()
 	for _, want := range []string{`"msg":"readiness check refused"`, `"check":"refusing_dependency"`, `"cause":"error"`} {
 		if !strings.Contains(logs, want) {

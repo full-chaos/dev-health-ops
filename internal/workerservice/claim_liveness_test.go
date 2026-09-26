@@ -1102,3 +1102,189 @@ func TestClaimLivenessRefusalAfterARecoveryLogsItsClauseAgain(t *testing.T) {
 		t.Fatalf("a refusal after a recovery logged %d lines in total, want 2 (each run of refusals logs its clause and facts): %s", got, logs.String())
 	}
 }
+
+// CHAOS-6883 r2 P1: a queue that recovers while an EARLIER queue refuses must still
+// end its refusal run, or its next refusal inside the interval loses its clause.
+// claimLivenessReady used to return at the first refusing queue, so the later
+// queue's healthy verdict was never reached.
+func TestClaimLivenessRecoveryOfALaterQueueIsSeenWhileAnEarlierQueueRefuses(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	telemetry := &fakeQueueTelemetry{}
+	stalled := func(queue string) riverstore.QueueJobTelemetry {
+		return riverstore.QueueJobTelemetry{Queue: queue, Kind: "k." + queue, Available: 3}
+	}
+	drained := func(queue string) riverstore.QueueJobTelemetry {
+		return riverstore.QueueJobTelemetry{Queue: queue, Kind: "k." + queue, Available: 0}
+	}
+	caps := []riverstore.QueueCapacityTelemetry{{Queue: "a", Capacity: 2}, {Queue: "b", Capacity: 2}}
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true, queueTelemetry: telemetry,
+		logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	claim := newClaimLiveness(time.Now().Add(-time.Hour), []string{"a", "b"})
+	claim.markRuntimeLive()
+	ready := dependencies.claimLivenessReady(claim)
+	bLines := func() int {
+		n := 0
+		for _, line := range strings.Split(logs.String(), "\n") {
+			if strings.Contains(line, `"msg":"execution liveness refused"`) && strings.Contains(line, `"queue":"b"`) {
+				n++
+			}
+		}
+		return n
+	}
+
+	telemetry.setSnapshot(riverstore.QueueTelemetrySnapshot{Jobs: []riverstore.QueueJobTelemetry{drained("a"), stalled("b")}, QueueCapacities: caps})
+	firstErr := ready(context.Background())
+	telemetry.setSnapshot(riverstore.QueueTelemetrySnapshot{Jobs: []riverstore.QueueJobTelemetry{stalled("a"), drained("b")}, QueueCapacities: caps})
+	secondErr := ready(context.Background())
+	telemetry.setSnapshot(riverstore.QueueTelemetrySnapshot{Jobs: []riverstore.QueueJobTelemetry{drained("a"), stalled("b")}, QueueCapacities: caps})
+	thirdErr := ready(context.Background())
+	if firstErr == nil || secondErr == nil || thirdErr == nil {
+		t.Fatalf("every poll has a refusing queue: %v %v %v", firstErr, secondErr, thirdErr)
+	}
+	if got := bLines(); got != 2 {
+		t.Fatalf("queue b refused, recovered (while a refused) and refused again: %d clause lines, want 2: %s", got, logs.String())
+	}
+	// The outcome is unchanged: the FIRST refusing queue's error is returned.
+	if !strings.Contains(secondErr.Error(), `"a"`) || !strings.Contains(firstErr.Error(), `"b"`) {
+		t.Fatalf("the returned error must name the first refusing queue: %v / %v", firstErr, secondErr)
+	}
+	// And every refusing queue in one poll is logged, not only the first.
+	logs.Reset()
+	claim2 := newClaimLiveness(time.Now().Add(-time.Hour), []string{"a", "b"})
+	claim2.markRuntimeLive()
+	telemetry.setSnapshot(riverstore.QueueTelemetrySnapshot{Jobs: []riverstore.QueueJobTelemetry{stalled("a"), stalled("b")}, QueueCapacities: caps})
+	if err := dependencies.claimLivenessReady(claim2)(context.Background()); err == nil || !strings.Contains(err.Error(), `"a"`) {
+		t.Fatalf("both queues refuse: the first (a) is returned, got %v", err)
+	}
+	if strings.Count(logs.String(), `"msg":"execution liveness refused"`) != 2 {
+		t.Fatalf("both refusing queues must be logged: %s", logs.String())
+	}
+}
+
+// Every refusing arm behaves the same across queues: all refusing queues are
+// logged in the poll, the FIRST one is returned (CHAOS-6883 r2).
+func TestClaimLivenessLogsEveryRefusingQueueAndReturnsTheFirstForEachArm(t *testing.T) {
+	t.Parallel()
+	backlog := riverstore.QueueJobTelemetry{Queue: "b", Kind: "k.b", Available: 3}
+	for _, test := range []struct {
+		name    string
+		clause  string
+		wantErr error
+		first   riverstore.QueueTelemetrySnapshot
+		second  riverstore.QueueTelemetrySnapshot
+		prepare func(*claimLiveness)
+	}{
+		{
+			name: "gate failures ahead of a backlog", clause: "gate_failures_without_handler", wantErr: errClaimLivenessGateFailing,
+			first: riverstore.QueueTelemetrySnapshot{
+				Jobs:            []riverstore.QueueJobTelemetry{{Queue: "a", Kind: "k.a"}, backlog},
+				QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "a", Capacity: 2}, {Queue: "b", Capacity: 2}},
+			},
+			prepare: func(c *claimLiveness) {
+				now := time.Now()
+				c.recordGateFailure("a", true, now.Add(-90*time.Second))
+				c.recordGateFailure("a", true, now.Add(-time.Second))
+			},
+		},
+		{
+			name: "stuck slot ahead of a backlog", clause: "slot_stuck_before_handler", wantErr: errClaimLivenessSlotStuckBeforeHandler,
+			first: riverstore.QueueTelemetrySnapshot{
+				Jobs:            []riverstore.QueueJobTelemetry{{Queue: "a", Kind: "k.a"}, {Queue: "b", Kind: "k.b"}},
+				QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "a", Capacity: 1, Running: 1}, {Queue: "b", Capacity: 2}},
+			},
+			second: riverstore.QueueTelemetrySnapshot{
+				Jobs:            []riverstore.QueueJobTelemetry{{Queue: "a", Kind: "k.a"}, backlog},
+				QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "a", Capacity: 1, Running: 1}, {Queue: "b", Capacity: 2}},
+			},
+		},
+	} {
+		var logs bytes.Buffer
+		telemetry := &fakeQueueTelemetry{snapshot: test.first}
+		dependencies := &workerDependencies{
+			queueTelemetryRequired: true, queueTelemetry: telemetry,
+			logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+		}
+		claim := newClaimLiveness(time.Now().Add(-time.Hour), []string{"a", "b"})
+		claim.SetStaleWindow(40 * time.Millisecond)
+		if test.prepare != nil {
+			claim.SetStaleWindow(time.Minute)
+			test.prepare(claim)
+		}
+		claim.markRuntimeLive()
+		ready := dependencies.claimLivenessReady(claim)
+		err := ready(context.Background())
+		if test.second.Jobs != nil {
+			// The stuck arm needs an unbroken run across polls before it can refuse.
+			time.Sleep(80 * time.Millisecond)
+			telemetry.setSnapshot(test.second)
+			err = ready(context.Background())
+		}
+		if !errors.Is(err, test.wantErr) || !strings.Contains(err.Error(), `"a"`) {
+			t.Errorf("%s: the FIRST refusing queue (a) must be returned, got %v", test.name, err)
+		}
+		out := logs.String()
+		for _, want := range []string{`"queue":"a","clause":"` + test.clause + `"`, `"queue":"b","clause":"backlog_without_handler"`} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s: the poll must log %s: %s", test.name, want, out)
+			}
+		}
+	}
+}
+
+// The first refusing queue wins whichever arm a LATER queue refuses through.
+func TestClaimLivenessFirstRefusalWinsOverALaterQueuesGateOrStuckRefusal(t *testing.T) {
+	t.Parallel()
+	first := riverstore.QueueJobTelemetry{Queue: "a", Kind: "k.a", Available: 3}
+	for _, test := range []struct {
+		name     string
+		snapshot riverstore.QueueTelemetrySnapshot
+		prepare  func(*claimLiveness)
+		polls    int
+	}{
+		{
+			name: "later queue refuses on gate failures",
+			snapshot: riverstore.QueueTelemetrySnapshot{
+				Jobs:            []riverstore.QueueJobTelemetry{first, {Queue: "b", Kind: "k.b"}},
+				QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "a", Capacity: 2}, {Queue: "b", Capacity: 2}},
+			},
+			prepare: func(c *claimLiveness) {
+				now := time.Now()
+				c.recordGateFailure("b", true, now.Add(-90*time.Second))
+				c.recordGateFailure("b", true, now.Add(-time.Second))
+			},
+			polls: 1,
+		},
+		{
+			name: "later queue refuses on a stuck slot",
+			snapshot: riverstore.QueueTelemetrySnapshot{
+				Jobs:            []riverstore.QueueJobTelemetry{first, {Queue: "b", Kind: "k.b"}},
+				QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "a", Capacity: 2}, {Queue: "b", Capacity: 1, Running: 1}},
+			},
+			polls: 2,
+		},
+	} {
+		telemetry := &fakeQueueTelemetry{snapshot: test.snapshot}
+		dependencies := &workerDependencies{queueTelemetryRequired: true, queueTelemetry: telemetry}
+		claim := newClaimLiveness(time.Now().Add(-time.Hour), []string{"a", "b"})
+		claim.SetStaleWindow(40 * time.Millisecond)
+		if test.prepare != nil {
+			claim.SetStaleWindow(time.Minute)
+			test.prepare(claim)
+		}
+		claim.markRuntimeLive()
+		ready := dependencies.claimLivenessReady(claim)
+		var err error
+		for poll := 0; poll < test.polls; poll++ {
+			if poll > 0 {
+				time.Sleep(80 * time.Millisecond)
+			}
+			err = ready(context.Background())
+		}
+		if !errors.Is(err, errClaimLivenessStalledWithBacklog) || !strings.Contains(err.Error(), `"a"`) {
+			t.Errorf("%s: the first refusing queue (a, backlog) must be returned, got %v", test.name, err)
+		}
+	}
+}

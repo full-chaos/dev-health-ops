@@ -47,7 +47,15 @@ type Registry struct {
 	refusalMu  sync.Mutex
 	refusalLog *slog.Logger
 	refusing   map[string]*refusalState
+	// The log writes happen off the readiness path (see reportRefusals): at most
+	// refusalMaxInFlight run at once, extras are dropped and counted.
+	refusalInFlight atomic.Int32
+	refusalDropped  atomic.Int64
+	refusalWG       sync.WaitGroup
 }
+
+// refusalMaxInFlight bounds the goroutines writing refusal log lines.
+const refusalMaxInFlight = 4
 
 // refusalState is one check's run of consecutive refusals.
 type refusalState struct {
@@ -318,14 +326,34 @@ func (r *Registry) reportRefusals(ctx context.Context, statuses []CheckStatus, c
 		}
 	}
 	r.refusalMu.Unlock()
-	for _, l := range lines {
-		if l.warn {
-			logger.WarnContext(ctx, l.message, l.attrs...)
-		} else {
-			logger.InfoContext(ctx, l.message, l.attrs...)
-		}
+	if len(lines) == 0 {
+		return
 	}
+	// A log sink can block (a full stdout pipe) or panic; readiness must do
+	// neither. The lines are written by a bounded background goroutine that
+	// recovers, and dropped (counted) when too many writes are already stuck.
+	if r.refusalInFlight.Add(1) > refusalMaxInFlight {
+		r.refusalInFlight.Add(-1)
+		r.refusalDropped.Add(int64(len(lines)))
+		return
+	}
+	r.refusalWG.Add(1)
+	go func() {
+		defer r.refusalWG.Done()
+		defer r.refusalInFlight.Add(-1)
+		defer func() { _ = recover() }()
+		for _, l := range lines {
+			if l.warn {
+				logger.WarnContext(context.WithoutCancel(ctx), l.message, l.attrs...)
+			} else {
+				logger.InfoContext(context.WithoutCancel(ctx), l.message, l.attrs...)
+			}
+		}
+	}()
 }
+
+// flushRefusalLogs waits for in-flight refusal log writes (tests).
+func (r *Registry) flushRefusalLogs() { r.refusalWG.Wait() }
 
 // RegisterRequired adds a fail-closed readiness dependency. Names are bounded
 // metric-safe identifiers, and duplicate registration is rejected.

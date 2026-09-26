@@ -243,7 +243,7 @@ before invoking the compatibility path.
 ## Local development
 
 `ops/compose.yml` ships a `pgbouncer` service (transaction mode, listening on
-`6432`) in front of `postgres`. The `api`, `billing-edge`, and `worker` services
+`6432`) in front of `postgres`. The `api` and `worker` services
 route `DATABASE_URI` / `POSTGRES_URI` through `pgbouncer:6432` and set
 `PGBOUNCER_TRANSACTION_MODE=true`.
 

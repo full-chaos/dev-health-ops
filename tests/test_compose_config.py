@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
-import socket
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -278,7 +277,7 @@ def test_production_compose_has_one_shot_migrate_service() -> None:
 
 def test_production_compose_app_services_gate_on_migrate() -> None:
     services = _load_yaml(_PROD_COMPOSE)["services"]
-    for name in ("api", "metrics-api", "billing-edge"):
+    for name in ("api", "metrics-api"):
         deps = services[name].get("depends_on") or {}
         assert (
             deps.get("migrate", {}).get("condition") == "service_completed_successfully"
@@ -745,7 +744,6 @@ def test_legacy_compose_disables_ambient_migrations() -> None:
     for name in (
         "api",
         "metrics-api",
-        "billing-edge",
     ):
         env = services[name].get("environment") or {}
         assert env.get("AUTO_RUN_MIGRATIONS") == "false", (
@@ -759,7 +757,6 @@ def test_legacy_compose_app_services_gate_on_migrate() -> None:
     for name in (
         "api",
         "metrics-api",
-        "billing-edge",
     ):
         deps = services[name].get("depends_on") or {}
         assert (
@@ -1570,86 +1567,21 @@ def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
         assert environment["COORDINATOR_DATABASE_MODE"] == "session"
 
 
-def _a_closed_local_port() -> int:
-    """A loopback port with nothing listening on it.
-
-    Bound and immediately released rather than hardcoded: on a shared host
-    any fixed port may genuinely be in use, which would turn a real
-    liveness failure into a passing test.
-    """
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
-def test_billing_edge_healthcheck_is_liveness_not_readiness() -> None:
-    """On
-    the real deployed stack the three Stripe/license secrets ARE
-    configured, so /health's ok/down decision (billing_edge.py's
-    `required_ok`) never reads `stripe_client` -- an operator whose
-    outbound egress to Stripe is blocked still gets /health 200. The only
-    way to see /health 503 in practice is a genuinely unconfigured
-    deployment (this repo's own bare bring-up, by design -- see
-    TEST-EVIDENCE). A healthcheck built on that route must therefore
-    assert LIVENESS (the process answers on :8000 at all), never
-    readiness (every downstream dependency succeeded) -- reusing api/
-    metrics-api's exit-on-non-2xx `wget --spider` form here would make
-    the container flip unhealthy the moment ANY one of the three optional
-    Stripe/license secrets goes missing, none of which billing-edge's own
-    depends_on chain requires for the rest of the default bring-up to
-    succeed.
-
-    The 503 on a bare bring-up is the DESIGNED behaviour, not a masked
-    failure: the three Stripe/license secrets are deliberately absent from
-    the staging compose file, they live in the operator's own `ops/.env`,
-    and webhook delivery is started separately by
-    `scripts/start-stripe.sh`. /health discloses exactly which of them is
-    unset; the healthcheck deliberately does not turn that disclosure into
-    an unhealthy container.
-
-    Mutation coverage (manually verified): reverting to `["CMD", "wget",
-    "--spider", "-q", "http://localhost:8000/health"]` survives every
-    OTHER test in this file (nothing else asserts this array), which is
-    exactly how the readiness-shaped probe shipped unnoticed once already
-    -- pinned here directly.
-    """
-    services = _load_yaml(_LEGACY_COMPOSE)["services"]
-    healthcheck = services["billing-edge"]["healthcheck"]
-    test = healthcheck["test"]
-    assert test[:1] == ["CMD-SHELL"], (
-        "billing-edge's healthcheck must be a shell form so it can ignore "
-        "the HTTP status code and only fail on a genuine connect failure "
-        f"(exit 4) -- got {test!r}"
-    )
-    command = test[1]
-    assert "wget" in command and "http://localhost:8000/health" in command, (
-        f"billing-edge's healthcheck must still target its own /health route: {command!r}"
-    )
-    assert "--spider" not in command, (
-        "wget --spider fails closed on any non-2xx status (exit 8) -- that "
-        "makes this a readiness check again, the exact class this test guards"
-    )
-    # The string assertions above cannot tell a working probe from one
-    # that always succeeds: appending "|| true" satisfies every one of
-    # them. EXECUTE the command against a port nothing is listening on
-    # and require a non-zero exit -- that is the liveness guarantee, and
-    # it is the only assertion here a mutant cannot talk its way past.
-    closed_port = _a_closed_local_port()
-    executed = subprocess.run(
-        ["sh", "-c", command.replace(":8000", f":{closed_port}")],
-        capture_output=True,
-        check=False,
-    )
-    assert executed.returncode != 0, (
-        "billing-edge's healthcheck reports success against a closed port, "
-        "so it guarantees nothing about the process being alive: "
-        f"{command!r} exited {executed.returncode}"
-    )
-
-    assert re.search(r"-ne\s+4", command) or re.search(r"!=\s*4", command), (
-        f"expected the command to explicitly tolerate every wget exit code "
-        f"except 4 (connection failure): {command!r}"
-    )
+def test_no_compose_file_defines_a_python_billing_edge_service() -> None:
+    """CHAOS-6939: the Python billing edge (dev_health_ops.api.billing_edge) is
+    deleted; the Go api's billing-edge listener serves the Stripe webhook host.
+    A compose service of that name, or one that runs the deleted module, would
+    crash-loop on an import error while looking like a configured service."""
+    for path in (_LEGACY_COMPOSE, _PROD_COMPOSE):
+        services = _load_yaml(path)["services"]
+        assert "billing-edge" not in services, f"{path} defines billing-edge"
+        running_it = [
+            name
+            for name, service in services.items()
+            if "billing_edge" in json.dumps(service.get("command") or "")
+            or "billing_edge" in json.dumps(service.get("entrypoint") or "")
+        ]
+        assert running_it == [], f"{path}: {running_it} run the deleted module"
 
 
 def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
@@ -1670,8 +1602,8 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
     No other `go-*` service in root compose.yml declares a healthcheck to
     match interval/timeout/retries against -- this asserts the reconciler's
     own values are present and sane, not copied from a sibling. (Other,
-    non-Go services in this file -- clickhouse, api, metrics-api,
-    billing-edge -- declare their own unrelated healthchecks; this test only
+    non-Go services in this file -- clickhouse, api, metrics-api --
+    declare their own unrelated healthchecks; this test only
     claims uniqueness within the go-* fleet.) Ported from the now-deleted
     deploy/go-workers/compose-go-workers.yml (CHAOS-3088) -- that file was
     the only place this healthcheck was defined before being folded into

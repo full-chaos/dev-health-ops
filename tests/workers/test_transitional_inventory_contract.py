@@ -1868,8 +1868,9 @@ def test_discovery_finds_a_cross_file_forwarding_endpoint(tmp_path):
     handler forwards to an imported symbol that's already a known
     dispatch-relevant endpoint elsewhere is discoverable, without needing a
     local dispatch call site in the same file (Codex round-4 HIGH-1 --
-    exactly billing_edge.py's shape: a separately deployed edge app calling
-    the imported billing/router.py stripe_webhook handler)."""
+    exactly the shape of the since-deleted billing_edge.py: a separately
+    deployed edge app calling the imported billing/router.py stripe_webhook
+    handler)."""
     root = tmp_path / "repo"
     _write(
         root / "src/dev_health_ops/api/billing/router.py",
@@ -1879,13 +1880,13 @@ def test_discovery_finds_a_cross_file_forwarding_endpoint(tmp_path):
         "    some_task.apply_async()\n",
     )
     _write(
-        root / "src/dev_health_ops/api/billing_edge.py",
+        root / "src/dev_health_ops/api/second_edge.py",
         "from fastapi import FastAPI\n"
         "\n"
         "from dev_health_ops.api.billing.router import stripe_webhook\n"
         "\n"
         "app = FastAPI(\n"
-        '    title="Billing Edge",\n'
+        '    title="Second Edge",\n'
         ")\n"
         "\n"
         "\n"
@@ -1899,7 +1900,7 @@ def test_discovery_finds_a_cross_file_forwarding_endpoint(tmp_path):
     )
     cross_file = checker.discover_cross_file_forwarding_endpoints(root, primary)
     assert [(s.file, s.line) for s in cross_file] == [
-        ("src/dev_health_ops/api/billing_edge.py", 10)
+        ("src/dev_health_ops/api/second_edge.py", 10)
     ]
 
 
@@ -1913,13 +1914,13 @@ def test_end_to_end_cross_file_forwarding_endpoint_can_be_inventoried(tmp_path):
         "    some_task.apply_async()\n",
     )
     _write(
-        root / "src/dev_health_ops/api/billing_edge.py",
+        root / "src/dev_health_ops/api/second_edge.py",
         "from fastapi import FastAPI\n"
         "\n"
         "from dev_health_ops.api.billing.router import stripe_webhook\n"
         "\n"
         "app = FastAPI(\n"
-        '    title="Billing Edge",\n'
+        '    title="Second Edge",\n'
         ")\n"
         "\n"
         "\n"

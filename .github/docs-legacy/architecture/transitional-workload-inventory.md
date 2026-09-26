@@ -424,7 +424,9 @@ round; anything found beyond these four is triaged as follow-up rather than
 another automation round):
 
 - **A deployed second FastAPI app forwarding cross-file was invisible
-  (HIGH):** `billing_edge.py` is a SEPARATELY DEPLOYED app (its own
+  (HIGH):** (historical: `billing_edge.py` and its chart template were deleted
+  in CHAOS-6939; the go-api billing-edge listener serves the host now)
+  `billing_edge.py` was a SEPARATELY DEPLOYED app (its own
   `app = FastAPI(...)` instance, deployed per
   `deploy/helm/dev-health/templates/billing-edge-deployment.yaml`) whose
   `/api/v1/billing/webhooks/stripe` route is a thin proxy calling the

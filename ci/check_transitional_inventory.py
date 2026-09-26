@@ -534,7 +534,7 @@ def _app_instance_names(lines: list[str]) -> tuple[set[str], set[str]]:
     """Local names bound to a `FastAPI()` or `APIRouter()` constructor call
     (returns (fastapi_names, router_names) separately -- a standalone
     FastAPI() app, not just an APIRouter included into one, is what marks a
-    module as its own deployable entrypoint, e.g. billing_edge.py). Only
+    module as its own deployable entrypoint, as the removed billing_edge.py was). Only
     the constructor's opening line needs matching even when its argument
     list spans multiple lines (`app = FastAPI(\\n    title=...,\\n)`) -- the
     arguments themselves are irrelevant here."""
@@ -552,7 +552,7 @@ def _router_aliases(lines: list[str]) -> set[str]:
     """Local names that refer to a module's FastAPI app or APIRouter
     instance. Seeded with the repo-wide convention `router`, plus any name
     actually bound to a `FastAPI()`/`APIRouter()` constructor call (e.g.
-    `app` in billing_edge.py/main.py), extended through simple bare
+    `app` in main.py), extended through simple bare
     aliasing (`r = router`) to a fixed point. Known limitation: an alias
     introduced any other way (a function return value, a container/dict
     lookup, an attribute on another object) is not tracked -- see
@@ -638,12 +638,12 @@ def discover_cross_file_forwarding_endpoints(
     root: Path, primary_endpoints: list[Surface]
 ) -> list[Surface]:
     """A route registered in a module that instantiates its OWN FastAPI()
-    app (e.g. billing_edge.py, a separately deployed edge service per
-    deploy/helm/dev-health/templates/billing-edge-deployment.yaml) whose
+    app (e.g. the removed billing_edge.py, a separately deployed edge
+    service) whose
     handler body calls a same-file-imported symbol that is ITSELF a
     function already known to be a dispatch-relevant endpoint elsewhere
     (see _endpoint_function_names) is a thin forwarding proxy (Codex
-    round-4 HIGH-1: billing_edge.py's `/api/v1/billing/webhooks/stripe`
+    round-4 HIGH-1: the removed billing_edge.py's `/api/v1/billing/webhooks/stripe`
     route just calls the imported `stripe_webhook` from billing/router.py).
 
     Scoped deliberately narrowly -- only files with their own FastAPI()

@@ -132,7 +132,7 @@ Fails (exit 1, with a human-readable report) when:
      service mapping for (a newly deployed app not yet added to
      ``_APP_ROOT_SERVICE``). ``service`` is per DEPLOYED APP, not per path
      -- the same path can be served by two apps with genuinely different
-     middleware stacks (see the billing-edge rows), so a row attributed to
+     middleware stacks (as the removed billing-edge app had), so a row attributed to
      the wrong app silently invalidates its own reasoning. This was
      previously never cross-checked at all: only the closed-vocabulary
      enum was validated (see 6 above), so relabelling a row to any OTHER
@@ -285,11 +285,11 @@ DEFAULT_DISCOVERER = "ci/discover_ops_routes.py"
 # routes to (its `app_root` field, a "module::varname" router-def key --
 # see discover_ops_routes.py:558 / _app_root_for), mapped to the `service`
 # enum value each one corresponds to (docs/reference/auth/endpoint-profiles.md
-# "Two deployed apps"; the schema's own `service` description). `service` is
-# per DEPLOYED APP, not per path -- reachable_validators is `[]` for
-# billing-edge rows precisely because that app shares no middleware with the
-# main app, so a row attributed to the wrong app silently invalidates its
-# own reasoning. Never previously checked at all: Codex relabelled
+# "Deployed apps"; the schema's own `service` description). `service` is
+# per DEPLOYED APP, not per path -- a separately deployed app can share no
+# middleware with the main app (the removed Python billing edge did not), so a
+# row attributed to the wrong app silently invalidates its own reasoning.
+# Never previously checked at all: Codex relabelled
 # `GET /api/v1/meta` from `dev-health-ops-api` to the ALSO-VALID enum value
 # `dev-health-web` (schema validation alone can't catch this -- dev-health-web
 # is a real vocabulary member, just not one this discoverer's app_root ever
@@ -298,13 +298,12 @@ DEFAULT_DISCOVERER = "ci/discover_ops_routes.py"
 # is a hard failure below (UNKNOWN APP ROOT), never a silent pass.
 _APP_ROOT_SERVICE: dict[str, str] = {
     "dev_health_ops.api.main::app": "dev-health-ops-api",
-    "dev_health_ops.api.billing_edge::app": "dev-health-ops-billing-edge",
 }
 
 # The GraphQL schema is mounted from exactly one deployed app -- main.py's
-# `app.include_router(graphql_app, prefix="/graphql")`; billing_edge.py
-# never imports or mounts it (verified: `rg "include_router\(graphql_app"
-# src/dev_health_ops/api` -- one hit, main.py). discover_ops_routes.py has
+# `app.include_router(graphql_app, prefix="/graphql")` (verified:
+# `rg "include_router\(graphql_app" src/dev_health_ops/api` -- one hit,
+# main.py). discover_ops_routes.py has
 # no app_root concept for GraphQL resolvers at all (they are bare decorated
 # functions, never reached via an include_router edge, so there is no mount
 # graph to walk the way REST routes' app_root is derived) -- a constant
@@ -1015,7 +1014,7 @@ def check(
             # a DIFFERENT app? That is the more specific and more dangerous
             # defect -- `service` is per DEPLOYED APP, and the same path can be
             # served by two apps with genuinely different middleware stacks
-            # (the billing-edge pair), so a row on the wrong app silently
+            # (the removed billing-edge pair was one), so a row on the wrong app silently
             # invalidates its own reasoning while still describing a real
             # route. Codex found this by relabelling GET /api/v1/meta to the
             # also-valid enum value `dev-health-web`; schema validation cannot

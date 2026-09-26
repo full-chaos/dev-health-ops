@@ -66,7 +66,7 @@ _GRAPHQL_KINDS = ("graphql_field", "graphql_mutation", "graphql_subscription")
 
 
 def test_inventory_row_count_matches_the_baseline():
-    """368 rows = 309 REST + 59 GraphQL. A different number here is a finding
+    """346 rows = 290 REST + 56 GraphQL (the history below starts at 368). A different number here is a finding
     to reconcile, not an adjustment to make quietly.
 
     Was 361 (303 + 58) under source-text discovery. The move to enumerating
@@ -177,6 +177,12 @@ def test_inventory_row_count_matches_the_baseline():
     capacity/ledger helper that existed only to serve these two routes) is
     deleted whole, not migrated. The rows stand at 349 (293 REST + 56
     GraphQL), recounted from the file per the rule below.
+    = 346, -3 REST under CHAOS-6939: the three `dev-health-ops-billing-edge`
+    rows (the Stripe webhook, `GET,HEAD /health` and the catch-all) are
+    deleted with `src/dev_health_ops/api/billing_edge.py` itself; the go-api
+    billing-edge listener serves the billing host now (executed oracle:
+    TestVenueOracleBillingEdge, against its frozen Python golden). The rows
+    stand at 346 (290 REST + 56 GraphQL), recounted from the file.
 
     MERGE HAZARD, recorded because it has now nearly landed silently more
     than once. Each change edited these same asserts, and each was correct
@@ -197,9 +203,9 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 293, len(rest)
+    assert len(rest) == 290, len(rest)
     assert len(graphql) == 56, len(graphql)
-    assert len(rows) == 349, len(rows)
+    assert len(rows) == 346, len(rows)
 
 
 def test_no_graphql_subscription_is_profiled():
@@ -267,9 +273,13 @@ def test_classification_summary_matches_the_baseline():
     # remaining-metrics/execute and metric-executions/{id} rows were also
     # protected (worker bridge bearer, same as every other worker_metrics.py
     # route). Recounted from the file.
-    assert len(protected) == 322, len(protected)
-    # 22 + the four fastapi doc routes + /metrics.
-    assert len(public) == 27, len(public)
+    # - 1 protected and - 2 public under CHAOS-6939: the three deleted
+    # billing-edge app rows (its Stripe webhook was protected by the signature
+    # check, `GET,HEAD /health` and the 404 catch-all were public). Recounted
+    # from the file.
+    assert len(protected) == 321, len(protected)
+    # 20 + the four fastapi doc routes + /metrics.
+    assert len(public) == 25, len(public)
     assert len(protected) + len(public) == len(rows)
 
 
@@ -315,10 +325,7 @@ def test_discovery_defaults_are_the_real_deployed_objects():
     tests can point it at a purpose-built package. This pins the DEFAULTS, so
     that flexibility can never quietly become a narrower production config."""
     discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_defaults")
-    assert discoverer.DEPLOYED_APPS == (
-        ("dev_health_ops.api.main", "app"),
-        ("dev_health_ops.api.billing_edge", "app"),
-    )
+    assert discoverer.DEPLOYED_APPS == (("dev_health_ops.api.main", "app"),)
     assert discoverer.GRAPHQL_SCHEMA == (
         "dev_health_ops.api.graphql.schema",
         "schema",
@@ -493,7 +500,6 @@ def _seed_shared_fixtures(root: Path) -> None:
 _ROUTER_FILE = "src/dev_health_ops/api/routers/example.py"
 _MAIN_FILE = "src/dev_health_ops/api/main.py"
 _SCHEMA_FILE = "src/dev_health_ops/api/graphql/schema.py"
-_BILLING_EDGE_FILE = "src/dev_health_ops/api/billing_edge.py"
 
 # CHAOS-4761: discovery IMPORTS the app and the schema, so a fixture tree is
 # no longer a few files that happen to contain the right decorators -- it is a
@@ -591,15 +597,6 @@ def _seed_source_tree(
     )
     _write(root / _ROUTER_FILE, router_body)
     _write(root / _SCHEMA_FILE, schema_body)
-    # billing_edge is in DEPLOYED_APPS, so every fixture tree needs one or
-    # discovery cannot import it. Empty by default; the billing-edge tests
-    # below overwrite it with a real second app.
-    _write(
-        root / _BILLING_EDGE_FILE,
-        "from fastapi import FastAPI\n"
-        "\n"
-        "app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)\n",
-    )
 
 
 def _minimal_valid_row(**overrides) -> dict:
@@ -1499,23 +1496,27 @@ def test_ops_owned_contract_files_are_jq_dash_S_stable():
 # finding 1). `service` is a real schema enum with 5 legal values -- the
 # schema validator alone accepts ANY of them, so relabelling a row to a
 # DIFFERENT but still-legal value (e.g. dev-health-ops-api -> dev-health-web)
-# previously passed with zero errors. The billing-edge fixture below is the
+# previously passed with zero errors. The second-app fixture below is the
 # interesting/adversarial direction: two rows genuinely share a path but are
-# served by two different apps, and that must keep passing.
+# served by two different apps, and that must keep passing. Production serves
+# ONE ops app since the Python billing edge was deleted (CHAOS-6939), so the
+# second app is a synthetic fixture module added to the discoverer's app table
+# for these tests only; the schema enum keeps the retired app's value, the one
+# free ops-app value the attribution check can be exercised with.
 # ---------------------------------------------------------------------------
 
-_BILLING_EDGE_FILE = "src/dev_health_ops/api/billing_edge.py"
+_SECOND_APP_FILE = "src/dev_health_ops/api/second_edge.py"
+_SECOND_APP_ROOT = "dev_health_ops.api.second_edge::app"
+_SECOND_APP_SERVICE = "dev-health-ops-billing-edge"
 
 
-def _seed_billing_edge_app(root: Path) -> None:
-    """A second, separately-deployed FastAPI() root decorated directly on
-    the `app` instance (never an APIRouter) -- mirrors the real
-    src/dev_health_ops/api/billing_edge.py shape exactly, including a route
-    at the SAME local path `/shared` that main.py's example router also
-    serves, the real billing-edge scenario (POST /api/v1/billing/webhooks/
-    stripe, served by both apps as two independent rows)."""
+def _seed_second_app(root: Path, monkeypatch) -> None:
+    """A second, separately-deployed FastAPI() root decorated directly on the
+    `app` instance (never an APIRouter), with a route at the SAME local path
+    `/shared` that main.py's example router also serves, and registered with
+    the discoverer and the checker's app-to-service table for this test only."""
     _write(
-        root / _BILLING_EDGE_FILE,
+        root / _SECOND_APP_FILE,
         "from fastapi import FastAPI\n"
         "\n"
         "app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)\n"
@@ -1525,6 +1526,23 @@ def _seed_billing_edge_app(root: Path) -> None:
         "async def shared_webhook():\n"
         "    return {}\n",
     )
+    monkeypatch.setitem(
+        checker._APP_ROOT_SERVICE, _SECOND_APP_ROOT, _SECOND_APP_SERVICE
+    )
+    load = checker._load_module
+
+    def load_with_second_app(path, name):
+        module = load(path, name)
+        if hasattr(module, "discover"):
+            discover = module.discover
+            module.discover = lambda root, **kwargs: discover(
+                root,
+                apps=(*module.DEPLOYED_APPS, ("dev_health_ops.api.second_edge", "app")),
+                **kwargs,
+            )
+        return module
+
+    monkeypatch.setattr(checker, "_load_module", load_with_second_app)
 
 
 def test_gate_catches_a_service_relabelled_to_a_different_deployed_app(tmp_path):
@@ -1545,22 +1563,24 @@ def test_gate_catches_a_service_relabelled_to_a_different_deployed_app(tmp_path)
     ), errors
 
 
-def test_gate_passes_two_rows_sharing_a_path_served_by_different_apps(tmp_path):
-    """The billing-edge false-positive guard: /shared is a real route on
-    BOTH the main app and the billing-edge app, each correctly attributing
+def test_gate_passes_two_rows_sharing_a_path_served_by_different_apps(
+    tmp_path, monkeypatch
+):
+    """The false-positive guard: /shared is a real route on
+    BOTH the main app and the second app, each correctly attributing
     its own row to its own service. Two rows, two different (file, line)
     anchors, two different services -- must pass cleanly."""
     root = _minimal_valid_root(tmp_path)
-    _seed_billing_edge_app(root)
+    _seed_second_app(root, monkeypatch)
     inventory_path, schema_path, cc_path = _paths(root)
     rows = [
         _minimal_valid_row(),
         _minimal_valid_row(
-            id="POST /shared [dev-health-ops-billing-edge]",
+            id=f"POST /shared [{_SECOND_APP_SERVICE}]",
             method="POST",
             route="/shared",
-            service="dev-health-ops-billing-edge",
-            source={"file": _BILLING_EDGE_FILE, "line": 6},
+            service=_SECOND_APP_SERVICE,
+            source={"file": _SECOND_APP_FILE, "line": 6},
         ),
     ]
     _write_inventory(root, rows)
@@ -1568,31 +1588,31 @@ def test_gate_passes_two_rows_sharing_a_path_served_by_different_apps(tmp_path):
     assert errors == [], errors
 
 
-def test_gate_catches_a_billing_edge_row_mislabelled_as_the_main_app(tmp_path):
-    """The inverse of the pass-case above: the billing-edge row claims
-    dev-health-ops-api instead of dev-health-ops-billing-edge. This matters
-    specifically because reachable_validators is [] for billing-edge rows
-    (that app shares no middleware with the main app) -- a row attributed
-    to the wrong app silently invalidates that whole line of reasoning."""
+def test_gate_catches_a_second_app_row_mislabelled_as_the_main_app(
+    tmp_path, monkeypatch
+):
+    """The inverse of the pass-case above: the second app's row claims
+    dev-health-ops-api instead of the second app's service. This matters
+    because a separately deployed app can share no middleware with the main
+    app -- a row attributed to the wrong app silently invalidates that whole
+    line of reasoning."""
     root = _minimal_valid_root(tmp_path)
-    _seed_billing_edge_app(root)
+    _seed_second_app(root, monkeypatch)
     inventory_path, schema_path, cc_path = _paths(root)
     rows = [
         _minimal_valid_row(),
         _minimal_valid_row(
-            id="POST /shared [dev-health-ops-billing-edge]",
+            id=f"POST /shared [{_SECOND_APP_SERVICE}]",
             method="POST",
             route="/shared",
-            service="dev-health-ops-api",  # wrong -- this route is billing-edge
-            source={"file": _BILLING_EDGE_FILE, "line": 6},
+            service="dev-health-ops-api",  # wrong -- this route is the second app's
+            source={"file": _SECOND_APP_FILE, "line": 6},
         ),
     ]
     _write_inventory(root, rows)
     errors = checker.check(root, inventory_path, schema_path, cc_path)
     assert any(
-        "SERVICE MISMATCH" in e
-        and "dev-health-ops-billing-edge" in e
-        and "/shared" in e
+        "SERVICE MISMATCH" in e and _SECOND_APP_SERVICE in e and "/shared" in e
         for e in errors
     ), errors
 

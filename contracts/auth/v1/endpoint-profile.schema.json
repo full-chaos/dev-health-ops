@@ -202,7 +202,7 @@
           ]
         },
         "service": {
-          "description": "Which DEPLOYED APPLICATION serves this surface. Profiles are per-app, not per-path: the same logical route can appear under two apps with different middleware stacks (see /api/v1/billing/webhooks/stripe, served by both dev-health-ops-api with the full middleware stack incl. OrgIdMiddleware/ImpersonationMiddleware, and the separately-deployed dev-health-ops-billing-edge with ZERO shared middleware). This is a CLOSED vocabulary -- an unknown service must fail validation rather than be accepted, per guardrail G-26. Adding a newly deployed app means adding it here first.",
+          "description": "Which DEPLOYED APPLICATION serves this surface. Profiles are per-app, not per-path: the same logical route can appear under two apps with different middleware stacks (the retired dev-health-ops-billing-edge app served /api/v1/billing/webhooks/stripe with ZERO shared middleware beside dev-health-ops-api's full stack; it was deleted, its value stays in the vocabulary, and the go-api billing-edge listener now serves that host). This is a CLOSED vocabulary -- an unknown service must fail validation rather than be accepted, per guardrail G-26. Adding a newly deployed app means adding it here first.",
           "enum": [
             "dev-health-ops-api",
             "dev-health-ops-billing-edge",

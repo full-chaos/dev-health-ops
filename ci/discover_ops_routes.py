@@ -81,10 +81,7 @@ from typing import Any
 # ci/check_endpoint_profiles.py maps to a `service` enum value via
 # _APP_ROOT_SERVICE, so adding a newly deployed app means adding it in BOTH
 # places and a mapping miss is a hard failure there, never a silent pass.
-DEPLOYED_APPS: tuple[tuple[str, str], ...] = (
-    ("dev_health_ops.api.main", "app"),
-    ("dev_health_ops.api.billing_edge", "app"),
-)
+DEPLOYED_APPS: tuple[tuple[str, str], ...] = (("dev_health_ops.api.main", "app"),)
 
 # The served GraphQL schema object, as (module, attribute).
 GRAPHQL_SCHEMA = ("dev_health_ops.api.graphql.schema", "schema")

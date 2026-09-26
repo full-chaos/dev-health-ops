@@ -1932,11 +1932,10 @@ def test_helm_metrics_api_deployment_only_renders_when_enabled() -> None:
 @pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
 def test_helm_go_worker_groups_roll_on_shared_config_or_secret_change() -> None:
     """All nine go-worker groups envFrom the shared ConfigMap and
-    Secret (go-workers.yaml), same as api-deployment.yaml/
-    billing-edge-deployment.yaml -- but envFrom never triggers a rollout on
-    its own. Prod rev 28 changed one ConfigMap key and rolled api and
-    billing-edge (they carry checksum/config + checksum/secret pod-template
-    annotations) but none of the nine go-worker groups, which had no such
+    Secret (go-workers.yaml), same as api-deployment.yaml -- but envFrom never
+    triggers a rollout on its own. Prod rev 28 changed one ConfigMap key and
+    rolled api and the since-removed billing-edge (they carried checksum/config
+    + checksum/secret pod-template annotations) but none of the nine go-worker groups, which had no such
     annotation; the operator had to `kubectl rollout restart` them by hand.
     Render the chart with two different config values and two different
     secret values and assert every group's pod-template annotations change

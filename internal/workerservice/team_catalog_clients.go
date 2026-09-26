@@ -397,7 +397,7 @@ LIMIT 1`, orgID, integrationID).Scan(&syncOptionsJSON)
 }
 
 // resolveIntegrationConfigFallback reads an integration's own `config`
-// column (jsonb, NOT NULL DEFAULT '{}') -- used ONLY when no canonical
+// column (json, NOT NULL) -- used ONLY when no canonical
 // sync_configurations row exists, mirroring reference_discovery.py:329-333's
 // `dict(integration.config or {})` fallback. That Python comment is explicit
 // that this value is trustworthy ONLY for a provider-specific scope
@@ -407,7 +407,7 @@ LIMIT 1`, orgID, integrationID).Scan(&syncOptionsJSON)
 func resolveIntegrationConfigFallback(ctx context.Context, pool *pgxpool.Pool, integrationID string) (map[string]any, error) {
 	var configJSON []byte
 	if err := pool.QueryRow(ctx, `
-SELECT COALESCE(config, '{}'::jsonb)
+SELECT COALESCE(config, '{}'::json)
 FROM public.integrations
 WHERE id = $1::uuid`, integrationID).Scan(&configJSON); err != nil {
 		return nil, err

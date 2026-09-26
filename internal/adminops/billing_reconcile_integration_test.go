@@ -56,7 +56,7 @@ const reconcileFixturesSHA256 = "46605af8e388443b75c23f532e65e1459ce5938b445ba44
 // reconcileGoldenSHA256 pins testdata/reconcile_golden.json (R24): what the real
 // `dev-hops billing reconcile` printed, left and asked of Stripe for every step. The
 // producer is deleted with the Python CLI, so this is a rot guard: the file is only
-// rewritten by TestBillingReconcileMatchesThePythonProducer with
+// rewritten by TestBillingReconcileVenueOracleMatchesThePythonProducer with
 // DHO_RECONCILE_GOLDEN_UPDATE=1, then this digest is updated.
 const reconcileGoldenSHA256 = "5c5dba13ae8b39070740c249eecef0853f8c11f2cd384db53998fe1fd104b175"
 
@@ -524,11 +524,11 @@ func TestBillingReconcileMatchesTheFrozenPythonOutput(t *testing.T) {
 	}
 }
 
-// TestBillingReconcileMatchesThePythonProducer regenerates the fixtures with the real
+// TestBillingReconcileVenueOracleMatchesThePythonProducer regenerates the fixtures with the real
 // SDK (with DHO_RECONCILE_FIXTURE_UPDATE=1), then runs the script through the real
 // Python verb and through dho and compares them. With DHO_RECONCILE_GOLDEN_UPDATE=1
 // it rewrites the frozen golden.
-func TestBillingReconcileMatchesThePythonProducer(t *testing.T) {
+func TestBillingReconcileVenueOracleMatchesThePythonProducer(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
 	}

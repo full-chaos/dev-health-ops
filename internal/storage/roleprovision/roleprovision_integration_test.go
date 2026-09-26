@@ -541,10 +541,15 @@ func TestVerifyRefusesAKedaRoleThatHoldsAnythingBeyondItsReadOnlyGrants(t *testi
 	options := testOptions(true)
 	s.runGo(t, options)
 	ctx := context.Background()
+	database, err := containers.DatabaseName(s.instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, test := range map[string]struct{ break_, restore string }{
 		"UPDATE on river_job":        {"GRANT UPDATE ON river.river_job TO parity_keda", "REVOKE UPDATE ON river.river_job FROM parity_keda"},
 		"SELECT on another table":    {"GRANT SELECT ON river.river_leader TO parity_keda", "REVOKE SELECT ON river.river_leader FROM parity_keda"},
 		"CREATE on the river schema": {"GRANT CREATE ON SCHEMA river TO parity_keda", "REVOKE CREATE ON SCHEMA river FROM parity_keda"},
+		"CREATE on the database":     {"GRANT CREATE ON DATABASE " + database + " TO parity_keda", "REVOKE CREATE ON DATABASE " + database + " FROM parity_keda"},
 	} {
 		if _, err := s.admin.Exec(ctx, test.break_); err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -561,6 +566,73 @@ func TestVerifyRefusesAKedaRoleThatHoldsAnythingBeyondItsReadOnlyGrants(t *testi
 		}
 		if !matched {
 			t.Errorf("%s: a KEDA role holding more than read-only river_job must be a problem: %v", name, problems)
+		}
+		if _, err := s.admin.Exec(ctx, test.restore); err != nil {
+			t.Fatalf("%s restore: %v", name, err)
+		}
+	}
+	if problems, warnings, err := Verify(ctx, s.admin, options); err != nil || len(problems)+len(warnings) != 0 {
+		t.Fatalf("not clean after restore: %v %v %v", problems, warnings, err)
+	}
+}
+
+// Lead D2616 shape rule: for the runtime roles Verify reads the SAME enumeration and
+// closure self-check the readiness checks use. It reports what neither `migrate roles`
+// nor `migrate river` grants (database/schema privileges beyond CONNECT and USAGE,
+// classes river never touches, another database's ACL) and leaves river's own kinds
+// (relations, columns, functions, default privileges, schema USAGE) to that role's
+// readiness check, which the end-to-end test runs.
+func TestVerifyRuntimeRolesHoldOnlyWhatRolesAndRiverGrantOfAnyCatalogClass(t *testing.T) {
+	t.Parallel()
+	s := startSide(t)
+	options := testOptions(true)
+	s.runGo(t, options)
+	ctx := context.Background()
+	database, err := containers.DatabaseName(s.instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// river's own kind of grant is NOT a problem.
+	if _, err := s.admin.Exec(ctx, "GRANT SELECT, INSERT ON river.river_job TO parity_domain"); err != nil {
+		t.Fatal(err)
+	}
+	if problems, warnings, err := Verify(ctx, s.admin, options); err != nil || len(problems)+len(warnings) != 0 {
+		t.Fatalf("a relation grant (migrate river's) must not be a problem: %v %v %v", problems, warnings, err)
+	}
+	if _, err := s.admin.Exec(ctx, "REVOKE SELECT, INSERT ON river.river_job FROM parity_domain"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.admin.Exec(ctx, "CREATE DATABASE other_db"); err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		break_, restore, label string
+		wantProblem            bool
+	}{
+		"CREATE on the database":                                        {"GRANT CREATE ON DATABASE " + database + " TO parity_queue", "REVOKE CREATE ON DATABASE " + database + " FROM parity_queue", "queue", true},
+		"CREATE on the river schema":                                    {"GRANT CREATE ON SCHEMA river TO parity_coordinator", "REVOKE CREATE ON SCHEMA river FROM parity_coordinator", "coordinator", true},
+		"USAGE on the river schema (river's own kind)":                  {"GRANT USAGE ON SCHEMA river TO parity_domain", "REVOKE USAGE ON SCHEMA river FROM parity_domain", "domain", false},
+		"EXECUTE on a function (river's own kind, judged by readiness)": {"CREATE FUNCTION public.roleprovision_probe() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'; GRANT EXECUTE ON FUNCTION public.roleprovision_probe() TO parity_api", "DROP FUNCTION public.roleprovision_probe()", "api", false},
+		"CONNECT on another database":                                   {"GRANT CONNECT ON DATABASE other_db TO parity_query_api", "REVOKE CONNECT ON DATABASE other_db FROM parity_query_api", "query_api", true},
+		"a grant option on a relation":                                  {"GRANT SELECT ON river.river_job TO parity_domain WITH GRANT OPTION", "REVOKE SELECT ON river.river_job FROM parity_domain", "domain", false},
+	} {
+		if _, err := s.admin.Exec(ctx, test.break_); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		problems, _, err := Verify(ctx, s.admin, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reported := false
+		for _, item := range problems {
+			if item.Role == test.label && strings.Contains(item.Detail, "unexpected privilege") {
+				reported = true
+			}
+		}
+		// A grant option on a relation is a relation-class grant, which river owns:
+		// the exactness of relation grants is that role's readiness check, not this one.
+		if reported != test.wantProblem {
+			t.Errorf("%s: reported=%v, want %v for %s: %v", name, reported, test.wantProblem, test.label, problems)
 		}
 		if _, err := s.admin.Exec(ctx, test.restore); err != nil {
 			t.Fatalf("%s restore: %v", name, err)

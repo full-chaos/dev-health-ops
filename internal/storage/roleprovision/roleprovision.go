@@ -352,6 +352,19 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 			if !ownsNothing {
 				problems = append(problems, Problem{entry.label, "owns an object (readiness refuses it)"})
 			}
+			// Read the SAME enumeration and closure self-check the readiness checks
+			// use, so a privilege KIND nobody thought to list cannot hide; report what
+			// neither this command nor `dho migrate river` grants (runtimeGrantOutOfScope).
+			grants, err := roleacl.Enumerate(ctx, q, entry.role.Name)
+			if err != nil {
+				return nil, nil, fmt.Errorf("%w: cannot enumerate the %s role's grants", ErrProvisioning, entry.label)
+			}
+			for _, grant := range grants {
+				if grant.ViaPublic || grant.Class == "setting" || !runtimeGrantOutOfScope(grant, database) {
+					continue
+				}
+				problems = append(problems, Problem{entry.label, "holds an unexpected privilege: " + grant.String()})
+			}
 			if !usage {
 				problems = append(problems, Problem{entry.label, "lacks USAGE on schema public"})
 			}
@@ -398,6 +411,29 @@ func kedaGrantExpected(grant roleacl.Grant, database, schema string) bool {
 	case grant.Class == "schema" && grant.Object == schema && grant.Privilege == "USAGE":
 		return true
 	case grant.Class == "relation" && grant.Object == schema+".river_job" && grant.Privilege == "SELECT":
+		return true
+	}
+	return false
+}
+
+// runtimeGrantOutOfScope is true for a privilege a runtime role holds in its own name
+// that NEITHER command grants and that `dho migrate river` never does either: a
+// database privilege other than CONNECT on this database, any schema privilege but
+// USAGE, and every class river has no reason to touch (tablespaces, foreign data
+// wrappers and servers, parameters, large objects, languages), plus anything the
+// closure self-check could not explain. Relation, column, function, type, default
+// privilege and schema-USAGE grants are `dho migrate river`'s (the queue role holds
+// EXECUTE and default privileges in the River schema by design), and whether the
+// exact set is right is that role's own readiness check, which the end-to-end test
+// runs: judging them here would fail a healthy database.
+func runtimeGrantOutOfScope(grant roleacl.Grant, database string) bool {
+	switch grant.Class {
+	case "database":
+		return !(grant.Object == database && grant.Privilege == "CONNECT")
+	case "schema":
+		return grant.Privilege != "USAGE"
+	case "tablespace", "foreign data wrapper", "foreign server", "parameter", "large object", "language",
+		roleacl.UnexplainedClass:
 		return true
 	}
 	return false

@@ -1045,10 +1045,18 @@ It never grants a table privilege (those are `dho migrate river`'s, derived from
 the posture manifests), never runs `DROP OWNED BY`, and applies everything in ONE
 transaction, so a failure leaves nothing half-applied (the script ran each
 statement on its own). It refuses two roles with the same name (including the KEDA
-role named like another), a role without a password, a name over 63 bytes, and a
-migration login that is itself one of the roles. After applying it verifies the
+role named like another), a role without a password, a name over 63 bytes, a runtime
+role or River schema name that `dho migrate river` would refuse (it must match
+`[a-z_][a-z0-9_]*`; the script would have created such a login and river then failed
+with a misleading "must be distinct"; the KEDA login stays free-form), and a
+migration login that is itself one of the roles. Role names are used exactly as
+configured (never trimmed); a blank value means "not set". After applying it verifies the
 bootstrap postconditions on the live catalog and exits 1, naming role labels and
-never a password, if one is unmet; `dho migrate roles --check` verifies only. A
+never a password, if one is unmet (each role is an unprivileged login with CONNECT,
+no TEMPORARY, USAGE and no CREATE on `public`; each runtime role is a member of no
+role and owns nothing, which is what its readiness check requires; the KEDA login
+holds exactly CONNECT, USAGE on the River schema and SELECT on `river_job`, and an
+extra grant it already had is reported, never silently revoked, like the script); `dho migrate roles --check` verifies only. A
 CREATE on `public` that a role holds only through PUBLIC (the PostgreSQL default
 before v15) is logged as a warning: revoking it is a human decision.
 

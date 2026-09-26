@@ -80,10 +80,10 @@ func TestMigrateRolesRefusesWhatWouldBeAmbiguousBeforeTouchingTheDatabase(t *tes
 	}
 }
 
-// A role the command cannot make safe (a pre-existing login with CREATEDB is left
-// alone, like the script) is NAMED by the closing check and fails the command; and
-// --check changes nothing.
-func TestMigrateRolesFailsLoudlyOnAnOverPrivilegedPreExistingRoleAndCheckChangesNothing(t *testing.T) {
+// A pre-existing login that is not an eligible unprivileged login (CREATEDB here) is
+// REFUSED before anything changes (the script left it alone; deliberate deviation, r3
+// P1), naming the label; --check on roles that do not exist yet fails and changes nothing.
+func TestMigrateRolesRefusesAnOverPrivilegedPreExistingRoleBeforeChangingAnything(t *testing.T) {
 	ctx := context.Background()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -124,16 +124,17 @@ func TestMigrateRolesFailsLoudlyOnAnOverPrivilegedPreExistingRoleAndCheckChanges
 	stdout.Reset()
 	stderr.Reset()
 	code := rivermigrate.ExecuteRoles(ctx, "dho", nil, lookup, &stdout, &stderr)
-	if code != 1 || !strings.Contains(stderr.String(), "do not meet the bootstrap postconditions") ||
-		!strings.Contains(stderr.String()+stdout.String(), "domain") {
-		t.Fatalf("an over-privileged pre-existing role must fail the closing check: exit %d\n%s\n%s", code, stdout.String(), stderr.String())
+	if code != 1 || !strings.Contains(stderr.String(), "not an unprivileged login") || !strings.Contains(stderr.String()+stdout.String(), "domain") {
+		t.Fatalf("an over-privileged pre-existing role must be refused up front: exit %d\n%s\n%s", code, stdout.String(), stderr.String())
 	}
-	if strings.Contains(stdout.String()+stderr.String(), "new-secret") {
-		t.Fatal("a password leaked into the output")
+	output := stdout.String() + stderr.String()
+	for _, leaked := range []string{"new-secret", "pre_domain", "pre_queue", "pre_coordinator"} {
+		if strings.Contains(output, leaked) {
+			t.Fatalf("the output leaked %q", leaked)
+		}
 	}
-	// The other two roles WERE provisioned (Apply committed before the check).
-	if err := admin.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname IN ('pre_queue', 'pre_coordinator')`).Scan(&created); err != nil || created != 2 {
-		t.Fatalf("the apply step must have committed the other roles: %d %v", created, err)
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname IN ('pre_queue', 'pre_coordinator')`).Scan(&created); err != nil || created != 0 {
+		t.Fatalf("the refused run must have created nothing: %d %v", created, err)
 	}
 }
 

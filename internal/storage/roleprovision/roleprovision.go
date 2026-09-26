@@ -206,6 +206,24 @@ func Apply(ctx context.Context, pool interface {
 	}
 	db := ident(database)
 
+	// PREFLIGHT, before any statement changes anything: a configured role that already
+	// exists must be an eligible unprivileged login. Granting River access to (or
+	// bootstrapping) an existing NOLOGIN group, or a role with CREATEDB/SUPERUSER/...,
+	// would commit before the closing check could refuse it, and members of a group
+	// inherit whatever it is granted. The script never looked; this is a stated
+	// deviation. The refusal names the LABEL.
+	for _, entry := range options.configured() {
+		var ineligible bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1) AND NOT `+roleacl.RoleAttributesSQL,
+			entry.role.Name).Scan(&ineligible); err != nil {
+			return fmt.Errorf("%w: cannot read the existing %s role", ErrProvisioning, entry.label)
+		}
+		if ineligible {
+			return fmt.Errorf("%w: the %s role already exists and is not an unprivileged login (NOLOGIN, or SUPERUSER/BYPASSRLS/CREATEROLE/CREATEDB/REPLICATION); nothing was changed",
+				ErrProvisioning, entry.label)
+		}
+	}
+
 	step := func(what string, err error) error {
 		if err != nil {
 			// The cause is the server's text; it can quote a statement, and a
@@ -455,10 +473,11 @@ func runtimeGrantOutOfScope(grant roleacl.Grant, database string) bool {
 	return false
 }
 
-// publicAmbient is the USAGE on schema public PUBLIC gives every role on a stock
-// database (CONNECT on this database is matched by kedaGrantExpected, ViaPublic or not).
-func publicAmbient(grant roleacl.Grant) bool {
-	return grant.Class == "schema" && grant.Object == "public" && grant.Privilege == "USAGE"
+// publicAmbient is what PUBLIC gives every role on a stock database: CONNECT on it and
+// USAGE on schema public.
+func publicAmbient(grant roleacl.Grant, database string) bool {
+	return (grant.Class == "database" && grant.Object == database && grant.Privilege == "CONNECT") ||
+		(grant.Class == "schema" && grant.Object == "public" && grant.Privilege == "USAGE")
 }
 
 // judgeGrant is the per-role judgement of one enumerated grant; "" means acceptable.
@@ -472,16 +491,24 @@ func publicAmbient(grant roleacl.Grant) bool {
 //     CREATE-on-public warning's business.
 func judgeGrant(label string, grant roleacl.Grant, database, schema string) string {
 	unexpected := "holds an unexpected privilege: " + grant.String()
-	if label == "keda" {
-		if kedaGrantExpected(grant, database, schema) {
-			return ""
-		}
-		if grant.ViaPublic && (publicAmbient(grant) || (grant.Class == "schema" && grant.Object == "public" && grant.Privilege == "CREATE")) {
+	// PUBLIC-derived grants are judged the SAME way for every role (lead D2648): PUBLIC is
+	// never part of any posture, so beyond the ambient CONNECT on this database and USAGE
+	// on schema public (and CREATE on public, the target-wide default reported as a
+	// warning elsewhere) a privilege arriving through PUBLIC, relation and column
+	// privileges included, is a problem.
+	if grant.ViaPublic {
+		if publicAmbient(grant, database) || (grant.Class == "schema" && grant.Object == "public" && grant.Privilege == "CREATE") {
 			return ""
 		}
 		return unexpected
 	}
-	if grant.ViaPublic || !runtimeGrantOutOfScope(grant, database) {
+	if label == "keda" {
+		if kedaGrantExpected(grant, database, schema) {
+			return ""
+		}
+		return unexpected
+	}
+	if !runtimeGrantOutOfScope(grant, database) {
 		return ""
 	}
 	return unexpected

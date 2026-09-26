@@ -4,6 +4,7 @@ package roleprovision
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -298,22 +299,40 @@ func TestGoLegIsIdempotentAndRotatesOnlyTheKedaPassword(t *testing.T) {
 	}
 }
 
-func TestGoLegLeavesAnExistingRolesAttributesAloneLikeTheScript(t *testing.T) {
+func TestGoLegRefusesAnOverPrivilegedPreExistingRoleWhereTheScriptLeavesItAlone(t *testing.T) {
 	t.Parallel()
 	options := testOptions(false)
 	script, golang := startSide(t), startSide(t)
 	for _, s := range []*side{script, golang} {
 		// An operator pre-created the domain role with extra privilege and another
-		// password: neither provisioner touches it (the migrate preflight refuses it).
+		// password. The script leaves it alone (and the migrate preflight refuses it
+		// later); the Go leg REFUSES up front, before changing anything (r3 P1): a
+		// deliberate, documented deviation.
 		if _, err := s.admin.Exec(context.Background(),
 			`CREATE ROLE parity_domain LOGIN CREATEDB PASSWORD 'pre-existing'`); err != nil {
 			t.Fatal(err)
 		}
 	}
 	script.runScript(t, options)
-	golang.runGo(t, options)
-	diff(t, "pre-existing role", script.snapshot(t, options), golang.snapshot(t, options))
-	problems, _, err := Verify(context.Background(), golang.admin, options)
+	err := Apply(context.Background(), golang.admin, options)
+	if err == nil || !strings.Contains(err.Error(), "domain") || strings.Contains(err.Error(), "parity_domain") {
+		t.Fatalf("Apply must refuse naming the label only: %v", err)
+	}
+	var created int
+	if err := golang.admin.QueryRow(context.Background(),
+		`SELECT count(*) FROM pg_roles WHERE rolname IN ('parity_queue', 'parity_coordinator')`).Scan(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created != 0 {
+		t.Fatalf("the refused Apply created %d role(s)", created)
+	}
+	var scriptCreated int
+	if err := script.admin.QueryRow(context.Background(),
+		`SELECT count(*) FROM pg_roles WHERE rolname IN ('parity_queue', 'parity_coordinator')`).Scan(&scriptCreated); err != nil || scriptCreated != 2 {
+		t.Fatalf("(documenting the deviation) the script provisions the other roles: %d %v", scriptCreated, err)
+	}
+	// Verify still NAMES the over-privileged role for a database the script touched.
+	problems, _, err := Verify(context.Background(), script.admin, options)
 	if err != nil || len(problems) == 0 {
 		t.Fatalf("Verify must NAME the over-privileged pre-existing domain role, got %v %v", problems, err)
 	}
@@ -614,7 +633,7 @@ func TestVerifyRuntimeRolesHoldOnlyWhatRolesAndRiverGrantOfAnyCatalogClass(t *te
 		"CREATE on the database":                                        {"GRANT CREATE ON DATABASE " + database + " TO parity_queue", "REVOKE CREATE ON DATABASE " + database + " FROM parity_queue", "queue", true},
 		"CREATE on the river schema":                                    {"GRANT CREATE ON SCHEMA river TO parity_coordinator", "REVOKE CREATE ON SCHEMA river FROM parity_coordinator", "coordinator", true},
 		"USAGE on the river schema (river's own kind)":                  {"GRANT USAGE ON SCHEMA river TO parity_domain", "REVOKE USAGE ON SCHEMA river FROM parity_domain", "domain", false},
-		"EXECUTE on a function (river's own kind, judged by readiness)": {"CREATE FUNCTION public.roleprovision_probe() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'; GRANT EXECUTE ON FUNCTION public.roleprovision_probe() TO parity_api", "DROP FUNCTION public.roleprovision_probe()", "api", false},
+		"EXECUTE on a function (river's own kind, judged by readiness)": {"CREATE FUNCTION public.roleprovision_probe() RETURNS int LANGUAGE sql AS 'SELECT 1'; GRANT EXECUTE ON FUNCTION public.roleprovision_probe() TO parity_api", "DROP FUNCTION public.roleprovision_probe()", "api", false},
 		"USAGE on a language":                                           {"GRANT USAGE ON LANGUAGE sql TO parity_coordinator", "REVOKE USAGE ON LANGUAGE sql FROM parity_coordinator", "coordinator", true},
 		"a large object":                                                {"SELECT lo_create(424242); GRANT SELECT ON LARGE OBJECT 424242 TO parity_queue", "REVOKE SELECT ON LARGE OBJECT 424242 FROM parity_queue; SELECT lo_unlink(424242)", "queue", true},
 		"a foreign data wrapper":                                        {"CREATE FOREIGN DATA WRAPPER probe_fdw; GRANT USAGE ON FOREIGN DATA WRAPPER probe_fdw TO parity_domain", "DROP FOREIGN DATA WRAPPER probe_fdw", "domain", true},
@@ -849,5 +868,77 @@ func TestVerifyReportsMembershipAndOwnershipForEveryConfiguredRole(t *testing.T)
 	}
 	if problems, warnings, err := Verify(ctx, s.admin, options); err != nil || len(problems)+len(warnings) != 0 {
 		t.Fatalf("not clean after restore: %v %v %v", problems, warnings, err)
+	}
+}
+
+// r3 P1 (lead D2648): a PRE-EXISTING role that is not an eligible unprivileged login is
+// refused BEFORE any statement runs: nothing is created, nothing is granted, and a
+// member of an existing NOLOGIN group named like the KEDA login gains no access.
+func TestApplyRefusesAnIneligiblePreExistingRoleBeforeChangingAnything(t *testing.T) {
+	t.Parallel()
+	s := startSide(t)
+	options := testOptions(true)
+	ctx := context.Background()
+	for _, statement := range []string{
+		"CREATE ROLE " + ident(options.Keda.Name) + " NOLOGIN",
+		"CREATE ROLE keda_member LOGIN PASSWORD 'member-pw'",
+		"GRANT " + ident(options.Keda.Name) + " TO keda_member",
+	} {
+		if _, err := s.admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := Apply(ctx, s.admin, options)
+	if !errors.Is(err, ErrInvalidOptions) && !errors.Is(err, ErrProvisioning) {
+		t.Fatalf("an ineligible pre-existing role must be refused, got %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "keda") || strings.Contains(err.Error(), options.Keda.Name) {
+		t.Fatalf("the refusal must name the LABEL and never the role name: %v", err)
+	}
+	var created int
+	if err := s.admin.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname LIKE 'parity_%' AND rolname <> $1`, options.Keda.Name).Scan(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created != 0 {
+		t.Fatalf("the refused Apply created %d role(s): it must change nothing", created)
+	}
+	var reads bool
+	if err := s.admin.QueryRow(ctx, `SELECT has_table_privilege('keda_member', 'river.river_job', 'SELECT')`).Scan(&reads); err != nil {
+		t.Fatal(err)
+	}
+	if reads {
+		t.Fatal("a member of the existing NOLOGIN group gained SELECT on river_job")
+	}
+}
+
+// r3 P2 (lead D2648): a privilege a runtime role holds through PUBLIC is judged like the
+// KEDA login's: ambient CONNECT and USAGE on public and PUBLIC's CREATE on public (a
+// warning) are fine; anything else, INCLUDING a relation or column privilege (PUBLIC is
+// never in any posture), is a problem for every configured role.
+func TestVerifyReportsAnUnexpectedPublicGrantForEveryConfiguredRole(t *testing.T) {
+	t.Parallel()
+	s := startSide(t)
+	options := testOptions(true)
+	s.runGo(t, options)
+	ctx := context.Background()
+	for _, statement := range []string{"GRANT USAGE ON SCHEMA river TO PUBLIC", "GRANT UPDATE ON river.river_job TO PUBLIC"} {
+		if _, err := s.admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	problems, _, err := Verify(ctx, s.admin, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range options.configured() {
+		found := false
+		for _, item := range problems {
+			if item.Role == entry.label && strings.Contains(item.Detail, "unexpected privilege") && strings.Contains(item.Detail, "through PUBLIC") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: an UPDATE on river_job through PUBLIC must be a problem: %v", entry.label, problems)
+		}
 	}
 }

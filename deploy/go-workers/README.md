@@ -405,7 +405,7 @@ to read. Size those by fixed `replicas` instead.
 
 `RIVER_KEDA_READONLY_DATABASE_ROLE` (`devhealth_keda_readonly`,
 SELECT-only on `river_job` and on `public.sync_run_units`, the go-sync planned-backlog
-trigger's table, CHAOS-6946) is provisioned by the same
+trigger's table, plus an explicit USAGE on schema `public`, CHAOS-6946) is provisioned by the same
 `…-provision-roles` Helm hook as the three runtime logins
 (`provision_river_roles.sql`), whenever a `goWorkers` group has
 `autoscaling.enabled: true` -- no hand-run script needed.
@@ -1062,8 +1062,10 @@ bootstrap postconditions on the live catalog and exits 1, naming role labels and
 never a password, if one is unmet (each role is an unprivileged login with CONNECT,
 no TEMPORARY, USAGE and no CREATE on `public`; each runtime role is a member of no
 role and owns nothing, which is what its readiness check requires; the KEDA login
-holds exactly CONNECT, USAGE on the River schema, SELECT on `river_job` and SELECT on
-`public.sync_run_units` (nothing else, not even a column privilege), and every
+holds exactly CONNECT, USAGE on the River schema, USAGE on schema `public`, SELECT on
+`river_job` and SELECT on `public.sync_run_units` (nothing else, not even a column
+privilege -- the `public` USAGE is an EXPLICIT grant, like every other role's, never
+relying on PUBLIC's own ambient default, which a hardened database can revoke), and every
 role is judged on what it holds through PUBLIC too (beyond the ambient CONNECT and
 USAGE on `public`, a privilege through PUBLIC is a problem, relation privileges
 included), counting what a role inherits through a membership, and an extra grant it already

@@ -103,15 +103,20 @@ func testOptions(withOptional bool) Options {
 }
 
 // runScript runs the psql script and then the ONE documented difference between it
-// and the Go leg (CHAOS-6946): the KEDA login's SELECT on public.sync_run_units,
-// which only `dho migrate roles` grants (the script is frozen and retires with the
-// chart's psql Job). Applying it here keeps every parity test a parity test;
-// runScriptOnly is the script alone, for the test that pins the difference.
+// and the Go leg (CHAOS-6946): the KEDA login's USAGE on schema public plus SELECT on
+// public.sync_run_units, which only `dho migrate roles` grants (the script is frozen
+// and retires with the chart's psql Job). Applying it here keeps every parity test a
+// parity test; runScriptOnly is the script alone, for the test that pins the
+// difference.
 func (s *side) runScript(t *testing.T, options Options) {
 	t.Helper()
 	s.runScriptOnly(t, options)
 	if options.Keda.Name != "" {
-		if _, err := s.admin.Exec(context.Background(), "GRANT SELECT ON public.sync_run_units TO "+ident(options.Keda.Name)); err != nil {
+		name := ident(options.Keda.Name)
+		if _, err := s.admin.Exec(context.Background(), "GRANT USAGE ON SCHEMA public TO "+name); err != nil {
+			t.Fatalf("the documented KEDA public-schema delta: %v", err)
+		}
+		if _, err := s.admin.Exec(context.Background(), "GRANT SELECT ON public.sync_run_units TO "+name); err != nil {
 			t.Fatalf("the documented KEDA sync_run_units delta: %v", err)
 		}
 	}
@@ -424,9 +429,14 @@ func TestVerifyNamesEachBrokenPostconditionAndSeparatesThePublicCreateWarning(t 
 		"CREATE only via PUBLIC":          {"GRANT CREATE ON SCHEMA public TO PUBLIC", "REVOKE CREATE ON SCHEMA public FROM PUBLIC", "query_api", "only through PUBLIC", true},
 		"KEDA cannot read":                {"REVOKE SELECT ON river.river_job FROM parity_keda", "GRANT SELECT ON river.river_job TO parity_keda", "keda", "cannot SELECT river_job", false},
 		"KEDA cannot read sync_run_units": {"REVOKE SELECT ON public.sync_run_units FROM parity_keda", "GRANT SELECT ON public.sync_run_units TO parity_keda", "keda", "cannot SELECT sync_run_units", false},
-		"role made superuser":             {"ALTER ROLE parity_queue SUPERUSER", "ALTER ROLE parity_queue NOSUPERUSER", "queue", "not an unprivileged login", false},
-		"role made NOLOGIN":               {"ALTER ROLE parity_domain NOLOGIN", "ALTER ROLE parity_domain LOGIN", "domain", "not an unprivileged login", false},
-		"role missing":                    {"ALTER ROLE parity_keda RENAME TO parity_keda_gone", "ALTER ROLE parity_keda_gone RENAME TO parity_keda", "keda", "not an unprivileged login", false},
+		// r1 finding, CHAOS-6946: a HARDENED database revokes USAGE ON SCHEMA public
+		// FROM PUBLIC (a common Postgres hardening step). Verify must catch the loss of
+		// the KEDA login's OWN grant even though has_table_privilege alone would still
+		// report the table SELECT as held.
+		"KEDA lacks schema public usage (PUBLIC ambient revoked)": {"REVOKE USAGE ON SCHEMA public FROM parity_keda, PUBLIC", "GRANT USAGE ON SCHEMA public TO parity_keda, PUBLIC", "keda", "cannot SELECT sync_run_units", false},
+		"role made superuser": {"ALTER ROLE parity_queue SUPERUSER", "ALTER ROLE parity_queue NOSUPERUSER", "queue", "not an unprivileged login", false},
+		"role made NOLOGIN":   {"ALTER ROLE parity_domain NOLOGIN", "ALTER ROLE parity_domain LOGIN", "domain", "not an unprivileged login", false},
+		"role missing":        {"ALTER ROLE parity_keda RENAME TO parity_keda_gone", "ALTER ROLE parity_keda_gone RENAME TO parity_keda", "keda", "not an unprivileged login", false},
 	} {
 		if _, err := s.admin.Exec(ctx, test.break_); err != nil {
 			t.Fatalf("%s: break: %v", name, err)
@@ -1071,5 +1081,83 @@ func TestKedaSyncRunUnitsMissingFailsApplyAtomicallyAndVerifyNamesIt(t *testing.
 	var roles int
 	if err := fresh.admin.QueryRow(context.Background(), `SELECT count(*) FROM pg_roles WHERE rolname LIKE 'parity_%'`).Scan(&roles); err != nil || roles != 0 {
 		t.Fatalf("a failed Apply left %d role(s) behind: %v", roles, err)
+	}
+}
+
+// r1 finding, CHAOS-6946: on a HARDENED database (USAGE ON SCHEMA public revoked
+// FROM PUBLIC, a common Postgres hardening step), the KEDA login's real trigger
+// query -- not has_table_privilege, which is blind to schema visibility -- is the
+// state that must actually work. Apply's explicit "GRANT USAGE ON SCHEMA public"
+// makes it survive that hardening; without it (simulated here by revoking Apply's
+// own grant, holding only the ambient default) the query fails to resolve the name.
+func TestKedaLoginReadsSyncRunUnitsEvenWhenPublicSchemaUsageIsNotAmbient(t *testing.T) {
+	t.Parallel()
+	options := testOptions(true)
+	golang := startSide(t)
+	golang.runGo(t, options)
+	ctx := context.Background()
+
+	run := func(t *testing.T) error {
+		t.Helper()
+		config, err := pgx.ParseConfig(golang.instance.URI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config.User, config.Password = options.Keda.Name, options.Keda.Password
+		connection, connErr := pgx.ConnectConfig(context.Background(), config)
+		if connErr != nil {
+			t.Fatalf("the KEDA login cannot connect: %v", connErr)
+		}
+		defer connection.Close(context.Background())
+		var ignored int
+		return connection.QueryRow(context.Background(),
+			`SELECT count(*) FROM public.sync_run_units WHERE status = 'planned' AND (available_at IS NULL OR available_at <= now())`).Scan(&ignored)
+	}
+
+	// Harden the database the way an operator would: revoke the ambient default.
+	if _, err := golang.admin.Exec(ctx, "REVOKE USAGE ON SCHEMA public FROM PUBLIC"); err != nil {
+		t.Fatal(err)
+	}
+	// Apply's own explicit grant survives the hardening: the query still works, and
+	// Verify (which reads effective privilege, own grant included) is still green.
+	if err := run(t); err != nil {
+		t.Fatalf("the KEDA login must read sync_run_units without the PUBLIC ambient default: %v", err)
+	}
+	if problems, warnings, err := Verify(ctx, golang.admin, options); err != nil || len(problems)+len(warnings) != 0 {
+		t.Fatalf("Verify: %v %v %v", problems, warnings, err)
+	}
+
+	// Simulate the version of this code that relied on the ambient default alone
+	// (no explicit grant): revoke the KEDA login's OWN usage too. The real query
+	// now fails to resolve the name, which has_table_privilege alone would have
+	// missed -- the exact gap the r1 round found and this test pins.
+	if _, err := golang.admin.Exec(ctx, "REVOKE USAGE ON SCHEMA public FROM "+ident(options.Keda.Name)); err != nil {
+		t.Fatal(err)
+	}
+	var pgErr *pgconn.PgError
+	if err := run(t); !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Fatalf("want a schema-permission-denied failure (42501) once the KEDA login's own USAGE is gone, got: %v", err)
+	}
+	problems, _, err := Verify(ctx, golang.admin, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := false
+	for _, item := range problems {
+		if item.Role == "keda" && strings.Contains(item.Detail, "cannot SELECT sync_run_units") {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("Verify must catch the loss of schema public USAGE that has_table_privilege alone misses: %v", problems)
+	}
+
+	// Restore: Apply is idempotent and repairs it.
+	golang.runGo(t, options)
+	if err := run(t); err != nil {
+		t.Fatalf("after a second Apply the KEDA login must read sync_run_units again: %v", err)
+	}
+	if _, err := golang.admin.Exec(ctx, "GRANT USAGE ON SCHEMA public TO PUBLIC"); err != nil {
+		t.Fatal(err)
 	}
 }

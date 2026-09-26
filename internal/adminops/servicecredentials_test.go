@@ -57,6 +57,14 @@ func TestServiceCredentialVerbsRefuseBeforeTheDatabase(t *testing.T) {
 		"revoke no id":             {"revoke", nil, cli.ExitUsage, "expected 1 positional"},
 		"revoke bad id":            {"revoke", []string{"not-a-uuid"}, cli.ExitFailure, "badly formed hexadecimal UUID string"},
 		"revoke unknown flag":      {"revoke", []string{id, "--nope"}, cli.ExitUsage, "flag provided but not defined"},
+		// "--" ends the options: what follows is positional, flag-looking or not (argparse).
+		"rotate flags after the terminator": {"rotate", []string{"--scope", "entitlements:read", "--", id, "--overlap-seconds", "60"}, cli.ExitUsage, "expected 1 positional"},
+		"rotate id after the terminator":    {"rotate", []string{"--scope", "nope", "--", id}, cli.ExitFailure, "unsupported internal service credential scope"},
+		"revoke id after the terminator":    {"revoke", []string{"--", "not-a-uuid"}, cli.ExitFailure, "badly formed hexadecimal UUID string"},
+		"revoke terminator after the id":    {"revoke", []string{"not-a-uuid", "--"}, cli.ExitFailure, "badly formed hexadecimal UUID string"},
+		"create terminator as a value":      {"create", []string{"--scope", "--"}, cli.ExitUsage, "expected one argument"},
+		"create bare terminator":            {"create", []string{"--scope", "entitlements:read", "--"}, cli.ExitUsage, "unrecognized arguments: --"},
+		"list bare terminator":              {"list", []string{"--"}, cli.ExitUsage, "unrecognized arguments: --"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			code, stdout, stderr := runCredentialVerb(t, tc.verb, tc.args...)

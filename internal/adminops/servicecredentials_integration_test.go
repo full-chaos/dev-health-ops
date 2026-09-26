@@ -141,19 +141,39 @@ var credScript = []credStep{
 	cverb("revoke", "{{cred:acr:16}}", "--nope"),
 	cverb("list"),
 	cverb("list", "--service", "worker-operator"),
+
+	// "--" ends the options (r1 of this change found rotate re-parsing flags after it).
+	cverb("create", "--scope", "entitlements:read"),
+	cverb("rotate", "--scope", "entitlements:read", "--", "{{cred:acr:last}}", "--overlap-seconds", "60"),
+	cverb("rotate", "--scope", "entitlements:read", "--", "{{cred:acr:last}}"),
+	cverb("rotate", "--", "{{cred:acr:last}}", "--scope", "entitlements:read"),
+	cverb("create", "--scope", "entitlements:read", "--"),
+	cverb("create", "--scope", "--", "entitlements:read"),
+	cverb("create", "--", "--scope", "entitlements:read"),
+	cverb("revoke", "--", "{{cred:acr:last}}"),
+	cverb("revoke", "{{cred:acr:last}}", "--"),
+	cverb("revoke", "--", "{{cred:acr:last}}", "--"),
+	cverb("list", "--"),
+	cverb("list", "--", "--service", "worker-operator"),
+	cverb("list"),
 }
 
-var credPlaceholder = regexp.MustCompile(`\{\{cred:([a-z-]+):(\d+)(?::(upper|nohyphen|braces|urn))?\}\}`)
+var credPlaceholder = regexp.MustCompile(`\{\{cred:([a-z-]+):(\d+|last)(?::(upper|nohyphen|braces|urn))?\}\}`)
 
 func (db *database) credResolve(t *testing.T, text string) string {
 	t.Helper()
 	return credPlaceholder.ReplaceAllStringFunc(text, func(match string) string {
 		parts := credPlaceholder.FindStringSubmatch(match)
-		var n int
-		fmt.Sscan(parts[2], &n)
+		query, args := `SELECT id::text FROM internal_service_credentials WHERE service_name = $1 ORDER BY created_at OFFSET $2 LIMIT 1`, []any{parts[1], 0}
+		if parts[2] == "last" {
+			query, args = `SELECT id::text FROM internal_service_credentials WHERE service_name = $1 ORDER BY created_at DESC LIMIT 1`, []any{parts[1]}
+		} else {
+			var n int
+			fmt.Sscan(parts[2], &n)
+			args[1] = n
+		}
 		var id string
-		if err := db.conn.QueryRow(context.Background(),
-			`SELECT id::text FROM internal_service_credentials WHERE service_name = $1 ORDER BY created_at OFFSET $2 LIMIT 1`, parts[1], n).Scan(&id); err != nil {
+		if err := db.conn.QueryRow(context.Background(), query, args...).Scan(&id); err != nil {
 			t.Fatalf("resolve %s: %v", match, err)
 		}
 		switch parts[3] {
@@ -303,7 +323,7 @@ func (db *database) credState(t *testing.T, run *credentialRun, start time.Time)
 	return string(raw)
 }
 
-func credGo(t *testing.T, db *database, args []string) (int, string) {
+func credGo(t *testing.T, db *database, args []string) (int, string, string) {
 	t.Helper()
 	verbs := map[string]func(context.Context, cli.Env) int{"create": runCredentialCreate, "list": runCredentialList, "rotate": runCredentialRotate, "revoke": runCredentialRevoke}
 	run := verbs[args[0]]
@@ -314,10 +334,44 @@ func credGo(t *testing.T, db *database, args []string) (int, string) {
 	if strings.Contains(stdout.String()+stderr.String(), "postgres://") {
 		t.Fatal("the output carries the DSN")
 	}
-	return code, stdout.String()
+	return code, stdout.String(), credStderr(code, stderr.String(), false)
 }
 
-func credPython(t *testing.T, db *database, args []string) (int, string) {
+// credStderr reduces what a run said on stderr to what both producers can be compared on. Exit 0
+// and the usage errors (2) say different things by construction (Python logs; argparse's usage
+// text, Go's flag text) and compare as such. A refusal (exit 1) compares by message: a Python
+// ValueError's message is the text dho puts in its JSON error's detail; any other failure (a
+// database error) compares as one class.
+func credStderr(code int, text string, python bool) string {
+	switch code {
+	case 0:
+		return ""
+	case 2:
+		return "<usage error>"
+	}
+	if python {
+		lines := strings.Split(strings.TrimSpace(text), "\n")
+		last := lines[len(lines)-1]
+		if message, ok := strings.CutPrefix(last, "ValueError: "); ok {
+			return message
+		}
+		return "<failure>"
+	}
+	var payload struct {
+		Error struct{ Code, Detail string } `json:"error"`
+	}
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		if json.Unmarshal([]byte(line), &payload) == nil && payload.Error.Code != "" {
+			if payload.Error.Code == "service_credential_refused" {
+				return payload.Error.Detail
+			}
+			return "<failure>"
+		}
+	}
+	return "<no error line>"
+}
+
+func credPython(t *testing.T, db *database, args []string) (int, string, string) {
 	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -343,10 +397,10 @@ func credPython(t *testing.T, db *database, args []string) (int, string) {
 			t.Fatalf("python printed %q before its traceback", stdout.String())
 		}
 	}
-	return code, stdout.String()
+	return code, stdout.String(), credStderr(code, stderr.String(), true)
 }
 
-func (db *database) credSession(t *testing.T, run func(*testing.T, *database, []string) (int, string)) []stepResult {
+func (db *database) credSession(t *testing.T, run func(*testing.T, *database, []string) (int, string, string)) []stepResult {
 	t.Helper()
 	db.credReset(t)
 	session := &credentialRun{tokens: map[string]string{}, full: map[string]string{}, expiry: map[string]expirySeen{}}
@@ -364,10 +418,21 @@ func (db *database) credSession(t *testing.T, run func(*testing.T, *database, []
 		for i, arg := range s.args {
 			args[i] = db.credResolve(t, arg)
 		}
-		code, stdout := run(t, db, args)
-		out = append(out, stepResult{Args: s.args, Exit: code, Stdout: maskStdout(session, index, stdout), State: session.m.mask(db.credState(t, session, start))})
+		code, stdout, stderr := run(t, db, args)
+		out = append(out, stepResult{Args: s.args, Exit: code, Stdout: maskStdout(session, index, stdout), Stderr: session.m.mask(stderr), State: session.m.mask(db.credState(t, session, start))})
 	}
 	return out
+}
+
+// compareCredentials is compare plus the normalized stderr of every step.
+func compareCredentials(t *testing.T, got, want []stepResult, wantName string) {
+	t.Helper()
+	compare(t, got, want, wantName)
+	for index := range got {
+		if index < len(want) && got[index].Stderr != want[index].Stderr {
+			t.Errorf("step %d (%s): stderr %q, %s stderr %q", index, strings.Join(got[index].Args, " "), got[index].Stderr, wantName, want[index].Stderr)
+		}
+	}
 }
 
 const credGolden = "testdata/service_credentials_golden.json"
@@ -394,7 +459,7 @@ func TestServiceCredentialsMatchTheFrozenPythonOutput(t *testing.T) {
 	}
 	db := startDatabase(t)
 	got := db.credSession(t, credGo)
-	compare(t, got, frozen, "frozen Python")
+	compareCredentials(t, got, frozen, "frozen Python")
 	refused, printed, usage := 0, 0, 0
 	for _, item := range frozen {
 		switch {
@@ -421,7 +486,7 @@ func TestServiceCredentialsVenueOracleMatchesThePythonProducer(t *testing.T) {
 	db := startDatabase(t)
 	py := db.credSession(t, credPython)
 	got := db.credSession(t, credGo)
-	compare(t, got, py, "python")
+	compareCredentials(t, got, py, "python")
 	if os.Getenv("DHO_SERVICE_CREDENTIALS_GOLDEN_UPDATE") == "1" {
 		raw, err := json.MarshalIndent(py, "", " ")
 		if err != nil {
@@ -442,4 +507,4 @@ func TestServiceCredentialsVenueOracleMatchesThePythonProducer(t *testing.T) {
 var _ = admin.ServiceACR
 
 // credGoldenSHA256 pins the frozen golden; regenerate both with the live oracle.
-const credGoldenSHA256 = "fb8b4808c263fe3b510a56ce32ece939f9ac723ac357110caa7cf26c3a2fe4ac"
+const credGoldenSHA256 = "4c4a081b59503540316f12653ffe8829cc46867fb2e8900a996dc7893e056657"

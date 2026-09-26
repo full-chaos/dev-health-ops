@@ -73,7 +73,9 @@ func checkService(env cli.Env, service string) bool {
 }
 
 // parseInterleaved parses flags and takes want positional arguments, wherever they
-// stand among the flags (argparse lets a positional come first or last).
+// stand among the flags (argparse lets a positional come first or last). A standalone
+// "--" ends the options, as in argparse: every token after it is a positional, even one
+// that looks like a flag.
 func parseInterleaved(flags *flag.FlagSet, env cli.Env, want int) (positionals []string, code int, ok bool) {
 	args := env.Args
 	for {
@@ -83,17 +85,51 @@ func parseInterleaved(flags *flag.FlagSet, env cli.Env, want int) (positionals [
 			}
 			return nil, cli.ExitUsage, false
 		}
-		if flags.NArg() == 0 {
+		rest := flags.Args()
+		consumed := args[:len(args)-len(rest)]
+		terminator, isValue := endedByTerminator(flags, consumed)
+		if isValue {
+			// argparse reads "--" after an option that needs a value as the end of the options:
+			// the option has no value, a usage error.
+			fmt.Fprintf(env.Stderr, "argument error: %s: expected one argument\n", consumed[len(consumed)-2])
+			return nil, cli.ExitUsage, false
+		}
+		if terminator && want == 0 {
+			// A parser with no positional to take it leaves "--" unrecognized.
+			fmt.Fprintln(env.Stderr, "argument error: unrecognized arguments: --")
+			return nil, cli.ExitUsage, false
+		}
+		if terminator {
+			positionals = append(positionals, rest...)
 			break
 		}
-		positionals = append(positionals, flags.Arg(0))
-		args = flags.Args()[1:]
+		if len(rest) == 0 {
+			break
+		}
+		positionals = append(positionals, rest[0])
+		args = rest[1:]
 	}
 	if len(positionals) != want {
 		fmt.Fprintf(env.Stderr, "argument error: expected %d positional argument(s), got %d\n", want, len(positionals))
 		return nil, cli.ExitUsage, false
 	}
 	return positionals, 0, true
+}
+
+// endedByTerminator says how a Parse stopped when the last token it consumed is "--": the
+// terminator (terminator) or the value of the option before it (isValue: Go's flag package
+// takes "--" as the value of a string option, argparse does not).
+func endedByTerminator(flags *flag.FlagSet, consumed []string) (terminator, isValue bool) {
+	if len(consumed) == 0 || consumed[len(consumed)-1] != "--" {
+		return false, false
+	}
+	if len(consumed) >= 2 {
+		previous := consumed[len(consumed)-2]
+		if strings.HasPrefix(previous, "-") && !strings.Contains(previous, "=") && flags.Lookup(strings.TrimLeft(previous, "-")) != nil {
+			return false, true
+		}
+	}
+	return true, false
 }
 
 // credentialSpec validates the shared options in Python's order: scopes, creator, expiry.

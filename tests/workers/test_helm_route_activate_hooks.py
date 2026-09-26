@@ -894,3 +894,29 @@ def test_route_activate_operator_pull_policy_default_input_domain(policy: str) -
     assert (
         init_containers["route-activate-dispatch-sync-run"]["imagePullPolicy"] == policy
     )
+
+
+def test_route_activate_refuses_an_empty_bundled_database_name() -> None:
+    """CHAOS-6902 r1 P1: an empty bundled `postgresql.credentials.database`
+    rendered `DEV_HEALTH_PG_DB ''`, which `config.ResolveDSN` turns into the
+    database `postgres` while the deleted init container's URI named no
+    database at all (the server then uses the role name) -- a different
+    connection identity the chart used to accept. The bundled branch of the
+    database helper must refuse an empty name, loudly, at render time."""
+    completed = subprocess.run(
+        [
+            "helm",
+            "template",
+            _RELEASE,
+            str(_CHART),
+            *[x for s in _FULL_CHAIN_ON for x in ("--set", s)],
+            "--set",
+            "postgresql.enabled=true",
+            "--set-string",
+            "postgresql.credentials.database=",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0, completed.stdout[:400]
+    assert "postgresql.credentials.database" in completed.stderr, completed.stderr

@@ -229,7 +229,7 @@ names; role credentials and runtime DSNs remain Secret values. */}}
 
 {{- define "dev-health.goPgbouncerPostgresDatabase" -}}
 {{- if .Values.postgresql.enabled }}
-{{- .Values.postgresql.credentials.database }}
+{{- required "postgresql.credentials.database must not be empty when postgresql.enabled=true" .Values.postgresql.credentials.database }}
 {{- else }}
 {{- required "goWorkers.pgbouncer.postgres.database is required for external PostgreSQL" .Values.goWorkers.pgbouncer.postgres.database }}
 {{- end }}

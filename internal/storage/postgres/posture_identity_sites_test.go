@@ -1,6 +1,11 @@
 package postgres
 
 import (
+	"bytes"
+	"go/ast"
+	"go/parser"
+	"go/printer"
+	"go/token"
 	"os"
 	"path/filepath"
 	"sort"
@@ -109,5 +114,63 @@ func TestEveryPostureCheckSiteUsesTheSharedIdentityPredicate(t *testing.T) {
 		if !present {
 			t.Errorf("the site walk did not find %s: the enumeration is not looking where the checks are", rel)
 		}
+	}
+}
+
+// Per-DECLARATION, not per-file (r2 P3): a new posture query added to an ALREADY
+// registered file must not slip by because the file mentions the shared predicate
+// somewhere else. Every string const/var in a registered check file whose expression
+// binds or probes the calling login (`current_user`) must reference
+// IdentityPredicateSQL, or be a named, reasoned exception.
+func TestEveryLoginBoundQueryDeclarationUsesTheSharedIdentityPredicate(t *testing.T) {
+	t.Parallel()
+	// Declarations that mention current_user WITHOUT asserting a login: they read
+	// the calling session's own privileges as part of a query that is already
+	// gated on the shared predicate elsewhere, or are not posture checks.
+	exceptions := map[string]string{}
+	seen := 0
+	files := []string{"domain_authorization.go", "queue_authorization.go", "api_authorization.go", "query_api_authorization.go", "role_identity.go"}
+	fset := token.NewFileSet()
+	for _, name := range files {
+		parsed, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, declaration := range parsed.Decls {
+			gen, ok := declaration.(*ast.GenDecl)
+			if !ok || (gen.Tok != token.CONST && gen.Tok != token.VAR) {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				var rendered bytes.Buffer
+				for _, expression := range value.Values {
+					if err := printer.Fprint(&rendered, fset, expression); err != nil {
+						t.Fatal(err)
+					}
+				}
+				text := rendered.String()
+				if !strings.Contains(text, "current_user") {
+					continue
+				}
+				declared := value.Names[0].Name
+				if reason, exempt := exceptions[declared]; exempt {
+					_ = reason
+					continue
+				}
+				seen++
+				if !strings.Contains(text, "IdentityPredicateSQL") {
+					t.Errorf("%s: %s reads current_user but does not use roleacl.IdentityPredicateSQL: a posture query must prove the login IS the role", name, declared)
+				}
+			}
+		}
+	}
+	// A walk that finds nothing would pass vacuously: rolePostureQuery and
+	// queueAuthorizationQuery are the two login-bound declarations there are today.
+	if seen < 2 {
+		t.Fatalf("the declaration walk saw %d login-bound declarations, want at least 2", seen)
 	}
 }

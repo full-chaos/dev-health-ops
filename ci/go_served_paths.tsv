@@ -12,8 +12,16 @@
 # plane  = go-api | query-api (the Go service the ingress sends the path to)
 # path   = the ingress path with every path parameter written {} (no regex, no trailing slash)
 #
-# rev186 = helm revision 187, dumped 2026-09-25T20:30:50Z. Admin routes are NOT here:
-# at rev186 no /api/v1/admin/* path is Go-routed (the '/' catch-all is the Python api).
+# rev186 = helm revision 187, dumped 2026-09-25T20:30:50Z (no /api/v1/admin/* path was
+# Go-routed then). rev187 = helm revision 188, deployed 2026-09-25T22:12:24Z: the
+# post-roll ingress dump (api.fullchaos.dev), 145 paths, 89 of them /api/v1/admin/*,
+# copied verbatim (params written {}); the rev186 rows are the subset first seen earlier.
+#
+# The receipt line pins the whole file to the dump: the number of rows and the sha256 of
+# the sorted `plane<TAB>path` lines. ci/check_go_served_paths.py fails when either differs,
+# so a row is added, dropped or re-planed only together with a new dump. prod-ops updates
+# it with the rows of each new rev.
+# receipt: rev187 rows=145 sha256=c9eb518fa32a8e8e7b94d8c01a3f5dd8aece49e57746ce8c3cc75ba216888c0b
 rev186	go-api	/api/v1/billing/audit
 rev186	go-api	/api/v1/billing/audit/{}
 rev186	go-api	/api/v1/billing/audit/{}/resolve
@@ -70,3 +78,92 @@ rev186	query-api	/api/v1/quadrant
 rev186	query-api	/api/v1/sankey
 rev186	query-api	/api/v1/work-units
 rev186	query-api	/api/v1/work-units/{}/explain
+rev187	go-api	/api/v1/admin/audit-logs/{}
+rev187	go-api	/api/v1/admin/audit-logs
+rev187	go-api	/api/v1/admin/audit-logs/resource/{}/{}
+rev187	go-api	/api/v1/admin/audit-logs/user/{}
+rev187	go-api	/api/v1/admin/backfill-jobs/{}
+rev187	go-api	/api/v1/admin/backfill-jobs
+rev187	go-api	/api/v1/admin/credentials/{}/{}
+rev187	go-api	/api/v1/admin/credentials
+rev187	go-api	/api/v1/admin/credentials/test
+rev187	go-api	/api/v1/admin/customer-push/batches/{}
+rev187	go-api	/api/v1/admin/customer-push/schemas/{}
+rev187	go-api	/api/v1/admin/customer-push/schemas
+rev187	go-api	/api/v1/admin/customer-push/sources/{}
+rev187	go-api	/api/v1/admin/customer-push/sources
+rev187	go-api	/api/v1/admin/customer-push/sources/{}/batches
+rev187	go-api	/api/v1/admin/customer-push/sources/{}/tokens
+rev187	go-api	/api/v1/admin/customer-push/sources/{}/validate
+rev187	go-api	/api/v1/admin/customer-push/tokens
+rev187	go-api	/api/v1/admin/customer-push/tokens/{}/revoke
+rev187	go-api	/api/v1/admin/customer-push/tokens/{}/rotate
+rev187	go-api	/api/v1/admin/feature-flags/{}
+rev187	go-api	/api/v1/admin/feature-flags
+rev187	go-api	/api/v1/admin/identities
+rev187	go-api	/api/v1/admin/impersonate
+rev187	go-api	/api/v1/admin/impersonate/status
+rev187	go-api	/api/v1/admin/impersonate/stop
+rev187	go-api	/api/v1/admin/integrations/{}
+rev187	go-api	/api/v1/admin/integrations
+rev187	go-api	/api/v1/admin/integrations/{}/backfill
+rev187	go-api	/api/v1/admin/integrations/{}/datasets
+rev187	go-api	/api/v1/admin/integrations/{}/discover
+rev187	go-api	/api/v1/admin/integrations/github/install-callback
+rev187	go-api	/api/v1/admin/integrations/github/install-url
+rev187	go-api	/api/v1/admin/integrations/pagerduty/api-token
+rev187	go-api	/api/v1/admin/integrations/pagerduty/authorize
+rev187	go-api	/api/v1/admin/integrations/pagerduty/callback
+rev187	go-api	/api/v1/admin/integrations/pagerduty/client-credentials
+rev187	go-api	/api/v1/admin/integrations/pagerduty/disconnect
+rev187	go-api	/api/v1/admin/integrations/pagerduty/preflight
+rev187	go-api	/api/v1/admin/integrations/pagerduty/services
+rev187	go-api	/api/v1/admin/integrations/pagerduty/status
+rev187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings/{}
+rev187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings
+rev187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings/{}/activate
+rev187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings/{}/revoke
+rev187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings/{}/rotate
+rev187	go-api	/api/v1/admin/integrations/{}/sources/{}
+rev187	go-api	/api/v1/admin/integrations/{}/sources
+rev187	go-api	/api/v1/admin/integrations/{}/sync
+rev187	go-api	/api/v1/admin/ip-allowlist/{}
+rev187	go-api	/api/v1/admin/ip-allowlist
+rev187	go-api	/api/v1/admin/llm-settings
+rev187	go-api	/api/v1/admin/llm-settings/budget
+rev187	go-api	/api/v1/admin/llm-settings/spend
+rev187	go-api	/api/v1/admin/orgs/{}
+rev187	go-api	/api/v1/admin/orgs
+rev187	go-api	/api/v1/admin/orgs/{}/feature-overrides/{}
+rev187	go-api	/api/v1/admin/orgs/{}/feature-overrides
+rev187	go-api	/api/v1/admin/orgs/{}/invites
+rev187	go-api	/api/v1/admin/orgs/{}/members/{}
+rev187	go-api	/api/v1/admin/orgs/{}/members
+rev187	go-api	/api/v1/admin/platform/audit-logs
+rev187	go-api	/api/v1/admin/platform/stats
+rev187	go-api	/api/v1/admin/retention-policies/{}
+rev187	go-api	/api/v1/admin/retention-policies
+rev187	go-api	/api/v1/admin/retention-policies/{}/execute
+rev187	go-api	/api/v1/admin/settings/{}/{}
+rev187	go-api	/api/v1/admin/settings/{}
+rev187	go-api	/api/v1/admin/settings
+rev187	go-api	/api/v1/admin/setup/status
+rev187	go-api	/api/v1/admin/sync-configs/{}
+rev187	go-api	/api/v1/admin/sync-configs
+rev187	go-api	/api/v1/admin/sync-configs/{}/coverage
+rev187	go-api	/api/v1/admin/sync-configs/{}/jobs
+rev187	go-api	/api/v1/admin/sync-configs/{}/repositories
+rev187	go-api	/api/v1/admin/sync-runs/{}
+rev187	go-api	/api/v1/admin/sync-runs/{}/units
+rev187	go-api	/api/v1/admin/sync-targets
+rev187	go-api	/api/v1/admin/teams/{}
+rev187	go-api	/api/v1/admin/teams
+rev187	go-api	/api/v1/admin/teams/{}/approve-changes
+rev187	go-api	/api/v1/admin/teams/{}/confirm-inferred-members
+rev187	go-api	/api/v1/admin/teams/{}/confirm-members
+rev187	go-api	/api/v1/admin/teams/{}/discover-members
+rev187	go-api	/api/v1/admin/teams/{}/dismiss-changes
+rev187	go-api	/api/v1/admin/teams/{}/infer-members
+rev187	go-api	/api/v1/admin/users/{}
+rev187	go-api	/api/v1/admin/users
+rev187	go-api	/api/v1/admin/users/{}/password

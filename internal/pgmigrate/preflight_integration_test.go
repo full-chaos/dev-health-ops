@@ -862,3 +862,34 @@ func TestUpgradeRefusesADatabaseAheadOfTheBuild(t *testing.T) {
 		})
 	}
 }
+
+// TestAnOlderBuildReadsAForwardMigratedDatabaseAsAheadOfIt is the rollback the refusal
+// exists for, through the read-only verb: the same head database, read with the walk
+// of a build that lacks the last chain revision, is ahead of that build and names the
+// revision it does not know; read with this build's own walk it is at its head.
+func TestAnOlderBuildReadsAForwardMigratedDatabaseAsAheadOfIt(t *testing.T) {
+	ctx := context.Background()
+	productionEnv(t)
+	baseline, current := currentBuild(t)
+	instance, admin := startInstance(t)
+	database := stateDatabase(t, admin, instance, upgradeTo(t, baseline, current.chain))
+	conn := connect(t, databaseURI(t, instance.URI, database))
+	last := current.chain[len(current.chain)-1].Revision
+
+	older := olderBuild(t, current, 1)
+	status, err := pgmigrate.ReadStatusWithHistory(ctx, conn, baseline, older.chain, older.history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State != "ahead_of_build" || !reflect.DeepEqual(status.Unknown, []string{last}) {
+		t.Fatalf("the older build read the head database as %+v, want ahead_of_build naming [%s]", status, last)
+	}
+
+	own, err := pgmigrate.ReadStatusWithHistory(ctx, conn, baseline, current.chain, current.history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if own.State != "at_head" || len(own.Unknown) != 0 {
+		t.Fatalf("this build read its own head database as %+v, want at_head", own)
+	}
+}

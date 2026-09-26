@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
 )
 
 // queueAuthorizationQuery proves the queue-control login has only the River
@@ -80,7 +82,7 @@ WITH river_tables AS (
 	WHERE role.rolname <> current_user
 )
 SELECT
-	current_user = $1
+	` + roleacl.IdentityPredicateSQL + `
 	AND EXISTS (
 		SELECT 1
 		FROM pg_catalog.pg_roles
@@ -420,6 +422,9 @@ func CheckQueueAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRo
 		// not match queueAuthorizationQuery's requirements. A role name is a
 		// checked-in runtime identifier (config, not connection material),
 		// so it is always safe to name here.
+		if mismatch := identityMismatchForDiagnosis(ctx, pool, expectedRole); mismatch != "" {
+			return fmt.Errorf("%w: %w for role %q: %s", ErrUnavailable, ErrPostureRefused, expectedRole, mismatch)
+		}
 		return fmt.Errorf("%w: %w for role %q", ErrUnavailable, ErrPostureRefused, expectedRole)
 	default:
 		return nil

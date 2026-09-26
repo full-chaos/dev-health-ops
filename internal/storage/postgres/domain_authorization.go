@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
 )
 
 // ErrPostureRefused reports that rolePostureQuery RAN SUCCESSFULLY and
@@ -152,7 +154,7 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 	SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user
 )
 SELECT
-	current_user = $1
+	` + roleacl.IdentityPredicateSQL + `
 	AND EXISTS (
 		SELECT 1
 		FROM pg_catalog.pg_roles
@@ -1300,6 +1302,9 @@ const postureDiagnoseTimeout = 5 * time.Second
 func firstPostureMismatch(ctx context.Context, pool *pgxpool.Pool, expectedRole string, posture RolePosture) string {
 	diagnoseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postureDiagnoseTimeout)
 	defer cancel()
+	if mismatch := identityMismatchForDiagnosis(ctx, pool, expectedRole); mismatch != "" {
+		return mismatch
+	}
 	gaps, err := DiagnoseRolePosture(diagnoseCtx, pool, expectedRole, posture)
 	switch {
 	case err != nil:

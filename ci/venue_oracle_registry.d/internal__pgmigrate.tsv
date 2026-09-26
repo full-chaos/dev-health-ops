@@ -1,4 +1,5 @@
 internal/pgmigrate	TestAliasesVenueOracleMatchesTheFlatVerbs	run
+internal/pgmigrate	TestBaselineVenueOracleIsTheExecutedPythonUpgrade	run
 internal/pgmigrate	TestHistoryVenueOracleMatchesAlembic	run
 internal/pgmigrate	TestPreflightVenueOracleOverRealAlembicStates	run
 internal/pgmigrate	TestRevisionsVenueOracleMatchesAlembic	run

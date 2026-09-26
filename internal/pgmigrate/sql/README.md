@@ -13,6 +13,6 @@ renders it (drop the BEGIN/COMMIT and `alembic_version` lines: the migrator adds
 version update itself). A revision that reads data or runs Python cannot be
 rendered; write the SQL by hand. `TestChainCoversEveryAlembicRevision` fails while
 an Alembic revision above the baseline has no file (or a file names no revision, or
-continues the wrong revision), and `TestBaselineIsTheExecutedPythonUpgrade` executes
+continues the wrong revision), and `TestBaselineVenueOracleIsTheExecutedPythonUpgrade` executes
 the result: a database built by the real Python upgrade at the baseline and at every
 chain revision, upgraded by dho, must equal the Python upgrade to the head.

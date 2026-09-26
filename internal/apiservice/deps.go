@@ -160,6 +160,9 @@ type Deps struct {
 	// answer the Python api's 500 ("Billing not configured" / no license).
 	StripeWebhookSecret secrets.Value
 	LicensePrivateKey   secrets.Value
+	// StripeSecretKey is STRIPE_SECRET_KEY, read by the billing edge's
+	// /health (the billing routes call Stripe through Stripe).
+	StripeSecretKey secrets.Value
 	// ClickHouseDSN is the org-deletion route's analytics-table purge
 	// connection (CHAOS-6306), sourced from CLICKHOUSE_URI -- the same
 	// broadly-privileged, unrestricted-posture credential

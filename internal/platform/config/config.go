@@ -333,6 +333,11 @@ type Config struct {
 	// APIAddress is the host:port of the api listener (dho api only; empty for
 	// every other service). The operator listener stays on HTTPAddress.
 	APIAddress string
+	// APIBillingEdgeAddress is the host:port of the billing-edge listener
+	// (dho api only): the Stripe webhook, /health in the Python billing
+	// edge's shape, and a 404 for everything else. Empty = the listener is
+	// off.
+	APIBillingEdgeAddress string
 	// CORSAllowedOrigins is the api's CORS allow-list, parsed exactly as the
 	// Python api parses CORS_ALLOWED_ORIGINS: comma-separated, entries trimmed,
 	// empty entries dropped (dho api only).
@@ -888,6 +893,26 @@ func Load(spec Spec) (Config, error) {
 				settingLabel("DEV_HEALTH_API_ADDR"), settingLabel("DEV_HEALTH_HTTP_ADDR"),
 			)
 		}
+		// The billing-edge listener is opt-in: an empty value leaves it off;
+		// a set one must be a host:port that does not overlap the api or
+		// operator listener (the same port on a shared interface: ":8010"
+		// and "127.0.0.1:8010" collide; port 0 never does).
+		cfg.APIBillingEdgeAddress = strings.TrimSpace(envOrDefault(lookup, "DEV_HEALTH_API_BILLING_EDGE_ADDR", ""))
+		if cfg.APIBillingEdgeAddress != "" {
+			if _, _, splitErr := net.SplitHostPort(cfg.APIBillingEdgeAddress); splitErr != nil {
+				return Config{}, fmt.Errorf(
+					"%s must be a host:port address", settingLabel("DEV_HEALTH_API_BILLING_EDGE_ADDR"),
+				)
+			}
+			for _, other := range []struct{ value, name string }{{cfg.APIAddress, "DEV_HEALTH_API_ADDR"}, {cfg.HTTPAddress, "DEV_HEALTH_HTTP_ADDR"}} {
+				if listenAddressesOverlap(cfg.APIBillingEdgeAddress, other.value) {
+					return Config{}, fmt.Errorf(
+						"%s must differ from %s: each listener has its own address",
+						settingLabel("DEV_HEALTH_API_BILLING_EDGE_ADDR"), settingLabel(other.name),
+					)
+				}
+			}
+		}
 		// os.getenv("CORS_ALLOWED_ORIGINS", default): the default only when
 		// the variable is absent. A present empty or blank value is an empty
 		// allow-list, never the default.
@@ -1036,6 +1061,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 	}
 	if c.APIAddress != "" {
 		attrs = append(attrs,
+			slog.String("api_billing_edge_address", c.APIBillingEdgeAddress),
 			slog.String("api_address", c.APIAddress),
 			slog.Int("cors_allowed_origin_count", len(c.CORSAllowedOrigins)),
 		)

@@ -194,6 +194,15 @@ type ServerOptions struct {
 	// mux default): HEAD then gets the pattern's 405 unless a HEAD route is
 	// registered for it.
 	ExplicitHead bool
+	// CatchAllMethods are the methods of a catch-all route the Python app
+	// registers after its own routes (`/{path:path}` with an explicit method
+	// list, the billing edge): a request with one of them that no route takes
+	// is the catch-all's answer (the not-found envelope), never a 405, on a
+	// known path or an unknown one. A method outside the list keeps
+	// Starlette's partial-match rule: the first registered route whose path
+	// matches answers 405 with its own Allow, and a path no route matches is
+	// the catch-all's 405 with the list (sorted) as Allow.
+	CatchAllMethods []string
 	// RedirectSlashes answers a request no route matches with Starlette's
 	// redirect_slashes 307 when the same path with its trailing slash
 	// toggled matches a route (for any method); see slashRedirector.
@@ -368,7 +377,29 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		}
 		write(w, r, CodeNotFound)
 	}
+	catchAll := make(map[string]bool, len(options.CatchAllMethods))
+	for _, method := range options.CatchAllMethods {
+		catchAll[method] = true
+	}
+	var catchAllNotAllowed http.Handler
+	if len(catchAll) > 0 {
+		sorted := append([]string(nil), options.CatchAllMethods...)
+		sort.Strings(sorted)
+		catchAllNotAllowed = &methodNotAllowed{allow: strings.Join(sorted, ", "), write: write}
+	}
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if catchAllNotAllowed != nil {
+			if catchAll[r.Method] {
+				notFound(w, r)
+				return
+			}
+			if handler, pattern := pathMux.Handler(r); pattern != "" {
+				handler.ServeHTTP(w, r)
+				return
+			}
+			catchAllNotAllowed.ServeHTTP(w, r)
+			return
+		}
 		// A method-free pattern answers as it did in the route mux: its
 		// 405, or net/http's own trailing-slash redirect to it; no match at
 		// all is the not-found path.

@@ -205,6 +205,11 @@ var optionRegistry = []Option{
 		Usage: "host:port for the api HTTP server; must differ from --http-addr",
 	},
 	{
+		Flag: "api-billing-edge-addr", Env: "DEV_HEALTH_API_BILLING_EDGE_ADDR", Kind: KindString,
+		Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "host:port for the billing-edge HTTP server (the Stripe webhook, /health, and a 404 for everything else); empty = off; must differ from --api-addr and --http-addr",
+	},
+	{
 		Flag: "cors-allowed-origins", Env: "CORS_ALLOWED_ORIGINS", Kind: KindString,
 		Default: defaultCORSAllowedOrigins, Services: []string{APIServiceName}, Group: GroupRuntime,
 		Usage: "comma-separated CORS allow-list for the api (same format as the Python api)",

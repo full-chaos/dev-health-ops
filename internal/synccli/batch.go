@@ -23,9 +23,12 @@ import (
 // oracle); each repository is the same per-dataset providersync.RunInProcess run
 // the single-repository executor makes.
 //
-// Where it follows Python: repositories run in chunks of --batch-size, at most
-// --max-concurrent at a time (both floored at 1, as `max(1, ...)` does there),
-// and --max-repos caps the listing.
+// Where it follows Python: repositories run in chunks of --batch-size (GitHub
+// always; GitLab only for `git`, every other GitLab target starts all of its
+// projects and lets --max-concurrent bound them), at most --max-concurrent at a
+// time (both floored at 1, as `max(1, ...)` does there), and --max-repos caps the
+// listing. The loop is pinned to the real batch functions by
+// TestBatchLoopMatchesLivePython.
 //
 // Where it deliberately differs, each named so a script can rely on it:
 //   - a failure is never swallowed. Every dataset of every repository is run on
@@ -33,9 +36,10 @@ import (
 //     dataset, the rest of the batch continues, and the command exits 1 when any
 //     failed. (Python's batch logs a repository error and carries on.)
 //   - --use-async is accepted and ignored: this executor is always concurrent.
-//   - --rate-limit-delay is accepted and has no effect. In Python it only seeds
-//     the pull-request backoff gate's first delay; the in-process gate here
-//     backs off from the provider's own retry-after signals.
+//   - --rate-limit-delay is refused on a `prs` batch (exit 2, see unappliedFlags):
+//     in Python it seeds the pull-request backoff gate's first delay, while the
+//     in-process gate here backs off from the provider's own retry-after signals.
+//     On every other target Python ignores it too, so it is accepted.
 //   - --max-concurrent bounds repositories in flight. The worker's per-cost-class
 //     budget (4 light / 2 medium / 1 heavy) is per repository run here, so the
 //     overall request concurrency can exceed it on a large --max-concurrent.

@@ -142,7 +142,7 @@ func TestMaterializerRedispatchesStaleUnitsExactlyOnce(t *testing.T) {
 		assertMaterializerDispatchState(t, ctx, pool, materializerRetryingDispatch, "pending", nil, 1)
 	})
 
-	t.Run("feature-disabled River row stays protected", func(t *testing.T) {
+	t.Run("feature-disabled row stays protected", func(t *testing.T) {
 		resetMaterializerIntegrationTables(t, ctx, pool)
 		now := time.Date(2026, time.July, 24, 4, 0, 0, 0, time.UTC)
 		cutoff := now.Add(-15 * time.Minute)
@@ -158,7 +158,7 @@ func TestMaterializerRedispatchesStaleUnitsExactlyOnce(t *testing.T) {
 		if result.Dispatch != 0 {
 			t.Fatalf("feature-disabled row rearmed unexpectedly: %#v", result)
 		}
-		assertMaterializerDispatchState(t, ctx, pool, materializerFeatureDisabled, "dispatched", ptrString("river"), 1)
+		assertMaterializerDispatchState(t, ctx, pool, materializerFeatureDisabled, "dispatched", nil, 1)
 	})
 
 	// CHAOS-4357: reproduces the live prod/local state verbatim -- a
@@ -1141,28 +1141,16 @@ func seedMaterializerFeatureDisabledOutbox(
 	dispatchedAt time.Time,
 ) {
 	t.Helper()
-	// Drift simulation: the migrated route fence strips the delivery columns from a feature-disabled
-	// dispatched row, so it can never carry a River transport. This test seeds exactly that shape
-	// (the CHAOS-4357 live state), which the dispatched-route coherence check also
-	// forbids, so both are removed for this database, to prove the materializer does not depend on the trigger.
-	if _, err := pool.Exec(ctx, `ALTER TABLE public.sync_dispatch_outbox DISABLE TRIGGER trg_sync_dispatch_outbox_route_fence;
-		ALTER TABLE public.sync_dispatch_outbox DROP CONSTRAINT IF EXISTS ck_sync_dispatch_outbox_dispatched_route_coherence`); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if _, err := pool.Exec(ctx, `ALTER TABLE public.sync_dispatch_outbox ENABLE TRIGGER trg_sync_dispatch_outbox_route_fence`); err != nil {
-			t.Fatal(err)
-		}
-	}()
+	// The reachable shape: migration 0049's route fence strips the delivery columns (transport,
+	// generation, job id) from a dispatched row whose last_error is feature_disabled, so a real
+	// feature-disabled terminal-denial row carries none of them.
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_dispatch_outbox (
 			id, org_id, sync_run_id, kind, status, available_at, attempts,
-			last_error, dispatched_at, dispatched_transport,
-			dispatched_route_generation, transport_job_id,
-			created_at, updated_at
+			last_error, dispatched_at, created_at, updated_at
 		) VALUES (
 			gen_random_uuid(), 'org-materializer', $1, 'dispatch_sync_run',
-			'dispatched', $2, 1, 'feature_disabled', $2, 'river', 2, 'feature-disabled-job', $2, $2
+			'dispatched', $2, 1, 'feature_disabled', $2, $2, $2
 		)`,
 		runID, dispatchedAt); err != nil {
 		t.Fatal(err)

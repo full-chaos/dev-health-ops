@@ -42,28 +42,11 @@ const jitCostSyncRuns = 4536
 func seedJITCostPopulation(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	seedOccurrenceParents(t, ctx, pool)
-	// The migrated schema carries the indexes migration 0111 and its siblings added -- exactly the
-	// mitigation these cases treat as absent ("the WORST case, no index at all" above). Drop every
-	// secondary index (those backing no constraint) on the tables the finalize statement reads, so the
-	// planner sees the same index-free shape the hand-written fixture always gave it.
-	if _, err := pool.Exec(ctx, `
-		DO $$
-		DECLARE ix record;
-		BEGIN
-			FOR ix IN
-				SELECT i.indexrelid::regclass AS name
-				FROM pg_index i
-				JOIN pg_class c ON c.oid = i.indrelid
-				JOIN pg_namespace n ON n.oid = c.relnamespace
-				WHERE n.nspname = 'public'
-				  AND c.relname IN ('sync_runs','scheduled_sync_occurrences','sync_run_units',
-				                    'sync_run_reference_discoveries','sync_dispatch_outbox')
-				  AND NOT i.indisprimary AND NOT i.indisunique
-			LOOP
-				EXECUTE 'DROP INDEX ' || ix.name;
-			END LOOP;
-		END $$`); err != nil {
-		t.Fatalf("drop secondary indexes: %v", err)
+	// The red baseline is the database as it stood at revision 0110: migration 0111 is what adds
+	// ix_sync_runs_active_candidates, the mitigation these cases treat as absent. Dropping exactly that
+	// index yields the real pre-0111 state; every other index stays.
+	if _, err := pool.Exec(ctx, `DROP INDEX public.ix_sync_runs_active_candidates`); err != nil {
+		t.Fatalf("drop the 0111 index: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.scheduled_sync_occurrences (occurrence_id, identity_version, org_id, sync_config_id,

@@ -1167,8 +1167,10 @@ func TestOrphanedUnitRepairGuardMatrix(t *testing.T) {
 		{
 			name:   "source_row_carries_a_prerequisite_fence",
 			clause: "the prerequisite_completion_key refusal",
-			mutate: func(s *liveShape) { s.outboxPrerequisit = "metrics_daily_finalize:00000000-0000-4000-8000-000000005458" },
-			want:   wantCounters(1, 0, func(r OrphanedUnitRepairResult) int { return r.SkippedPrerequisite }, "SkippedPrerequisite"),
+			mutate: func(s *liveShape) {
+				s.outboxPrerequisit = "metrics_daily_finalize:00000000-0000-4000-8000-000000005458"
+			},
+			want: wantCounters(1, 0, func(r OrphanedUnitRepairResult) int { return r.SkippedPrerequisite }, "SkippedPrerequisite"),
 		},
 		{
 			name:   "the_replacement_key_already_exists",

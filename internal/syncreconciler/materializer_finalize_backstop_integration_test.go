@@ -393,109 +393,11 @@ func backstopRoutes(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int64
 	return finalize
 }
 
-// TestReadyFinalizeRepairGuardsHoldWithoutTheRouteFence pins the three
-// candidate clauses that migration 0049's route-fence trigger ALSO enforces.
-//
-// The trigger nulls dispatched_transport / dispatched_route_generation /
-// transport_job_id on any row whose status is not 'dispatched', and on any
-// 'dispatched' row whose last_error is 'feature_disabled'. With the trigger
-// installed those two shapes cannot exist, so a guard row seeded through it
-// passes whether or not the repair's own SQL still names the clause -- a
-// mutation pass proved exactly that: dropping `outbox.status='dispatched'`,
-// dropping the feature_disabled exclusion, and dropping transport_job_id from
-// the re-arm all survived the whole matrix, pinned by the trigger rather than
-// by the code under test.
-//
-// This test removes the trigger for the duration, seeds the shape directly,
-// and measures the repair's own refusal. It is not asserting that production
-// can reach these states -- it is asserting the repair does not DEPEND on a
-// database trigger to be safe, which is what "each guard predicate has a red
-// test behind it" has to mean.
-func TestReadyFinalizeRepairGuardsHoldWithoutTheRouteFence(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-	h := startFinalizeBackstopHarness(t, ctx)
-	now := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
-
-	withoutFence := func(t *testing.T, body func()) {
-		t.Helper()
-		// Drift simulation: the shapes below (a pending or feature-disabled row that still carries its
-		// dead delivery columns) are exactly what the migrated schema forbids twice over -- the fence
-		// trigger strips them and ck_sync_dispatch_outbox_dispatched_route_coherence rejects them.
-		// The test asserts the repair does not DEPEND on either, so both are removed for its duration
-		// (the constraint stays dropped for the rest of this test's database; seed() rebuilds the rows).
-		if _, err := h.admin.Exec(ctx,
-			`DROP TRIGGER trg_sync_dispatch_outbox_route_fence ON public.sync_dispatch_outbox;
-			 ALTER TABLE public.sync_dispatch_outbox DROP CONSTRAINT IF EXISTS ck_sync_dispatch_outbox_dispatched_route_coherence`); err != nil {
-			t.Fatal(err)
-		}
-		defer func() {
-			if _, err := h.admin.Exec(ctx, `CREATE TRIGGER trg_sync_dispatch_outbox_route_fence
-			    BEFORE INSERT OR UPDATE ON public.sync_dispatch_outbox FOR EACH ROW
-			    EXECUTE FUNCTION enforce_sync_dispatch_outbox_route_fence()`); err != nil {
-				t.Fatal(err)
-			}
-		}()
-		body()
-	}
-
-	for _, tc := range []struct {
-		name, sql string
-	}{
-		{
-			name: "already pending row keeps its dead delivery columns",
-			sql:  `UPDATE sync_dispatch_outbox SET status='pending' WHERE id='` + backstopOutboxID + `'`,
-		},
-		{
-			name: "feature-disabled row keeps its dead delivery columns",
-			sql:  `UPDATE sync_dispatch_outbox SET last_error='feature_disabled' WHERE id='` + backstopOutboxID + `'`,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			h.seed(t, ctx, now, "completed")
-			withoutFence(t, func() {
-				if _, err := h.admin.Exec(ctx, tc.sql); err != nil {
-					t.Fatal(err)
-				}
-				var transport, jobID *string
-				if err := h.admin.QueryRow(ctx,
-					`SELECT dispatched_transport,transport_job_id FROM public.sync_dispatch_outbox WHERE id=$1`,
-					backstopOutboxID).Scan(&transport, &jobID); err != nil {
-					t.Fatal(err)
-				}
-				if transport == nil || jobID == nil {
-					t.Fatal("fence still stripped the delivery columns; the shape under test was never created")
-				}
-				result, err := h.repair.Step(ctx, now, 20)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if result.Recovered != 0 || result.ReadyFinalizersRecovered != 0 {
-					t.Fatalf("repair recovered a row its own SQL must refuse: %+v", result)
-				}
-			})
-		})
-	}
-
-	t.Run("re-arm clears the delivery columns itself", func(t *testing.T) {
-		h.seed(t, ctx, now, "completed")
-		withoutFence(t, func() {
-			result, err := h.repair.Step(ctx, now, 20)
-			if err != nil || result.ReadyFinalizersRecovered != 1 {
-				t.Fatalf("result=%+v err=%v", result, err)
-			}
-			var residue int
-			if err := h.admin.QueryRow(ctx, `SELECT count(*) FROM public.sync_dispatch_outbox
-			    WHERE id=$1 AND (dispatched_at IS NOT NULL OR dispatched_transport IS NOT NULL
-			        OR dispatched_route_generation IS NOT NULL OR transport_job_id IS NOT NULL
-			        OR claim_token IS NOT NULL OR claim_expires_at IS NOT NULL
-			        OR claim_transport IS NOT NULL OR claim_route_generation IS NOT NULL)`,
-				backstopOutboxID).Scan(&residue); err != nil {
-				t.Fatal(err)
-			}
-			if residue != 0 {
-				t.Fatal("re-arm left delivery columns behind when the fence was not there to clear them")
-			}
-		})
-	})
-}
+// NOTE (CHAOS-6873): a former TestReadyFinalizeRepairGuardsHoldWithoutTheRouteFence removed the
+// route-fence trigger and the dispatched-route coherence check to seed pending / feature-disabled rows
+// that still carried delivery columns, so the repair's own SQL clauses were measured without the
+// trigger's help. Migration 0049 creates the delivery columns, that trigger and that check together,
+// so no deployable database can hold those rows: the test modelled no real state and is deleted.
+// Residual risk, stated rather than hidden: the repair's `status='dispatched'`, feature_disabled and
+// transport_job_id clauses are now covered only through the trigger (a mutation that drops one of them
+// survives). Reinstating a mutation-kill for them needs a ruling on an out-of-tree harness.

@@ -3,8 +3,12 @@
 package billingvenue
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -132,5 +136,70 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 	}
 	python := venue.ServePython(t, requests)
 	receipt += venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{})
+
+	// NAMED LIMITS (CHAOS-6520 r1, ruled): the Go edge keeps the main
+	// listener's transport bounds, which are stricter than the in-process
+	// Python edge the venue serves (no ingress and no uvicorn layer in front of
+	// TestClient). Pinned here as the two planes' own answers, so the
+	// difference cannot change or widen unseen: a webhook body above the 50 MiB
+	// ingress bound is Python's signature check (400) and Go's 413; a head above
+	// the request-head bound is Python's catch-all 404 and Go's 431.
+	limits := []venueoracle.Request{
+		{Name: "named limit: webhook body above the bound", Method: "POST", Path: webhookPath, Headers: map[string]string{"Content-Type": "application/json"},
+			Body: venueoracle.B64(strings.Repeat("a", 50<<20+1))},
+		{Name: "named limit: request head above the bound", Method: "GET", Path: "/unknown", Headers: map[string]string{"X-Big": strings.Repeat("a", 2<<20)}},
+	}
+	// The head bound lives on the listener, not the handler: serve the edge
+	// through its own Start, as dho api does.
+	edgeServer, err := apiservice.NewEdgeServer(config.Config{APIBillingEdgeAddress: "127.0.0.1:0"}, quietLogger(), billing.EdgeRoutes(billing.Deps{
+		Pool: upPool, Stripe: stripeclient.New(stripeclient.Options{Key: env["STRIPE_SECRET_KEY"]}), Logger: quietLogger(),
+		WebhookSecret: secrets.NewValue(env["STRIPE_WEBHOOK_SECRET"]), LicensePrivateKey: secrets.NewValue(env["LICENSE_PRIVATE_KEY"]), StripeKey: secrets.NewValue(env["STRIPE_SECRET_KEY"]),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := edgeServer.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = edgeServer.Shutdown(context.Background()) })
+	limitBase := "http://" + edgeServer.Address()
+	limitPython := venue.ServePython(t, limits)
+	wantPython := []struct {
+		status int
+		body   string
+	}{{400, `{"detail":"Invalid Stripe signature"}`}, {404, `{"detail":"Not Found"}`}}
+	wantGo := []struct {
+		status int
+		body   string
+	}{{413, `{"detail":"Request Entity Too Large"}`}, {431, ""}}
+	for index, request := range limits {
+		if limitPython[index].Status != wantPython[index].status || limitPython[index].Body != wantPython[index].body {
+			t.Errorf("%s: python %d %q, want %d %q", request.Name, limitPython[index].Status, limitPython[index].Body, wantPython[index].status, wantPython[index].body)
+		}
+		var body io.Reader
+		if request.Body != nil {
+			raw, err := base64.StdEncoding.DecodeString(*request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = bytes.NewReader(raw)
+		}
+		goRequest, err := http.NewRequest(request.Method, limitBase+request.Path, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for key, value := range request.Headers {
+			goRequest.Header.Set(key, value)
+		}
+		response, err := http.DefaultClient.Do(goRequest)
+		if err != nil {
+			t.Fatalf("%s: go: %v", request.Name, err)
+		}
+		text, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if response.StatusCode != wantGo[index].status || (wantGo[index].body != "" && string(text) != wantGo[index].body) {
+			t.Errorf("%s: go %d %q, want %d %q", request.Name, response.StatusCode, text, wantGo[index].status, wantGo[index].body)
+		}
+	}
 	t.Logf("health scenarios %d (x GET and HEAD), grid requests %d, SAME %d\n%s", scenarios, len(requests), strings.Count(receipt, "SAME"), receipt)
 }

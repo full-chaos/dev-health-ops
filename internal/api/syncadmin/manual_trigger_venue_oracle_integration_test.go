@@ -110,6 +110,10 @@ func manualSpecs() []manualSpec {
 	add("b-limit-org-b", func(s *manualSpec) { s.org, s.credential = "B", "credB" })
 	add("b-limit-org-b-ok", func(s *manualSpec) { s.org, s.credential = "B", "credB" })
 	add("t-legacy-unmanaged", func(s *manualSpec) { s.managed = false })
+	add("b-legacy-unmanaged", func(s *manualSpec) { s.managed = false })
+	add("t-pending", nil)
+	add("b-pending", nil)
+	add("b-invalid-source", nil)
 	add("t-other-org", func(s *manualSpec) { s.org, s.credential = "B", "credB" })
 	return out
 }
@@ -295,8 +299,34 @@ func manualRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Request
 		backfill("clock: backfill, dataset scope only", "b-mixed-scope", a,
 			`{"selector": {"since": "2026-09-01T00:00:00Z", "before": "2026-09-05T00:00:00Z", "dataset_keys": ["prs"]}}`),
 		backfill("clock: backfill, one day", "b-days-30", a, `{"since": "2026-09-01", "before": "2026-09-01"}`),
+		// Python does not validate a source id: the scheduler quarantines the occurrence,
+		// and both routes answer 202 "failed" with its error code.
+		backfill("clock: backfill, a source id that is not a uuid is quarantined", "b-invalid-source", a,
+			`{"selector": {"since": "2026-09-01T00:00:00Z", "before": "2026-09-05T00:00:00Z", "source_ids": ["not-a-uuid"]}}`),
 	}
 	return out
+}
+
+// pendingRequests are answered while the scheduler is stopped: both routes wait
+// their bound and answer 202 "pending" with the occurrence's id, the same on
+// both planes.
+func pendingRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Request {
+	return []venueoracle.Request{
+		manualPost(venue, "pending: trigger, the scheduler is stopped", v.cfg["t-pending"].id.String(), "/trigger", "adminA", nil),
+		manualPost(venue, "pending: backfill, the scheduler is stopped", v.cfg["b-pending"].id.String(), "/backfill", "adminA",
+			venueoracle.B64(`{"since": "2026-09-01", "before": "2026-09-30"}`)),
+	}
+}
+
+// divergingRequests are answered differently on purpose: Python plans a
+// configuration that is neither planner-managed nor pinned in process; the
+// hand-off refuses it, with nothing written.
+func divergingRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Request {
+	return []venueoracle.Request{
+		manualPost(venue, "diverging: trigger, legacy configuration", v.cfg["t-legacy-unmanaged"].id.String(), "/trigger", "adminA", nil),
+		manualPost(venue, "diverging: backfill, legacy configuration", v.cfg["b-legacy-unmanaged"].id.String(), "/backfill", "adminA",
+			venueoracle.B64(`{"since": "2026-09-01", "before": "2026-09-30"}`)),
+	}
 }
 
 var manualUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
@@ -350,12 +380,16 @@ func TestManualTriggerVenueOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var goScheduler *pgxpool.Pool
 	for _, database := range []string{venue.SourceDB, venue.GoDB} {
 		pool, err := pgxpool.New(ctx, venue.AdminURI(t, database))
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(pool.Close)
+		if database == venue.GoDB {
+			goScheduler = pool
+		}
 		materializer, err := schedsync.NewNativeMaterializer(pool)
 		if err != nil {
 			t.Fatal(err)
@@ -401,6 +435,55 @@ func TestManualTriggerVenueOracle(t *testing.T) {
 		},
 	})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
+
+	// The scheduler stopped: the wait ends with 202 "pending" and the occurrence id.
+	paused.Store(true)
+	pending := pendingRequests(venue, v)
+	pendingReceipt := venueoracle.Diff(t, base, pending, venue.ServePython(t, pending), venueoracle.DiffOptions{})
+	t.Logf("pending receipt:\n%s", pendingReceipt)
+	paused.Store(false)
+
+	// Ruled divergences, both planes asked: Python plans the legacy configuration
+	// in process (202), the hand-off refuses it (409) and writes nothing.
+	diverging := divergingRequests(venue, v)
+	pythonDiverging := venue.ServePython(t, diverging)
+	for index, request := range diverging {
+		goResponse := venueoracle.Do(t, base, request)
+		if pythonDiverging[index].Status != 202 {
+			t.Errorf("%s: python %d %s (the divergence assumes Python plans it)", request.Name, pythonDiverging[index].Status, pythonDiverging[index].Body)
+		}
+		if goResponse.Status != 409 || !strings.Contains(goResponse.Body, "not one the scheduler can run") {
+			t.Errorf("%s: go %d %s", request.Name, goResponse.Status, goResponse.Body)
+		}
+	}
+	var refusedOccurrences int
+	if err := goScheduler.QueryRow(ctx, `SELECT count(*) FROM scheduled_sync_occurrences o JOIN sync_configurations c ON c.id = o.sync_config_id
+WHERE c.id = ANY($1::uuid[])`, []uuid.UUID{v.cfg["t-legacy-unmanaged"].id, v.cfg["b-legacy-unmanaged"].id}).Scan(&refusedOccurrences); err != nil || refusedOccurrences != 0 {
+		t.Errorf("a refused hand-off wrote %d occurrences (err %v)", refusedOccurrences, err)
+	}
+
+	// The paused runs are planned once the scheduler runs again, on both planes.
+	for _, database := range []string{venue.SourceDB, venue.GoDB} {
+		pool, err := pgxpool.New(ctx, venue.AdminURI(t, database))
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			var open int
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM scheduled_sync_occurrences WHERE reconcile_status = 'pending'`).Scan(&open); err != nil {
+				t.Fatal(err)
+			}
+			if open == 0 || time.Now().After(deadline) {
+				if open != 0 {
+					t.Errorf("%s: %d occurrences still pending after the scheduler resumed", database, open)
+				}
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		pool.Close()
+	}
 	compareManualRows(t, ctx, venue)
 }
 
@@ -411,16 +494,16 @@ func compareManualRows(t *testing.T, ctx context.Context, venue *venueoracle.Ven
 		minSeparators int
 	}{
 		{"scheduled_sync_occurrences", `SELECT c.name, o.occurrence_id, o.identity_version, o.org_id, o.scheduled_for, o.reconcile_status, o.reconcile_error_code
-FROM scheduled_sync_occurrences o JOIN sync_configurations c ON c.id = o.sync_config_id ORDER BY c.name`, 12},
+FROM scheduled_sync_occurrences o JOIN sync_configurations c ON c.id = o.sync_config_id WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 12},
 		{"sync_manual_triggers", `SELECT c.name, m.mode, m.since, m.before, m.source_ids::text, m.dataset_keys::text, m.triggered_by
-FROM sync_manual_triggers m JOIN scheduled_sync_occurrences o USING (occurrence_id) JOIN sync_configurations c ON c.id = o.sync_config_id ORDER BY c.name`, 12},
+FROM sync_manual_triggers m JOIN scheduled_sync_occurrences o USING (occurrence_id) JOIN sync_configurations c ON c.id = o.sync_config_id WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 12},
 		{"sync_runs", `SELECT c.name, r.mode, r.status, r.total_units, r.completed_units, r.failed_units, r.triggered_by, r.result::text, r.error
-FROM sync_runs r JOIN sync_configurations c ON c.integration_id = r.integration_id ORDER BY c.name, r.mode`, 12},
+FROM sync_runs r JOIN sync_configurations c ON c.integration_id = r.integration_id WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name, r.mode`, 12},
 		{"sync_run_units", `SELECT c.name, u.dataset_key, u.mode, u.since_at, u.before_at, u.status, u.provider
-FROM sync_run_units u JOIN sync_configurations c ON c.integration_id = u.integration_id ORDER BY c.name, u.source_id::text, u.dataset_key`, 12},
+FROM sync_run_units u JOIN sync_configurations c ON c.integration_id = u.integration_id WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name, u.source_id::text, u.dataset_key, u.since_at, u.before_at`, 12},
 		{"backfill_jobs", `SELECT c.name, b.status, b.since_date, b.before_date, b.total_chunks, b.completed_chunks, b.failed_chunks, b.celery_task_id
-FROM backfill_jobs b JOIN sync_configurations c ON c.id = b.sync_config_id ORDER BY c.name`, 5},
-		{"scheduled_jobs", `SELECT c.name, j.job_type, j.status, j.org_id FROM scheduled_jobs j JOIN sync_configurations c ON c.id = j.sync_config_id ORDER BY c.name`, 10},
+FROM backfill_jobs b JOIN sync_configurations c ON c.id = b.sync_config_id WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 5},
+		{"scheduled_jobs", `SELECT c.name, j.job_type, j.status, j.org_id FROM scheduled_jobs j JOIN sync_configurations c ON c.id = j.sync_config_id WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 10},
 	}
 	for _, table := range compare {
 		pythonRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)

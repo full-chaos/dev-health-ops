@@ -993,6 +993,10 @@ func (sweep *UnreclaimableSweep) unroutable(candidate unreclaimableCandidate) bo
 // may act on it; the never-published branch still requires attempts 0 and the idle gate on
 // updated_at, which the dispatcher's own stale reclaim keeps fresh for exactly this
 // population (so the heartbeat is the clock that means "no worker has touched it").
+// An attempted unit is a candidate ONLY when it holds a `delivered` outbox row (an equality
+// lookup on the unique dedupe_key index): the scan below is bounded and restarts every pass, so
+// an attempted unit that can never be acted on (no delivery to prove dead) must not use up its
+// budget and hide one that can (r1 P1).
 const selectUnreclaimableCandidatesSQL = `
 SELECT unit.id::text, unit.sync_run_id::text, unit.org_id,
 	unit.provider, unit.dataset_key, unit.cost_class,
@@ -1006,7 +1010,15 @@ WHERE unit.status = 'dispatching'
 	AND unit.created_at <= $1
 	AND (
 		(unit.attempts = 0 AND unit.updated_at <= $2)
-		OR unit.attempts > 0
+		OR (
+			unit.attempts > 0
+			AND EXISTS (
+				SELECT 1
+				FROM public.worker_job_outbox AS delivered
+				WHERE delivered.dedupe_key = 'sync.provider_unit:' || unit.id::text
+					AND delivered.status = 'delivered'
+			)
+		)
 	)
 	AND run.status NOT IN ('success', 'partial_failed', 'failed')
 	AND run.org_id = unit.org_id

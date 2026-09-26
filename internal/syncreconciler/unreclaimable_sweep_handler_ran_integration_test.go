@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -154,5 +155,44 @@ func TestUnreclaimableSweepSparesAnAttemptedUnitThatIsNotProvablyDead(t *testing
 				t.Fatalf("DeferredToRepair = %d, want %d (%+v)", result.DeferredToRepair, tc.wantDeferred, result)
 			}
 		})
+	}
+}
+
+// r1 P1 (CHAOS-6890): the candidate scan is bounded (unreclaimableMaximumScan rows, cursor
+// restarting every pass). An attempted unit with no outbox row can never be acted on, so if
+// the candidate SQL admits it, a prefix of them older than a genuinely dead delivery uses up
+// the scan budget every pass and hides that delivery for ever.
+func TestUnreclaimableSweepIsNotStarvedByAnAttemptedPrefixWithNoDelivery(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_run_units (
+			id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status,
+			attempts, last_heartbeat_at, created_at, updated_at)
+		SELECT gen_random_uuid(), $1, $2, $3::uuid, $4::uuid, 'github', 'repo-metadata', 'heavy', 'incremental',
+			'dispatching', 2, $5::timestamptz, $6::timestamptz - make_interval(secs => n), $7::timestamptz
+		FROM generate_series(1, $8::int) AS n`,
+		sweepOrg, sweepRun, pgseed.DefaultSyncIntegrationID, pgseed.DefaultSyncSourceID,
+		now.Add(-33*time.Hour), now.Add(-40*time.Hour), now.Add(-90*time.Minute), unreclaimableMaximumScan); err != nil {
+		t.Fatal(err)
+	}
+	target := sweepUnitID(72)
+	spec := strandedSpec(target, "repo-metadata", "heavy", now) // created 16 h ago: after the whole prefix
+	spec.attempts = 4
+	heartbeat := now.Add(-33 * time.Hour)
+	spec.heartbeat = &heartbeat
+	seedSweepUnit(t, ctx, pool, spec)
+	seedSweepDelivery(t, ctx, pool, target, "discarded", "dev-health job failed [retryable]")
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if status, _, _, _ := sweepUnitState(t, ctx, pool, target); status != "failed" || result.Terminalized != 1 {
+		t.Fatalf("target status = %q, result %+v: %d older attempted units with no outbox row used up the sweep's scan budget "+
+			"and hid a provably dead delivery (r1 P1)", status, result, unreclaimableMaximumScan)
 	}
 }

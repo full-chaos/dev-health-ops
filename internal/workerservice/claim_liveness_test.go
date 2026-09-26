@@ -1057,3 +1057,48 @@ func TestClaimLivenessHealthyQueueLogsNoRefusal(t *testing.T) {
 		t.Fatalf("a healthy queue logged a refusal: %s", logs.String())
 	}
 }
+
+// CHAOS-6883 r1 P1: the first refusal after a healthy stretch is always logged. The
+// per-queue limiter must not carry a refusal across a recovery, or a queue that
+// recovers and refuses again inside the interval keeps only the generic registry
+// line and loses the clause and facts.
+func TestClaimLivenessRefusalAfterARecoveryLogsItsClauseAgain(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	telemetry := &fakeQueueTelemetry{}
+	stalled := riverstore.QueueTelemetrySnapshot{
+		Jobs:            []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: 3}},
+		QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "heartbeat", Capacity: 2, Running: 0}},
+	}
+	drained := riverstore.QueueTelemetrySnapshot{
+		Jobs:            []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: 0}},
+		QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "heartbeat", Capacity: 2, Running: 0}},
+	}
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true, queueTelemetry: telemetry,
+		logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	claim := newClaimLiveness(time.Now().Add(-time.Hour), []string{"heartbeat"})
+	claim.markRuntimeLive()
+	ready := dependencies.claimLivenessReady(claim)
+	count := func() int { return strings.Count(logs.String(), `"msg":"execution liveness refused"`) }
+
+	telemetry.setSnapshot(stalled)
+	if err := ready(context.Background()); err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if err := ready(context.Background()); err == nil || count() != 1 {
+		t.Fatalf("a repeat inside the interval must not log again: err=%v lines=%d", err, count())
+	}
+	telemetry.setSnapshot(drained)
+	if err := ready(context.Background()); err != nil {
+		t.Fatalf("the drained queue must be healthy: %v", err)
+	}
+	telemetry.setSnapshot(stalled)
+	if err := ready(context.Background()); err == nil {
+		t.Fatal("expected the second refusal")
+	}
+	if got := count(); got != 2 {
+		t.Fatalf("a refusal after a recovery logged %d lines in total, want 2 (each run of refusals logs its clause and facts): %s", got, logs.String())
+	}
+}

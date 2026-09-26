@@ -617,9 +617,15 @@ func TestRegistryLogsRefusalsOnFirstRepeatRecoveryAndNeverTheErrorText(t *testin
 	if got := strings.Count(logs.String(), `"msg":"readiness check recovered"`); got != 1 {
 		t.Fatalf("recovery logged %d lines, want 1: %s", got, logs.String())
 	}
-	for _, want := range []string{`"last_cause":"error"`, `"consecutive_refusals":6`} {
-		if !strings.Contains(logs.String(), want) {
-			t.Errorf("recovery line lacks %s: %s", want, logs.String())
+	var recovered string
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, `"msg":"readiness check recovered"`) {
+			recovered = line
+		}
+	}
+	for _, want := range []string{`"check":"dep_a"`, `"last_cause":"error"`, `"consecutive_refusals":6`} {
+		if !strings.Contains(recovered, want) {
+			t.Errorf("the recovery line itself lacks %s: %q", want, recovered)
 		}
 	}
 	failing.Store(true)

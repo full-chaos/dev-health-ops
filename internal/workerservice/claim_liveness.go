@@ -501,7 +501,11 @@ func (dependencies *workerDependencies) claimLivenessReady(claim *claimLiveness)
 		for _, facts := range collectQueueFacts(snapshot, claim, now, preclaim) {
 			switch judgeQueue(facts) {
 			case verdictHealthy:
+				// A healthy poll ends this queue's run of refusals: the next one is a
+				// fresh run and logs its clause and facts again.
+				claim.endRefusalRun(facts.queue)
 			case verdictPreclaimSkip:
+				claim.endRefusalRun(facts.queue)
 				// River has not started yet, so no claim on this queue could
 				// possibly exist regardless of how long preclaim's own retry
 				// loop has been running against some other slow dependency.
@@ -677,6 +681,14 @@ func (c *claimLiveness) claimRefusalDue(queue string, now time.Time) bool {
 	}
 	c.refusalLogged[queue] = now
 	return true
+}
+
+// endRefusalRun forgets queue's last logged refusal, so the first refusal after
+// a healthy stretch is always due (claimRefusalDue).
+func (c *claimLiveness) endRefusalRun(queue string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.refusalLogged, queue)
 }
 
 // logClaimLivenessRefusal names the clause that failed execution_liveness and

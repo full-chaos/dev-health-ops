@@ -477,8 +477,8 @@ func NewServer(
 	})
 }
 
-// NewEdgeServer is the billing-edge listener: the Python billing edge
-// (dev_health_ops.api.billing_edge:app) is a bare FastAPI app, with none of
+// NewEdgeServer is the billing-edge listener: the deleted Python billing edge
+// (dev_health_ops.api.billing_edge:app, CHAOS-6939) was a bare FastAPI app, with none of
 // the main app's middleware, so this server carries none of its origin check,
 // security headers or CORS, and redirects no slash.
 //

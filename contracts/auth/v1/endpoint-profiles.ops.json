@@ -5,102 +5,6 @@
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "rows": [
     {
-      "id": "POST /api/v1/billing/webhooks/stripe [dev-health-ops-billing-edge]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/webhooks/stripe",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-billing-edge",
-      "source": {
-        "file": "src/dev_health_ops/api/billing_edge.py",
-        "line": 77,
-        "router_local_path": "/api/v1/billing/webhooks/stripe"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "stripe_webhook_signature"
-      ],
-      "primary_validator": {
-        "description": "Forwards to billing.router.stripe_webhook, which verifies the Stripe-Signature header via the configured webhook secret.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/billing/router.py",
-          "line": 320
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [],
-      "action": "billing.webhook.stripe",
-      "resource_resolver": "Stripe event payload (no org_id path/header; resolved from Stripe customer/subscription metadata inside the handler)",
-      "tenant_requirement": "unknown",
-      "current_state_cache_behavior": "no-cache (webhook, one-shot)",
-      "impersonation_policy": "not_applicable_non_main_app",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "Signature failure -> 401; this deployment has no OrgIdMiddleware/CORS/CSRF at all (api/billing_edge.py registers no middleware)."
-    },
-    {
-      "id": "GET,HEAD /health [dev-health-ops-billing-edge]",
-      "surface_kind": "rest",
-      "method": "GET,HEAD",
-      "route": "/health",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-billing-edge",
-      "source": {
-        "file": "src/dev_health_ops/api/billing_edge.py",
-        "line": 82,
-        "router_local_path": "/health"
-      },
-      "gaps": [],
-      "classification": "public",
-      "public_rationale": "Kubernetes liveness/readiness probe for the billing-edge deployment; no credential by design.",
-      "accepted_credential_classes": [],
-      "primary_validator": null,
-      "token_shape": null,
-      "reachable_validators": [],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "none",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "not_applicable_non_main_app",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "Always 200/503 body, no auth-shaped disclosure."
-    },
-    {
-      "id": "DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT /{path:path} [dev-health-ops-billing-edge]",
-      "surface_kind": "rest",
-      "method": "DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT",
-      "route": "/{path:path}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-billing-edge",
-      "source": {
-        "file": "src/dev_health_ops/api/billing_edge.py",
-        "line": 108,
-        "router_local_path": "/{path:path}"
-      },
-      "gaps": [],
-      "classification": "public",
-      "public_rationale": "Catch-all reject_unapproved_paths handler: always returns 404 for any path not explicitly registered above on this app. No credential is checked because no functionality is served.",
-      "accepted_credential_classes": [],
-      "primary_validator": {
-        "description": "reject_unapproved_paths always returns 404, regardless of method/credential -- this deployment's allowlist boundary.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/billing_edge.py",
-          "line": 108,
-          "line_end": 110
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "none",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "not_applicable_non_main_app",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "Always 404, uniform for every unregistered path/method on this deployment."
-    },
-    {
       "id": "POST /api/v1/admin/impersonate [dev-health-ops-api]",
       "surface_kind": "rest",
       "method": "POST",
@@ -12568,7 +12472,7 @@
       "current_state_cache_behavior": "no-cache (webhook)",
       "impersonation_policy": "subject_to_impersonation_override",
       "entitlement_requirement": null,
-      "disclosure_behavior": "Also served, with NO shared middleware, by the billing-edge app (see that service's row for the same path)."
+      "disclosure_behavior": "Served only by the ops api app; the billing host's webhook is served by the go-api billing-edge listener."
     },
     {
       "id": "POST /api/v1/billing/checkout [dev-health-ops-api]",

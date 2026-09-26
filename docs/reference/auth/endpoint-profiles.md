@@ -85,7 +85,7 @@ comes from the framework and the location still comes from real source.
     `method: "API_ROUTE"`, which named the fact that `@app.api_route(...)`
     takes a runtime method list without saying what was in it. Both now come
     from the route object: the real path, and the real verb set
-    (`GET,HEAD`, or the billing-edge catch-all's seven).
+    (`GET,HEAD`, or the removed billing-edge catch-all's seven).
 
 !!! warning "What a green run still does not tell you"
     The surface SET is now verified in both directions. The JUDGEMENT in each
@@ -96,9 +96,14 @@ comes from the framework and the location still comes from real source.
     the edge path-map, so nothing here can verify whether a surface the app
     mounts is reachable from outside.
 
-### Two deployed apps
+### Deployed apps
 
-Routes are declared by **two separate `FastAPI()` instances**, not one (the heading keeps its anchor; the billing edge below is no longer deployed by the chart):
+Routes are declared by **one deployed `FastAPI()` instance**. A second one,
+the Python billing edge (`dev-health-ops-billing-edge`, zero shared
+middleware), was deleted with its rows; the go-api billing-edge listener now
+serves the billing host and is outside this ops-Python inventory. `service`
+stays a per-deployed-app field, and the closed `service` vocabulary keeps the
+retired value:
 
 - `dev-health-ops-api` — `src/dev_health_ops/api/main.py`, the main app. Full
   middleware stack registered in `api/_middleware.py`: on the request path,
@@ -106,18 +111,9 @@ Routes are declared by **two separate `FastAPI()` instances**, not one (the head
   `SlowAPIMiddleware` → `OriginValidationMiddleware` (CSRF) →
   `GraphQLQuerySizeLimitMiddleware` → `SecurityHeadersMiddleware` →
   `CORSMiddleware` → the route.
-- `dev-health-ops-billing-edge` — `src/dev_health_ops/api/billing_edge.py`, a
-  separate app that this chart no longer deploys (its template was removed; the go-api billing-edge listener now serves the billing host, and this app is only kept until its deletion)
-  with **zero shared middleware** — no `OrgIdMiddleware`, no CORS, no CSRF.
-  It registers exactly three routes: `POST /api/v1/billing/webhooks/stripe`
-  (forwards into `billing/router.py`'s `stripe_webhook`, the SAME handler the
-  main app also serves at the same path — two independent surfaces, two rows),
-  `GET/HEAD /health`, and a catch-all `/{path:path}` that 404s everything
-  else.
 
 Every row's `service` field says which app serves it. `reachable_validators`
-is `[]` for billing-edge rows because that app shares no middleware with the
-main app to be reachable through.
+is derived from the middleware that app mounts.
 
 ## Classification summary
 
@@ -282,7 +278,7 @@ rather than guessed.
    protected — `accepted_credential_classes` from
    `contracts/auth/v1/credential-classes.json`'s closed vocabulary plus
    `reachable_validators` derived from where your router mounts (which
-   middleware sees it, per [Two deployed apps](#two-deployed-apps) and
+   middleware sees it, per [Deployed apps](#deployed-apps) and
    [Reachable-but-not-owner findings](#reachable-but-not-owner-findings)
    above). Re-run `python3 ci/discover_ops_routes.py` first — it independently
    re-derives every surface, so your new route must appear in its output with

@@ -165,7 +165,7 @@ same binary.
 | `DEV_HEALTH_GO_OPERATOR_IMAGE` | `dev-health-go-operator` | the four `go-sync-*-route-activate` one-shots |
 | `DEV_HEALTH_GO_CONTRACTCHECK_IMAGE` | `dev-health-go-contractcheck` | `go-contractcheck` |
 | `DEV_HEALTH_IMAGE` | `dev-hops-runner` | `go-river-provision`, `go-river-migrate`, and the dormant Celery services |
-| `DEV_HEALTH_API_IMAGE` | `dev-hops-api` | `api`, `metrics-api`, `billing-edge` |
+| `DEV_HEALTH_API_IMAGE` | `dev-hops-api` | `api`, `metrics-api` |
 
 Every default is the `:local` tag of its family, a tag no registry
 publishes. Unpinned, Compose has nothing to fetch under that name and

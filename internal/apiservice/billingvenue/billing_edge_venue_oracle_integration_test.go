@@ -42,6 +42,8 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name(), goldenDigest(t.Name())))
 	start := time.Now().UTC()
 	env := webhookEnv()
+	// Only a recording serves Python, and only from the pinned checkout (pythonBuild)
+	// that still carries this module; the module is deleted on main.
 	pythonEnv := []string{"VENUE_PY_APP=dev_health_ops.api.billing_edge:app"}
 	for key, value := range env {
 		pythonEnv = append(pythonEnv, key+"="+value)

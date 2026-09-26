@@ -26,7 +26,9 @@ import (
 // (credentials, OAuth grants, revocations, webhook bindings) are compared.
 func TestCredentialDeleteVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, governanceGolden("credentialdelete", "TestCredentialDeleteVenueOracle", "fa3709a5b40a8689a27b0e2459dfe96965daa3bd761a2cb00243c1bfe43451c8"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("cd")
 	const jwtKey = "venue-oracle-test-secret-key-for-credential-delete-32-by"
 
 	fake := &pagerDutyDisconnectFakeServer{failTokens: map[string]bool{}}
@@ -35,9 +37,9 @@ func TestCredentialDeleteVenueOracle(t *testing.T) {
 
 	orgs := map[string]uuid.UUID{}
 	for _, slug := range []string{"main", "other", "connected", "empty", "bad-cipher", "with-binding", "revoke-fails"} {
-		orgs[slug] = uuid.New()
+		orgs[slug] = nextID()
 	}
-	adminID, memberID := uuid.New(), uuid.New()
+	adminID, memberID := nextID(), nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   root,
@@ -75,7 +77,7 @@ VALUES ($1, $2, true, true, false, 0, now(), now())`, id, email)
 				return ciphertext
 			}
 			credential := func(org, provider, name string, active bool, payload any) uuid.UUID {
-				id := uuid.New()
+				id := nextID()
 				exec(`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, '{"auth_mode":"oauth","region":"us","subdomain":"acme"}'::json, now(), now())`, id, orgs[org].String(), provider, name, active, payload)
 				return id
@@ -92,7 +94,7 @@ VALUES ($1, 'pagerduty', $2, $3, 1, now(), now(), false)`, orgs[org].String(), n
 			credential("main", "gitlab", "default", true, encrypt(`{"token":"t"}`))
 			linked := credential("main", "jira", "linked", true, encrypt(`{"token":"t"}`))
 			exec(`INSERT INTO integrations (id, org_id, provider, name, config, is_active, credential_id, created_at, updated_at)
-VALUES ($1, $2, 'jira', 'jira-int', '{}'::json, true, $3, now(), now())`, uuid.New(), orgs["main"].String(), linked)
+VALUES ($1, $2, 'jira', 'jira-int', '{}'::json, true, $3, now(), now())`, nextID(), orgs["main"].String(), linked)
 			credential("other", "github", "default", true, encrypt(`{"token":"t"}`))
 
 			credential("connected", "pagerduty", "default", true, nil)
@@ -108,14 +110,14 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 			fake.mu.Unlock()
 			bindingCredential := credential("with-binding", "pagerduty", "default", true, nil)
 			oauthTokens("with-binding", "default", "venue-cred-del-binding-token")
-			integrationID := uuid.New()
+			integrationID := nextID()
 			exec(`INSERT INTO integrations (id, org_id, provider, name, config, is_active, created_at, updated_at)
 VALUES ($1, $2, 'pagerduty', 'pd', '{}'::json, true, now(), now())`, integrationID, orgs["with-binding"].String())
-			sourceID := uuid.New()
+			sourceID := nextID()
 			exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
 VALUES ($1, $2, $3, 'pagerduty', 'service', 'ext-1', 'svc', 'svc', '{}'::json, true, now(), now())`, sourceID, orgs["with-binding"].String(), integrationID)
 			exec(`INSERT INTO pagerduty_webhook_bindings (id, org_id, integration_source_id, credential_id, provider_subscription_id, signing_secret_encrypted, signing_secret_key_version, status, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`, uuid.New(), orgs["with-binding"], sourceID, bindingCredential, encrypt("venue-cred-del-signing-secret"))
+VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`, nextID(), orgs["with-binding"], sourceID, bindingCredential, encrypt("venue-cred-del-signing-secret"))
 
 			admin_ := func(slug string) map[string]any {
 				return map[string]any{"user_id": adminID.String(), "email": "cred-del-admin@example.com", "org_id": orgs[slug].String(), "role": "admin"}
@@ -165,17 +167,19 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`, uuid.New(),
 	if err != nil {
 		t.Fatalf("build decryptor: %v", err)
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: pagerDutyDisconnectVenueClientID, RevokeURL: fakeServer.URL}
 	})
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 
 	compare := func(name, query string) {
 		t.Helper()
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		source := golden.Rows(t, name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		})
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
 		if source != goRows {
 			t.Errorf("%s differs after the requests:\n python: %s\n go:     %s", name, source, goRows)
@@ -186,4 +190,5 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`, uuid.New(),
 	compare("provider_oauth_revocations rows", `SELECT org_id, provider, credential_name, purpose, status, attempts FROM provider_oauth_revocations ORDER BY org_id, credential_name, created_at`)
 	compare("pagerduty_webhook_bindings rows", `SELECT org_id, status, (credential_id IS NULL)::text, (revoked_at IS NULL)::text FROM pagerduty_webhook_bindings ORDER BY org_id`)
 	compare("integrations rows", `SELECT org_id, provider, name, (credential_id IS NULL)::text FROM integrations ORDER BY org_id, name`)
+	golden.Finish(t)
 }

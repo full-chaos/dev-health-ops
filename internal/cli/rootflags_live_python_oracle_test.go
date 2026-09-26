@@ -58,6 +58,7 @@ func rootCorpus() [][]string {
 		// unknown and ambiguous options
 		with("--bogus"), with("--bogus", "x"), with("-z"), with("--l", "x"), with("--llm", "x"), with("--log-"),
 		// help
+		with("-h", "--llm", "x"), with("--llm", "x", "-h"), with("--help", "--l"), with("--l", "--help"), with("--org", "R", "-h", "--llm"),
 		with("--help"), with("-h"), with("--org", "R", "--help"), with("--org", "R", "-h"),
 		{"--org", "R", "-hx", "fixtures", "generate"},
 		// "--" and the words after the command

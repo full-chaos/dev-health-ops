@@ -78,6 +78,7 @@ func syncTargetCorpus(keyFile string) []oracleCase {
 		{"--backf=4"}, {"--bef", "2026-02-02"}, {"--da", "2026-01-02"}, {"--dat", "2026-01-02"}, {"--day", "2026-01-02"},
 		{"--day", "2026-01-02", "--date", "2026-03-03"}, {"--date", "2026-03-03", "--before", "2026-05-05"},
 		{"--day", "2026-01-02", "--backfill", "3"}, {"--date", "2026-01-02", "--since", "2026-01-01"},
+		{"--s", "2026-01-02", "-h"}, {"-h", "--d", "x"}, {"--d", "x", "--help"}, {"--help", "--o"}, {"--d", "-h"}, {"-h", "--s"},
 		{"--d", "x"}, {"--pro", "gitlab"}, {"--p", "gitlab"}, {"--o", "x"}, {"--org=x"}, {"--or", "x"}, {"--org", ""},
 		{"--org"}, {"--auth"}, {"--auth", "--since"}, {"--auth", "-5"}, {"--owner", "-x"}, {"--owner=-x"},
 		{"--max-commits-per-repo", "-5"}, {"--max-commits-per-repo=-5"}, {"--backfill", "-3"},

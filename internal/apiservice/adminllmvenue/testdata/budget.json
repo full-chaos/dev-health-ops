@@ -1,0 +1,1243 @@
+{
+  "header": {
+    "test": "TestAdminLLMBudgetVenueOracle",
+    "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=$DIR DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestAdminLLMBudgetVenueOracle$' ./internal/apiservice/adminllmvenue/ (it fails once by design and prints the digest to pin)"
+  },
+  "requests": [
+    {
+      "name": "community tier is refused",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "7b24a259c2286bbda41597ee22e02c814b0aed9fadb349d3c659d910c81ec00e",
+      "status": 402,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9dea4de5-689f-43d4-9b19-ae6ca6b9f6fc"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "kill switch is refused",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "16d4e89b44a93e2996ff544453eb6d8db8498f4eb0efc2feeef64a334172fb5c",
+      "status": 403,
+      "headers": {
+        "content-length": "119",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "979cce5f-9b09-4fbd-842e-034ae40b4ff3"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"byo_llm\",\"message\":\"BYO LLM is not enabled for this organization\"}}"
+    },
+    {
+      "name": "no settings at all",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "20f512cc4fb36838edd5a65c49302c92289253e78427f7668e10a198b0b53068",
+      "status": 200,
+      "headers": {
+        "content-length": "258",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d2e733f7-7932-46ad-a782-390f5111eaaa"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "unpriced provider, limit set",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ff3dbf624e74dfe5992342855dfb89eda4583f2bb1c49764b3d033c37ca5efd1",
+      "status": 200,
+      "headers": {
+        "content-length": "256",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6a06ba9c-d34e-49bc-9527-3d1ba3d2f454"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":1000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "unpriced provider, no limit",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c6c777c9e4694ffac3e022b00fbf786c5f2d4f3f78d5eed72947359dc09afa01",
+      "status": 200,
+      "headers": {
+        "content-length": "258",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "77d9fde7-4539-4e24-8f07-2a9088822156"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "empty model falls back to the provider default",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b40daa11a8612583ca0508b7b62e18748a81dfb41934ff9600a639be9e14a998",
+      "status": 200,
+      "headers": {
+        "content-length": "267",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4552a191-d0af-4aaf-989b-e7a84c01e8d3"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":1000,\"remaining_micro_usd\":1000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "unknown provider has no default model",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "f5ba3b06b71f75403122d25f9540177be29f7338dc9813f6882ecefbe2abf1b2",
+      "status": 200,
+      "headers": {
+        "content-length": "256",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6ae51fa5-da9d-4c1b-bec7-8314e9d5f7cc"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":1000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "priced, no limit",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "59a0718ec071d9355b43fe96763a7dd394ed2ae2635def4e0c386fc06efd0ac5",
+      "status": 200,
+      "headers": {
+        "content-length": "280",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "743a083c-c238-4a57-b7c8-cf5dadd524ce"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "limit within the ceiling",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "6cb5954518ffae2fcb97cc44bf070ad57b9e24ad7e4d4c89787f9dbf246d678d",
+      "status": 200,
+      "headers": {
+        "content-length": "267",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "260300bb-d7f3-4610-9b0d-c625806b7379"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":1000,\"remaining_micro_usd\":1000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "limit above the operator ceiling is capped",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4b4fddf99007e290c31f93ccde7418706baf709b5f5afcfbc2556b14bca3cfad",
+      "status": 200,
+      "headers": {
+        "content-length": "275",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0e2c256b-cc5d-4b13-bb7d-73d384a32c87"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":10000000,\"remaining_micro_usd\":10000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "limit zero is exhausted at once",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "7b1bb1687eccd1d0b359f08e865aa3e9402c83fe99592d5b6deafce51740ff8b",
+      "status": 200,
+      "headers": {
+        "content-length": "268",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "91507f6d-07b7-43bb-9379-eaee2ab8b614"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":0,\"remaining_micro_usd\":0,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"budget_exhausted\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "limit padded and underscored",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "99c48984b20e19355adb22a1fd3b88496131799701440b325e5714612b6b7586",
+      "status": 200,
+      "headers": {
+        "content-length": "267",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "60bcf6d8-cf1d-410f-afc5-930c5b9b636a"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":7000,\"remaining_micro_usd\":7000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "limit not an integer",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c566b0dfe50ac11cb0d0ca1d90e29567f50b2330a94beb4ef2524e2ff8b90604",
+      "status": 200,
+      "headers": {
+        "content-length": "280",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "19316c78-1693-4974-8667-404d2127250d"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "limit negative",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "234dcfd69127f8dd750417dec58193c221be264a41c033a970e933c42408efd9",
+      "status": 200,
+      "headers": {
+        "content-length": "280",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "54cd4e1f-96b5-46f3-9214-c2bd833e87fa"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "limit float text",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "eb27a04d22e8c6dd5e7ed4b2063c4dccf5f93082fc14fbbb5ebae308f566567e",
+      "status": 200,
+      "headers": {
+        "content-length": "280",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2981b010-bc13-423d-a9d0-a07f8b4260b0"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "limit empty text",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4f31a2717b608af29f2f94b59f5b4483546c07fcefee5946c6f0a72ad726fc70",
+      "status": 200,
+      "headers": {
+        "content-length": "280",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e8151cad-5a74-4e00-8090-f37b88f4d295"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "reserved counts as used",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4800d06224f99f5bf1022a0c9b9ffc0fd2cce7ca04faea035fe875eb3e936217",
+      "status": 200,
+      "headers": {
+        "content-length": "268",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "badf4d68-fbc5-4bd9-96e6-7509877e334d"
+      },
+      "body": "{\"used_micro_usd\":300,\"limit_micro_usd\":1000,\"remaining_micro_usd\":700,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "actual replaces the reserve",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "bad45f162e04eed537ec512322a64734e39f92c13bee1d436dcc74a8e8b3bdaf",
+      "status": 200,
+      "headers": {
+        "content-length": "268",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b6dbbcfe-c17f-4d2a-adb6-aa6a078ea23c"
+      },
+      "body": "{\"used_micro_usd\":120,\"limit_micro_usd\":1000,\"remaining_micro_usd\":880,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "voided is ignored",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2539db7769fe9a636dd2e0918ec90b1ade8569162ee9f8a00c6e24bc59c095bb",
+      "status": 200,
+      "headers": {
+        "content-length": "267",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e3fb96a5-b64d-4a01-9922-6c98f2a815b4"
+      },
+      "body": "{\"used_micro_usd\":40,\"limit_micro_usd\":1000,\"remaining_micro_usd\":960,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "failed and cancelled count their actual",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c1ebd28585c43ce270951477037608f9b4070a9430f3cecd5fc5bf324a3e21fe",
+      "status": 200,
+      "headers": {
+        "content-length": "267",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3a081ceb-2914-4a23-b83b-051538333284"
+      },
+      "body": "{\"used_micro_usd\":60,\"limit_micro_usd\":1000,\"remaining_micro_usd\":940,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "used equals the limit is exhausted",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b6ca8f9db60fa285ec0a86bf6d2c87199568c1247385685ca38d01e1c64294e5",
+      "status": 200,
+      "headers": {
+        "content-length": "272",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "97883970-ad36-48ea-92fc-97ca289fba25"
+      },
+      "body": "{\"used_micro_usd\":300,\"limit_micro_usd\":300,\"remaining_micro_usd\":0,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"budget_exhausted\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "used above the limit clamps remaining",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ac4d8ab311c8925e793fae68f6f230f68ee78985e22192fb2b4922f9e3846f6d",
+      "status": 200,
+      "headers": {
+        "content-length": "272",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "795a3d02-0151-4605-95dc-1d14aebbf918"
+      },
+      "body": "{\"used_micro_usd\":900,\"limit_micro_usd\":300,\"remaining_micro_usd\":0,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"budget_exhausted\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "usage unavailable hides the usage",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c82460ea20e66471552b520a27f798cf7db14beaee8e4107787968308df8c06b",
+      "status": 200,
+      "headers": {
+        "content-length": "279",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2a28752b-3ba6-42dd-91cf-a78dd3dcc9d8"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":1000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"usage_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "no limit with reservations still reports used",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4066da695fb62d8e2d436d2e505a9eecc27ac14be2e9c2f72c61fe83fe3811a7",
+      "status": 200,
+      "headers": {
+        "content-length": "282",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "39e960c7-3782-490c-8984-b6d21f77f28c"
+      },
+      "body": "{\"used_micro_usd\":410,\"limit_micro_usd\":null,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"budget_not_configured\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "model gpt-5-mini dated",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "960189869c10eef9c579ff1c2ff5e8ce6140ebb4fb174393cab8953b3d38359a",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ce66de52-18c1-4340-a381-8273bd12d5db"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "model gpt-5-mini upper case",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ee8b4b2c04223a88d745a99f5b66ff02adb4a869f40b70e17ecea968f4998909",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "19941aa1-a61f-43b9-8b17-aa3e280b3552"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "model gpt-5-mini padded",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "89a8b0f9ad49568b6a367f31bd6cb42d367db96774b74ee05dd667b58a8c4fff",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "593a2e80-f2ef-4bed-a458-cf47344e8387"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "model gpt-5-nano",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e2fe99cda244ca70c95bffeae478a7c987d16ace99803efec80e0f0e07d0e0a9",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9ccd2baf-307a-4221-bf18-ea4b6e52c040"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "model gpt-5-nano dated",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "5e33ffc2a212c775288a606fe973ae3a9db8098473c12d18a20554904355dcb4",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ffad552c-e506-43ab-8c32-f88a42bb3cc8"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "model gpt-5-nano upper case is unpriced",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "42e90747b32e9584c7d909b024211e6ab36f43af8de4df27ce8607d69814ac8c",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "70265183-1766-442f-bb4e-bb07a3874a7a"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "model gpt-5-nano padded",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ebb9c281a2a8f5e562b3acdb52f4a5517f938109cfbf5bb970fb91f8dbed673d",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0b7c941c-2a58-4c3e-b51e-8fe287962812"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "model gpt-5 is unpriced",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "99f81e84a22d11f913a0c4e4a013efaea177b8af51800b9f839f322a5a82c6e6",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "966aaca6-87e9-406e-abd2-d1a57bb069e9"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "model scripted without its transport",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "6590221156baa60e05d7845f4f2ebdca0098934b5ee9f678315c989544e06b1b",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "045b70b7-b8bf-4e5e-90a5-7a421d97a0a0"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "model scripted look-alike",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "bbb4e1754f1083b543c4c37fdd00d707a9acbe20ee6d431b5239540fa0d0cedc",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "566cb365-cb0a-4a05-8dbe-323441858d69"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "official endpoint",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "9af2ec9fb270def5931616db866246d8d84eb90bd7b9f177c7a0541f449244d7",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5c484cf3-2d7b-4639-8a59-2b2f839a8656"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "official endpoint with a path",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "792bf03cf330d6d249ec8ec7efe6153fbbe87ee21e9a54c53584ab0aad32e5f1",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "22d3d84a-a7d9-49e7-898a-d05397ca3b2b"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "official endpoint upper case host",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "73480b3b7532d93329b36c9c67c8f4fc848b0e81ace7e6be1fe26f607a437133",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9e25a369-dd66-452c-b44e-5feb9f989442"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "plain http endpoint",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "19a9e2e50bd8d1b9c597d9cec4bc10051098cb00c722876418a5522ad8d39a88",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "23b09513-b6c9-49a9-a703-d01d91807a56"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "look-alike endpoint",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ca26a6bc570cc0782fc67740661b2ecb42f9b9c514655468dc21a9adfe8c706d",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0dd9f20c-4a4a-402d-a562-bb8c0c18dcee"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "endpoint with userinfo",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fcb5bd297005270a424e18c4fe9820dd830ad9f794998c31aa844c4972890691",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9174b2fc-e6b0-400a-8bb3-3a5f23c46d73"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "endpoint blank",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "79b2a035ca93af22173245e388d876017b6652df8f040d04edb1985a36921043",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cc6989ef-f5c9-4010-b259-45659e8c19eb"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "endpoint empty",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "91255fc3c65b2f595755da9f24406f747eff664c0315a572b0b7199390d91d4b",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f26e6bc6-08e0-4d95-a80d-08e0962519ac"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "endpoint not a url",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "821b2a3b94280fdba62b549478777708697504040aeb4104d13a8876a2d51d44",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "eca1c3d1-09c0-43a6-b6fd-1d8a88629f07"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "endpoint with a broken bracket",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d5b94eddc108ae91ba3118de26fa8b3f6449d8647ac83d1ed4a2fe009a465682",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3350d961-1a64-458f-9b27-a83926c17ce2"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "azure endpoint is unpriced",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "47439024d2bd4b3267c7fdaae615c1500a92a6a1682155d8dce94af99efe50c0",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "aa33c4f6-6c01-442e-91ca-d0fb730ae2a0"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "scripted model on its transport",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ec237c399633c2557c0b57bae45568a99cfff93ba8c08c379b03f78f2b70cf91",
+      "status": 200,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3c99b52d-5298-4374-9932-363eb3d31107"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":5000000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "scripted model, wrong port",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d114ed7034a603db23d55a8fd6052fc1e6acbe9eb9335eda798e86860726127c",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c6feaf3f-de27-4692-ad75-0c185499ff7a"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "scripted model, https",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "6f8d0157d459a968baf970d144014fc6ffe1880878e6d5bffa7d5529048c21cd",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bc5c8cb3-6798-4e05-a783-e4ea82a3ebe3"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "scripted model, unparsable port",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fc804a03996669be9eae6caea8a68d0a5c0f6a7c99e1ec14372bb65e5d6175b3",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "scripted model, no port",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4fa1dc1c658b6bd0d7409d0621c20f5edabb931446a5fda26c1e2a66bb97f16f",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b81c459f-d8e3-4e07-979b-80db926ea153"
+      },
+      "body": "{\"used_micro_usd\":null,\"limit_micro_usd\":5000000,\"remaining_micro_usd\":null,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":false,\"reason\":\"pricing_unavailable\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":null}"
+    },
+    {
+      "name": "provider upper case",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1538b457084b9305d2706758eace7bf4306745b0413ac490bd4b5688d891d469",
+      "status": 200,
+      "headers": {
+        "content-length": "267",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ad24f3b7-8812-4d41-8804-6ea455209eb6"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":1000,\"remaining_micro_usd\":1000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "provider padded",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2fd9868377ba96ff2880321567498bca18509e438cf8dcfc25cecf1a72cecff2",
+      "status": 200,
+      "headers": {
+        "content-length": "267",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7543dfc9-8607-44e7-a39c-20f6bb9762aa"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":1000,\"remaining_micro_usd\":1000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "licence lowers the ceiling",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "f10b43c0eaa9ae319c8da06ff7ca0de9fa478addb014d1d66dcfc2d84813ea1f",
+      "status": 200,
+      "headers": {
+        "content-length": "263",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7d8c1040-53bc-4483-b94c-bce9c33758be"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":5000,\"remaining_micro_usd\":5000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":5000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "licence above the operator ceiling",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "51a3f9271b49b21362d8ef4c3942d2933be6072aa152f009b3c6a01db424b412",
+      "status": 200,
+      "headers": {
+        "content-length": "271",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "97666e82-a84b-46e4-a87e-d0fa4d849d43"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":999999,\"remaining_micro_usd\":999999,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "licence override not an integer",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "9acf6bc00a005c7794175562b88405ab353bde1ff0c3e4dae462087cfb68ce46",
+      "status": 200,
+      "headers": {
+        "content-length": "261",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "adf6ef91-edff-410a-bbd5-f3b0e9eeda04"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":0,\"remaining_micro_usd\":0,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"budget_exhausted\",\"maximum_limit_micro_usd\":0,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "licence override float",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "49b3edc97ded9c403c6f65db3e7acafe5b978d226b45c5f05b3a70427c11fc70",
+      "status": 200,
+      "headers": {
+        "content-length": "261",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "962d7f26-4585-45b5-a797-809595a708b0"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":0,\"remaining_micro_usd\":0,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"budget_exhausted\",\"maximum_limit_micro_usd\":0,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "licence override text",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "9d9da5fb7ebae59651d18a142fe57dac2b1b71cc2b16256c160178e6008b21e1",
+      "status": 200,
+      "headers": {
+        "content-length": "263",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "36e54176-7584-42b3-a13a-0c51b708956a"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":7000,\"remaining_micro_usd\":7000,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":7000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "licence override negative",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "44dc5f5843a336c99f03fe2dab083cc5ba60e09d7aab4626a9270f2a9c5da49a",
+      "status": 200,
+      "headers": {
+        "content-length": "261",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d1ec3eae-af50-42d3-8dfd-350211400b90"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":0,\"remaining_micro_usd\":0,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"budget_exhausted\",\"maximum_limit_micro_usd\":0,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "licence override absent key",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "0d5d5cc4f544ebef45b99dcf26318f752dc5a1857f7dff64b66d3fbb0828b889",
+      "status": 200,
+      "headers": {
+        "content-length": "271",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bc0efbd5-37a3-41e0-a3d4-3e1c91d75035"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":999999,\"remaining_micro_usd\":999999,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "licence override null",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "842d7f1dc12267dc0d9ceaa89eb70e8e166a538a239fab9e8a7e62ffaf22e0c3",
+      "status": 200,
+      "headers": {
+        "content-length": "271",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "95a47281-4bd5-4c92-b61f-9f2966608d06"
+      },
+      "body": "{\"used_micro_usd\":0,\"limit_micro_usd\":999999,\"remaining_micro_usd\":999999,\"window\":\"calendar_month_utc\",\"reset_at\":\"2026-10-01T00:00:00Z\",\"enforcement_available\":true,\"reason\":\"available\",\"maximum_limit_micro_usd\":10000000,\"pricing_version\":\"openai-public-2025-08-07.v1\"}"
+    },
+    {
+      "name": "a member is not an admin",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "690483fcd7c3b97b1c904c3f4c93e72f7092b4d1487ed830adde3af77bd167eb",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5f8549fc-95f2-48be-8f4d-d62b3560d434"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "no credentials",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/budget",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e4d964d2-d2fc-4cfc-92ab-c845975dffbd"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    }
+  ]
+}

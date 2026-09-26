@@ -1,0 +1,2398 @@
+{
+  "header": {
+    "test": "TestRetentionRoutesVenueOracle",
+    "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=$DIR DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestRetentionRoutesVenueOracle$' ./internal/apiservice/admin/ (it fails once by design and prints the digest to pin)"
+  },
+  "requests": [
+    {
+      "name": "list",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 200,
+      "headers": {
+        "content-length": "1090",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "94c3aedd-65bc-43f0-a317-e1110adc984c"
+      },
+      "body": "{\"items\":[{\"id\":\"ad5860da-b95a-56fd-a854-0f95fc365bdf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"audit_logs\",\"retention_days\":30,\"description\":\"keep a month\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-01T00:00:00Z\",\"updated_at\":\"2026-02-01T00:00:00Z\"},{\"id\":\"ee7decd9-b336-59ce-a053-10df924425d0\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"sync_logs\",\"retention_days\":10,\"description\":null,\"is_active\":false,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-02T00:00:00Z\",\"updated_at\":\"2026-02-02T00:00:00Z\"},{\"id\":\"4552acad-c025-52f3-9759-8a29aa621ddf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"metrics_daily\",\"retention_days\":45,\"description\":\"not implemented\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-03T00:00:00Z\",\"updated_at\":\"2026-02-03T00:00:00Z\"}],\"total\":3,\"limit\":100,\"offset\":0}"
+    },
+    {
+      "name": "list paged",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies?limit=2\u0026offset=1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 200,
+      "headers": {
+        "content-length": "738",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "be8ec1ef-cd30-49cb-aecd-7ad0c9c85cc6"
+      },
+      "body": "{\"items\":[{\"id\":\"ee7decd9-b336-59ce-a053-10df924425d0\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"sync_logs\",\"retention_days\":10,\"description\":null,\"is_active\":false,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-02T00:00:00Z\",\"updated_at\":\"2026-02-02T00:00:00Z\"},{\"id\":\"4552acad-c025-52f3-9759-8a29aa621ddf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"metrics_daily\",\"retention_days\":45,\"description\":\"not implemented\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-03T00:00:00Z\",\"updated_at\":\"2026-02-03T00:00:00Z\"}],\"total\":3,\"limit\":2,\"offset\":1}"
+    },
+    {
+      "name": "list active only",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies?active_only=true",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 200,
+      "headers": {
+        "content-length": "750",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0bef50bb-405a-437f-9b0e-e4341774e610"
+      },
+      "body": "{\"items\":[{\"id\":\"ad5860da-b95a-56fd-a854-0f95fc365bdf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"audit_logs\",\"retention_days\":30,\"description\":\"keep a month\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-01T00:00:00Z\",\"updated_at\":\"2026-02-01T00:00:00Z\"},{\"id\":\"4552acad-c025-52f3-9759-8a29aa621ddf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"metrics_daily\",\"retention_days\":45,\"description\":\"not implemented\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-03T00:00:00Z\",\"updated_at\":\"2026-02-03T00:00:00Z\"}],\"total\":2,\"limit\":100,\"offset\":0}"
+    },
+    {
+      "name": "list active only invalid",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies?active_only=maybe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 422,
+      "headers": {
+        "content-length": "149",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d86e89a8-ce02-4c6a-8fad-3da625a25896"
+      },
+      "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"query\",\"active_only\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"}]}"
+    },
+    {
+      "name": "list limit zero",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies?limit=0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 422,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "780ceae1-586e-41bc-9641-a38dbdc052af"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"0\",\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "list limit over",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies?limit=501",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 422,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fb672702-f868-4a6b-9bed-e7a98af70f46"
+      },
+      "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be less than or equal to 500\",\"input\":\"501\",\"ctx\":{\"le\":500}}]}"
+    },
+    {
+      "name": "list offset negative",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies?offset=-1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 422,
+      "headers": {
+        "content-length": "146",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "55420a0b-1dc9-4662-90b0-5563e97d1fdd"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":\"-1\",\"ctx\":{\"ge\":0}}]}"
+    },
+    {
+      "name": "list duplicate limit",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies?limit=1\u0026limit=3",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 200,
+      "headers": {
+        "content-length": "1088",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "baf765d2-f287-49d8-b613-0e2fff413231"
+      },
+      "body": "{\"items\":[{\"id\":\"ad5860da-b95a-56fd-a854-0f95fc365bdf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"audit_logs\",\"retention_days\":30,\"description\":\"keep a month\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-01T00:00:00Z\",\"updated_at\":\"2026-02-01T00:00:00Z\"},{\"id\":\"ee7decd9-b336-59ce-a053-10df924425d0\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"sync_logs\",\"retention_days\":10,\"description\":null,\"is_active\":false,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-02T00:00:00Z\",\"updated_at\":\"2026-02-02T00:00:00Z\"},{\"id\":\"4552acad-c025-52f3-9759-8a29aa621ddf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"metrics_daily\",\"retention_days\":45,\"description\":\"not implemented\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-03T00:00:00Z\",\"updated_at\":\"2026-02-03T00:00:00Z\"}],\"total\":3,\"limit\":3,\"offset\":0}"
+    },
+    {
+      "name": "list community refused",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "391ed14346601b2635d9869bd8277143e75469a55b600f884b2baa5d4e45e1ad",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fc64d086-89fd-4db2-9a32-42991865738e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "list override grants",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8b1d9199dd9565db5fcd93265d0265bd56ea0e44a22e3c543ffca9f69c13b1fc",
+      "status": 200,
+      "headers": {
+        "content-length": "392",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "dcd117fc-5e99-4498-b99f-37d886e230be"
+      },
+      "body": "{\"items\":[{\"id\":\"45ce219d-aaf7-5969-81e3-207a6eb13912\",\"org_id\":\"9977605f-33ed-5617-842a-9fd85f72000f\",\"resource_type\":\"audit_logs\",\"retention_days\":2000000000,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-05T00:00:00Z\",\"updated_at\":\"2026-02-05T00:00:00Z\"}],\"total\":1,\"limit\":100,\"offset\":0}"
+    },
+    {
+      "name": "list tier only",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "494278f605179093d1e6318c9f392fe51f034fe57f1cdf12690864fb58f31a69",
+      "status": 200,
+      "headers": {
+        "content-length": "383",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "869eaf29-8e73-4f3a-89ac-1ab4e2283fb0"
+      },
+      "body": "{\"items\":[{\"id\":\"f02e943d-9930-51e6-b499-ba859f86b2ba\",\"org_id\":\"732c5000-e54f-5dc9-b853-adbc614e273e\",\"resource_type\":\"audit_logs\",\"retention_days\":5,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-04T00:00:00Z\",\"updated_at\":\"2026-02-04T00:00:00Z\"}],\"total\":1,\"limit\":100,\"offset\":0}"
+    },
+    {
+      "name": "list bogus license tier",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "3f4cbd919960f4e07a53d3d3d7a0e66bcd6996e51df84c698cb1f871e89d3d6a",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ed2f3f75-9841-4156-9aa5-ae88f5d3a0c2"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "list superuser without org",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "bb61f0af1c1ca91d8ac9c3e76d90712d70f3289617ce35a60aae42330852f5b5",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c8f803ee-4692-4b03-a99b-9aecb25d8e3f"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "list member refused",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "824f517ea369c87e63445ca272ebb2a5345769766a9a3ae38195f28653ba6cc7",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0e1a22a9-13cd-42b1-bc44-0a1b43fa3e8d"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "list unauthenticated",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "16ca4f2a-1c1c-48cc-836a-96a1271d25ad"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "list 422 beats licence",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies?limit=0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "391ed14346601b2635d9869bd8277143e75469a55b600f884b2baa5d4e45e1ad",
+      "status": 422,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a80bfb48-5823-4ef6-bace-0ab337e6b820"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"0\",\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "resource types community",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/resource-types",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "391ed14346601b2635d9869bd8277143e75469a55b600f884b2baa5d4e45e1ad",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5894b374-3648-4065-8550-49f5ec11b491"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "resource types bogus licence tier",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/resource-types",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "3f4cbd919960f4e07a53d3d3d7a0e66bcd6996e51df84c698cb1f871e89d3d6a",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b8ebb669-8b56-49bd-9a8d-ed767abee432"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "resource types superuser without org",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/resource-types",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "bb61f0af1c1ca91d8ac9c3e76d90712d70f3289617ce35a60aae42330852f5b5",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6ba2bb10-70c2-47c8-9933-2957fa14ffc5"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "resource types member",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/resource-types",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "824f517ea369c87e63445ca272ebb2a5345769766a9a3ae38195f28653ba6cc7",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a550a8a8-1e7d-4830-b039-d8aad0764726"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "resource types post is 405",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/resource-types",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "77c6f03c-b2ab-4169-ac8a-721459476ab7"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "resource types patch is a uuid error",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/resource-types",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 400,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "95e4d8ba-be6e-4a7b-a132-cafe048cb23c"
+      },
+      "body": "{\"detail\":\"badly formed hexadecimal UUID string\"}"
+    },
+    {
+      "name": "resource types delete is a uuid error",
+      "method": "DELETE",
+      "path": "/api/v1/admin/retention-policies/resource-types",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "resource types put is 405",
+      "method": "PUT",
+      "path": "/api/v1/admin/retention-policies/resource-types",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "77ae14b3-2602-412b-bcd7-b03e1d652870"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "get",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 200,
+      "headers": {
+        "content-length": "349",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bc5caec8-800f-4afa-8af8-83a1815932c5"
+      },
+      "body": "{\"id\":\"ad5860da-b95a-56fd-a854-0f95fc365bdf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"audit_logs\",\"retention_days\":30,\"description\":\"keep a month\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-01T00:00:00Z\",\"updated_at\":\"2026-02-01T00:00:00Z\"}"
+    },
+    {
+      "name": "get null description",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/ee7decd9-b336-59ce-a053-10df924425d0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 200,
+      "headers": {
+        "content-length": "339",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "739909e9-3dd3-4dc4-9e14-7d0f7ea8ae80"
+      },
+      "body": "{\"id\":\"ee7decd9-b336-59ce-a053-10df924425d0\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"sync_logs\",\"retention_days\":10,\"description\":null,\"is_active\":false,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-02T00:00:00Z\",\"updated_at\":\"2026-02-02T00:00:00Z\"}"
+    },
+    {
+      "name": "get unknown",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/a4730766-05b7-5682-a975-a989ce52dace",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 404,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "189042e4-d70c-4543-9564-5000e044fb95"
+      },
+      "body": "{\"detail\":\"Retention policy not found\"}"
+    },
+    {
+      "name": "get malformed",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "get other org",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/f02e943d-9930-51e6-b499-ba859f86b2ba",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 404,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f0528a4b-c3cb-4e78-a9dd-0d516bb330d6"
+      },
+      "body": "{\"detail\":\"Retention policy not found\"}"
+    },
+    {
+      "name": "get community",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "391ed14346601b2635d9869bd8277143e75469a55b600f884b2baa5d4e45e1ad",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9e054bd2-54cd-460e-8db3-b7c9cb325258"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "policy id put is 405",
+      "method": "PUT",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "eca2d238-720b-4ef6-a608-a87152eb1a61"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "execute get is 405",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9c050155-1548-4a5f-968e-147bf3d00978"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "execute no body is a dry run",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 200,
+      "headers": {
+        "content-length": "32",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4ce93e36-5d89-4c50-8819-0b60b9f5b153"
+      },
+      "body": "{\"deleted_count\":3,\"error\":null}"
+    },
+    {
+      "name": "execute empty object",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "32",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "136b1087-b8af-4ec3-9da3-cc609f563a75"
+      },
+      "body": "{\"deleted_count\":3,\"error\":null}"
+    },
+    {
+      "name": "execute dry_run true",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "ee10d572cf3e24869c36c30a0977e440646ff2b23bc88787cf80176a405fc381",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "32",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "36ef7662-fdac-4ea6-86f3-4121dfb4d911"
+      },
+      "body": "{\"deleted_count\":3,\"error\":null}"
+    },
+    {
+      "name": "execute dry_run yes",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "0c617e60bf92de0f18a5fe05b03e804904e3ce05923cf214c6cc7e57a2d9119a",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "32",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5a5d0cd7-0e84-4cd4-8be5-1b8ec2bab607"
+      },
+      "body": "{\"deleted_count\":3,\"error\":null}"
+    },
+    {
+      "name": "execute dry_run null",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "ee32e6f2d2251b6b1faebbd276dc193f3f5382648789dfc23c980473d3e2fa5a",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "111",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "97a28a59-66c1-4426-b009-a1a1f891c329"
+      },
+      "body": "{\"detail\":[{\"type\":\"bool_type\",\"loc\":[\"body\",\"dry_run\"],\"msg\":\"Input should be a valid boolean\",\"input\":null}]}"
+    },
+    {
+      "name": "execute dry_run invalid",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "f6525477c584dbd4e9ee649d82653caf05ae2fb88e123d2732cd973642df7fa7",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "146",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9f83a0c4-472b-4d17-a7c8-049f8f4048bc"
+      },
+      "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"dry_run\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"perhaps\"}]}"
+    },
+    {
+      "name": "execute body null",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "bb99e5bb3a756453730056b900774c14cb31358abd79a0903bf0e0349d0ade7a",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "32",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a28d57b5-db1e-435c-800f-75ac580113d7"
+      },
+      "body": "{\"deleted_count\":3,\"error\":null}"
+    },
+    {
+      "name": "execute body list",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bfafb146-a0a2-4b81-b87d-78a8d850ac83"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "execute invalid json",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "05e1426d-f95a-4d11-adb7-11b10b99912d"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
+    },
+    {
+      "name": "execute non-json content type",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "192d29593c10ee095ddf00bea96ff2af56eb8b0305b8fa69f209438f54e13b85",
+      "request_headers_sha256": "3a8c5307759a05426310359466d59e6b9b171b8db01177060aaa35e7af07b9cd",
+      "status": 422,
+      "headers": {
+        "content-length": "154",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fc0adeff-2771-4478-bf6c-3731a9099254"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":\"dry_run\"}]}"
+    },
+    {
+      "name": "execute unknown policy",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/53f7833d-64d0-5218-a5eb-6fe07c7a47ab/execute",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "46",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8ffeddfe-a6d6-4d24-96b2-93ca8915b6bd"
+      },
+      "body": "{\"deleted_count\":0,\"error\":\"Policy not found\"}"
+    },
+    {
+      "name": "execute other org policy",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/f02e943d-9930-51e6-b499-ba859f86b2ba/execute",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "46",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5bd53180-17ce-4e5e-993f-8c1193e3ef78"
+      },
+      "body": "{\"deleted_count\":0,\"error\":\"Policy not found\"}"
+    },
+    {
+      "name": "execute inactive",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ee7decd9-b336-59ce-a053-10df924425d0/execute",
+      "body_sha256": "fc3f69d01f817490d6fc303b7dcc1d6f58d6572442e1a688a97b028e003fb9cc",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "50",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7991a11a-356d-4f84-a574-4470fe63b06e"
+      },
+      "body": "{\"deleted_count\":0,\"error\":\"Policy is not active\"}"
+    },
+    {
+      "name": "execute not implemented type",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/4552acad-c025-52f3-9759-8a29aa621ddf/execute",
+      "body_sha256": "fc3f69d01f817490d6fc303b7dcc1d6f58d6572442e1a688a97b028e003fb9cc",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "86",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "68d702d9-8ebf-4ff5-b282-63cd7a137257"
+      },
+      "body": "{\"deleted_count\":0,\"error\":\"Cleanup not implemented for resource type: metrics_daily\"}"
+    },
+    {
+      "name": "execute malformed id",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/nope/execute",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "execute community refused",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "183a16d9c9a027fab0a7443a5ac3f84d8fb37995c85480956729102dd7ab01c8",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "92dbf8eb-e7ba-4f01-843d-6bca9c39e227"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "execute 422 beats licence",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "ee32e6f2d2251b6b1faebbd276dc193f3f5382648789dfc23c980473d3e2fa5a",
+      "request_headers_sha256": "183a16d9c9a027fab0a7443a5ac3f84d8fb37995c85480956729102dd7ab01c8",
+      "status": 422,
+      "headers": {
+        "content-length": "111",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1089f8ac-f7e0-49b5-8264-1bef016f5a9e"
+      },
+      "body": "{\"detail\":[{\"type\":\"bool_type\",\"loc\":[\"body\",\"dry_run\"],\"msg\":\"Input should be a valid boolean\",\"input\":null}]}"
+    },
+    {
+      "name": "execute database failure dry run counts",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/197f7cbe-59a6-5845-a3a9-2a860a697055/execute",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "3a0ec0b213d3521f73a8a1c33d0243ced88fc92401e3aed97063b4a19e9beb52",
+      "status": 200,
+      "headers": {
+        "content-length": "32",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c6b9ed3e-d524-447e-ad80-e3267d0e3d6c"
+      },
+      "body": "{\"deleted_count\":1,\"error\":null}"
+    },
+    {
+      "name": "execute database failure on delete",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/197f7cbe-59a6-5845-a3a9-2a860a697055/execute",
+      "body_sha256": "fc3f69d01f817490d6fc303b7dcc1d6f58d6572442e1a688a97b028e003fb9cc",
+      "request_headers_sha256": "3a0ec0b213d3521f73a8a1c33d0243ced88fc92401e3aed97063b4a19e9beb52",
+      "status": 200,
+      "headers": {
+        "content-length": "474",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "059c9f4b-98fb-4a93-9071-011e9989afb4"
+      },
+      "body": "{\"deleted_count\":0,\"error\":\"(sqlalchemy.dialects.postgresql.asyncpg.Error) \u003cclass 'asyncpg.exceptions.RaiseError'\u003e: sentinel retention delete failure\\n[SQL: DELETE FROM audit_logs WHERE audit_logs.org_id = $1::UUID AND audit_logs.created_at \u003c $2::TIMESTAMP WITH TIME ZONE]\\n[parameters: ('f414f664-400b-59b3-80b7-cae7b6fa02a2', datetime.datetime(2026, 8, 27, 1, 19, 39, 661616, tzinfo=datetime.timezone.utc))]\\n(Background on this error at: https://sqlalche.me/e/20/dbapi)\"}"
+    },
+    {
+      "name": "execute member refused",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "eb69a98d84f83804626ff7f180bc87ac9be681311207376d28cee9cd236965fd",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0f491950-8071-4492-b7db-d1e760003bc9"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "execute huge retention days overflows",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/45ce219d-aaf7-5969-81e3-207a6eb13912/execute",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "a022c1378c11c0e180964b35bb9b4ebcea10eee9c4fe2037ff75d58e52b8b2b4",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "execute huge retention days real",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/45ce219d-aaf7-5969-81e3-207a6eb13912/execute",
+      "body_sha256": "fc3f69d01f817490d6fc303b7dcc1d6f58d6572442e1a688a97b028e003fb9cc",
+      "request_headers_sha256": "a022c1378c11c0e180964b35bb9b4ebcea10eee9c4fe2037ff75d58e52b8b2b4",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "execute unauthenticated dry",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "824f517ea369c87e63445ca272ebb2a5345769766a9a3ae38195f28653ba6cc7",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cb15aa55-212f-432a-862c-ceefef78511c"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "W create default days",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "426b5efacd4dae4b377fb9f2781b4a52ace1ef5ed4200fb2e67eba148b474d0d",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 201,
+      "headers": {
+        "content-length": "353",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8b3c8d9c-0602-4340-824d-e193f49b5d31"
+      },
+      "body": "{\"id\":\"b76d3c8a-27c5-4e18-8809-dd50ef7b1937\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"work_items\",\"retention_days\":90,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-09-26T01:19:40.256706Z\",\"updated_at\":\"2026-09-26T01:19:40.256711Z\"}"
+    },
+    {
+      "name": "W create full",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "7eb93f48966c6757349e04071d5152b9e41242e16f0f9e39f53e87fcae925012",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 201,
+      "headers": {
+        "content-length": "356",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c26cedf0-fb42-43d2-b076-91f63169a033"
+      },
+      "body": "{\"id\":\"d6bb0177-f02f-4bd1-9d3a-be16d92fa10a\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"git_commits\",\"retention_days\":7,\"description\":\"seven\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-09-26T01:19:40.391742Z\",\"updated_at\":\"2026-09-26T01:19:40.391748Z\"}"
+    },
+    {
+      "name": "W create string days",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "3fe72c7f562ca88cdce054d360f98978b4ecec962e3daaaa4ae1403d102ef7e3",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7230e86a-c729-457f-939d-460f6dda80b6"
+      },
+      "body": "{\"detail\":\"Invalid resource type: work_items_x\"}"
+    },
+    {
+      "name": "W create invalid type",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "bab6558b500b745238406268ae5b4bf7bf3778b065f508417ba17565097c2b40",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 400,
+      "headers": {
+        "content-length": "40",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "94973620-2386-4aec-b447-7809b5cbe838"
+      },
+      "body": "{\"detail\":\"Invalid resource type: nope\"}"
+    },
+    {
+      "name": "W create days 7.0",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "0c084d4b0f5d8c8069a1d9a81e1e3a93a497e03bd5f2f5477c34e25ff4bca825",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 400,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0200235c-0657-4a90-9275-8c58910dbc9c"
+      },
+      "body": "{\"detail\":\"Invalid resource type: nope2\"}"
+    },
+    {
+      "name": "W create days zero",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "7bddc3b783cdb336c6a9bd4bef147197598099cfaf938a4461f7cb7c280ab88b",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "150",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "329c0d85-cc37-4f79-9c42-744c4cafef52"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"retention_days\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":0,\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "W create days negative",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "19a410d7cebd1e3abb345f7f2463d8369544178aa3985f04c8224176c711404b",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "151",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4c1f1f69-ea92-42b5-a1bc-1f5cbe17ae2d"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"retention_days\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":-5,\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "W create days fractional",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "bbe48cd6e98e93bb0e2cae02a65726879763dc95e344ed759cfcdd7598043c96",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "159",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "88aa56a4-d4f0-4b8f-80e6-2083737f0452"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_from_float\",\"loc\":[\"body\",\"retention_days\"],\"msg\":\"Input should be a valid integer, got a number with a fractional part\",\"input\":7.5}]}"
+    },
+    {
+      "name": "W create days null",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "419864926a1c359c5e9f7d5830ffd2ee391b31011718b12752d7ddf8ecf0793e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "117",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "140be9c5-7b03-47ec-8119-ddbbb0166202"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_type\",\"loc\":[\"body\",\"retention_days\"],\"msg\":\"Input should be a valid integer\",\"input\":null}]}"
+    },
+    {
+      "name": "W create days text",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "61589f6cbfc1fac8d55acb3e7cf2b4f9dca5340e62e9a5dce40d82fa0c6a4850",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "159",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "98fd7580-3a11-47fc-a939-367f5f6345d4"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"body\",\"retention_days\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"abc\"}]}"
+    },
+    {
+      "name": "W create days past int32",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "aaa8b525c760c8dfad3079e66af699e7154e033e28ac468021ca78c45378383a",
+      "request_headers_sha256": "a022c1378c11c0e180964b35bb9b4ebcea10eee9c4fe2037ff75d58e52b8b2b4",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W create days beyond int64",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "e7e625fb7cc42739d072c09ebc93206e5938acfa8b1f65c498b5456b59e6437a",
+      "request_headers_sha256": "a022c1378c11c0e180964b35bb9b4ebcea10eee9c4fe2037ff75d58e52b8b2b4",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W create days float beyond int64",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "e64eb539e429829ced8dbc083d13a4322f0e3efb281a59a914b0c3af4709da39",
+      "request_headers_sha256": "a022c1378c11c0e180964b35bb9b4ebcea10eee9c4fe2037ff75d58e52b8b2b4",
+      "status": 422,
+      "headers": {
+        "content-length": "160",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9d2bf904-a3d3-41c9-86a9-aba1a94e0dc3"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_parsing_size\",\"loc\":[\"body\",\"retention_days\"],\"msg\":\"Unable to parse input string as an integer, exceeded maximum size\",\"input\":1e+19}]}"
+    },
+    {
+      "name": "W create days infinite float",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "5ac71735424a9224457685aba7e435893564e96c4f6ea644d838e7998ee46509",
+      "request_headers_sha256": "a022c1378c11c0e180964b35bb9b4ebcea10eee9c4fe2037ff75d58e52b8b2b4",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W create days boolean false",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "e1d898712808ee36622b8fc8311de6d463a0262573ad7a882a823a479447b9d2",
+      "request_headers_sha256": "a022c1378c11c0e180964b35bb9b4ebcea10eee9c4fe2037ff75d58e52b8b2b4",
+      "status": 422,
+      "headers": {
+        "content-length": "154",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c7250530-85fb-4af4-9dd8-c3fe45e92894"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"retention_days\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":false,\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "W create days boolean true",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "542fc11cec449ff1f7bcac7a21521895c7d633e31d0441c2b39c063c7bde0135",
+      "request_headers_sha256": "a022c1378c11c0e180964b35bb9b4ebcea10eee9c4fe2037ff75d58e52b8b2b4",
+      "status": 201,
+      "headers": {
+        "content-length": "352",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "854f0b63-eeb4-445e-8340-d2c996f7ec47"
+      },
+      "body": "{\"id\":\"c30dd45a-7107-40b9-a7ba-ca5982901656\",\"org_id\":\"9977605f-33ed-5617-842a-9fd85f72000f\",\"resource_type\":\"work_items\",\"retention_days\":1,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-09-26T01:19:41.899503Z\",\"updated_at\":\"2026-09-26T01:19:41.899508Z\"}"
+    },
+    {
+      "name": "W create description non-ascii",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "e1e42ce93a0977333cb25c98fb68d6805570964a0d5120a8ea16fdb5c2ea4305",
+      "request_headers_sha256": "a022c1378c11c0e180964b35bb9b4ebcea10eee9c4fe2037ff75d58e52b8b2b4",
+      "status": 201,
+      "headers": {
+        "content-length": "370",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a888cfae-fdd0-4f31-a412-4e45088d9a5a"
+      },
+      "body": "{\"id\":\"66c361c0-552b-4762-8657-a5291a44c54d\",\"org_id\":\"9977605f-33ed-5617-842a-9fd85f72000f\",\"resource_type\":\"git_commits\",\"retention_days\":90,\"description\":\"Café 東京 ünï\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-09-26T01:19:42.040851Z\",\"updated_at\":\"2026-09-26T01:19:42.040856Z\"}"
+    },
+    {
+      "name": "W create duplicate type",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "c741ba8d5f9c26a698dee4c3da042e305ab178519d4e10f88c13dc371a5fcf62",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 400,
+      "headers": {
+        "content-length": "65",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ba23c501-9c17-42aa-82eb-98b95cb2ac67"
+      },
+      "body": "{\"detail\":\"Policy for resource type 'audit_logs' already exists\"}"
+    },
+    {
+      "name": "W create missing type",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "96",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fc39c107-d8b7-4728-9034-42a73234baea"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"resource_type\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "W create null type",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "106bbf9b3e43cd32bd533adf1103ddd4bca269374c83897ed12963344b38183a",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "118",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "93de9e49-cd14-40ce-8c65-f788df39ddb2"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"resource_type\"],\"msg\":\"Input should be a valid string\",\"input\":null}]}"
+    },
+    {
+      "name": "W create description null",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "b8c4468964de49705925b4aa09d01523c8f18e3f0bdcda6d9987d5b10784b5b9",
+      "request_headers_sha256": "981ab4f8fa0981e43c36525bc349ff8e285096be1092c1d36cb44f4085a05b94",
+      "status": 201,
+      "headers": {
+        "content-length": "356",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3b697b15-7fe0-414e-b08d-3c279aea3fcf"
+      },
+      "body": "{\"id\":\"8002bbc5-7d9e-4d3e-a6c2-fee8612455d3\",\"org_id\":\"732c5000-e54f-5dc9-b853-adbc614e273e\",\"resource_type\":\"metrics_daily\",\"retention_days\":90,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-09-26T01:19:42.488289Z\",\"updated_at\":\"2026-09-26T01:19:42.488295Z\"}"
+    },
+    {
+      "name": "W create description empty",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "70eac6e0267e484dd691ea2f9e6956b1b86d1a41756528e5840e4ccb41b15ede",
+      "request_headers_sha256": "981ab4f8fa0981e43c36525bc349ff8e285096be1092c1d36cb44f4085a05b94",
+      "status": 201,
+      "headers": {
+        "content-length": "351",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d66a4ab6-b85d-44ff-a137-8b31354a3e74"
+      },
+      "body": "{\"id\":\"84faa936-600a-441d-81e3-d24a9e380e06\",\"org_id\":\"732c5000-e54f-5dc9-b853-adbc614e273e\",\"resource_type\":\"work_items\",\"retention_days\":90,\"description\":\"\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-09-26T01:19:42.626895Z\",\"updated_at\":\"2026-09-26T01:19:42.626900Z\"}"
+    },
+    {
+      "name": "W create description wrong type",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "b2cc6903e2ff259f7cb7a6fa93e5d04a9024ff04ac043076c5c4c8c6dffdd3bf",
+      "request_headers_sha256": "981ab4f8fa0981e43c36525bc349ff8e285096be1092c1d36cb44f4085a05b94",
+      "status": 422,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4a2a2dda-9a8b-4900-90e4-f015749728c9"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"description\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+    },
+    {
+      "name": "W create community refused",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "c741ba8d5f9c26a698dee4c3da042e305ab178519d4e10f88c13dc371a5fcf62",
+      "request_headers_sha256": "183a16d9c9a027fab0a7443a5ac3f84d8fb37995c85480956729102dd7ab01c8",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "af44f6f2-bc35-4b52-9526-f852bf1ec57c"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "W create 422 beats licence",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "183a16d9c9a027fab0a7443a5ac3f84d8fb37995c85480956729102dd7ab01c8",
+      "status": 422,
+      "headers": {
+        "content-length": "96",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "05d8e606-8b08-4e24-ba57-5f44f021174a"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"resource_type\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "W create invalid type on community",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "bab6558b500b745238406268ae5b4bf7bf3778b065f508417ba17565097c2b40",
+      "request_headers_sha256": "183a16d9c9a027fab0a7443a5ac3f84d8fb37995c85480956729102dd7ab01c8",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e0acc099-6654-4130-9902-3b5d5aad0fe5"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "W create member refused",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "c741ba8d5f9c26a698dee4c3da042e305ab178519d4e10f88c13dc371a5fcf62",
+      "request_headers_sha256": "eb69a98d84f83804626ff7f180bc87ac9be681311207376d28cee9cd236965fd",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bd6edf7b-1b1a-4c53-862e-da1f16edb391"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "W create superuser without org",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "c741ba8d5f9c26a698dee4c3da042e305ab178519d4e10f88c13dc371a5fcf62",
+      "request_headers_sha256": "1a163e29644871f68f01c3d56f96ad29666cd98d2ca1b28921607c201a617639",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d0493ef4-2227-4838-ab14-94ff36e428a1"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "W create with existing X-User-Id",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "f6f4675fa58c41ac888eb66d64493a7f6edc0c84b30d00589b4e4766a102eba6",
+      "request_headers_sha256": "90bb9791180bcfaef47d71c08157cc7f0478eae7998ca81026d5691786b5e986",
+      "status": 201,
+      "headers": {
+        "content-length": "386",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4a8a9cce-3948-44a8-8d0e-c15f6683dff9"
+      },
+      "body": "{\"id\":\"348d4060-ffb1-49a1-8114-9eb34678cb95\",\"org_id\":\"732c5000-e54f-5dc9-b853-adbc614e273e\",\"resource_type\":\"sync_logs\",\"retention_days\":90,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":\"276d32d0-7516-5a0f-b854-9baa5aab6889\",\"created_at\":\"2026-09-26T01:19:43.407092Z\",\"updated_at\":\"2026-09-26T01:19:43.407097Z\"}"
+    },
+    {
+      "name": "W create with malformed X-User-Id",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "bab6558b500b745238406268ae5b4bf7bf3778b065f508417ba17565097c2b40",
+      "request_headers_sha256": "1bff139751a978c918b0822f1c06f4052163243f3e3cc8e2d0089f89de6e2ee6",
+      "status": 400,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "523a4911-41d1-4e33-981c-23ffea41fbdb"
+      },
+      "body": "{\"detail\":\"badly formed hexadecimal UUID string\"}"
+    },
+    {
+      "name": "W create with non-hex 32-char X-User-Id",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "426b5efacd4dae4b377fb9f2781b4a52ace1ef5ed4200fb2e67eba148b474d0d",
+      "request_headers_sha256": "569702e81f74ba48c5d7c98317337bf4e2569a41cbe3a41de98b3e757b1b8490",
+      "status": 400,
+      "headers": {
+        "content-length": "87",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f5e8d9c2-d286-4906-909a-3052a677df42"
+      },
+      "body": "{\"detail\":\"invalid literal for int() with base 16: 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'\"}"
+    },
+    {
+      "name": "W create with unknown X-User-Id",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies",
+      "body_sha256": "9b84bbf77a2e216dc6040d60fc0b06d2e9d2fc90bf4f27af6f1ab2d9298ffc08",
+      "request_headers_sha256": "01fa4105817d093fc1f0264da12114b87a8b81f7bb3c08b836abe7131e2658d2",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W list after creates",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies?limit=500",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 200,
+      "headers": {
+        "content-length": "1801",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d001b319-eceb-4f57-8906-f6678cb585d5"
+      },
+      "body": "{\"items\":[{\"id\":\"ad5860da-b95a-56fd-a854-0f95fc365bdf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"audit_logs\",\"retention_days\":30,\"description\":\"keep a month\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-01T00:00:00Z\",\"updated_at\":\"2026-02-01T00:00:00Z\"},{\"id\":\"ee7decd9-b336-59ce-a053-10df924425d0\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"sync_logs\",\"retention_days\":10,\"description\":null,\"is_active\":false,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-02T00:00:00Z\",\"updated_at\":\"2026-02-02T00:00:00Z\"},{\"id\":\"4552acad-c025-52f3-9759-8a29aa621ddf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"metrics_daily\",\"retention_days\":45,\"description\":\"not implemented\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-03T00:00:00Z\",\"updated_at\":\"2026-02-03T00:00:00Z\"},{\"id\":\"b76d3c8a-27c5-4e18-8809-dd50ef7b1937\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"work_items\",\"retention_days\":90,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-09-26T01:19:40.256706Z\",\"updated_at\":\"2026-09-26T01:19:40.256711Z\"},{\"id\":\"d6bb0177-f02f-4bd1-9d3a-be16d92fa10a\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"git_commits\",\"retention_days\":7,\"description\":\"seven\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-09-26T01:19:40.391742Z\",\"updated_at\":\"2026-09-26T01:19:40.391748Z\"}],\"total\":5,\"limit\":500,\"offset\":0}"
+    },
+    {
+      "name": "W list tier org after creates",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies?limit=500",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "494278f605179093d1e6318c9f392fe51f034fe57f1cdf12690864fb58f31a69",
+      "status": 200,
+      "headers": {
+        "content-length": "1479",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "355c460b-391d-42e0-afb6-66f4595bbd14"
+      },
+      "body": "{\"items\":[{\"id\":\"f02e943d-9930-51e6-b499-ba859f86b2ba\",\"org_id\":\"732c5000-e54f-5dc9-b853-adbc614e273e\",\"resource_type\":\"audit_logs\",\"retention_days\":5,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-04T00:00:00Z\",\"updated_at\":\"2026-02-04T00:00:00Z\"},{\"id\":\"8002bbc5-7d9e-4d3e-a6c2-fee8612455d3\",\"org_id\":\"732c5000-e54f-5dc9-b853-adbc614e273e\",\"resource_type\":\"metrics_daily\",\"retention_days\":90,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-09-26T01:19:42.488289Z\",\"updated_at\":\"2026-09-26T01:19:42.488295Z\"},{\"id\":\"84faa936-600a-441d-81e3-d24a9e380e06\",\"org_id\":\"732c5000-e54f-5dc9-b853-adbc614e273e\",\"resource_type\":\"work_items\",\"retention_days\":90,\"description\":\"\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-09-26T01:19:42.626895Z\",\"updated_at\":\"2026-09-26T01:19:42.626900Z\"},{\"id\":\"348d4060-ffb1-49a1-8114-9eb34678cb95\",\"org_id\":\"732c5000-e54f-5dc9-b853-adbc614e273e\",\"resource_type\":\"sync_logs\",\"retention_days\":90,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":\"276d32d0-7516-5a0f-b854-9baa5aab6889\",\"created_at\":\"2026-09-26T01:19:43.407092Z\",\"updated_at\":\"2026-09-26T01:19:43.407097Z\"}],\"total\":4,\"limit\":500,\"offset\":0}"
+    },
+    {
+      "name": "W patch days",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "2ee8d1cc502d996485327862ed51f8721bebbe882b060f8d94ae5eef1054d929",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "356",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8ce87032-a30f-4b0b-800d-2cacb52e5143"
+      },
+      "body": "{\"id\":\"ad5860da-b95a-56fd-a854-0f95fc365bdf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"audit_logs\",\"retention_days\":60,\"description\":\"keep a month\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-01T00:00:00Z\",\"updated_at\":\"2026-09-26T01:19:44.213186Z\"}"
+    },
+    {
+      "name": "W patch description",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "139f0e5360766eff0801ad205225e77e8143d0c7ea6a398db9c43067fded3e61",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "351",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4eb53e78-b260-490a-8588-f79b2131dfee"
+      },
+      "body": "{\"id\":\"ad5860da-b95a-56fd-a854-0f95fc365bdf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"audit_logs\",\"retention_days\":60,\"description\":\"changed\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-01T00:00:00Z\",\"updated_at\":\"2026-09-26T01:19:44.346485Z\"}"
+    },
+    {
+      "name": "W patch empty description",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "720d7a063da47d5e80e9e50fa6989135a9794fe68e9da12ce8563d73d824f572",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "344",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d2f1d3ce-d048-41e3-b11e-7f5ba3421437"
+      },
+      "body": "{\"id\":\"ad5860da-b95a-56fd-a854-0f95fc365bdf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"audit_logs\",\"retention_days\":60,\"description\":\"\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-01T00:00:00Z\",\"updated_at\":\"2026-09-26T01:19:44.480273Z\"}"
+    },
+    {
+      "name": "W patch deactivate",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/4552acad-c025-52f3-9759-8a29aa621ddf",
+      "body_sha256": "f869ae85a26479915e8b904a7a46ef8b50edacd476d5c48c16c3fc09f2fc4564",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "363",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "de5e6df9-87ca-41f3-b360-191122749ebd"
+      },
+      "body": "{\"id\":\"4552acad-c025-52f3-9759-8a29aa621ddf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"metrics_daily\",\"retention_days\":45,\"description\":\"not implemented\",\"is_active\":false,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-03T00:00:00Z\",\"updated_at\":\"2026-09-26T01:19:44.612688Z\"}"
+    },
+    {
+      "name": "W patch reactivate and days",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ee7decd9-b336-59ce-a053-10df924425d0",
+      "body_sha256": "054ea7892d3b535e7276ea9942dccb9c8cbc6d1b2ede9916bb4f84a26c243625",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "345",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "71bb7b3c-8db9-4be3-a185-e1f6ad553739"
+      },
+      "body": "{\"id\":\"ee7decd9-b336-59ce-a053-10df924425d0\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"sync_logs\",\"retention_days\":12,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-02T00:00:00Z\",\"updated_at\":\"2026-09-26T01:19:44.743939Z\"}"
+    },
+    {
+      "name": "W patch empty body",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "344",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "457ffe72-17b4-44aa-b81d-ea8aeeef4b17"
+      },
+      "body": "{\"id\":\"ad5860da-b95a-56fd-a854-0f95fc365bdf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"audit_logs\",\"retention_days\":60,\"description\":\"\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-01T00:00:00Z\",\"updated_at\":\"2026-09-26T01:19:44.876260Z\"}"
+    },
+    {
+      "name": "W patch nulls",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "131d64b3e413d1fafe9c286cb7ffcae2c9cf12b098081bab9d0012ee9171f10e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "344",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2ea776a2-ff28-4087-8956-ebd27b4ab917"
+      },
+      "body": "{\"id\":\"ad5860da-b95a-56fd-a854-0f95fc365bdf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"audit_logs\",\"retention_days\":60,\"description\":\"\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-01T00:00:00Z\",\"updated_at\":\"2026-09-26T01:19:45.012594Z\"}"
+    },
+    {
+      "name": "W patch days zero",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "e598198412572d72085ab7f04acfb2b27ca3c3d6eb3dd7a9da3b3dacc03f08ac",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "150",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "845836ad-ed6f-4406-887c-2f4bf2dec8c9"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"retention_days\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":0,\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "W patch days fractional",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "380eb3f805122f80ea9d7f456a0f5471533f77f299d21e1996946fed3130ae75",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "159",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "77eaa7d4-17cc-4c7e-9291-0d1dcef5f14e"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_from_float\",\"loc\":[\"body\",\"retention_days\"],\"msg\":\"Input should be a valid integer, got a number with a fractional part\",\"input\":1.5}]}"
+    },
+    {
+      "name": "W patch days past int32",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "4621ac2fca0eadec8a2ff92c47e17ca159a13fe30e118baf9c9b0834197fad27",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W patch days beyond int64",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "6d209237f0c99d4aafb29642043618e3e3451b28ec36a654ef7e8ec202f63bb2",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W patch days float beyond int64",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "0659a5da1a5260092382208bd18219aa36fc38990ffc685b1a3ef1b4ef0aa16f",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "161",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c352b0c5-bc8f-426c-b44d-a12caeb5f8b9"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_parsing_size\",\"loc\":[\"body\",\"retention_days\"],\"msg\":\"Unable to parse input string as an integer, exceeded maximum size\",\"input\":-1e+19}]}"
+    },
+    {
+      "name": "W patch days boolean false",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ee7decd9-b336-59ce-a053-10df924425d0",
+      "body_sha256": "4714f41e27c5b2cd6625f38e2e631ba8a975e29ab2f61c87b4cb11c735f1b503",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "154",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "82c1244a-a1de-4cf1-9a42-2c0f36dcad44"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"retention_days\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":false,\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "W patch days boolean",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ee7decd9-b336-59ce-a053-10df924425d0",
+      "body_sha256": "00014758c1821004010ce3089b5fca26ca58354a4d504bae0c6452573487c708",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "344",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9a2f42d5-d429-45b3-8cba-80caf1f52087"
+      },
+      "body": "{\"id\":\"ee7decd9-b336-59ce-a053-10df924425d0\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"sync_logs\",\"retention_days\":1,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-02T00:00:00Z\",\"updated_at\":\"2026-09-26T01:19:45.765152Z\"}"
+    },
+    {
+      "name": "W patch bad bool",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "4ade26f58698b8d8cf8e04b1f8344e311859aaa2818ffd321dda08335b60cac2",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 422,
+      "headers": {
+        "content-length": "148",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "97715470-f50f-4442-b715-458ec6c0f154"
+      },
+      "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"is_active\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"perhaps\"}]}"
+    },
+    {
+      "name": "W patch unknown",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/0e5653c7-27ea-5bce-a016-480fa1f63e9f",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 404,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "58d17008-602f-4aa1-ba82-c89a6b10a4a0"
+      },
+      "body": "{\"detail\":\"Retention policy not found\"}"
+    },
+    {
+      "name": "W patch malformed id",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/nope",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 400,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5dbc52c0-10b5-447d-a8f2-7e23d0c1cbac"
+      },
+      "body": "{\"detail\":\"badly formed hexadecimal UUID string\"}"
+    },
+    {
+      "name": "W patch other org",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/f02e943d-9930-51e6-b499-ba859f86b2ba",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 404,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f1f312a7-9352-4e85-9aaa-4d33d9b1825a"
+      },
+      "body": "{\"detail\":\"Retention policy not found\"}"
+    },
+    {
+      "name": "W patch community refused",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "183a16d9c9a027fab0a7443a5ac3f84d8fb37995c85480956729102dd7ab01c8",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a26dd8d4-2042-4849-b8fb-2ecc1dee6f62"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "W patch 422 beats licence",
+      "method": "PATCH",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "e598198412572d72085ab7f04acfb2b27ca3c3d6eb3dd7a9da3b3dacc03f08ac",
+      "request_headers_sha256": "183a16d9c9a027fab0a7443a5ac3f84d8fb37995c85480956729102dd7ab01c8",
+      "status": 422,
+      "headers": {
+        "content-length": "150",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ed6738fd-7a44-4775-9a71-f7c9771f81c1"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"retention_days\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":0,\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "W execute dry run after patches",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "32",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "03e2d6f9-85b0-4557-b0fb-b4f2fa57c4e7"
+      },
+      "body": "{\"deleted_count\":2,\"error\":null}"
+    },
+    {
+      "name": "W execute real",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "fc3f69d01f817490d6fc303b7dcc1d6f58d6572442e1a688a97b028e003fb9cc",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "32",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8b6950df-181d-40de-a2b5-4b3fcb2a17eb"
+      },
+      "body": "{\"deleted_count\":2,\"error\":null}"
+    },
+    {
+      "name": "W execute real again",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf/execute",
+      "body_sha256": "fc3f69d01f817490d6fc303b7dcc1d6f58d6572442e1a688a97b028e003fb9cc",
+      "request_headers_sha256": "e06aaeabf0c424d4b20b20e41993219de73aeb96c71eee68eaada1fabe3683a8",
+      "status": 200,
+      "headers": {
+        "content-length": "32",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "57f4cf23-ff69-4fd7-88d7-22869607d32f"
+      },
+      "body": "{\"deleted_count\":0,\"error\":null}"
+    },
+    {
+      "name": "W execute real tier org",
+      "method": "POST",
+      "path": "/api/v1/admin/retention-policies/f02e943d-9930-51e6-b499-ba859f86b2ba/execute",
+      "body_sha256": "fc3f69d01f817490d6fc303b7dcc1d6f58d6572442e1a688a97b028e003fb9cc",
+      "request_headers_sha256": "981ab4f8fa0981e43c36525bc349ff8e285096be1092c1d36cb44f4085a05b94",
+      "status": 200,
+      "headers": {
+        "content-length": "32",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1a967c2e-f861-45ee-a009-a6db432ff816"
+      },
+      "body": "{\"deleted_count\":1,\"error\":null}"
+    },
+    {
+      "name": "W get after execute",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 200,
+      "headers": {
+        "content-length": "391",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ba06134e-8f8c-4ed2-babf-14f64e9de7f9"
+      },
+      "body": "{\"id\":\"ad5860da-b95a-56fd-a854-0f95fc365bdf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"audit_logs\",\"retention_days\":60,\"description\":\"\",\"is_active\":true,\"last_run_at\":\"2026-09-26T01:19:46.840648Z\",\"last_run_deleted_count\":0,\"next_run_at\":\"2026-09-27T01:19:46.840679Z\",\"created_by_id\":null,\"created_at\":\"2026-02-01T00:00:00Z\",\"updated_at\":\"2026-09-26T01:19:46.841059Z\"}"
+    },
+    {
+      "name": "W list after execute",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies?limit=500",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 200,
+      "headers": {
+        "content-length": "1856",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "74f8282b-55c5-4915-bdec-e9b5f7a20493"
+      },
+      "body": "{\"items\":[{\"id\":\"ad5860da-b95a-56fd-a854-0f95fc365bdf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"audit_logs\",\"retention_days\":60,\"description\":\"\",\"is_active\":true,\"last_run_at\":\"2026-09-26T01:19:46.840648Z\",\"last_run_deleted_count\":0,\"next_run_at\":\"2026-09-27T01:19:46.840679Z\",\"created_by_id\":null,\"created_at\":\"2026-02-01T00:00:00Z\",\"updated_at\":\"2026-09-26T01:19:46.841059Z\"},{\"id\":\"ee7decd9-b336-59ce-a053-10df924425d0\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"sync_logs\",\"retention_days\":1,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-02T00:00:00Z\",\"updated_at\":\"2026-09-26T01:19:45.765152Z\"},{\"id\":\"4552acad-c025-52f3-9759-8a29aa621ddf\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"metrics_daily\",\"retention_days\":45,\"description\":\"not implemented\",\"is_active\":false,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-02-03T00:00:00Z\",\"updated_at\":\"2026-09-26T01:19:44.612688Z\"},{\"id\":\"b76d3c8a-27c5-4e18-8809-dd50ef7b1937\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"work_items\",\"retention_days\":90,\"description\":null,\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-09-26T01:19:40.256706Z\",\"updated_at\":\"2026-09-26T01:19:40.256711Z\"},{\"id\":\"d6bb0177-f02f-4bd1-9d3a-be16d92fa10a\",\"org_id\":\"ff12fdd3-c98b-5dd0-8c2a-957bd97020af\",\"resource_type\":\"git_commits\",\"retention_days\":7,\"description\":\"seven\",\"is_active\":true,\"last_run_at\":null,\"last_run_deleted_count\":null,\"next_run_at\":null,\"created_by_id\":null,\"created_at\":\"2026-09-26T01:19:40.391742Z\",\"updated_at\":\"2026-09-26T01:19:40.391748Z\"}],\"total\":5,\"limit\":500,\"offset\":0}"
+    },
+    {
+      "name": "W delete",
+      "method": "DELETE",
+      "path": "/api/v1/admin/retention-policies/ee7decd9-b336-59ce-a053-10df924425d0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "47dd257a-50e0-4427-825e-335d5b4b2702"
+      },
+      "body": "{\"deleted\":true}"
+    },
+    {
+      "name": "W delete again",
+      "method": "DELETE",
+      "path": "/api/v1/admin/retention-policies/ee7decd9-b336-59ce-a053-10df924425d0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 404,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8c21b8db-5c10-42ca-9377-6d7744559c81"
+      },
+      "body": "{\"detail\":\"Retention policy not found\"}"
+    },
+    {
+      "name": "W delete malformed",
+      "method": "DELETE",
+      "path": "/api/v1/admin/retention-policies/nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W delete other org",
+      "method": "DELETE",
+      "path": "/api/v1/admin/retention-policies/f02e943d-9930-51e6-b499-ba859f86b2ba",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 404,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "847d37f2-d3f7-4a0e-b083-5bd376d5188a"
+      },
+      "body": "{\"detail\":\"Retention policy not found\"}"
+    },
+    {
+      "name": "W delete community",
+      "method": "DELETE",
+      "path": "/api/v1/admin/retention-policies/ad5860da-b95a-56fd-a854-0f95fc365bdf",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "391ed14346601b2635d9869bd8277143e75469a55b600f884b2baa5d4e45e1ad",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "72439555-0f6f-448f-b82d-7b13af2d5580"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "resource types enterprise",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/resource-types",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "760e202d591d2369be7443f4957779139f3d48ddc07c1f827b60cd16caffaac5",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0a2d5b16-23af-4cdb-8039-43dd87c243d0"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "resource types override grants",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/resource-types",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8b1d9199dd9565db5fcd93265d0265bd56ea0e44a22e3c543ffca9f69c13b1fc",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8c900cc6-9c50-46d4-9f0b-c9315e2a9aed"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "resource types tier only",
+      "method": "GET",
+      "path": "/api/v1/admin/retention-policies/resource-types",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "494278f605179093d1e6318c9f392fe51f034fe57f1cdf12690864fb58f31a69",
+      "status": 402,
+      "headers": {
+        "content-length": "128",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4a895791-2380-469a-b9ff-b89fafe7b6d0"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"custom_retention\",\"required_tier\":\"enterprise\",\"current_tier\":\"community\"}}"
+    }
+  ],
+  "rows": {
+    "audit_logs rows": {
+      "rows": "732c5000-e54f-5dc9-b853-adbc614e273etier-new | d8a480d8-af98-5d17-ac0e-cefbacd2d231comm-old | f414f664-400b-59b3-80b7-cae7b6fa02a2fail-old | ff12fdd3-c98b-5dd0-8c2a-957bd97020afent-0 | ff12fdd3-c98b-5dd0-8c2a-957bd97020afent-1 | ff12fdd3-c98b-5dd0-8c2a-957bd97020afent-29 | ff12fdd3-c98b-5dd0-8c2a-957bd97020afent-31"
+    },
+    "org_retention_policies rows": {
+      "rows": "732c5000-e54f-5dc9-b853-adbc614e273eaudit_logs5 \u003cnil\u003e true 1truetrue\u003cnil\u003etrue | 732c5000-e54f-5dc9-b853-adbc614e273emetrics_daily90 \u003cnil\u003e true \u003cnil\u003efalsefalse\u003cnil\u003etrue | 732c5000-e54f-5dc9-b853-adbc614e273esync_logs90 \u003cnil\u003e true \u003cnil\u003efalsefalse276d32d0-7516-5a0f-b854-9baa5aab6889true | 732c5000-e54f-5dc9-b853-adbc614e273ework_items90true \u003cnil\u003efalsefalse\u003cnil\u003etrue | 9977605f-33ed-5617-842a-9fd85f72000faudit_logs2000000000 \u003cnil\u003e true \u003cnil\u003efalsefalse\u003cnil\u003efalse | 9977605f-33ed-5617-842a-9fd85f72000fgit_commits90Café 東京 ünïtrue \u003cnil\u003efalsefalse\u003cnil\u003etrue | 9977605f-33ed-5617-842a-9fd85f72000fwork_items1 \u003cnil\u003e true \u003cnil\u003efalsefalse\u003cnil\u003etrue | f414f664-400b-59b3-80b7-cae7b6fa02a2audit_logs30 \u003cnil\u003e true \u003cnil\u003efalsefalse\u003cnil\u003efalse | ff12fdd3-c98b-5dd0-8c2a-957bd97020afaudit_logs60true 0truetrue\u003cnil\u003etrue | ff12fdd3-c98b-5dd0-8c2a-957bd97020afgit_commits7seventrue \u003cnil\u003efalsefalse\u003cnil\u003etrue | ff12fdd3-c98b-5dd0-8c2a-957bd97020afmetrics_daily45not implementedfalse \u003cnil\u003efalsefalse\u003cnil\u003etrue | ff12fdd3-c98b-5dd0-8c2a-957bd97020afwork_items90 \u003cnil\u003e true \u003cnil\u003efalsefalse\u003cnil\u003etrue"
+    }
+  }
+}

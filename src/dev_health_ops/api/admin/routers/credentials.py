@@ -3,7 +3,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import socket
-from typing import Any, Protocol, cast
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -19,11 +19,10 @@ from dev_health_ops.api.admin.schemas import (
     TestConnectionRequest,
     TestConnectionResponse,
 )
+from dev_health_ops.api.go_served import GO_API, raise_served_by_go_api
 from dev_health_ops.api.services.configuration import (
-    CredentialLookupOutcome,
     IntegrationCredentialsService,
 )
-from dev_health_ops.api.utils.errors import error_detail
 from dev_health_ops.credentials.resolver import (
     github_credentials_from_mapping,
     gitlab_credentials_from_mapping,
@@ -37,9 +36,6 @@ from dev_health_ops.exceptions import (
 )
 from dev_health_ops.providers.github.client import GitHubAuth
 from dev_health_ops.providers.github.code_client import GitHubCodeClient
-from dev_health_ops.providers.pagerduty.sync_auth import (
-    hydrate_pagerduty_credentials_async,
-)
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
 from .common import get_session
@@ -50,11 +46,6 @@ _GITLAB_DEFAULT_URL = "https://gitlab.com"
 _GITLAB_API_SUFFIX = "/api/v4"
 
 router = APIRouter()
-
-
-class _MutableIntegrationCredential(Protocol):
-    config: dict[str, Any] | None
-    is_active: bool
 
 
 def _string_value(value: object) -> str | None:
@@ -121,15 +112,9 @@ def _integration_credential_response(
 async def list_credentials(
     provider: str | None = None,
     active_only: bool = False,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> list[IntegrationCredentialResponse]:
-    svc = IntegrationCredentialsService(session, org_id)
-    if provider:
-        creds = await svc.list_by_provider(provider)
-    else:
-        creds = await svc.list_all(active_only=active_only)
-    return [_integration_credential_response(credential) for credential in creds]
+    raise_served_by_go_api("/api/v1/admin/credentials", GO_API)
 
 
 @router.get(
@@ -264,40 +249,17 @@ async def list_credential_repos(
 async def get_credential(
     provider: str,
     name: str = "default",
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> IntegrationCredentialResponse:
-    svc = IntegrationCredentialsService(session, org_id)
-    cred = await svc.get(provider, name)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
-    return _integration_credential_response(cred)
+    raise_served_by_go_api("/api/v1/admin/credentials/{provider}/{name}", GO_API)
 
 
 @router.post("/credentials", response_model=IntegrationCredentialResponse)
 async def create_credential(
     payload: IntegrationCredentialCreate,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> IntegrationCredentialResponse:
-    if payload.provider == "pagerduty":
-        raise HTTPException(
-            status_code=400,
-            detail="Use the dedicated PagerDuty setup endpoints",
-        )
-    svc = IntegrationCredentialsService(session, org_id)
-    cred = await svc.set(
-        provider=payload.provider,
-        credentials=payload.credentials,
-        name=payload.name,
-        config=payload.config,
-    )
-    # Commit before responding (CHAOS-3739): ``svc.set`` only flushes, while
-    # the yielded request-session dependency commits during teardown after
-    # FastAPI has already sent the response. A following request that links
-    # this credential would otherwise fail its foreign-key check.
-    await session.commit()
-    return _integration_credential_response(cred)
+    raise_served_by_go_api("/api/v1/admin/credentials", GO_API)
 
 
 @router.patch(
@@ -307,160 +269,26 @@ async def update_credential(
     provider: str,
     name: str,
     payload: IntegrationCredentialUpdate,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> IntegrationCredentialResponse:
-    if provider == "pagerduty":
-        raise HTTPException(
-            status_code=400,
-            detail="Use the dedicated PagerDuty setup endpoints",
-        )
-    svc = IntegrationCredentialsService(session, org_id)
-    existing = await svc.get(provider, name)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Credential not found")
-
-    if payload.credentials is not None:
-        existing = await svc.set(
-            provider=provider,
-            credentials=payload.credentials,
-            name=name,
-            config=payload.config
-            if payload.config is not None
-            else getattr(existing, "config"),
-            is_active=payload.is_active
-            if payload.is_active is not None
-            else bool(getattr(existing, "is_active")),
-        )
-    else:
-        mutable_existing = cast(_MutableIntegrationCredential, existing)
-        if payload.config is not None:
-            mutable_existing.config = payload.config
-        if payload.is_active is not None:
-            mutable_existing.is_active = payload.is_active
-        await session.flush()
-
-    return _integration_credential_response(existing)
+    raise_served_by_go_api("/api/v1/admin/credentials/{provider}/{name}", GO_API)
 
 
 @router.delete("/credentials/{provider}/{name}")
 async def delete_credential(
     provider: str,
     name: str = "default",
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> dict:
-    svc = IntegrationCredentialsService(session, org_id)
-    deleted = await svc.delete(provider, name)
-    if provider == "pagerduty" and deleted is False:
-        raise HTTPException(
-            status_code=503,
-            detail="PagerDuty remote revocation is pending retry",
-        )
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Credential not found")
-    return {"deleted": True}
+    raise_served_by_go_api("/api/v1/admin/credentials/{provider}/{name}", GO_API)
 
 
 @router.post("/credentials/test", response_model=TestConnectionResponse)
 async def test_connection(
     payload: TestConnectionRequest,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> TestConnectionResponse:
-    svc = IntegrationCredentialsService(session, org_id)
-
-    creds = payload.credentials  # inline (pre-save) or fall back to stored
-    stored = None
-    if not creds:
-        # Prefer credential_id (UUID) lookup; fall back to provider+name
-        if payload.credential_id:
-            # issue 3694: a by-id lookup can be falsy for three DISTINCT
-            # reasons (see CredentialLookupOutcome) -- only NOT_FOUND
-            # stays 404 (the cross-tenant not-found-as-forbidden posture
-            # is unchanged; get_by_id already scopes to this org). A row
-            # that exists in THIS org but is unusable (no stored payload,
-            # or a decrypt failure) is a distinct, reason-coded 422:
-            # the client asked to test something real that this org
-            # genuinely has, and "not found" would be a lie.
-            (
-                creds,
-                stored,
-                outcome,
-            ) = await svc.get_decrypted_credentials_by_id_with_outcome(
-                payload.credential_id
-            )
-            if not creds and outcome is not CredentialLookupOutcome.OK:
-                if outcome is CredentialLookupOutcome.NOT_FOUND:
-                    raise HTTPException(status_code=404, detail="Credential not found")
-                reason_code = (
-                    "credential_missing_payload"
-                    if outcome is CredentialLookupOutcome.NO_PAYLOAD
-                    else "credential_unreadable"
-                )
-                raise HTTPException(
-                    status_code=422,
-                    detail=error_detail(
-                        "Stored credential exists but cannot be used for a "
-                        "test connection",
-                        reason_code=reason_code,
-                    ),
-                )
-        else:
-            creds = await svc.get_decrypted_credentials(payload.provider, payload.name)
-        if not creds:
-            raise HTTPException(status_code=404, detail="Credential not found")
-
-    success = False
-    error = None
-    details: dict[str, Any] = {}
-
-    try:
-        if payload.provider == "github":
-            success, details = await _test_github_connection(creds)
-        elif payload.provider == "gitlab":
-            success, details = await _test_gitlab_connection(creds)
-        elif payload.provider == "jira":
-            success, details = await _test_jira_connection(creds)
-        elif payload.provider == "linear":
-            success, details = await _test_linear_connection(creds)
-        elif payload.provider == "launchdarkly":
-            success, details = await _test_launchdarkly_connection(creds)
-        elif payload.provider == "pagerduty":
-            # OAuth access tokens live in the separately encrypted provider
-            # OAuth store, while client-credential descriptors require a token
-            # exchange.  The generic credential row intentionally contains
-            # neither ephemeral token, so hydrate it before the live probe.
-            creds = await hydrate_pagerduty_credentials_async(creds, org_id=org_id)
-            success, details = await _test_pagerduty_connection(creds)
-        else:
-            error = f"Unknown provider: {payload.provider}"
-    except Exception as e:
-        error = str(e)
-        safe_provider = str(payload.provider).replace("\r", "").replace("\n", "")
-        logger.exception("Test connection failed for %s", safe_provider)
-
-    # CHAOS-2780: this is the credential-test flow -- the most likely place
-    # for a secret-bearing exception message (or, via the provider helpers
-    # below, a raw external HTTP response body) to appear. Sanitize before
-    # it reaches EITHER sink: the persisted last_test_error (below) and the
-    # HTTP response returned to the caller (below that). sanitize_error_text
-    # is a no-op on None/already-clean text, so this is safe regardless of
-    # which branch above set `error`.
-    error = sanitize_error_text(error)
-
-    # Always persist the test result when a stored credential exists
-    # (covers both inline pre-save tests and DB-sourced tests)
-    if stored is None:
-        stored = await svc.get(payload.provider, payload.name)
-    if stored:
-        await svc.update_test_result(
-            str(getattr(stored, "provider")),
-            success,
-            error,
-            str(getattr(stored, "name")),
-        )
-    return TestConnectionResponse(success=success, error=error, details=details or None)
+    raise_served_by_go_api("/api/v1/admin/credentials/test", GO_API)
 
 
 def _validate_external_url(url: str) -> tuple[bool, str | None]:

@@ -2352,16 +2352,75 @@ def test_discovery_does_not_override_a_caller_set_otel_enabled(tmp_path, monkeyp
 
 
 def test_discovery_can_run_twice_in_one_process():
-    """Two discoveries in one process must both succeed (CHAOS-6943).
+    """Two discoveries in one process must both succeed under CI's environment (CHAOS-6943).
 
-    Order-dependent on an unpinned environment: with OTEL_ENABLED unset, `discover()`
-    purges the modules it imported but not the Prometheus collectors and SQLAlchemy
-    tables they registered, so the second discovery died with `DuplicateTimeseries` --
-    whichever test happened to run second in a local pytest process failed. CI sets
-    OTEL_ENABLED=false and never took that path; `tests/conftest.py` now pins the same
-    default for every test process, and this test fails if that pin is lost.
+    With OTEL_ENABLED unset, `discover()` purges the modules it imported but not the
+    Prometheus collectors and SQLAlchemy tables they registered (see the next test), so a
+    second discovery in the same process cannot work. CI sets OTEL_ENABLED=false and
+    never took that path; `tests/conftest.py` pins the same default for every test
+    process, and this test fails if the pin is lost.
     """
     discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_twice")
     first = discoverer.discover(_REPO_ROOT)
     second = discoverer.discover(_REPO_ROOT)
     assert first["routes"] == second["routes"], "the two discoveries disagree"
+
+
+# Runs in a CHILD process: two discoveries with OTEL_ENABLED unset leave purged modules'
+# collectors and tables behind, which would poison every later test in this process.
+_TWO_DISCOVERIES_WITHOUT_OTEL = """
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("discover_ops_routes_child", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+root = __import__("pathlib").Path(sys.argv[2])
+module.discover(root)
+try:
+    module.discover(root)
+    outcome = {"second": "returned"}
+except Exception as exc:
+    outcome = {"second": type(exc).__name__, "message": str(exc),
+               "is_import_error": isinstance(exc, module.DiscoveryImportError)}
+print("OUTCOME " + json.dumps(outcome))
+"""
+
+
+def test_a_second_discovery_with_otel_unset_fails_loud_and_named(monkeypatch):
+    """The second discovery in a process that purged the first one's modules raises a
+    NAMED error up front instead of dying inside the import (CHAOS-6943).
+
+    Executed in a child process with OTEL_ENABLED removed. Before the guard the second
+    call raised `DiscoveryImportError` wrapping `DuplicateTimeseries` from deep inside
+    `api.main`'s import; now it raises `DiscoveryStateError` (still a
+    `DiscoveryImportError`, so callers that treat that as a hard failure are unchanged),
+    before importing anything, naming the cause and the way out.
+    """
+    monkeypatch.delenv("OTEL_ENABLED", raising=False)
+    env = {k: v for k, v in os.environ.items() if k != "OTEL_ENABLED"}
+    env["PYTHONPATH"] = str(_REPO_ROOT / "src")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _TWO_DISCOVERIES_WITHOUT_OTEL,
+            str(_DISCOVERER_PATH),
+            str(_REPO_ROOT),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=_REPO_ROOT,
+        timeout=300,
+    )
+    lines = [line for line in result.stdout.splitlines() if line.startswith("OUTCOME ")]
+    assert lines, (
+        f"the child printed no outcome: rc={result.returncode} {result.stderr[-800:]}"
+    )
+    outcome = json.loads(lines[-1].removeprefix("OUTCOME "))
+    assert outcome["second"] == "DiscoveryStateError", outcome
+    assert outcome["is_import_error"] is True, outcome
+    assert (
+        "DuplicateTimeseries" in outcome["message"]
+        and "OTEL_ENABLED" in outcome["message"]
+    ), outcome

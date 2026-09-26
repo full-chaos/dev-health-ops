@@ -29,10 +29,35 @@ func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Cha
 	return UpgradeLogged(ctx, conn, baseline, chain, slog.New(slog.DiscardHandler))
 }
 
+// embeddedKnown is the revisions this build knows: its embedded Alembic walk, its
+// baseline heads and its chain.
+func embeddedKnown(baseline Baseline, chain []ChainFile) (map[string]bool, error) {
+	history, err := LoadHistory()
+	if err != nil {
+		return nil, err
+	}
+	return KnownRevisions(history, baseline, chain), nil
+}
+
 // UpgradeLogged is Upgrade with a logger for the one event the command's JSON
 // result cannot show: a chain step that failed and was recovered because another
 // migrator had recorded its revision.
 func UpgradeLogged(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, logger *slog.Logger) (Result, error) {
+	known, err := embeddedKnown(baseline, chain)
+	if err != nil {
+		return Result{Heads: Heads(baseline, chain)}, err
+	}
+	return upgrade(ctx, conn, baseline, chain, known, logger)
+}
+
+// UpgradeWithHistory is UpgradeLogged for a build whose Alembic walk is history
+// rather than the embedded one: an older build (an image rolled back) knows fewer
+// revisions than this one.
+func UpgradeWithHistory(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, history []HistoryEntry, logger *slog.Logger) (Result, error) {
+	return upgrade(ctx, conn, baseline, chain, KnownRevisions(history, baseline, chain), logger)
+}
+
+func upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, known map[string]bool, logger *slog.Logger) (Result, error) {
 	result := Result{Heads: Heads(baseline, chain)}
 	var plan Plan
 	err := inTransaction(ctx, conn, func(tx pgx.Tx) error {
@@ -40,8 +65,10 @@ func UpgradeLogged(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain
 		if err != nil {
 			return err
 		}
-		plan = Decide(observation, baseline, chain)
+		plan = Decide(observation, baseline, chain, known)
 		switch plan.State {
+		case StateAheadOfBuild:
+			return AheadOfBuildError{Recorded: observation.Versions, Unknown: plan.Unknown}
 		case StateForeign:
 			return ForeignDatabaseError{Objects: observation.Objects}
 		case StateSchemaMismatch:
@@ -78,7 +105,7 @@ func UpgradeLogged(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain
 	if err != nil {
 		return result, err
 	}
-	applied, err := applyChain(ctx, dbChain{conn: conn, baseline: baseline, chain: chain}, logger)
+	applied, err := applyChain(ctx, dbChain{conn: conn, baseline: baseline, chain: chain, known: known}, logger)
 	result.Applied = applied
 	if err != nil {
 		return result, err
@@ -139,6 +166,7 @@ type dbChain struct {
 	conn     *pgx.Conn
 	baseline Baseline
 	chain    []ChainFile
+	known    map[string]bool
 }
 
 func (d dbChain) step(ctx context.Context) (string, string, error) {
@@ -148,7 +176,7 @@ func (d dbChain) step(ctx context.Context) (string, string, error) {
 		if err != nil {
 			return err
 		}
-		current := Decide(observation, d.baseline, d.chain)
+		current := Decide(observation, d.baseline, d.chain, d.known)
 		if current.State != StateAtHead {
 			return fmt.Errorf("the database changed while the chain was applied: it is no longer at a known revision (state %d, alembic_version %v)", current.State, observation.Versions)
 		}
@@ -171,7 +199,7 @@ func (d dbChain) step(ctx context.Context) (string, string, error) {
 type stepProgress struct{ applied, attempted string }
 
 func (d dbChain) recorded(ctx context.Context, revision string) bool {
-	return revisionRecordedSince(ctx, d.conn, d.baseline, d.chain, revision)
+	return revisionRecordedSince(ctx, d.conn, d.baseline, d.chain, d.known, revision)
 }
 
 // applyChainFile runs one revision and moves the application head it
@@ -196,6 +224,8 @@ type Status struct {
 	Heads    []string `json:"heads"`
 	Recorded []string `json:"recorded"`
 	Missing  []string `json:"missing,omitempty"`
+	// Unknown are the recorded revisions this build does not know (ahead_of_build).
+	Unknown []string `json:"unknown,omitempty"`
 	// MissingTables are the baseline tables a schema_mismatch database lacks.
 	MissingTables []string `json:"missing_tables,omitempty"`
 	Pending       []string `json:"pending,omitempty"`
@@ -203,6 +233,19 @@ type Status struct {
 
 // ReadStatus reports where the database stands without changing it.
 func ReadStatus(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile) (Status, error) {
+	known, err := embeddedKnown(baseline, chain)
+	if err != nil {
+		return Status{Heads: Heads(baseline, chain)}, err
+	}
+	return readStatus(ctx, conn, baseline, chain, known)
+}
+
+// ReadStatusWithHistory is ReadStatus for a build whose Alembic walk is history.
+func ReadStatusWithHistory(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, history []HistoryEntry) (Status, error) {
+	return readStatus(ctx, conn, baseline, chain, KnownRevisions(history, baseline, chain))
+}
+
+func readStatus(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, known map[string]bool) (Status, error) {
 	status := Status{Heads: Heads(baseline, chain)}
 	err := readOnlyTransaction(ctx, conn, func(tx pgx.Tx) error {
 		observation, err := observe(ctx, tx)
@@ -210,13 +253,14 @@ func ReadStatus(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []
 			return err
 		}
 		status.Recorded = observation.Versions
-		plan := Decide(observation, baseline, chain)
+		plan := Decide(observation, baseline, chain, known)
 		status.Missing = plan.Missing
+		status.Unknown = plan.Unknown
 		status.MissingTables = plan.MissingTables
 		for _, file := range plan.Pending {
 			status.Pending = append(status.Pending, file.Revision)
 		}
-		status.State = map[State]string{StateEmpty: "empty", StateAtHead: "at_head", StateBelowHead: "below_head", StateForeign: "foreign", StateSchemaMismatch: "schema_mismatch"}[plan.State]
+		status.State = map[State]string{StateEmpty: "empty", StateAtHead: "at_head", StateBelowHead: "below_head", StateForeign: "foreign", StateSchemaMismatch: "schema_mismatch", StateAheadOfBuild: "ahead_of_build"}[plan.State]
 		return nil
 	})
 	return status, err
@@ -323,14 +367,14 @@ func sameSet(a, b []string) bool {
 
 // revisionRecordedSince reports whether the database now records the chain revision
 // (or a later one): read fresh, after the failed step's transaction is gone.
-func revisionRecordedSince(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, revision string) bool {
+func revisionRecordedSince(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, known map[string]bool, revision string) bool {
 	var recorded bool
 	err := readOnlyTransaction(ctx, conn, func(tx pgx.Tx) error {
 		observation, err := observe(ctx, tx)
 		if err != nil {
 			return err
 		}
-		current := Decide(observation, baseline, chain)
+		current := Decide(observation, baseline, chain, known)
 		if current.State != StateAtHead {
 			return nil
 		}

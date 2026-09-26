@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -154,7 +155,7 @@ func runHook(t *testing.T, ctx context.Context, admin *pgx.Conn, instance *conta
 	if err := pgmigrate.CheckSettings(settings, baseline); err != nil {
 		outcome.err = err
 	} else {
-		outcome.result, outcome.err = pgmigrate.Upgrade(ctx, conn, baseline, b.chain)
+		outcome.result, outcome.err = pgmigrate.UpgradeWithHistory(ctx, conn, baseline, b.chain, b.history, slog.New(slog.DiscardHandler))
 	}
 	rows, err := conn.Query(ctx, "SELECT version_num FROM alembic_version ORDER BY version_num")
 	if err == nil {
@@ -172,6 +173,7 @@ func runHook(t *testing.T, ctx context.Context, admin *pgx.Conn, instance *conta
 
 func reasonForError(err error) []string {
 	var below pgmigrate.BelowHeadError
+	var ahead pgmigrate.AheadOfBuildError
 	var foreign pgmigrate.ForeignDatabaseError
 	var mismatch pgmigrate.SchemaMismatchError
 	var settings pgmigrate.SettingsMismatchError
@@ -182,8 +184,10 @@ func reasonForError(err error) []string {
 		return []string{pgmigrate.ReasonSchemaMismatch}
 	case errors.As(err, &foreign):
 		return []string{pgmigrate.ReasonForeignDatabase}
+	case errors.As(err, &ahead):
+		return []string{pgmigrate.ReasonAheadOfBuild}
 	case errors.As(err, &below):
-		return []string{pgmigrate.ReasonBelowBaseline, pgmigrate.ReasonCutoverMissing, pgmigrate.ReasonAheadOfBuild}
+		return []string{pgmigrate.ReasonBelowBaseline, pgmigrate.ReasonCutoverMissing}
 	}
 	return nil
 }
@@ -346,6 +350,17 @@ func TestPreflightMatchesTheHookOverTheStateGrid(t *testing.T) {
 			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonBelowBaseline},
 		{"a revision this build never heard of", stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, nil),
 			execSQL(t, "UPDATE alembic_version SET version_num = '9999' WHERE version_num = '"+application+"'"))), productionSettings, current,
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
+		// CHAOS-6878: an unknown revision ALONGSIDE the baseline heads. The hook used to apply the
+		// chain over such a database (or call it up to date); it refuses now, and the preflight says so.
+		{"an unknown extra row beside the baseline heads", stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, nil),
+			execSQL(t, "INSERT INTO alembic_version VALUES ('9999')"))), productionSettings, current,
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
+		{"an unknown extra row beside the head", stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, current.chain),
+			execSQL(t, "INSERT INTO alembic_version VALUES ('9999')"))), productionSettings, current,
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
+		{"a future revision beside the baseline heads", stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, nil),
+			execSQL(t, "INSERT INTO alembic_version VALUES ('0999')"))), productionSettings, current,
 			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
 		{"the image was rolled back one revision", atHead, productionSettings, olderBuild(t, current, 1),
 			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
@@ -643,6 +658,9 @@ func TestPreflightVenueOracleOverRealAlembicStates(t *testing.T) {
 		{"python: at the baseline (0138)", pythonState("0138", "0066"), pgmigrate.VerdictAppliesCleanly, pgmigrate.ReasonPendingRevs},
 		{"python: the baseline without the cutover", pythonState("0138"), pgmigrate.VerdictNeedsManual, pgmigrate.ReasonCutoverMissing},
 		{"python: at the head", pythonState("head"), pgmigrate.VerdictAtHead, pgmigrate.ReasonUpToDate},
+		// CHAOS-6878: real-Alembic databases that also record a revision this build does not know.
+		{"python: at the head, plus an unknown row", pythonStateWith(pythonState, admin, instance, "INSERT INTO alembic_version VALUES ('9999')", "head"), pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
+		{"python: the baseline, plus a future revision", pythonStateWith(pythonState, admin, instance, "INSERT INTO alembic_version VALUES ('0999')", "0138", "0066"), pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
 	}
 	for index := 0; index < len(current.chain)-1; index++ {
 		revision := current.chain[index].Revision
@@ -769,6 +787,77 @@ func TestReadersSeeOneSnapshotWhileAnUpgradeCommits(t *testing.T) {
 			want := map[string]string{"preflight": pgmigrate.VerdictAppliesCleanly + "/" + pgmigrate.ReasonEmptyDatabase, "status": "empty", "current": "[]"}[reader.name]
 			if result.got != want {
 				t.Fatalf("the %s read %q while an upgrade committed between its queries, want %q (the state its first query saw)", reader.name, result.got, want)
+			}
+		})
+	}
+}
+
+// pythonStateWith builds a real-Alembic state and then records one more row in alembic_version.
+func pythonStateWith(build func(...string) string, admin *pgx.Conn, instance *containers.Instance, insert string, revisions ...string) string {
+	database := build(revisions...)
+	conn, err := pgx.Connect(context.Background(), instanceDatabaseURI(instance.URI, database))
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close(context.Background())
+	if _, err := conn.Exec(context.Background(), insert); err != nil {
+		panic(err)
+	}
+	return database
+}
+
+func instanceDatabaseURI(uri, database string) string {
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		panic(err)
+	}
+	parsed.Path = "/" + database
+	return parsed.String()
+}
+
+// TestUpgradeRefusesADatabaseAheadOfTheBuild is the hook's own behaviour (CHAOS-6878),
+// through the verbs the chart runs: `upgrade` refuses a database that records a
+// revision this build does not know, with a nonzero exit, an error naming the revision
+// (not the "below the head" advice), and the database byte-unchanged; `status` says so
+// and `preflight` agrees.
+func TestUpgradeRefusesADatabaseAheadOfTheBuild(t *testing.T) {
+	ctx := context.Background()
+	productionEnv(t)
+	baseline, current := currentBuild(t)
+	instance, admin := startInstance(t)
+	for name, set := range map[string]func(*pgx.Conn){
+		"beside the baseline heads": sequence(upgradeTo(t, baseline, nil), execSQL(t, "INSERT INTO alembic_version VALUES ('9999')")),
+		"beside the head":           sequence(upgradeTo(t, baseline, current.chain), execSQL(t, "INSERT INTO alembic_version VALUES ('9999')")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			database := stateDatabase(t, admin, instance, set)
+			uri := databaseURI(t, instance.URI, database)
+			before := snapshot(t, ctx, instance, database)
+
+			code, stdout, stderr := commandRun(t, uri, productionLookup, "upgrade")
+			if code != cli.ExitFailure || strings.TrimSpace(stdout) != "" {
+				t.Fatalf("upgrade exit %d stdout %q: want exit %d and nothing on stdout (stderr %q)", code, stdout, cli.ExitFailure, stderr)
+			}
+			if !strings.Contains(stderr, `"code":"ahead_of_build"`) || !strings.Contains(stderr, "[9999]") ||
+				!strings.Contains(stderr, "dho never downgrades") || strings.Contains(stderr, "below the head") {
+				t.Fatalf("the refusal is %q", stderr)
+			}
+			if snapshot(t, ctx, instance, database) != before {
+				t.Fatal("the refused upgrade changed the database")
+			}
+
+			code, stdout, _ = commandRun(t, uri, productionLookup, "status")
+			var status struct {
+				State   string   `json:"state"`
+				Unknown []string `json:"unknown"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &status); err != nil || code != cli.ExitOK || status.State != "ahead_of_build" || !reflect.DeepEqual(status.Unknown, []string{"9999"}) {
+				t.Fatalf("status exit %d %q (%v)", code, stdout, err)
+			}
+
+			code, stdout, _ = commandRun(t, uri, productionLookup, "preflight")
+			if code != cli.ExitFailure || !strings.Contains(stdout, `"reason":"ahead_of_build"`) {
+				t.Fatalf("preflight exit %d %q", code, stdout)
 			}
 		})
 	}

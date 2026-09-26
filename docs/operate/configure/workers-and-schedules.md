@@ -164,7 +164,6 @@ same binary.
 | `DEV_HEALTH_GO_DHO_IMAGE` | `dev-health-go-dho` | the four `go-worker-*` processes (`dho worker`), `go-reconciler` (`dho reconciler`), `go-scheduler` (`dho scheduler`), the three `go-stream-*` processes (`dho stream-runner`), `query-api` (`dho query-api`, the `go-api` compose profile, `deploy/go-api/compose-query-api.yml`) and the one-shot `migrate` (`dho migrate upgrade --river`) |
 | `DEV_HEALTH_GO_OPERATOR_IMAGE` | `dev-health-go-operator` | the four `go-sync-*-route-activate` one-shots |
 | `DEV_HEALTH_GO_CONTRACTCHECK_IMAGE` | `dev-health-go-contractcheck` | `go-contractcheck` |
-| `DEV_HEALTH_IMAGE` | `dev-hops-runner` | `go-river-provision`, `go-river-migrate`, and the dormant Celery services |
 | `DEV_HEALTH_API_IMAGE` | `dev-hops-api` | `api`, `metrics-api` |
 
 Every default is the `:local` tag of its family, a tag no registry

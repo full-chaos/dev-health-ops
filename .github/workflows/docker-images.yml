@@ -187,7 +187,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [runner, api]
+        target: [api]
         platform: [linux/amd64, linux/arm64]
         include:
           - platform: linux/amd64
@@ -585,7 +585,7 @@ jobs:
       sha: ${{ needs.build.outputs.sha }}
     strategy:
       matrix:
-        target: [runner, api]
+        target: [api]
     steps:
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -1542,7 +1542,7 @@ jobs:
           # The full family list, both naming schemes -- keep this whole,
           # like ci/check_go_containers.sh's ALL_TARGETS: a shorter,
           # second copy is how the next target goes untagged.
-          families="dev-hops-runner dev-hops-api dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-go-dho dev-health-go-api-tools"
+          families="dev-hops-api dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-go-dho dev-health-go-api-tools"
           short_sha="$(echo "${BUILT_SHA}" | cut -c1-7)"
           # codex round 3, P2: every family shares this ONE short_sha, so an
           # UNKNOWN source-tag registry error (rc==2) on it is not a
@@ -1767,7 +1767,7 @@ jobs:
 
             if [ -z "${base_sha}" ]; then
               # Reached with zero OR exactly one platform label present.
-              # dev-hops-runner/dev-hops-api predate this PR's label and
+              # dev-hops-api predates this PR's label and
               # carry NO Labels map at all today (measured, 084-prod) --
               # that's the zero case. A labelless :latest is NOT the same
               # as a MISSING :latest

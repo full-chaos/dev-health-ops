@@ -18,16 +18,6 @@ BUILD_ARGS=(
 
 DOCKERFILE="${REPO_ROOT}/docker/Dockerfile"
 API_IMAGE="${IMAGE_REGISTRY}/dev-hops-api:${VERSION}"
-RUNNER_IMAGE="${IMAGE_REGISTRY}/dev-hops-runner:${VERSION}"
-
-echo "Building ${RUNNER_IMAGE} (target=runner) ..."
-docker build \
-  "${BUILD_ARGS[@]}" \
-  "$@" \
-  -t "${RUNNER_IMAGE}" \
-  --target runner \
-  -f "${DOCKERFILE}" \
-  "${REPO_ROOT}"
 
 echo "Building ${API_IMAGE} (target=api) ..."
 docker build \
@@ -39,5 +29,4 @@ docker build \
   "${REPO_ROOT}"
 
 echo "Built images:"
-echo "- ${RUNNER_IMAGE}"
 echo "- ${API_IMAGE}"

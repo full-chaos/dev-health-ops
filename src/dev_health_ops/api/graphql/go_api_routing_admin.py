@@ -1143,13 +1143,37 @@ async def routing_status_rows(
             operation
         ] = document
     for (build, target_mode, _document), operations in sorted(grouped.items()):
+        kinds = {
+            operation: operation_kind(operation) or OPERATION_KIND_QUERY
+            for operation in operations
+        }
         found = await operations_with_enablement_proof(
             session,
             schema_digest=live_schema_digest,
             candidate_build=build,
             operations=operations,
             target_mode=target_mode,
+            operation_kinds=kinds,
         )
+        # DISPLAY-ONLY reading for a live row whose operation the catalog does not
+        # register (a retired one): its kind is unknown, so `enable` admits nothing
+        # for it (the fail-closed rule), but this page reports what receipts the
+        # row HAS, judged by each receipt's own form -- a query-form receipt above,
+        # a write-form one here. It never authorizes anything.
+        unknown_kind = {
+            operation: document
+            for operation, document in operations.items()
+            if operation_kind(operation) is None
+        }
+        if unknown_kind:
+            found = found | await operations_with_enablement_proof(
+                session,
+                schema_digest=live_schema_digest,
+                candidate_build=build,
+                operations=unknown_kind,
+                target_mode=target_mode,
+                operation_kinds={op: OPERATION_KIND_MUTATION for op in unknown_kind},
+            )
         # Re-pair each returned name with the document THIS group asked
         # about, so a name can never carry proof across a document, a
         # build or a target mode.

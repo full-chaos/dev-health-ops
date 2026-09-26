@@ -101,7 +101,11 @@ def run_product_telemetry(request):
     )
     events = ProductTelemetryGenerator(spec).generate_events()
     client = CaptureClient()
-    persist.create_sink = lambda: CaptureSink(client)
+
+    def make_sink():
+        return CaptureSink(client)
+
+    setattr(persist, "create_sink", make_sink)
     asyncio.run(persist.persist_product_telemetry_events(events, source=SOURCE))
     return {
         "columns": client.columns or list(persist.PRODUCT_TELEMETRY_COLUMNS),

@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 const productTelemetryUsage = `Usage: dho fixtures product-telemetry [--org <uuid>]... [--orgs N] [--days N] [--sessions-per-day N] [--seed N]
@@ -192,7 +193,7 @@ func lookupOrganizations(ctx context.Context, env cli.Env, n int, logger *slog.L
 	if err != nil || !configured {
 		return fallback("POSTGRES_URI is not configured")
 	}
-	boundary := secrets.NewBoundary(dsn.Reveal())
+	boundary := pgstorage.Boundary(dsn.Reveal())
 	lookupCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	pool, err := pgxpool.New(lookupCtx, dsn.Reveal())

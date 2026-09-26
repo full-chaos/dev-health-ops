@@ -43,7 +43,8 @@ const (
 // URI): a file that builds one for PostgreSQL too would print the resolved
 // credentials, so any other count fails.
 var otherBoundaries = map[string]int{
-	"internal/fixturescli/fixturescli.go": 1, // the VALKEY_URI boundary
+	"internal/fixturescli/fixturescli.go":       1, // the VALKEY_URI boundary
+	"internal/fixturescli/product_telemetry.go": 1, // the ClickHouse boundary of the seeding writes
 }
 
 var openers = map[string]struct {
@@ -54,6 +55,7 @@ var openers = map[string]struct {
 	"internal/adminops/users.go":                           {kindBoundary, "admin users and orgs: the pool and the error redactor"},
 	"internal/backfillrun/command.go":                      {kindBoundary, "backfill run"},
 	"internal/fixturescli/fixturescli.go":                  {kindBoundary, "fixtures finalize-synthetic-sync"},
+	"internal/fixturescli/product_telemetry.go":            {kindBoundary, "fixtures product-telemetry organizations lookup"},
 	"internal/goapicli/prove/main.go":                      {kindBoundary, "go-api-prove: the boundary run() composes"},
 	"internal/goapicli/routing/main.go":                    {kindBoundary, "goapi routing: connectPostgres, the helper of status, enable, disable, repoint and carry"},
 	"internal/maintenancecli/maintenance.go":               {kindBoundary, "maintenance"},

@@ -4,6 +4,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/localgit"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion/storedversiontest"
@@ -19,7 +20,7 @@ func allSpecs(t *testing.T) map[string][]storedversion.Spec {
 		t.Fatal(err)
 	}
 	all := map[string][]storedversion.Spec{}
-	for _, specs := range []map[string][]storedversion.Spec{streamSpecs, providersync.StoredVersionSpecs()} {
+	for _, specs := range []map[string][]storedversion.Spec{streamSpecs, providersync.StoredVersionSpecs(), localgit.StoredVersionSpecs()} {
 		if len(specs) == 0 {
 			t.Fatal("a package lists no stored-version writers")
 		}

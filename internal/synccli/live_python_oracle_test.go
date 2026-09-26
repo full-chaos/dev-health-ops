@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 //go:embed testdata/sync_target_oracle.py
@@ -290,6 +291,21 @@ func TestSyncTargetMatchesLivePython(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proof, "cli-sync-target"), []byte("executed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	writeVenueProof(t)
+}
+
+// writeVenueProof records that the running test made a real comparison against
+// the live Python producer: venueoracle.WriteProof writes the proof file the
+// venue-oracles verb (ci/check_go.sh, registry ci/venue_oracle_registry.d/
+// internal__synccli.tsv) reads under the test's own name, and the registry guard
+// (CHAOS-6806) requires a run row's test to reach it. Only a test that has not
+// failed writes it.
+func writeVenueProof(t *testing.T) {
+	t.Helper()
+	if t.Failed() {
+		return
+	}
+	venueoracle.WriteProof(t)
 }
 
 // canonical re-marshals through a map so key order never matters.

@@ -1,0 +1,4 @@
+internal/synccli	TestDBLookupsMatchLivePython	run
+internal/synccli	TestLocalSyncMatchesLivePython	run
+internal/synccli	TestLocalSyncRerunKeepsHeldColumnsUnlikePython	run
+internal/synccli	TestSyncTargetMatchesLivePython	run

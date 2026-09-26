@@ -30,7 +30,7 @@ import (
 //     Python does; with no organization at all the sync is refused);
 //   - the chunked targets cicd and tests (they need a chunk store the
 //     in-process ledger does not implement yet);
-//   - --provider local|synthetic (their own tickets).
+//   - --provider local blame (CHAOS-6776) and --provider synthetic (their own tickets).
 //
 // `--search` batch mode is batch.go: the listing, then this same per-dataset
 // run for each listed repository.
@@ -41,9 +41,9 @@ const githubIncidentsRefusal = "GitHub does not expose a native incident source;
 
 // Tickets the refusals point at.
 const (
-	ticketDBLookups = "CHAOS-6710"
-	ticketChunked   = "CHAOS-6711"
-	ticketLocal     = "CHAOS-6685"
+	ticketDBLookups  = "CHAOS-6710"
+	ticketChunked    = "CHAOS-6711"
+	ticketLocalBlame = "CHAOS-6776"
 )
 
 // InlineDeps are the executor's outside connections, replaceable in tests.
@@ -56,6 +56,9 @@ type InlineDeps struct {
 	// The two Postgres reads (CHAOS-6710); nil uses the real ones.
 	FirstOrg         func(ctx context.Context, dbURL string) (string, bool)
 	GitHubCredential func(ctx context.Context, dbURL, orgID string, env cli.Env) (*GitHubCredentials, error)
+
+	// Local syncs a local repository (CHAOS-6775): the store connection is open.
+	Local func(ctx context.Context, plan Plan, conn driver.Conn, env cli.Env, now time.Time) error
 }
 
 func defaultInlineDeps() InlineDeps {
@@ -69,6 +72,7 @@ func defaultInlineDeps() InlineDeps {
 
 		FirstOrg:         firstOrganization,
 		GitHubCredential: githubCredentialFromDB,
+		Local:            syncLocal,
 	}
 }
 
@@ -88,6 +92,9 @@ func InlineExecutor(deps InlineDeps) Executor {
 	if deps.Now == nil {
 		deps.Now = defaults.Now
 	}
+	if deps.Local == nil {
+		deps.Local = defaults.Local
+	}
 	if deps.FirstOrg == nil {
 		deps.FirstOrg = defaults.FirstOrg
 	}
@@ -96,6 +103,9 @@ func InlineExecutor(deps InlineDeps) Executor {
 	}
 	lookups := dbLookups{FirstOrg: deps.FirstOrg, GitHubCredential: deps.GitHubCredential}
 	return func(ctx context.Context, plan Plan, env cli.Env) error {
+		if plan.Call == CallLocalRepo {
+			return runLocalRepo(ctx, deps, lookups, plan, env)
+		}
 		datasets, refusal := inlineDatasets(plan)
 		if refusal != nil {
 			return refusal
@@ -149,8 +159,8 @@ func notYet(plan Plan, what, ticket string) *Refusal {
 func inlineDatasets(plan Plan) ([]string, *Refusal) {
 	switch plan.Call {
 	case CallGitHubSingle, CallGitLabSingle, CallGitHubBatch, CallGitLabBatch:
-	case CallLocalRepo, CallLocalBlame:
-		return nil, notYet(plan, "the local provider", ticketLocal)
+	case CallLocalBlame:
+		return nil, notYet(plan, "the local provider's blame target", ticketLocalBlame)
 	default:
 		return nil, notYet(plan, "this provider", "chris-pending")
 	}

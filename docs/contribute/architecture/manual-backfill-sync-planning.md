@@ -138,9 +138,10 @@ credential row that is missing); then the hand-off. The wait is
 quarantined occurrence), `pending`, `disabled` or `triggered`/`accepted`. The
 backfill also records its `backfill_jobs` history row, so the api role holds
 INSERT on that table, and the trigger's work items count needs SELECT on
-ClickHouse `work_items` for the api login: without that grant the count fails,
-the sync is allowed (as when ClickHouse is down) and the cap is silently not
-enforced, which the route logs as an error.
+ClickHouse `work_items` for the api login. ClickHouse unreachable allows the
+sync with a warning log and the `devhealth_sync_work_items_limit_open_total`
+counter (the tier cap is not enforced for that request); an ACCESS_DENIED or
+AUTH_FAILED answer (a login without the grant) fails closed with an error log.
 
 Named divergences from the Python routes: a configuration that is neither
 planner-managed nor pinned to one source (which Python plans in process) is

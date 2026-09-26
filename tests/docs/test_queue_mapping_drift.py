@@ -5,7 +5,7 @@ The Celery-to-River queue mapping is published at
 ``BEGIN/END GENERATED QUEUE MAP`` block written by
 ``scripts/gen_queue_mapping_docs.py`` from ``deploy/go-workers/deployment.json``,
 ``contracts/jobs/v1/registry.json``, ``contracts/jobs/v1/migration-state.json``,
-``compose.yml``, and ``deploy/docker-compose/compose.production.yml``.
+``compose.yml``, and ``deploy/docker-compose/compose.production.yml (deleted, CHAOS-6950)``.
 ``scripts/check_queue_mapping_docs_drift.py`` fails when the published page
 and those producers disagree, mirroring ``tests/docs/test_investment_drift.py``.
 """
@@ -55,7 +55,7 @@ def test_queue_mapping_drift_check_exits_clean() -> None:
 
 def test_go_worker_runtime_generated_block_matches_producers() -> None:
     """The published block must match its producers (deployment.json, registry.json,
-    migration-state.json, compose.yml, compose.production.yml).
+    migration-state.json, compose.yml, compose.production.yml (deleted, CHAOS-6950)).
 
     Read-only verification: proves the published page is in sync with its
     producers without writing to disk.

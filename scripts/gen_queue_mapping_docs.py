@@ -17,8 +17,8 @@ can't happen here:
   a given kind -- a queue is not uniformly "live"; a specific kind on it can
   still be `canary` (see ``sync.provider_unit`` below).
 CHAOS-5589 deleted the Celery ``worker``/``beat`` fleet outright from every
-compose surface (``compose.yml``, ``compose.production.yml``,
-``docker-swarm/stack.yml`` -- R146: Celery transport is not a rollback
+compose surface (``compose.yml``, ``compose.production.yml (deleted, CHAOS-6950)``,
+``docker-swarm/stack.yml (deleted, CHAOS-6950)`` -- R146: Celery transport is not a rollback
 target), so there is no longer a live producer to parse Celery ``-Q`` lists
 from or cross-check against. The historical Celery-queue <-> Go-successor
 *correspondence* below (``CELERY_CORRESPONDENCE``) is therefore now a purely

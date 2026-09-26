@@ -300,7 +300,7 @@ func TestExecuteEmitsAnInfoRecordOfTheResolvedForm(t *testing.T) {
 // this ticket exists to fix, one layer further out than internal/platform/
 // config's own URIs. The component path here must survive it, using
 // DEV_HEALTH_MIGRATION_PG_* names (never POSTGRES_HOST/_PORT/_USER/
-// _PASSWORD/_DB, which deploy/docker-compose/compose.go-workers.yml --
+// _PASSWORD/_DB, which deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950) --
 // not touched by this PR -- already sets unconditionally for that same
 // shell fallback; reusing those names would make
 // this function silently discard a real, working MIGRATION_DATABASE_URI
@@ -378,7 +378,7 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 
 	// The exact overlay scenario this matters for: this binary
 	// must behave EXACTLY as it did before this ticket when
-	// deploy/docker-compose/compose.go-workers.yml's own POSTGRES_HOST
+	// deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950)'s own POSTGRES_HOST
 	// default (or any of its raw shell-fallback vars) is present --
 	// POSTGRES_HOST is not a component key this binary reads at all
 	// anymore, so it has zero effect on which form wins.

@@ -138,7 +138,7 @@ services:
   # River's own schema is a SEPARATE migrator (`dho migrate river`,
   # internal/rivermigrate) that requires its three runtime roles to
   # already exist -- provisioned here from the same checked-in SQL
-  # deploy/docker-compose/compose.go-workers.yml's `go-river-provision`
+  # deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950)'s `go-river-provision`
   # uses, built locally (no ghcr pull) since the `runner` target already
   # ships psql + the SQL file (docker/Dockerfile).
   river-provision:

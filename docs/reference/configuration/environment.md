@@ -71,7 +71,7 @@ The API and sync workers need the same app client values. The redirect URI is th
     The environment names below remain supported and are unchanged — the
     Python producer reads the same `WORKER_*_ENABLED` route switches, so
     renaming them would split producer and executor. What changed is that the
-    shipped Compose, Swarm, Kubernetes, and Helm surfaces now pass the
+    shipped Compose and Helm surfaces now pass the
     flag-backed settings in `command:`/`args:`, and an unknown flag is rejected
     at startup instead of a misspelled variable sitting inert.
 

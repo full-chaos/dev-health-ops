@@ -1,13 +1,10 @@
 ---
 page_id: op-production
-summary: Choose a supported deployment artifact, preserve migration ordering, and verify a production revision before enabling traffic or synchronization.
+summary: Deploy with the supported Helm chart, preserve migration ordering, and verify a production revision before enabling traffic or synchronization.
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
   - docs/ops/deployment-guide.md
-  - deploy/kubernetes/
-  - deploy/docker-compose/
-  - deploy/docker-swarm/
   - deploy/helm/dev-health/
   - deploy/go-workers/
 applicability: current
@@ -19,47 +16,13 @@ lifecycle: active
 Dev Health is deployed as an API plus background workers, persistent databases, a queue, and scheduled work. A production deployment is not complete when the API container starts: migrations must finish, the active worker topology must consume every configured queue, and the selected revision must pass health and data-progress checks before provider synchronization or user traffic is enabled.
 {: .fc-page-lede }
 
-## Choose a deployment example
+## Deploy with the Helm chart
 
-Use the repository artifact that matches the environment you already operate. Do not translate one example into a new platform during the first installation unless that platform has its own reviewed manifests and runbook.
+The [Helm chart](https://github.com/full-chaos/dev-health-ops/tree/main/deploy/helm/dev-health) is the one supported production deployment artifact. Use it where Helm is the managed release boundary, and review values, schema validation, migration-hook ordering, secrets, and worker settings before installation.
 
-<div class="fc-topic-grid" markdown>
+The repository no longer ships production Docker Compose, Docker Swarm, or Kustomize examples: they duplicated the chart's contract without being the path production runs, so they drifted from it. Do not translate the chart into a new platform during the first installation unless that platform has its own reviewed manifests and runbook.
 
-<div class="fc-topic-card" markdown>
-
-### [Docker Compose](https://github.com/full-chaos/dev-health-ops/tree/main/deploy/docker-compose)
-
-Best for a single managed host or small environment where Docker Compose is the operational standard. The example includes one-shot migrations, API, the Go worker fleet, queue routing, health checks, and an environment template.
-
-</div>
-
-<div class="fc-topic-card" markdown>
-
-### [Kubernetes with Kustomize](https://github.com/full-chaos/dev-health-ops/tree/main/deploy/kubernetes)
-
-Best for Kubernetes with ingress, external secret management, and an established rollout process. The base includes namespace, storage, migration Job, API, workers, schedules, and ingress resources.
-
-</div>
-
-<div class="fc-topic-card" markdown>
-
-### [Helm](https://github.com/full-chaos/dev-health-ops/tree/main/deploy/helm/dev-health)
-
-Use the chart where Helm is the managed release boundary. Review values, schema validation, migration-job ordering, secrets, and worker settings before installation.
-
-</div>
-
-<div class="fc-topic-card" markdown>
-
-### [Docker Swarm](https://github.com/full-chaos/dev-health-ops/tree/main/deploy/docker-swarm)
-
-Use only where Swarm is already supported. The example uses Docker secrets and requires explicit verification of the one-shot migration service because Swarm does not provide Compose-style dependency ordering.
-
-</div>
-
-</div>
-
-The root [`compose.yml`](https://github.com/full-chaos/dev-health-ops/blob/main/compose.yml) is for local development and evaluation. It is not a substitute for the production examples.
+The root [`compose.yml`](https://github.com/full-chaos/dev-health-ops/blob/main/compose.yml) is for local development and evaluation. It is not a substitute for the chart.
 
 ## Current worker ownership
 
@@ -70,18 +33,18 @@ route is served by one.
 
 What that means when you deploy:
 
-- the Go worker deployment groups are the production worker topology, not a coexistence foundation waiting on approval. The Kubernetes tree still renders every group at `replicas: 0` so an operator scales only the groups that environment needs -- zero replicas there is a sizing default, no longer a statement that the route belongs to something else;
+- the Go worker deployment groups are the production worker topology, not a coexistence foundation waiting on approval. Each group renders at the replica count its `goWorkers.groups` entry sets, so an operator sizes only the groups that environment needs;
 - routes are served by the Go runtime, and a route's owner is recorded in the routing state rather than assumed from the deployment;
 - River queue ownership is established per job kind, and changing it still requires contract, handler, parity, canary, and rollback evidence;
 - the reconciler refuses a route that drifts from the checked-in policy, so a
   deployment whose routes disagree with the manifest fails closed rather than
   serving the wrong runtime.
 
-Neither the root [`compose.yml`](https://github.com/full-chaos/dev-health-ops/blob/main/compose.yml) nor this page's own [production Compose file](https://github.com/full-chaos/dev-health-ops/blob/main/deploy/docker-compose/compose.production.yml)/[Swarm stack](https://github.com/full-chaos/dev-health-ops/blob/main/deploy/docker-swarm/stack.yml) define the Celery services any more (CHAOS-5589): R146 established Celery is not a rollback target, so the fleet is deleted outright, not archived-in-place. Go/River is the unconditional default worker topology on every compose surface.
+No Compose file or chart defines the Celery services any more (CHAOS-5589): R146 established Celery is not a rollback target, so the fleet is deleted outright, not archived-in-place. Go/River is the unconditional default worker topology.
 
 ## Prepare the production inputs
 
-Before applying any example, decide and record:
+Before installing the chart, decide and record:
 
 - the immutable Dev Health image or reviewed source revision;
 - PostgreSQL domain, queue-control, and migration endpoints where the Go foundation is included;
@@ -114,102 +77,24 @@ The Go topology requires `max_connections` on that PostgreSQL server to be at le
 psql "$MIGRATION_DATABASE_URI" -Atc 'SHOW max_connections'
 ```
 
-## Docker Compose example
+## Install the release
 
-Start from the checked-in [production Compose file](https://github.com/full-chaos/dev-health-ops/blob/main/deploy/docker-compose/compose.production.yml) and [environment template](https://github.com/full-chaos/dev-health-ops/blob/main/deploy/docker-compose/.env.example).
-
-```bash
-cd deploy/docker-compose
-cp .env.example .env
-```
-
-Replace the example image, database hosts, passwords, application secrets, and provider credentials. Pin a reviewed tag or digest:
-
-```dotenv
-DEV_HEALTH_IMAGE=ghcr.io/full-chaos/dev-health-ops@sha256:<reviewed-digest>
-POSTGRES_HOST=postgres.internal.example
-POSTGRES_USER=devhealth
-POSTGRES_PASSWORD=<secret-from-your-store>
-POSTGRES_DB=devhealth
-POSTGRES_URI=postgresql+asyncpg://devhealth:<secret>@postgres.internal.example:5432/devhealth
-CLICKHOUSE_PASSWORD=<secret-from-your-store>
-```
-
-Run and inspect the one-shot migration service before starting the rest of the stack:
+Pin a reviewed image tag or digest in your values file, replace the example database hosts and secret references, and install with Helm:
 
 ```bash
-docker compose -f compose.production.yml pull
-docker compose -f compose.production.yml up migrate
-docker compose -f compose.production.yml logs migrate
+helm upgrade --install dev-health deploy/helm/dev-health \
+  --namespace dev-health --create-namespace \
+  -f values.production.yaml
 ```
 
-Start the application only after migration exits successfully:
+The migration hooks run before the application workloads roll: the chart's migrate Job applies the PostgreSQL and ClickHouse schema, the optional `provisionRoles` and `riverMigrate` hooks provision the runtime roles and apply the River schema and grants, and the route-activate hook applies the route table. Inspect them before relying on the release:
 
 ```bash
-docker compose -f compose.production.yml up -d
-docker compose -f compose.production.yml ps
-curl -fsS http://127.0.0.1:${API_PORT:-8000}/ready
+kubectl -n dev-health get jobs
+kubectl -n dev-health logs job/<migrate-job-name>
 ```
 
-If migration fails, correct the database, credential, role, or schema problem and rerun only that service before starting API and workers.
-
-## Kubernetes example
-
-The checked-in [Kustomize entry point](https://github.com/full-chaos/dev-health-ops/blob/main/deploy/kubernetes/kustomization.yaml) assembles namespace, configuration, secret template, ClickHouse, Valkey, migration Job, API, the Go worker groups, schedules, and ingress. It renders no Celery manifests: the `worker.yaml` and `beat.yaml` they replaced were deleted once production stopped running them. Review the [Kubernetes deployment notes](https://github.com/full-chaos/dev-health-ops/blob/main/deploy/kubernetes/README.md).
-
-Create an environment overlay that pins the image and replaces example configuration:
-
-```yaml
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - ../../base
-images:
-  - name: ghcr.io/your-org/dev-health-ops
-    newName: ghcr.io/full-chaos/dev-health-ops
-    digest: sha256:<reviewed-digest>
-```
-
-Apply migrations and wait before rolling application workloads:
-
-```bash
-kubectl -n dev-health delete job dev-health-migrate --ignore-not-found
-kubectl apply -k deploy/kubernetes/
-kubectl -n dev-health wait --for=condition=complete --timeout=600s \
-  job/dev-health-migrate
-kubectl -n dev-health rollout status deployment/dev-health-api
-kubectl -n dev-health rollout status deployment/dev-health-worker
-```
-
-If the migration Job fails:
-
-```bash
-kubectl -n dev-health logs job/dev-health-migrate
-kubectl -n dev-health describe job dev-health-migrate
-```
-
-The API and worker manifests include a read-only migration wait as a safety net, but explicit Job completion remains the production procedure.
-
-## Docker Swarm example
-
-The [Swarm example](https://github.com/full-chaos/dev-health-ops/tree/main/deploy/docker-swarm) expects Docker secrets and a pre-existing Swarm:
-
-```bash
-docker stack deploy -c deploy/docker-swarm/stack.yml dev-health
-```
-
-Swarm does not gate services on migration completion. Verify the one-shot task before relying on API or workers:
-
-```bash
-docker service logs dev-health_migrate
-docker service ps dev-health_migrate
-```
-
-A successful migration task should be in `Shutdown` without an error. After correcting a failure:
-
-```bash
-docker service update --force dev-health_migrate
-```
+If a hook Job fails, correct the database, credential, role, or schema problem and run the upgrade again; the workloads keep running the previous revision until the hooks succeed.
 
 ## Verify the deployed revision
 
@@ -229,6 +114,6 @@ Before enabling provider synchronization or directing user traffic, verify:
 
 Continue with [Verify first health](verify-health.md), [Environment and secrets](../configure/environment-and-secrets.md), [Databases and storage](../configure/databases-and-storage.md), [Workers and schedules](../configure/workers-and-schedules.md), and [Production hardening](../security/hardening.md).
 
-## Do not infer support from an example alone
+## Do not infer support from defaults alone
 
-Deployment directories are maintained examples, not a promise that every default fits every environment. Review image tags, storage classes, resource limits, ingress behavior, secret integration, provider budgets, worker ownership, and observability. When an example and the current runtime contract disagree, the current code, migration state, route contract, and validated configuration win.
+The chart and its defaults are maintained for the environments this project runs, not a promise that every default fits every environment. Review image tags, storage classes, resource limits, ingress behavior, secret integration, provider budgets, worker ownership, and observability. When an example and the current runtime contract disagree, the current code, migration state, route contract, and validated configuration win.

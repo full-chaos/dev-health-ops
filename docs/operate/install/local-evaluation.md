@@ -5,7 +5,6 @@ content_type: tutorial
 owner: platform-operations
 source_of_truth:
   - compose.yml
-  - deploy/docker-compose/
 applicability: current
 lifecycle: active
 ---

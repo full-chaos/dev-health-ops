@@ -78,8 +78,8 @@ func TestInitDefaultEnabledConstructsAProvider(t *testing.T) {
 }
 
 func TestInitAcceptsTheURLShapedEndpointEveryDeploymentActuallySets(t *testing.T) {
-	// deploy/kubernetes/configmap.yaml, deploy/helm/dev-health/values.yaml,
-	// and deploy/docker-compose/compose.production.yml all set
+	// deploy/kubernetes/configmap.yaml (deleted, CHAOS-6950), deploy/helm/dev-health/values.yaml,
+	// and deploy/docker-compose/compose.production.yml (deleted, CHAOS-6950) all set
 	// OTEL_EXPORTER_OTLP_ENDPOINT to a URL, not this package's own bare
 	// "host:port" default -- otlptracegrpc.WithEndpoint requires "no scheme
 	// or path", so passing a URL there (rather than to WithEndpointURL)

@@ -23,12 +23,9 @@ on:
       # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
       # render deploy/helm/dev-health, so a chart-only change is a Go input.
       - 'deploy/helm/dev-health/**'
-      # The migrate Job's Go pins (internal/rivermigrate/deploy_wiring_test.go) read every compose,
-      # swarm and kubernetes manifest that runs `dho migrate upgrade`.
+      # The migrate service's Go pins (internal/rivermigrate/deploy_wiring_test.go) read the
+      # compose manifest that runs `dho migrate upgrade`.
       - 'compose.yml'
-      - 'deploy/docker-compose/**'
-      - 'deploy/docker-swarm/**'
-      - 'deploy/kubernetes/**'
       - 'scripts/**'
       - 'src/dev_health_ops/api/**'
       - 'src/dev_health_ops/config/**'
@@ -192,12 +189,9 @@ on:
       # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
       # render deploy/helm/dev-health, so a chart-only change is a Go input.
       - 'deploy/helm/dev-health/**'
-      # The migrate Job's Go pins (internal/rivermigrate/deploy_wiring_test.go) read every compose,
-      # swarm and kubernetes manifest that runs `dho migrate upgrade`.
+      # The migrate service's Go pins (internal/rivermigrate/deploy_wiring_test.go) read the
+      # compose manifest that runs `dho migrate upgrade`.
       - 'compose.yml'
-      - 'deploy/docker-compose/**'
-      - 'deploy/docker-swarm/**'
-      - 'deploy/kubernetes/**'
       - 'scripts/**'
       - 'src/dev_health_ops/api/**'
       - 'src/dev_health_ops/config/**'

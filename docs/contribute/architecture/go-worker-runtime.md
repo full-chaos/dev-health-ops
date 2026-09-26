@@ -833,14 +833,14 @@ because `active` is an assertion about the deployment and a typo must not
 quietly become one.
 
 **`active` is the shipped value, and `shadow` is only the compiled fallback.**
-Every deploy shape in this repo sets it for `dev-health-reconciler`: the
-go-workers compose overlay, the Helm values, the Kubernetes ConfigMap and both
-`.env.example` files carry `SYNC_UNRECLAIMABLE_SWEEP=active`, while the
-docker-compose and swarm stacks carry
+Every deploy shape in this repo sets it for `dev-health-reconciler`: the Helm
+values and the root `.env.example` carry `SYNC_UNRECLAIMABLE_SWEEP=active`,
+while `compose.yml` carries
 `--unreclaimable-sweep=${SYNC_UNRECLAIMABLE_SWEEP:-active}` in `command:` —
-CHAOS-4020's contract for those two surfaces is that only credentials render
+CHAOS-4020's contract for that surface is that only credentials render
 through `environment:`, so the flag is where a reader (and `docker compose
-config`) can see it. The interpolated default keeps the operator override
+config`) can see it (CHAOS-6950 deleted the other Compose, Swarm and raw
+Kubernetes shapes). The interpolated default keeps the operator override
 either form would give. `ParseSweepMode("")` still answers `shadow` so a binary
 run with no configuration at all cannot destroy work, but nothing ships in that
 state any more.
@@ -1007,7 +1007,7 @@ That distinction has exactly four consumers, and none of them route:
 
 | Consumer | What it does with the group label |
 | --- | --- |
-| `worker_instances` presence / `EXPECTED_WORKER_GROUPS` health (CHAOS-3942) | `deploy/kubernetes/go-workers.yaml`'s `EXPECTED_WORKER_GROUPS` ConfigMap key (`heavy,ops,sync,sync-provider`) tells `/health/workers` which presence rows to expect before it flips from Celery-authoritative to Go-authoritative. It deliberately excludes `reconciler`/`scheduler`/`stream-*`: those run a separate role with their own `/healthz` and never register `worker_instances` presence. An earlier reconciler cut misread this variable as a *rollback-safety* declaration (`internal/reconcilerservice/dependencies.go`, the `buildUnreclaimableSweep` doc comment) — wrong, because the variable's own contract excludes the reconciler and because rollback safety already rests on the durable `worker_job_routes` row, not on an env list. |
+| `worker_instances` presence / `EXPECTED_WORKER_GROUPS` health (CHAOS-3942) | the chart's `goWorkers.expectedWorkerGroups` value (rendered as `EXPECTED_WORKER_GROUPS`) (`heavy,ops,sync,sync-provider`) tells `/health/workers` which presence rows to expect before it flips from Celery-authoritative to Go-authoritative. It deliberately excludes `reconciler`/`scheduler`/`stream-*`: those run a separate role with their own `/healthz` and never register `worker_instances` presence. An earlier reconciler cut misread this variable as a *rollback-safety* declaration (`internal/reconcilerservice/dependencies.go`, the `buildUnreclaimableSweep` doc comment) — wrong, because the variable's own contract excludes the reconciler and because rollback safety already rests on the durable `worker_job_routes` row, not on an env list. |
 | `workerctl workers status` grouping | `internal/workersctl/main.go`'s `manifestQueueStatusSource.Status` keys live presence rows by `WorkerPresenceSummary.WorkerGroup` and cross-checks each group's queue set against the deployment manifest (`slices.Equal(summary.Queues, queues)`) — a display and consistency check, not a dispatch decision. |
 | `joboperator` drain-and-mutation targeting | `internal/joboperator/service.go`'s `Queues`, `Drain`, and `Undrain` all take a `group string` and validate it with `isValidWorkerGroup` before acting. An operator drains *a group* (a named, deployed set of replicas) — the group answers "which replicas do I signal," never "which queue does this job kind go to." |
 | Log labels | `Config.LogAttrs` (`internal/platform/config/config.go:764-767`) emits `worker_group` as a `slog` attribute alongside `queue_workers`, purely so a log line can be filtered to one deployed group. |
@@ -1029,8 +1029,7 @@ This is the exact confusion CHAOS-4044 exists to close: a worker-group name
 carries no routing information whatsoever, in either direction. If you need
 to know what a group *runs*, read its `--queues`/`--queue-concurrency` flags
 (`deploy/go-workers/deployment.json`, or the rendered `args:` in
-`deploy/kubernetes/go-workers.yaml` / `compose.go-workers.yml` / the Helm
-template), never its name.
+`compose.yml` / the Helm template), never its name.
 
 ## Two planes, not a route-flag plane: what runs vs. where it's served
 
@@ -1068,9 +1067,9 @@ The Go fleet serves **10** River queues, listed in the process table above.
 The Celery fleet declared **23** — Redis lists, not PostgreSQL rows, a
 different transport entirely. **Every Python celery worker service has been
 stopped in production since 2026-08-19** (CHAOS-4026), and CHAOS-5589
-deleted the service definitions outright from every compose surface
-(`compose.yml`, `compose.production.yml`, `docker-swarm/stack.yml` -- R146:
-Celery transport is not a rollback target). The table below is now a purely
+deleted the service definitions outright from every compose surface (R146:
+Celery transport is not a rollback target; CHAOS-6950 later deleted the
+production Compose file and the Swarm stack altogether). The table below is now a purely
 curated historical record (see the next section), kept for the
 `route`/`rollback_route` values still recorded per kind in
 `contracts/jobs/v1/migration-state.json`. Nothing in this section describes a
@@ -1442,7 +1441,7 @@ migrate                (Alembic + ClickHouse, Python image)
 ```
 
 Each step is gated on the previous completing successfully
-(`deploy/docker-compose/compose.go-workers.yml`). Role provisioning runs
+(`compose.yml`). Role provisioning runs
 *after* the Python migration so that guarded grants see every current semantic
 table, including on an already-initialised volume.
 

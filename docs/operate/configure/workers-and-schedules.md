@@ -20,11 +20,11 @@ lifecycle: active
 **Go/River is the production owner of every current background job and every
 current production schedule.** Every Python Celery worker and Beat service has
 been stopped in production since 2026-08-19 (CHAOS-4026), and CHAOS-5589
-deleted the service definitions outright from every compose surface
-(`compose.yml`, `compose.production.yml`, `docker-swarm/stack.yml` -- R146:
-Celery transport is not a rollback target). The Go/River fleet is every
-compose file's only worker topology now, folded in as the unconditional
-default the same way CHAOS-3088 first did for root `compose.yml`. Configure
+deleted the service definitions outright from every compose surface (R146:
+Celery transport is not a rollback target; CHAOS-6950 then deleted the
+production Compose file and the Swarm stack altogether). The Go/River fleet is
+the only worker topology now, folded into `compose.yml` as the unconditional
+default (CHAOS-3088) and rendered by the Helm chart. Configure
 and operate the Go worker groups and the Go scheduler described below; read
 the Celery section only to understand a queue name you find in an old issue,
 runbook, or `rollback_route` value.
@@ -41,8 +41,8 @@ this page does not repeat that content.
 `worker`/`worker-ingest`/`worker-external-ingest`/`worker-heavy`/`beat`
 Celery service definition is gone from every compose surface -- `compose.yml`
 first (gated behind `profiles: [celery-legacy]` under CHAOS-3088, then
-deleted outright), then `compose.production.yml` and
-`deploy/docker-swarm/stack.yml` in the same ticket, once R146 established
+deleted outright), then the production Compose file and the Swarm stack (both
+since deleted entirely, CHAOS-6950) in the same ticket, once R146 established
 Celery is not a rollback target and no consumer had run since 2026-08-19.
 There is no compose surface left where the archived fleet can be brought
 back up.
@@ -303,7 +303,8 @@ a bug and re-discover it from scratch.
   profile is selected silently skips pulling the profiled images, so the
   first `up` under the profile can start stale or missing images without
   erroring. Local's `go-*` services are not profile-gated.
-- **Replica defaults.** `deploy/docker-compose/compose.go-workers.yml` sets
+- **Replica defaults.** The former `compose.go-workers.yml` (deleted,
+  CHAOS-6950) set
   `replicas: 0` as the compose *default* for `go-worker-heavy`; prod's actual
   replica count (3) comes from the deploy records, not the checked-in file. A
   reader of the file alone concludes heavy work is not running.
@@ -314,8 +315,8 @@ a bug and re-discover it from scratch.
   (`investment,metrics,reports,workgraph`) and `go-worker-ops`
   (`coverage,heartbeat,retention,webhooks`) are identical in both.
 - **Archived Celery naming, checked-in vs. actually deployed.** The Celery
-  service names archived in this repo's `compose.production.yml`
-  (`worker`, `worker-ingest`, `worker-external-ingest`, `worker-heavy`,
+  service names archived in this repo's former production Compose file
+  (deleted, CHAOS-6950) (`worker`, `worker-ingest`, `worker-external-ingest`, `worker-heavy`,
   `beat`) do not match the fleet a live prod-host `docker compose config`
   snapshot showed at the time this was filed (`worker`, `worker-backfill`,
   `worker-bg`, `worker-heavy`, `worker-ingest`, `worker-wi`, `beat`) --
@@ -334,8 +335,8 @@ a bug and re-discover it from scratch.
   manifests. Chris's ruling on CHAOS-4195 was delete, not archive (unlike the
   compose surfaces above, which have no equivalent live-vs-checked-in
   divergence to preserve): the Celery Helm templates and Kubernetes manifests
-  are gone, `goWorkers.enabled` and `deploy/kubernetes/go-workers.yaml`'s
-  presence in `kustomization.yaml` now default to `true`. Helm/Kubernetes now
+  are gone (and CHAOS-6950 later deleted the raw Kubernetes tree entirely),
+  and `goWorkers.enabled` now defaults to `true`. Helm now
   agree with the compose reality this page describes: Go/River primary, no
   Celery fleet to opt out of. `PAGERDUTY_WEBHOOK_TRANSPORT` itself is gone
   (CHAOS-4105): it chose between two runtimes consuming the PagerDuty webhook

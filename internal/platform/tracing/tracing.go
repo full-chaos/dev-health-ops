@@ -144,8 +144,8 @@ func newProvider(serviceName, environment, endpoint string, sampleRate float64) 
 // dialOptions picks the right otlptracegrpc option for the shape of endpoint.
 // WithEndpoint requires a bare host:port ("no scheme or path"); WithEndpointURL
 // requires a full URL. This package's own default ("localhost:4317") is bare,
-// but every deployed value (deploy/kubernetes/configmap.yaml,
-// deploy/helm/dev-health/values.yaml, deploy/docker-compose/compose.production.yml)
+// but every deployed value (deploy/kubernetes/configmap.yaml (deleted, CHAOS-6950),
+// deploy/helm/dev-health/values.yaml, deploy/docker-compose/compose.production.yml (deleted, CHAOS-6950))
 // sets a URL-shaped value ("http://otel-collector...:4317") -- the same value
 // tracing.py's OTLPSpanExporter already receives and handles transparently.
 // Passing a URL-shaped value to WithEndpoint would make gRPC try to dial a

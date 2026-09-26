@@ -10,7 +10,7 @@ two Jobs put the rest of the chain in the chart, ordered by hook weight:
     weight  5   …-provision-roles    the three runtime logins  (this file)
     weight 10   …-river-migrate      River schema + grants     (this file)
 
-That mirrors Compose exactly (deploy/docker-compose/compose.go-workers.yml:
+That mirrors Compose exactly (deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950):
 `go-river-provision` depends_on migrate, `go-river-migrate` depends_on
 provision). Provisioning follows Alembic rather than preceding it because that
 is the order the running system uses; River's preflight needs the three logins,
@@ -181,7 +181,7 @@ spec:
             - -ec
             - |
               # Connect by PARTS when the Secret supplies them, exactly as
-              # Compose's go-river-provision does (compose.go-workers.yml:
+              # Compose's go-river-provision does (compose.go-workers.yml (deleted, CHAOS-6950):
               # --host/--username/--dbname with PGPASSWORD out of band). Parts
               # sidestep the question of which URL dialect the value is written
               # in, so where they exist they win.
@@ -312,7 +312,7 @@ gets its own, on the same weight -5 as the other hook-scoped copies.
 With secrets.create=false the operator owns one Secret for both Jobs and the
 chart cannot split its keys; there the migrate Job's entrypoint unsets the
 variable before calling dev-hops, which is what Compose (compose.yml:188-189)
-and the kustomize Job (deploy/kubernetes/migrate-job.yaml:60-61) do.
+and the kustomize Job (deploy/kubernetes/migrate-job.yam (deleted, CHAOS-6950)l:60-61) do.
 */}}
 {{- if .Values.secrets.create }}
 {{- $riverDSN := include "dev-health.riverMigrationDSN" . }}

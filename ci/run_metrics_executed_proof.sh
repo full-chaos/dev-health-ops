@@ -31,7 +31,7 @@ set -euo pipefail
 # multiple runs.
 #
 # RISK-NOTES: this is a LIGHTER topology than prod/local-dev's
-# deploy/docker-compose/compose.go-workers.yml -- no PgBouncer, no
+# deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950) -- no PgBouncer, no
 # transaction-mode pooling, direct role DSNs, only the "metrics" and "sync"
 # queues (not the full investment/reports/workgraph "heavy" set, which this
 # gate does not need and was not verified here). CHAOS-4261 owns the

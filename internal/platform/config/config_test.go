@@ -809,7 +809,7 @@ func TestSyncObservationTimeoutDefaultAndOverride(t *testing.T) {
 	// CHAOS-4092 / Codex adversarial review (round 1): the reconciler-only
 	// option must not be parsed for every service. Every Go binary reads
 	// from the same shared compose environment
-	// (deploy/docker-compose/compose.go-workers.yml's go-worker-env-base),
+	// (deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950)'s go-worker-env-base),
 	// so a value scoped to the reconciler's own deployment must not be able
 	// to fail Load for the worker or scheduler -- a malformed value meant
 	// only for the reconciler must not be able to break every OTHER Go

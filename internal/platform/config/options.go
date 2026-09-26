@@ -325,7 +325,7 @@ var coreOptions = []Option{
 	// POSTGRES_HOST/_USER/_PASSWORD/_DB for the migrate binary) were either
 	// already deployed elsewhere in this repo's compose/helm surface for an
 	// unrelated purpose, or would collide the moment a future manifest
-	// defaulted them the way deploy/docker-compose/compose.go-workers.yml
+	// defaulted them the way deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950)
 	// already defaults POSTGRES_HOST. Every name below was swept against
 	// compose.yml, both overlays, deploy/helm values and templates, and
 	// docs before being chosen -- zero hits, so it can never collide with

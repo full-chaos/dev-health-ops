@@ -126,7 +126,7 @@ spec:
             # CHAOS-3944: log_connections/log_disconnections default on and
             # turn steady Go worker replica churn into a continuous,
             # diagnostically worthless log firehose, identically to the
-            # compose poolers (see deploy/docker-compose/compose.production.yml).
+            # compose poolers (see deploy/docker-compose/compose.production.yml (deleted, CHAOS-6950)).
             # log_pooler_errors and the default log_stats stay on: the
             # once-a-minute stats line is the only real pooler telemetry.
             - {name: LOG_CONNECTIONS, value: "0"}

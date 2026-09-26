@@ -183,7 +183,7 @@ Flagged rather than guessed.
 
 - **`infrastructure_deployment_credentials`** (DB/Kubernetes/TLS/deployment
   identities) — only confirmed the deployment manifests exist
-  (`deploy/kubernetes/secrets.yaml`, `deploy/helm/dev-health/templates/serviceaccount.yaml`);
+  (`deploy/helm/dev-health/templates/secret.yaml`, `deploy/helm/dev-health/templates/serviceaccount.yaml`);
   no application-code read/validate path was traced. This is the
   least-verified class in the inventory.
 - **`acr_workload_identity_exchange`**'s subject-token (Kubernetes

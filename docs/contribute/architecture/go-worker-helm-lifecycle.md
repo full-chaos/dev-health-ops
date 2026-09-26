@@ -9,7 +9,7 @@ source_of_truth:
   - deploy/helm/dev-health/templates/go-worker-pdb.yaml (per-group disruption budgets)
   - src/dev_health_ops/migrate.py (which invocation runs the River migrator, and when)
   - internal/storage/river/migrate.go (role preflight and the runtime grant posture)
-  - deploy/docker-compose/compose.go-workers.yml (the Compose arrangement the chart mirrors)
+  - compose.yml (the local Compose arrangement the chart mirrors)
 applicability: current
 lifecycle: active
 ---

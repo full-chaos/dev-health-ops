@@ -49,7 +49,9 @@ x-settings-encryption-key:
 # placeholder default, same convention as above.
 x-jwt-secret-key:
   token: &jwt-secret-key
-    JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key}
+    # At least 32 characters: the Go api refuses a shorter access-token key at
+    # startup (edgetoken), and both planes read this one value.
+    JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
 
 # Go/River worker topology (CHAOS-3142, folded in at CHAOS-3088 from
 # deploy/docker-compose/compose.go-workers.yml -- that file keeps its own
@@ -822,7 +824,9 @@ services:
       pgbouncer:
         condition: service_started
     ports:
-      - "8010:8000"
+      # Host 8011, not 8010: 8010 is the go-api billing-edge listener's now
+      # (CHAOS-6942); this Python service is deleted with its module.
+      - "8011:8000"
     volumes:
       - ./:/app
     working_dir: /app
@@ -928,6 +932,10 @@ services:
       RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
       RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
       RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+      # The dho api Service's own login (the optional API_DATABASE_ROLE block of
+      # `dho migrate roles`), which the go-api service below connects as.
+      API_DATABASE_ROLE: ${API_DATABASE_ROLE:-devhealth_api}
+      API_DATABASE_PASSWORD: ${API_DATABASE_PASSWORD:-devhealth_api}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -1323,6 +1331,56 @@ services:
     environment:
       <<: *go-worker-env-base
     stop_grace_period: 960s
+
+  # The Go api (`dho api`, the operator image: no new build, no new image) with
+  # the billing-edge listener on :8010 (CHAOS-6942): the Stripe webhook, GET|HEAD
+  # /health in the Python billing edge's shape, and a JSON 404 for everything
+  # else. It replaces the Python `billing-edge` service for local Stripe
+  # forwarding (`stripe listen --forward-to
+  # http://localhost:8010/api/v1/billing/webhooks/stripe`). The three secrets
+  # are the operator's own (`ops/.env`), unset by default: /health then answers
+  # 503 and names which one is missing, the same designed behaviour the Python
+  # edge had. The api listener itself (:8000 inside the container) is not
+  # published: the Python `api` service owns host port 8000 locally.
+  go-api:
+    <<: *go-worker-route-activate
+    restart: unless-stopped
+    command:
+      - api
+      - --api-addr=:8000
+      - --api-billing-edge-addr=:8010
+      - *flag-http-addr
+      - *flag-river-schema
+      - *flag-log-level
+    environment:
+      # The api's own least-privilege login (provisioned by go-river-provision,
+      # granted by go-river-migrate), on the direct postgres service: the api
+      # pool is not a transaction-pooler client.
+      DEV_HEALTH_PG_API_HOST: postgres
+      DEV_HEALTH_PG_API_PORT: "5432"
+      DEV_HEALTH_PG_API_USER: ${API_DATABASE_ROLE:-devhealth_api}
+      DEV_HEALTH_PG_API_PASSWORD: ${API_DATABASE_PASSWORD:-devhealth_api}
+      DEV_HEALTH_PG_DB: ${POSTGRES_DB:-postgres}
+      API_DATABASE_ROLE: ${API_DATABASE_ROLE:-devhealth_api}
+      VALKEY_URI: redis://valkey:6379/1
+      <<: *jwt-secret-key
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      LICENSE_PRIVATE_KEY: ${LICENSE_PRIVATE_KEY:-}
+    depends_on:
+      # No direct dependency on the Python `migrate` service (a Go service must
+      # not gate on it); go-river-provision waits for it, so the api login's
+      # grants see every semantic table.
+      go-river-provision:
+        condition: service_completed_successfully
+      go-river-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+    ports:
+      - "8010:8010"
 
   go-reconciler:
     <<: *go-worker

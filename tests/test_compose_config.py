@@ -1794,6 +1794,12 @@ def test_go_operator_target_services_declare_a_nonempty_command() -> None:
         if name == "go-river-provision":
             assert command == ["migrate", "roles"], command
             continue
+        # go-api is the long-running Go api with the billing-edge listener
+        # (CHAOS-6942), not a route-activate one-shot.
+        if name == "go-api":
+            assert command[0] == "api", command
+            assert "--api-billing-edge-addr=:8010" in command, command
+            continue
         # The operator image's entrypoint is dho; `workers` selects the
         # operator verbs (spec S2).
         assert command[:3] == ["workers", "routes", "apply"], (
@@ -2104,3 +2110,79 @@ def test_compose_provenance_defaults_match_the_dockerfile_arg_defaults() -> None
         "compose.yml build-arg defaults disagree with docker/Dockerfile's "
         f"ARG defaults: {mismatched}"
     )
+
+
+def test_go_api_serves_the_billing_edge_on_the_operator_image() -> None:
+    """CHAOS-6942: the root compose stack keeps a local billing edge (Stripe
+    webhook forwarding on :8010) through the Go api's billing-edge listener,
+    on the operator image the setup jobs already use -- no new build target,
+    no new image family."""
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    api = services["go-api"]
+    operator = services["go-river-migrate"]
+    assert api["image"] == operator["image"], "go-api must reuse the operator image"
+    assert (api.get("build") or {}).get("target") == "operator"
+    command = api["command"]
+    assert command[0] == "api", command
+    assert "--api-billing-edge-addr=:8010" in command, command
+    assert "8010:8010" in api["ports"], api.get("ports")
+    # The api listener is not published: the Python api owns host port 8000.
+    assert not any(str(p).endswith(":8000") for p in api["ports"]), api["ports"]
+    deps = api["depends_on"]
+    for name in ("go-river-provision", "go-river-migrate"):
+        assert deps[name]["condition"] == "service_completed_successfully", name
+    assert "migrate" not in deps, "a Go service never gates on the Python migrate"
+    environment = api["environment"]
+    # Component form only, never both forms of one connection.
+    assert "API_DATABASE_URI" not in environment
+    for key in (
+        "DEV_HEALTH_PG_API_HOST",
+        "DEV_HEALTH_PG_API_USER",
+        "DEV_HEALTH_PG_API_PASSWORD",
+        "DEV_HEALTH_PG_DB",
+        "VALKEY_URI",
+        "JWT_SECRET_KEY",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "LICENSE_PRIVATE_KEY",
+    ):
+        assert key in environment, key
+
+
+def test_go_river_provision_creates_the_api_role_the_go_api_connects_as() -> None:
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    provision = services["go-river-provision"]
+    # `dho migrate roles` reads the optional api role and password from the
+    # environment (it provisions the api login only when the role is set).
+    assert provision["command"] == ["migrate", "roles"], provision["command"]
+    environment = provision["environment"]
+    api_environment = services["go-api"]["environment"]
+    assert environment["API_DATABASE_ROLE"] == api_environment["API_DATABASE_ROLE"]
+    # The role the api logs in as is the role that is provisioned, with the
+    # same password.
+    assert environment["API_DATABASE_ROLE"] == api_environment["DEV_HEALTH_PG_API_USER"]
+    assert (
+        environment["API_DATABASE_PASSWORD"]
+        == api_environment["DEV_HEALTH_PG_API_PASSWORD"]
+    )
+
+
+def test_root_compose_publishes_each_host_port_once() -> None:
+    """CHAOS-6942: the go-api billing-edge listener took host port 8010 while
+    the Python billing-edge service (deleted by its own change) held it; two
+    services publishing one host port fail `docker compose up` for the whole
+    stack."""
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    published: dict[str, str] = {}
+    for name, service in services.items():
+        for port in service.get("ports") or []:
+            text = str(port)
+            parts = text.split(":")
+            if len(parts) < 2:
+                continue  # container-port-only publication picks a free host port
+            host_port = parts[-2].split("-")[0]
+            assert host_port not in published, (
+                f"host port {host_port} is published by both "
+                f"{published[host_port]} and {name}"
+            )
+            published[host_port] = name

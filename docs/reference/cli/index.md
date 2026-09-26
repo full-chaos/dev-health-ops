@@ -1709,6 +1709,8 @@ dev-hops billing reconcile --org-id <uuid> --since 2025-01-01
 | `--org-id` | Reconcile a single organization (UUID). Omit to reconcile all orgs |
 | `--since` | Only reconcile invoices on or after this date (ISO YYYY-MM-DD) |
 
+> **`dho billing reconcile` (Go):** the same command line and the same report (one line of JSON: `started_at`, `completed_at`, the three `*_checked` counts, `mismatches`, `missing_local`, `missing_stripe`), the same audit rows for a named organization, and the same second invoice pass for `--since`. It needs a database (`MIGRATION_DATABASE_URI` or `POSTGRES_URI`) and `STRIPE_SECRET_KEY`. Differences: `dev-hops` asks Stripe for each list with a call the Stripe library refuses, catches that, and reads Stripe as empty, so every stored row shows as `missing_stripe` and no status is ever compared (CHAOS-6479); `dho` lists every subscription, invoice and refund (100 a page, every page followed) and compares them. A `--since` with no UTC offset is read as UTC (`dev-hops` reads it in the process time zone). A bad `--org-id` or `--since`, or a missing `STRIPE_SECRET_KEY`, ends `dev-hops` with a Python traceback and `dho` with a one-line message; both exit 1.
+
 ---
 
 ## AI Governance

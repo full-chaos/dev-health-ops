@@ -83,3 +83,46 @@ func TestPinnedAPIVersionMatchesPythonSDK(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestRawGetReturnsTheBodyUntouchedAndSendsTheTypedRequest: RawGet (CHAOS-6893) is
+// the request the typed client sends (path and query, the key, the pinned API
+// version, no idempotency key on a GET) and hands back the JSON as Stripe sent it,
+// whatever the types of its fields; a Stripe error is an error, and no key is
+// ErrKeyMissing.
+func TestRawGetReturnsTheBodyUntouchedAndSendsTheTypedRequest(t *testing.T) {
+	var method, target, auth, version, idempotency string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, target, auth, version, idempotency = r.Method, r.URL.RequestURI(), r.Header.Get("Authorization"),
+			r.Header.Get("Stripe-Version"), r.Header.Get("Idempotency-Key")
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/v1/refused") {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error": {"message": "refused", "type": "invalid_request_error"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"object": "list", "data": [{"id": "in_1", "status": 42, "created": "yesterday"}], "has_more": false}`)
+	}))
+	defer server.Close()
+	provider := New(Options{Key: "sk_test_fixture", BaseURL: server.URL})
+	body, err := provider.RawGet(context.Background(), "/v1/invoices?limit=100&starting_after=in_0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"object": "list", "data": [{"id": "in_1", "status": 42, "created": "yesterday"}], "has_more": false}`; string(body) != want {
+		t.Fatalf("body %s, want %s", body, want)
+	}
+	if method != http.MethodGet || target != "/v1/invoices?limit=100&starting_after=in_0" || auth != "Bearer sk_test_fixture" ||
+		version != APIVersion || idempotency != "" {
+		t.Fatalf("request %s %s auth=%q version=%q idempotency=%q", method, target, auth, version, idempotency)
+	}
+	if _, err := provider.RawGet(context.Background(), "/v1/refused"); err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("a Stripe error answer must be the error, got %v", err)
+	}
+	if _, err := New(Options{}).RawGet(context.Background(), "/v1/invoices"); err != ErrKeyMissing {
+		t.Fatalf("no key: %v, want ErrKeyMissing", err)
+	}
+	var none *Provider
+	if _, err := none.RawGet(context.Background(), "/v1/invoices"); err != ErrKeyMissing {
+		t.Fatalf("nil provider: %v, want ErrKeyMissing", err)
+	}
+}

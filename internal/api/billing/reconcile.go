@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/stripe/stripe-go/v86"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 
@@ -102,60 +102,76 @@ func (h handlers) fetchLocalRows(ctx context.Context, tx pgx.Tx, table, stripeCo
 	return out
 }
 
-// fetchStripeRows is _fetch_stripe_rows with the list call made as
-// intended: every object of the resource, 100 a page. Any failure, part
-// way included, is logged and read as no rows.
-func (h handlers) fetchStripeRows(ctx context.Context, client *stripe.Client, resource string) []stripeRow {
-	var out []stripeRow
-	add := func(response *stripe.APIResponse) error {
-		object, err := rawObject(response)
-		if err != nil {
-			return err
-		}
-		id, _ := object.Get("id")
-		if !pyjson.Truthy(id) {
-			return nil
-		}
-		status, _ := object.Get("status")
-		out = append(out, stripeRow{id: pyStr(id), status: status})
-		return nil
-	}
-	params := stripe.ListParams{Limit: stripe.Int64(100)}
-	var err error
-	switch resource {
-	case "subscriptions":
-		for item, listErr := range client.V1Subscriptions.List(ctx, &stripe.SubscriptionListParams{ListParams: params}).All(ctx) {
-			if err = listErr; err == nil {
-				err = add(item.LastResponse)
-			}
-			if err != nil {
-				break
-			}
-		}
-	case "invoices":
-		for item, listErr := range client.V1Invoices.List(ctx, &stripe.InvoiceListParams{ListParams: params}).All(ctx) {
-			if err = listErr; err == nil {
-				err = add(item.LastResponse)
-			}
-			if err != nil {
-				break
-			}
-		}
-	case "refunds":
-		for item, listErr := range client.V1Refunds.List(ctx, &stripe.RefundListParams{ListParams: params}).All(ctx) {
-			if err = listErr; err == nil {
-				err = add(item.LastResponse)
-			}
-			if err != nil {
-				break
-			}
-		}
-	}
+// fetchStripeRows is _fetch_stripe_rows with the list call made as intended: every
+// object of the resource, 100 a page, each page followed as stripe-python's
+// auto_paging_iter follows it. The pages are read as raw JSON and only each
+// object's id and status are looked at, as Python looks at only those: a field of
+// the wrong type elsewhere in an object (or a status that is not a string) is not
+// an error, where the SDK's typed decoder would refuse the whole page. Any failure,
+// part way included, is logged and read as no rows.
+func (h handlers) fetchStripeRows(ctx context.Context, resource string) []stripeRow {
+	rows, err := h.listStripeRows(ctx, "/v1/"+resource)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "billing: failed loading stripe billing rows", "resource", resource, "error", pyStripeError(err))
 		return nil
 	}
-	return out
+	return rows
+}
+
+// listStripeRows is the rows of every page of one v1 list endpoint. A page with
+// more to come and no data, or whose last object has no id, ends the run in an
+// error (Python's `self.data[-1].id` raises there).
+func (h handlers) listStripeRows(ctx context.Context, path string) ([]stripeRow, error) {
+	var out []stripeRow
+	after := ""
+	for {
+		query := "?limit=100"
+		if after != "" {
+			query += "&starting_after=" + url.QueryEscape(after)
+		}
+		raw, err := h.stripe.RawGet(ctx, path+query)
+		if err != nil {
+			return nil, err
+		}
+		value, err := pyjson.Decode(raw)
+		if err != nil {
+			return nil, err
+		}
+		page, _ := value.(*pyjson.Object)
+		if page == nil {
+			return nil, errors.New("stripe list is not an object")
+		}
+		data, _ := page.Get("data")
+		items, isList := data.([]pyjson.Value)
+		if !isList {
+			return nil, errors.New("stripe list has no data list")
+		}
+		for _, item := range items {
+			object, _ := item.(*pyjson.Object)
+			if object == nil {
+				continue
+			}
+			id, _ := object.Get("id")
+			if !pyjson.Truthy(id) {
+				continue
+			}
+			status, _ := object.Get("status")
+			out = append(out, stripeRow{id: pyStr(id), status: status})
+		}
+		hasMore, _ := page.Get("has_more")
+		if len(items) == 0 || !pyjson.Truthy(hasMore) {
+			return out, nil
+		}
+		last, _ := items[len(items)-1].(*pyjson.Object)
+		if last == nil {
+			return nil, errors.New("stripe list object has no id")
+		}
+		lastID, present := last.Get("id")
+		if !present {
+			return nil, errors.New("stripe list object has no id")
+		}
+		after = pyStr(lastID)
+	}
 }
 
 // orderedKeys is a Python dict built by assignment: a repeated key keeps
@@ -321,7 +337,7 @@ type reconcileResult struct {
 // reconcileAll is ReconciliationService.reconcile_all: the subscription, invoice
 // and refund comparisons of one organisation (every organisation when org is nil),
 // each with its audit rows when an organisation is named.
-func (h handlers) reconcileAll(ctx context.Context, tx pgx.Tx, client *stripe.Client, org *uuid.UUID) reconcileResult {
+func (h handlers) reconcileAll(ctx context.Context, tx pgx.Tx, org *uuid.UUID) reconcileResult {
 	started := h.nowUTC()
 	if org != nil {
 		h.writeAudit(ctx, tx, auditRecord{
@@ -331,7 +347,7 @@ func (h handlers) reconcileAll(ctx context.Context, tx pgx.Tx, client *stripe.Cl
 	}
 	step := func(resourceType, table, stripeColumn string) reconcileReport {
 		local := h.fetchLocalRows(ctx, tx, table, stripeColumn, org, nil)
-		return compareRows(resourceType, local, h.fetchStripeRows(ctx, client, table))
+		return compareRows(resourceType, local, h.fetchStripeRows(ctx, table))
 	}
 	subs := step("subscription", "subscriptions", "stripe_subscription_id")
 	if org != nil {
@@ -359,9 +375,9 @@ func (h handlers) reconcileAll(ctx context.Context, tx pgx.Tx, client *stripe.Cl
 // invoices updated on or after it are compared with Stripe's (whose listing takes
 // no since), and the run is logged for an organisation. Only the count of local
 // invoices it checked is used by its caller.
-func (h handlers) reconcileInvoices(ctx context.Context, tx pgx.Tx, client *stripe.Client, org *uuid.UUID, since *time.Time) reconcileReport {
+func (h handlers) reconcileInvoices(ctx context.Context, tx pgx.Tx, org *uuid.UUID, since *time.Time) reconcileReport {
 	local := h.fetchLocalRows(ctx, tx, "invoices", "stripe_invoice_id", org, since)
-	report := compareRows("invoice", local, h.fetchStripeRows(ctx, client, "invoices"))
+	report := compareRows("invoice", local, h.fetchStripeRows(ctx, "invoices"))
 	if org != nil {
 		h.logReport(ctx, tx, *org, report)
 	}
@@ -398,13 +414,13 @@ func (h handlers) reconcile(w http.ResponseWriter, r *http.Request) {
 		h.write(w, superadminRequired)
 		return
 	}
-	client, err := h.stripe.Client()
-	if err != nil {
+	// The key is checked before the transaction opens, as before.
+	if _, err := h.stripe.Client(); err != nil {
 		h.internal(w, r, "reconcile", err)
 		return
 	}
 	h.serve(w, r, "reconcile", func(tx pgx.Tx) (reply, error) {
-		return ok(reportJSON(h.reconcileAll(r.Context(), tx, client, org))), nil
+		return ok(reportJSON(h.reconcileAll(r.Context(), tx, org))), nil
 	})
 }
 
@@ -438,8 +454,7 @@ func (s Reconcile) Run(ctx context.Context, org *uuid.UUID, since *time.Time) (*
 	if s.Pool == nil {
 		return nil, errors.New("billing: no database pool")
 	}
-	client, err := s.Stripe.Client()
-	if err != nil {
+	if _, err := s.Stripe.Client(); err != nil {
 		return nil, err
 	}
 	h := s.handlers()
@@ -448,9 +463,9 @@ func (s Reconcile) Run(ctx context.Context, org *uuid.UUID, since *time.Time) (*
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	result := h.reconcileAll(ctx, tx, client, org)
+	result := h.reconcileAll(ctx, tx, org)
 	if since != nil {
-		result.report.invoices = h.reconcileInvoices(ctx, tx, client, org, since).invoices
+		result.report.invoices = h.reconcileInvoices(ctx, tx, org, since).invoices
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err

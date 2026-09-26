@@ -55,6 +55,24 @@
    "id": "in_recent_b",
    "object": "invoice",
    "status": "open"
+  },
+  {
+   "created": 1700000000,
+   "currency": "usd",
+   "customer": "cus_x",
+   "id": "in_bool_status",
+   "object": "invoice",
+   "status": true
+  },
+  {
+   "created": 1700000000,
+   "currency": "usd",
+   "customer": "cus_x",
+   "id": "in_list_status",
+   "object": "invoice",
+   "status": [
+    "open"
+   ]
   }
  ],
  "refunds": [
@@ -89,6 +107,14 @@
    "id": "re_stripe_only",
    "object": "refund",
    "status": "failed"
+  },
+  {
+   "amount": "a lot",
+   "created": "yesterday",
+   "currency": "usd",
+   "id": "re_odd_created",
+   "object": "refund",
+   "status": "succeeded"
   }
  ],
  "subscriptions": [
@@ -131,6 +157,21 @@
    "created": 1700000000,
    "customer": "cus_x",
    "id": "sub_\u00fcn\u00ef",
+   "object": "subscription",
+   "status": "active"
+  },
+  {
+   "created": 1700000000,
+   "customer": "cus_x",
+   "id": "sub_num_status",
+   "object": "subscription",
+   "status": 42
+  },
+  {
+   "cancel_at_period_end": "maybe",
+   "created": 1700000000,
+   "customer": "cus_x",
+   "id": "sub_odd_field",
    "object": "subscription",
    "status": "active"
   }

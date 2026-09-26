@@ -8,6 +8,7 @@
 package stripeclient
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -72,6 +73,26 @@ func (p *Provider) Client() (*stripe.Client, error) {
 		return nil, ErrKeyMissing
 	}
 	return stripe.NewClient(p.key, stripe.WithBackends(p.backend)), nil
+}
+
+// RawGet is a GET of path (with its query) on Stripe's API as raw JSON: the request
+// the typed client would send, with none of the SDK's decoding. A caller that reads
+// only some fields of an object needs it: the typed decoder refuses the whole
+// response for one field of the wrong type, where a reader of raw JSON never looks
+// at that field. A Stripe error answer is the returned error, as for a typed call.
+func (p *Provider) RawGet(ctx context.Context, path string) ([]byte, error) {
+	if p == nil || p.key == "" {
+		return nil, ErrKeyMissing
+	}
+	backend, ok := p.backend.API.(stripe.RawRequestBackend)
+	if !ok {
+		return nil, errors.New("stripe backend cannot make raw requests")
+	}
+	response, err := backend.RawRequest(http.MethodGet, path, p.key, "", &stripe.RawParams{Params: stripe.Params{Context: ctx}})
+	if err != nil {
+		return nil, err
+	}
+	return response.RawJSON, nil
 }
 
 // pythonIdempotency sends the Idempotency-Key header the way the Python SDK

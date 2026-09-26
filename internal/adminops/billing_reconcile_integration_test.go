@@ -51,14 +51,14 @@ const (
 )
 
 // reconcileFixturesSHA256 pins testdata/reconcile_fixtures.json.
-const reconcileFixturesSHA256 = "46605af8e388443b75c23f532e65e1459ce5938b445ba4405d0019b1c61ed424"
+const reconcileFixturesSHA256 = "9f38c0d2145f2bfc81e0eeca6b086c1b86f4024dacfb9f7fd0576632faaf17cd"
 
 // reconcileGoldenSHA256 pins testdata/reconcile_golden.json (R24): what the real
 // `dev-hops billing reconcile` printed, left and asked of Stripe for every step. The
 // producer is deleted with the Python CLI, so this is a rot guard: the file is only
 // rewritten by TestBillingReconcileVenueOracleMatchesThePythonProducer with
 // DHO_RECONCILE_GOLDEN_UPDATE=1, then this digest is updated.
-const reconcileGoldenSHA256 = "5c5dba13ae8b39070740c249eecef0853f8c11f2cd384db53998fe1fd104b175"
+const reconcileGoldenSHA256 = "b3b2b3a932de3ecf3b5412e24e8707b0d623ad8c115743c27a7a8578f7cd22a2"
 
 // reconcileFixtureProgram builds every Stripe object with the SDK's own classes and
 // prints them as JSON: stdin is empty, stdout the fixture document.
@@ -71,14 +71,14 @@ KEY = "sk_test_fixture_never_used"
 def dump(cls, **values):
     return json.loads(json.dumps(cls.construct_from(values, KEY).to_dict(), default=str))
 
-def subscription(sid, status):
-    return dump(stripe.Subscription, id=sid, object="subscription", status=status, customer="cus_x", created=1700000000)
+def subscription(sid, status, **extra):
+    return dump(stripe.Subscription, **{**dict(id=sid, object="subscription", status=status, customer="cus_x", created=1700000000), **extra})
 
-def invoice(iid, status):
-    return dump(stripe.Invoice, id=iid, object="invoice", status=status, customer="cus_x", created=1700000000, currency="usd")
+def invoice(iid, status, **extra):
+    return dump(stripe.Invoice, **{**dict(id=iid, object="invoice", status=status, customer="cus_x", created=1700000000, currency="usd"), **extra})
 
-def refund(rid, status):
-    return dump(stripe.Refund, id=rid, object="refund", status=status, amount=100, currency="usd", created=1700000000)
+def refund(rid, status, **extra):
+    return dump(stripe.Refund, **{**dict(id=rid, object="refund", status=status, amount=100, currency="usd", created=1700000000), **extra})
 
 print(json.dumps({
     "subscriptions": [
@@ -88,6 +88,10 @@ print(json.dumps({
         subscription("sub_stripe_only", "past_due"),
         subscription("sub_dup", "canceled"),
         subscription("sub_ünï", "active"),
+        # Python reads only id and status, whatever type they and the other fields
+        # carry: a numeric status, a list status and a field of the wrong type.
+        subscription("sub_num_status", 42),
+        subscription("sub_odd_field", "active", cancel_at_period_end="maybe"),
     ],
     "invoices": [
         invoice("in_match_a", "paid"),
@@ -97,12 +101,15 @@ print(json.dumps({
         invoice("in_stripe_only", "draft"),
         invoice("in_match_b", "void"),
         invoice("in_recent_b", "open"),
+        invoice("in_bool_status", True),
+        invoice("in_list_status", ["open"]),
     ],
     "refunds": [
         refund("re_match_a", "succeeded"),
         refund("re_mismatch_a", "succeeded"),
         refund("re_null_status", None),
         refund("re_stripe_only", "failed"),
+        refund("re_odd_created", "succeeded", created="yesterday", amount="a lot"),
     ],
 }, sort_keys=True, indent=1))
 `
@@ -138,6 +145,10 @@ type reconcileStripe struct {
 	// read are dropped with the rest, as Python drops them (the whole listing is one
 	// try block).
 	failingLater string
+	// overrides answers the first page of a path with this raw list envelope instead
+	// of the fixtures (a shape Stripe does not send: the stripe-python reader must
+	// meet it the same way as the Go one).
+	overrides map[string]string
 }
 
 func (f *reconcileStripe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +180,10 @@ func (f *reconcileStripe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		stripeFail(w, "listing refused")
 		return
 	}
+	if body, ok := f.overrides[r.URL.Path]; ok && r.URL.Query().Get("starting_after") == "" {
+		fmt.Fprint(w, body)
+		return
+	}
 	start := 0
 	if after := r.URL.Query().Get("starting_after"); after != "" {
 		for index, item := range items {
@@ -198,6 +213,7 @@ type reconcileStep struct {
 	// failing refuses the listing of this Stripe path for the step; failingLater
 	// only from its second page on.
 	failing, failingLater string
+	overrides             map[string]string
 }
 
 func rs(args ...string) reconcileStep { return reconcileStep{args: args} }
@@ -226,18 +242,23 @@ INSERT INTO subscriptions (id, org_id, billing_plan_id, billing_price_id, stripe
  ('a0000000-0000-4000-8000-000000000002', '` + recOrgA + `', ` + recPlanPrice + `, 'sub_mismatch_a', 'cus_a', 'canceled', now(), now(), '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
  ('a0000000-0000-4000-8000-000000000003', '` + recOrgA + `', ` + recPlanPrice + `, 'sub_local_only_a', 'cus_a', 'active', now(), now(), '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
  ('b0000000-0000-4000-8000-000000000001', '` + recOrgB + `', ` + recPlanPrice + `, 'sub_match_b', 'cus_b', 'trialing', now(), now(), '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
- ('b0000000-0000-4000-8000-000000000002', '` + recOrgB + `', ` + recPlanPrice + `, 'sub_ünï', 'cus_b', 'incomplete', now(), now(), '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+ ('b0000000-0000-4000-8000-000000000002', '` + recOrgB + `', ` + recPlanPrice + `, 'sub_ünï', 'cus_b', 'incomplete', now(), now(), '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+ ('a0000000-0000-4000-8000-000000000004', '` + recOrgA + `', ` + recPlanPrice + `, 'sub_num_status', 'cus_a', 'active', now(), now(), '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+ ('a0000000-0000-4000-8000-000000000005', '` + recOrgA + `', ` + recPlanPrice + `, 'sub_odd_field', 'cus_a', 'active', now(), now(), '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
 INSERT INTO invoices (id, org_id, stripe_invoice_id, stripe_customer_id, status, amount_due, currency, metadata, created_at, updated_at) VALUES
  ('a1000000-0000-4000-8000-000000000001', '` + recOrgA + `', 'in_match_a', 'cus_a', 'paid', 100, 'usd', '{}', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'),
  ('a1000000-0000-4000-8000-000000000002', '` + recOrgA + `', 'in_mismatch_a', 'cus_a', 'open', 100, 'usd', '{}', '2026-09-02T00:00:00Z', '2026-09-02T00:00:00Z'),
  ('a1000000-0000-4000-8000-000000000003', '` + recOrgA + `', 'in_old', 'cus_a', 'open', 100, 'usd', '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
  ('a1000000-0000-4000-8000-000000000004', '` + recOrgA + `', 'in_null_status', 'cus_a', 'open', 100, 'usd', '{}', '2026-09-03T00:00:00Z', '2026-09-03T00:00:00Z'),
  ('b1000000-0000-4000-8000-000000000001', '` + recOrgB + `', 'in_match_b', 'cus_b', 'void', 100, 'usd', '{}', '2026-06-01T12:30:00Z', '2026-06-01T12:30:00Z'),
- ('b1000000-0000-4000-8000-000000000002', '` + recOrgB + `', 'in_local_only_b', 'cus_b', 'open', 100, 'usd', '{}', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z');
+ ('b1000000-0000-4000-8000-000000000002', '` + recOrgB + `', 'in_local_only_b', 'cus_b', 'open', 100, 'usd', '{}', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z'),
+ ('a1000000-0000-4000-8000-000000000005', '` + recOrgA + `', 'in_bool_status', 'cus_a', 'open', 100, 'usd', '{}', '2026-09-04T00:00:00Z', '2026-09-04T00:00:00Z'),
+ ('a1000000-0000-4000-8000-000000000006', '` + recOrgA + `', 'in_list_status', 'cus_a', 'open', 100, 'usd', '{}', '2026-09-04T00:00:00Z', '2026-09-04T00:00:00Z');
 INSERT INTO refunds (id, org_id, stripe_refund_id, stripe_charge_id, amount, currency, status, metadata, created_at, updated_at) VALUES
  ('a2000000-0000-4000-8000-000000000001', '` + recOrgA + `', 're_match_a', 'ch_a', 100, 'usd', 'succeeded', '{}', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'),
  ('a2000000-0000-4000-8000-000000000002', '` + recOrgA + `', 're_mismatch_a', 'ch_a', 100, 'usd', 'pending', '{}', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'),
- ('b2000000-0000-4000-8000-000000000001', '` + recOrgB + `', 're_local_only_b', 'ch_b', 100, 'usd', 'succeeded', '{}', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z');
+ ('b2000000-0000-4000-8000-000000000001', '` + recOrgB + `', 're_local_only_b', 'ch_b', 100, 'usd', 'succeeded', '{}', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'),
+ ('a2000000-0000-4000-8000-000000000003', '` + recOrgA + `', 're_odd_created', 'ch_a', 100, 'usd', 'succeeded', '{}', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z');
 `
 
 var reconcileScript = []reconcileStep{
@@ -276,6 +297,14 @@ var reconcileScript = []reconcileStep{
 	// A later page is refused: the rows of the earlier pages are dropped too.
 	{args: []string{"reconcile"}, failingLater: "/v1/subscriptions"},
 	{args: []string{"reconcile", "--org-id", recOrgB}, failingLater: "/v1/invoices"},
+	// List envelopes Stripe does not send: each is read as stripe-python reads it.
+	{args: []string{"reconcile"}, overrides: map[string]string{"/v1/refunds": `{"object": "list", "url": "/v1/refunds", "has_more": false}`}},
+	{args: []string{"reconcile"}, overrides: map[string]string{"/v1/refunds": `{"object": "list", "url": "/v1/refunds", "has_more": true, "data": []}`}},
+	{args: []string{"reconcile"}, overrides: map[string]string{"/v1/refunds": `{"object": "list", "url": "/v1/refunds", "has_more": true, "data": [{"id": "re_match_a", "object": "refund", "status": "succeeded"}, {"object": "refund", "status": "pending"}]}`}},
+	{args: []string{"reconcile"}, overrides: map[string]string{"/v1/refunds": `{"object": "list", "url": "/v1/refunds", "has_more": false, "data": ["not an object", 7, null, {"object": "refund", "status": "pending"}, {"id": "", "status": "pending"}, {"id": "re_match_a", "status": "succeeded"}, {"id": "re_match_a", "status": "pending"}]}`}},
+	{args: []string{"reconcile"}, overrides: map[string]string{"/v1/subscriptions": `{"object": "list", "url": "/v1/subscriptions", "has_more": false, "data": "nope"}`}},
+	{args: []string{"reconcile"}, overrides: map[string]string{"/v1/invoices": `{"object": "list", "url": "/v1/invoices", "has_more": false, "data": [{"id": 5, "status": "open"}, {"id": "in_match_a", "status": "paid"}]}`}},
+	{args: []string{"reconcile"}, overrides: map[string]string{"/v1/invoices": `{"object": "list", "url": "/v1/invoices", "has_more": 1, "data": [{"id": "in_match_a", "status": "paid"}]}`}},
 	// Arguments and configuration.
 	{args: []string{"reconcile"}, noKey: true},
 	rs("reconcile", "--org-id", "not-a-uuid"),
@@ -431,7 +460,7 @@ func reconcileSession(t *testing.T, python bool) []reconcileResult {
 		}
 		fake.mu.Lock()
 		fake.calls = nil
-		fake.failing, fake.failingLater = s.failing, s.failingLater
+		fake.failing, fake.failingLater, fake.overrides = s.failing, s.failingLater, s.overrides
 		fake.mu.Unlock()
 		var code int
 		var stdout string

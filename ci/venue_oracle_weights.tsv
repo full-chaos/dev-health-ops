@@ -9,7 +9,7 @@
 # provisional weight (600, above the slowest row ever measured) and the marker
 # `unmeasured` in a fourth column, until a run log measures it. Sorted (LC_ALL=C)
 # by package, then test.
-internal/adminops	TestBillingReconcileVenueOracleMatchesThePythonProducer	215
+internal/adminops	TestBillingReconcileVenueOracleMatchesThePythonProducer	274
 internal/adminops	TestBillingVenueOracleMatchesThePythonProducer	74
 internal/adminops	TestBundlesVenueOracleMatchesThePythonProducer	271
 internal/adminops	TestLLMSettingsVenueOracleMatchesThePythonProducer	155

@@ -106,6 +106,12 @@ func runBatch(ctx context.Context, deps InlineDeps, plan Plan, datasets []string
 	writeLine(env.Stderr, fmt.Sprintf("dho sync %s: %d repositories matched %q", plan.Target, len(repos), plan.Search))
 
 	batchSize := max(1, clampInt(plan.BatchSize))
+	if plan.Call == CallGitLabBatch && !plan.SyncGit {
+		// process_gitlab_projects_batch groups by --batch-size only on its `sync_git`
+		// path (the commit-stats fetch); every other target starts a task per project and
+		// lets the semaphore (--max-concurrent) bound them, so no group waits for the last.
+		batchSize = len(repos)
+	}
 	concurrent := max(1, clampInt(plan.MaxConcurrent))
 	slots := make(chan struct{}, concurrent)
 	var (

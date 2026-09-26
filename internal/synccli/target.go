@@ -93,6 +93,10 @@ type Plan struct {
 
 	Since      *time.Time
 	MaxCommits *big.Int
+	// MaxCommitsGiven and RateLimitDelayGiven: the flag was on the command line (not
+	// the default). The Go routes apply neither, so the executor refuses them where
+	// Python applies them (see unappliedFlags): silent acceptance is not an option.
+	MaxCommitsGiven, RateLimitDelayGiven bool
 
 	SyncGit, SyncPrs, SyncCICD, SyncDeployments   bool
 	SyncIncidents, SyncSecurity, SyncTests, Blame bool
@@ -380,6 +384,7 @@ func BuildPlan(target string, args []string, in Inputs) (plan Plan, help bool, e
 	}
 	plan.Since = since
 	plan.MaxCommits = resolveMaxCommits(v, since != nil || backfill.Cmp(big.NewInt(1)) > 0)
+	_, plan.MaxCommitsGiven = v["max_commits_per_repo"]
 
 	fillFlags(&plan)
 	if rerr := fillMode(&plan, v, in); rerr != nil {
@@ -484,6 +489,7 @@ func fillBatch(plan *Plan, v map[string]string) {
 	plan.RateLimitDelay = 1.0
 	if text, ok := v["rate_limit_delay"]; ok {
 		plan.RateLimitDelay, _ = pyFloat(text)
+		plan.RateLimitDelayGiven = true
 	}
 	plan.MaxRepos = optionalInt(v, "max_repos")
 	_, plan.UseAsync = v["use_async"]

@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -61,100 +62,12 @@ func withRouteHoldFixture(t *testing.T, fn func(ctx context.Context, fixture rou
 	}
 	defer pool.Close()
 
-	// Domain-side tables: the same shape withDispatchServicePool already
-	// proves Dispatch's real statement set against, this test's own copy
-	// (not sharing that helper directly, since this fixture also needs the
-	// FULL production worker_job_outbox shape + a real River schema + the
-	// jobroute worker_job_routes table, none of which the lighter dispatch
-	// fixtures need).
-	createReferenceDiscoveryTablesLegacy(t, ctx, pool)
-	// organizations/org_licenses/tier_limits are created by
-	// createReferenceDiscoveryTables above (CHAOS-6286 merged them there);
-	// only the seed row and this fixture's own extra tables are local.
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.organizations (id, tier) VALUES ('`+discoveryTestOrg+`', 'community');
-CREATE TABLE public.provider_rate_limit_observations (
- id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, host text NULL,
- integration_id uuid NOT NULL, sync_run_id uuid NOT NULL, sync_run_unit_id uuid NOT NULL,
- route_family text NULL, route_family_attribution text NULL, dimension text NULL,
- retry_after_seconds double precision NULL, reset_at timestamptz NULL, reason text NULL,
- request_id text NULL, observed_at timestamptz NOT NULL
-);`); err != nil {
-		t.Fatal(err)
-	}
-
-	// The FULL production worker_job_outbox shape (claim_token/claimed_at/
-	// claim_expires_at/river_job_id/delivered_at etc.) -- the lighter
-	// Publish-only shape the dispatch fixtures use is not enough here,
-	// since this test also drives the real Repository/Relay claim-and-
-	// deliver path against it, matching internal/joboutbox's own
-	// createOutboxSchema (verified against that file before copying).
-	if _, err := pool.Exec(ctx, `
-CREATE TABLE public.worker_job_outbox (
-	id uuid PRIMARY KEY,
-	dedupe_key varchar(256) NOT NULL UNIQUE,
-	job_kind varchar(96) NOT NULL,
-	contract_version integer NOT NULL,
-	args json NOT NULL,
-	payload_hash varchar(71) NOT NULL,
-	queue varchar(96) NOT NULL,
-	priority smallint NOT NULL,
-	max_attempts smallint NOT NULL,
-	scheduled_at timestamptz NOT NULL,
-	status varchar(16) NOT NULL,
-	claim_token uuid,
-	claimed_at timestamptz,
-	claim_expires_at timestamptz,
-	attempt_count integer NOT NULL,
-	first_attempt_at timestamptz,
-	last_attempt_at timestamptz,
-	next_attempt_at timestamptz NOT NULL,
-	last_error_code varchar(64),
-	last_error_detail varchar(256),
-	last_error_at timestamptz,
-	river_job_id bigint UNIQUE,
-	delivered_at timestamptz,
-	prerequisite_completion_key text NULL,
-	created_at timestamptz NOT NULL,
-	updated_at timestamptz NOT NULL,
-	CONSTRAINT worker_job_outbox_status CHECK (status IN ('pending','claimed','delivered','dead')),
-	CONSTRAINT worker_job_outbox_claim CHECK (
-		(status='claimed' AND claim_token IS NOT NULL AND claimed_at IS NOT NULL AND claim_expires_at IS NOT NULL)
-		OR (status<>'claimed' AND claim_token IS NULL AND claimed_at IS NULL AND claim_expires_at IS NULL)
-	),
-	CONSTRAINT worker_job_outbox_delivery CHECK (
-		(status='delivered' AND river_job_id IS NOT NULL AND delivered_at IS NOT NULL)
-		OR (status<>'delivered' AND river_job_id IS NULL AND delivered_at IS NULL)
-	)
-);
-CREATE TABLE public.worker_job_completion_fences (
-	completion_key text PRIMARY KEY,
-	completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
-);
-CREATE TABLE public.worker_job_delivery_abandonments (
-	dedupe_key varchar(256) PRIMARY KEY,
-	job_kind varchar(96) NOT NULL,
-	abandoned_at timestamptz NOT NULL,
-	attempt_count integer NOT NULL,
-	last_error_code varchar(64)
-);
-CREATE TABLE public.worker_job_routes (
-	job_kind text PRIMARY KEY, transport text NOT NULL, paused boolean NOT NULL,
-	generation bigint NOT NULL, updated_at timestamptz NOT NULL
-);
-INSERT INTO public.worker_job_routes (job_kind, transport, paused, generation, updated_at)
-VALUES ('`+jobcontract.KindSyncProviderUnit+`', 'river', false, 1, now());
--- Rollback's own live-claims check reads this (control.go's
--- "SELECT count(*) FROM public.worker_job_runs WHERE job_kind=$1 AND
--- status='running'") -- absent from every other dispatch fixture in this
--- package since Dispatch's own write path never touches it, but the
--- rollback-fence test needs it for a real Rollback() call to reach past
--- its own precondition checks instead of failing on a missing relation.
-CREATE TABLE public.worker_job_runs (
-	id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-);`); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema: the domain tables, the FULL production worker_job_outbox (the
+	// Repository/Relay claim-and-deliver path drives it), worker_job_routes (seeded on river for
+	// sync.provider_unit) and worker_job_runs (Rollback's live-claims check reads it). A River schema
+	// is added below, after Apply (which wants an empty database).
+	createReferenceDiscoveryTables(t, ctx, pool)
+	pgseed.Org(ctx, t, pool, discoveryTestOrg, "community")
 
 	// A real River schema this Postgres instance owns -- DomainRole/
 	// QueueRole only need to EXIST for ApplyPinnedMigrations's role-
@@ -231,32 +144,27 @@ func (routeHoldFakeQuiescer) Quiesce(context.Context, string) error { return nil
 
 func seedRouteHoldRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, unitID string) {
 	t.Helper()
-	statements := []string{
-		`INSERT INTO sync_dispatch_transport_routes (kind,transport,generation,paused,rollback_transport)
-		 VALUES ('dispatch_sync_run','river',1,false,'celery')`,
-		`INSERT INTO sync_dispatch_outbox
-		    (id,sync_run_id,org_id,kind,status,available_at,dispatched_transport,dispatched_route_generation,created_at,updated_at)
-		 VALUES ('` + routeHoldTestOutbox + `','` + discoveryTestRun + `','` + discoveryTestOrg + `',
-		         'dispatch_sync_run','dispatched',now(),'river',1,now(),now())`,
-		`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ('` + discoveryTestRun + `','` +
-			discoveryTestOrg + `','` + discoveryTestIntegration + `')`,
-		`INSERT INTO integrations (id,org_id,provider) VALUES ('` + discoveryTestIntegration + `','` + discoveryTestOrg + `','github')`,
-		`INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at)
-		 VALUES ('00000000-0000-4000-8000-0000000000fb','` + discoveryTestRun + `','` + discoveryTestOrg + `','` + discoveryStatusSuccess + `',1,now())`,
-		`INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
-		 VALUES ('` + unitID + `','` + discoveryTestOrg + `','` + discoveryTestRun + `','github','commits','00000000-0000-4000-8000-0000000000ed','planned',now())`,
+	if got := pgseed.SyncTransportRoute(ctx, t, pool, "dispatch_sync_run", "river", dispatchRouteGeneration, false, "celery"); got != dispatchRouteGeneration {
+		t.Fatalf("dispatch_sync_run route generation = %d, want %d", got, dispatchRouteGeneration)
 	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: discoveryTestRun, OrgID: discoveryTestOrg, IntegrationID: discoveryTestIntegration})
+	pgseed.SyncDispatchOutbox(ctx, t, pool, routeHoldTestOutbox, discoveryTestRun, discoveryTestOrg, "dispatch_sync_run", "dispatched", "river", dispatchRouteGeneration)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,created_at,updated_at)
+VALUES ('00000000-0000-4000-8000-0000000000fb',$1,$2,$3,1,now(),now(),now())`,
+		discoveryTestRun, discoveryTestOrg, discoveryStatusSuccess); err != nil {
+		t.Fatal(err)
 	}
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: unitID, RunID: discoveryTestRun, OrgID: discoveryTestOrg, IntegrationID: discoveryTestIntegration,
+		SourceID: dispatchTestSource, DatasetKey: "commits", CostClass: "rest_core", Status: "planned",
+	})
 }
 
 func routeHoldDispatchArgs() DispatchSyncRunArgs {
 	return DispatchSyncRunArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: discoveryTestRun,
-		DispatchOutbox: routeHoldTestOutbox, RouteGeneration: 1,
+		DispatchOutbox: routeHoldTestOutbox, RouteGeneration: dispatchRouteGeneration,
 	}}
 }
 

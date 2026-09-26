@@ -43,16 +43,24 @@ type manualIDs struct {
 	cfg                                                       map[string]*manualCfg
 }
 
+// stableID is the deterministic id of name: the recording run and the frozen
+// run are different processes, and an id that reaches a compared response or
+// row must be the same in both.
+func stableID(name string) uuid.UUID {
+	return uuid.MustParse(venueoracle.StableUUID("manual-trigger/" + name))
+}
+
 func newManualIDs(names []string) manualIDs {
 	v := manualIDs{cfg: map[string]*manualCfg{}}
-	for _, target := range []*uuid.UUID{&v.orgA, &v.orgB, &v.adminA, &v.memberA, &v.adminB, &v.adminNoOrg, &v.credOK,
-		&v.credInactive, &v.credFailed, &v.credFailedNoText, &v.credB} {
-		*target = uuid.New()
+	for name, target := range map[string]*uuid.UUID{"orgA": &v.orgA, "orgB": &v.orgB, "adminA": &v.adminA, "memberA": &v.memberA,
+		"adminB": &v.adminB, "adminNoOrg": &v.adminNoOrg, "credOK": &v.credOK, "credInactive": &v.credInactive,
+		"credFailed": &v.credFailed, "credFailedNoText": &v.credFailedNoText, "credB": &v.credB} {
+		*target = stableID(name)
 	}
 	for _, name := range names {
-		c := &manualCfg{id: uuid.New(), integration: uuid.New()}
-		for range 3 {
-			c.sources = append(c.sources, uuid.New())
+		c := &manualCfg{id: stableID("config/" + name), integration: stableID("integration/" + name)}
+		for index := range 3 {
+			c.sources = append(c.sources, stableID(fmt.Sprintf("source/%s/%d", name, index)))
 		}
 		v.cfg[name] = c
 	}
@@ -146,7 +154,7 @@ func seedManual(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *v
 		exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, false, 0, $3, $3)`, user.id, user.email, at)
 		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-			uuid.New(), user.id, user.org, user.role, at)
+			stableID("membership/"+user.id.String()), user.id, user.org, user.role, at)
 	}
 	exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'manual-noorg@example.com', true, true, false, 0, $2, $2)`, v.adminNoOrg, at)
@@ -205,14 +213,14 @@ VALUES ($1, $2, $3, $4, 'repository', $5, $6, $5, $7::json, $8, $9, $9)`, source
 		// A stored coverage projection: a trigger that is handed to the scheduler
 		// must invalidate it.
 		exec(`INSERT INTO sync_coverage_projections (id, org_id, sync_config_id, history_lookback_days, projection_version, generated_at, payload)
-VALUES ($1, $2, $3, 30, 1, $4, '{}'::json)`, uuid.New(), orgID.String(), c.id, at)
+VALUES ($1, $2, $3, 30, 1, $4, '{}'::json)`, stableID("job/"+c.id.String()), orgID.String(), c.id, at)
 		if s.pinned {
 			// The source is pinned once it exists (the foreign key).
 			exec(`UPDATE sync_configurations SET source_id = $1 WHERE id = $2`, c.sources[0], c.id)
 		}
 		for _, dataset := range []string{"commits", "prs"} {
 			exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options) VALUES ($1, $2, $3, $4, true, '{}'::json)`,
-				uuid.New(), orgID.String(), c.integration, dataset)
+				stableID("dataset/"+c.integration.String()+"/"+dataset), orgID.String(), c.integration, dataset)
 		}
 	}
 	// The community org is over its work items limit on both ClickHouse planes.
@@ -256,11 +264,11 @@ func manualRequests(venue *venueoracle.Venue, v manualIDs) []venueoracle.Request
 		trigger("trigger guard: member", "t-guard-memberA", "memberA"),
 		trigger("trigger guard: no org", "t-guard-noorg", "adminNoOrg"),
 		manualPost(venue, "trigger: not a uuid", "zzz", "/trigger", a, nil),
-		manualPost(venue, "trigger: unknown config", uuid.NewString(), "/trigger", a, nil),
+		manualPost(venue, "trigger: unknown config", stableID("unknown config").String(), "/trigger", a, nil),
 		trigger("trigger: another org's config", "t-other-org", a),
 		backfill("backfill guard: no token", "b-days-30", "", `{"since": "2026-09-01", "before": "2026-09-30"}`),
 		backfill("backfill guard: member", "b-days-30", "memberA", `{"since": "2026-09-01", "before": "2026-09-30"}`),
-		manualPost(venue, "backfill: the body is validated before the config", uuid.NewString(), "/backfill", a, json(`{}`)),
+		manualPost(venue, "backfill: the body is validated before the config", stableID("unknown config, backfill").String(), "/backfill", a, json(`{}`)),
 		manualPost(venue, "backfill: no body", id("b-days-30"), "/backfill", a, nil),
 		backfill("backfill: another org's config", "t-other-org", a, `{"since": "2026-09-01", "before": "2026-09-30"}`),
 		manualPost(venue, "backfill: not a uuid", "zzz", "/backfill", a, json(`{"since": "2026-09-01", "before": "2026-09-30"}`)),
@@ -343,9 +351,43 @@ var manualUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 // path), so both planes are compared on the same answers and the same
 // scheduled_sync_occurrences, sync_manual_triggers, sync_runs, sync_run_units
 // and backfill_jobs rows.
-func TestManualTriggerVenueOracle(t *testing.T) {
+func TestManualTriggerVenueOracle(t *testing.T) { runManualTriggerOracle(t, nil) }
+
+// manualGoldenBuild is the last Python-bearing build the frozen answers were
+// executed on: the commit that carried the Python trigger and backfill bodies
+// when CHAOS-6875 recorded them.
+const manualGoldenBuild = "c2b14a3f2ed3d43bef927d88025a9c18eda4ce6e"
+
+// TestManualTriggerVenueOracleFrozen is TestManualTriggerVenueOracle with the
+// Python plane's answers and row snapshots read from a golden executed once on
+// manualGoldenBuild, so the comparison survives the deletion of the Python
+// route bodies (CHAOS-6875). Same seed, same requests, same comparisons.
+func TestManualTriggerVenueOracleFrozen(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/manual_trigger_oracle.golden.json",
+		PythonBuild: manualGoldenBuild,
+		SHA256:      "PIN:manual_trigger_oracle",
+		Recipe:      "DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/syncadmin/ -test '^TestManualTriggerVenueOracleFrozen$' -python-root <clean worktree at " + manualGoldenBuild + ">",
+	})
+	runManualTriggerOracle(t, golden)
+}
+
+// runManualTriggerOracle runs the oracle: with a nil golden the Python plane is
+// served live beside the Go plane; with a golden its answers are the recorded
+// ones (or, recording, served live and written).
+func runManualTriggerOracle(t *testing.T, golden *venueoracle.Golden) {
 	ctx := context.Background()
 	root := repoRoot(t)
+	if golden != nil {
+		root = golden.PythonRoot(t, root)
+	}
+	livePython := golden == nil || golden.Recording()
+	servePython := func(venue *venueoracle.Venue, requests []venueoracle.Request) []venueoracle.Response {
+		if golden != nil {
+			return golden.Python(t, venue, requests)
+		}
+		return venue.ServePython(t, requests)
+	}
 	const jwtKey = "venue-oracle-test-secret-key-for-manual-trigger!"
 	v := newManualIDs(manualRequestNames())
 	t.Setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "6")
@@ -385,7 +427,11 @@ func TestManualTriggerVenueOracle(t *testing.T) {
 		t.Fatal(err)
 	}
 	var goScheduler *pgxpool.Pool
-	for _, database := range []string{venue.SourceDB, venue.GoDB} {
+	planes := []string{venue.GoDB}
+	if livePython {
+		planes = []string{venue.SourceDB, venue.GoDB}
+	}
+	for _, database := range planes {
 		pool, err := pgxpool.New(ctx, venue.AdminURI(t, database))
 		if err != nil {
 			t.Fatal(err)
@@ -423,8 +469,9 @@ func TestManualTriggerVenueOracle(t *testing.T) {
 	}
 
 	requests := manualRequests(venue, v)
-	python := venue.ServePython(t, requests)
+	python := servePython(venue, requests)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
 			if !strings.HasPrefix(request.Name, "clock: ") {
 				return body
@@ -443,14 +490,17 @@ func TestManualTriggerVenueOracle(t *testing.T) {
 	// The scheduler stopped: the wait ends with 202 "pending" and the occurrence id.
 	paused.Store(true)
 	pending := pendingRequests(venue, v)
-	pendingReceipt := venueoracle.Diff(t, base, pending, venue.ServePython(t, pending), venueoracle.DiffOptions{})
+	pendingReceipt := venueoracle.Diff(t, base, pending, servePython(venue, pending), venueoracle.DiffOptions{Golden: golden})
 	t.Logf("pending receipt:\n%s", pendingReceipt)
 	paused.Store(false)
 
 	// Ruled divergences, both planes asked: Python plans the legacy configuration
 	// in process (202), the hand-off refuses it (409) and writes nothing.
 	diverging := divergingRequests(venue, v)
-	pythonDiverging := venue.ServePython(t, diverging)
+	pythonDiverging := servePython(venue, diverging)
+	if golden != nil {
+		golden.Consumed(t, pythonDiverging...)
+	}
 	for index, request := range diverging {
 		goResponse := venueoracle.Do(t, base, request)
 		if pythonDiverging[index].Status != 202 {
@@ -467,7 +517,7 @@ WHERE c.id = ANY($1::uuid[])`, []uuid.UUID{v.cfg["t-legacy-unmanaged"].id, v.cfg
 	}
 
 	// The paused runs are planned once the scheduler runs again, on both planes.
-	for _, database := range []string{venue.SourceDB, venue.GoDB} {
+	for _, database := range planes {
 		pool, err := pgxpool.New(ctx, venue.AdminURI(t, database))
 		if err != nil {
 			t.Fatal(err)
@@ -488,10 +538,13 @@ WHERE c.id = ANY($1::uuid[])`, []uuid.UUID{v.cfg["t-legacy-unmanaged"].id, v.cfg
 		}
 		pool.Close()
 	}
-	compareManualRows(t, ctx, venue)
+	compareManualRows(t, ctx, venue, golden)
+	if golden != nil {
+		golden.Finish(t)
+	}
 }
 
-func compareManualRows(t *testing.T, ctx context.Context, venue *venueoracle.Venue) {
+func compareManualRows(t *testing.T, ctx context.Context, venue *venueoracle.Venue, golden *venueoracle.Golden) {
 	t.Helper()
 	compare := []struct {
 		name, query   string
@@ -512,10 +565,17 @@ WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 30},
 		{"scheduled_jobs", `SELECT c.name, j.job_type, j.status, j.org_id FROM scheduled_jobs j JOIN sync_configurations c ON c.id = j.sync_config_id WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 10},
 	}
 	for _, table := range compare {
-		pythonRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
-		if pythonRows != goRows {
-			t.Errorf("%s differ\n python:\n%.5000s\n go:\n%.5000s", table.name, pythonRows, goRows)
+		var pythonRows string
+		if golden != nil {
+			pythonRows = golden.CompareRows(t, table.name, func() string {
+				return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
+			}, goRows)
+		} else {
+			pythonRows = venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
+			if pythonRows != goRows {
+				t.Errorf("%s differ\n python:\n%.5000s\n go:\n%.5000s", table.name, pythonRows, goRows)
+			}
 		}
 		if strings.Count(pythonRows, " | ") < table.minSeparators {
 			t.Errorf("%s: too few rows compared:\n%s", table.name, pythonRows)

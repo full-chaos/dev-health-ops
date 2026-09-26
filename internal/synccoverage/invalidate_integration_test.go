@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
 // TestInvalidateForIntegrationMarksOnlyTheIntegrationsProjections pins the
@@ -32,14 +34,12 @@ func TestInvalidateForIntegrationMarksOnlyTheIntegrationsProjections(t *testing.
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `
-CREATE TABLE public.sync_configurations (id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid);
-CREATE TABLE public.sync_coverage_projections (
- id uuid PRIMARY KEY, org_id text NOT NULL, sync_config_id uuid NOT NULL, invalidated_at timestamptz,
- updated_at timestamptz NOT NULL DEFAULT '2000-01-01 00:00:00+00')`); err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 	integration, otherIntegration := uuid.New(), uuid.New()
+	// integration_id is a foreign key: the integrations the configs point at exist (any org: the org
+	// filters under test are on the configs, not on the integration row).
+	pgseed.Integration(ctx, t, pool, integration.String(), "org", "github")
+	pgseed.Integration(ctx, t, pool, otherIntegration.String(), "org", "github")
 	type seed struct {
 		org         string
 		integration any
@@ -63,10 +63,10 @@ CREATE TABLE public.sync_coverage_projections (
 	for _, s := range seeds {
 		config, projection := uuid.New(), uuid.New()
 		projections = append(projections, projection)
-		if _, err := pool.Exec(ctx, `INSERT INTO sync_configurations (id, org_id, integration_id) VALUES ($1, $2, $3)`, config, s.org, s.integration); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO sync_configurations (id, org_id, name, provider, integration_id, created_at, updated_at) VALUES ($1::uuid, $2, 'config-' || $1::uuid::text, 'github', $3, now(), now())`, config, s.org, s.integration); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, `INSERT INTO sync_coverage_projections (id, org_id, sync_config_id) VALUES ($1, $2, $3)`, projection, s.org, config); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO sync_coverage_projections (id, org_id, sync_config_id, history_lookback_days, projection_version, generated_at, payload, updated_at) VALUES ($1, $2, $3, 90, 1, now(), '{}'::json, '2000-01-01 00:00:00+00')`, projection, s.org, config); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -74,10 +74,10 @@ CREATE TABLE public.sync_coverage_projections (
 		config, projection := uuid.New(), uuid.New()
 		projections = append(projections, projection)
 		seeds = append(seeds, seed{org: c.configOrg + "/" + c.projectionOrg, integration: integration, want: "valid kept"})
-		if _, err := pool.Exec(ctx, `INSERT INTO sync_configurations (id, org_id, integration_id) VALUES ($1, $2, $3)`, config, c.configOrg, integration); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO sync_configurations (id, org_id, name, provider, integration_id, created_at, updated_at) VALUES ($1::uuid, $2, 'config-' || $1::uuid::text, 'github', $3, now(), now())`, config, c.configOrg, integration); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, `INSERT INTO sync_coverage_projections (id, org_id, sync_config_id) VALUES ($1, $2, $3)`, projection, c.projectionOrg, config); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO sync_coverage_projections (id, org_id, sync_config_id, history_lookback_days, projection_version, generated_at, payload, updated_at) VALUES ($1, $2, $3, 90, 1, now(), '{}'::json, '2000-01-01 00:00:00+00')`, projection, c.projectionOrg, config); err != nil {
 			t.Fatal(err)
 		}
 	}

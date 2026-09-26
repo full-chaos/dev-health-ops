@@ -82,6 +82,7 @@ WITH river_tables AS (
 SELECT
 	session_user = $1
 	AND current_user = $1
+	AND (SELECT usename FROM pg_catalog.pg_stat_activity WHERE pid = pg_backend_pid()) = $1
 	AND EXISTS (
 		SELECT 1
 		FROM pg_catalog.pg_roles

@@ -154,6 +154,7 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 SELECT
 	session_user = $1
 	AND current_user = $1
+	AND (SELECT usename FROM pg_catalog.pg_stat_activity WHERE pid = pg_backend_pid()) = $1
 	AND EXISTS (
 		SELECT 1
 		FROM pg_catalog.pg_roles
@@ -1286,23 +1287,33 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 
 // loginIdentityMismatch names the cause when the pool's login is not the expected
 // runtime role, or "" when it is (or the identity could not be read). CHAOS-6862:
-// the posture queries bind BOTH session_user (the credential the DSN carries) and
-// current_user (who the session acts as) to the expected role, so a session that
-// merely ACTS as the role (a startup option `-c role=...`, a role setting in the
-// DSN) on a wider credential reads as refused, and the cause is named here. Role
-// names are checked-in runtime identifiers, never connection material.
+// the posture queries bind THREE identities to the expected role: the
+// AUTHENTICATED user (pg_stat_activity.usename of this backend: the credential the
+// DSN carries, which SET SESSION AUTHORIZATION and SET ROLE do not change),
+// session_user (which SET SESSION AUTHORIZATION rewrites) and current_user (who the
+// session acts as, which SET ROLE and a startup `-c role=...` rewrite). A session
+// that merely ACTS as the role on a wider credential therefore reads as refused,
+// and the cause is named here. Role names are checked-in runtime identifiers,
+// never connection material.
 func loginIdentityMismatch(ctx context.Context, pool *pgxpool.Pool, expectedRole string) string {
 	identityCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postureDiagnoseTimeout)
 	defer cancel()
 	var sessionUser, currentUser string
-	if err := pool.QueryRow(identityCtx, "SELECT session_user::text, current_user::text").Scan(&sessionUser, &currentUser); err != nil {
+	var authenticated *string
+	if err := pool.QueryRow(identityCtx,
+		"SELECT session_user::text, current_user::text, (SELECT usename::text FROM pg_catalog.pg_stat_activity WHERE pid = pg_backend_pid())",
+	).Scan(&sessionUser, &currentUser, &authenticated); err != nil {
 		return ""
 	}
-	if sessionUser == expectedRole && currentUser == expectedRole {
+	authenticatedName := ""
+	if authenticated != nil {
+		authenticatedName = *authenticated
+	}
+	if sessionUser == expectedRole && currentUser == expectedRole && authenticatedName == expectedRole {
 		return ""
 	}
-	return fmt.Sprintf("the pool authenticated as %q (session_user) and acts as %q (current_user), not the expected role: the login itself must be the role",
-		sessionUser, currentUser)
+	return fmt.Sprintf("the pool authenticated as %q, has session_user %q and acts as %q (current_user), not the expected role: the login itself must be the role",
+		authenticatedName, sessionUser, currentUser)
 }
 
 // postureDiagnoseTimeout bounds the diagnostic pass that names the first

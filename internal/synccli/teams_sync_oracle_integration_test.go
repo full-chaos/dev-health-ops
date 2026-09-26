@@ -772,11 +772,11 @@ func githubScenarios() []*teamsScenario {
 	}
 }
 
-// TestSyncTeamsGitHubMatchesLivePython runs `dev-hops sync teams --provider github` (the real verb, PyGithub
+// TestSyncTeamsGitHubVenueOracleMatchesThePythonProducer runs `dev-hops sync teams --provider github` (the real verb, PyGithub
 // pointed at a fake) and `dho sync teams --provider github` (the Go team catalog) over one fake GitHub and
 // compares exit codes and, column by column, the `teams` rows each wrote. The rows differ by design in the
 // columns teamsRules names; everything else must be equal.
-func TestSyncTeamsGitHubMatchesLivePython(t *testing.T) {
+func TestSyncTeamsGitHubVenueOracleMatchesThePythonProducer(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
 	}

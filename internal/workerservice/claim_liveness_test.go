@@ -285,7 +285,10 @@ func TestClaimLivenessReadyRequiresProofNotJustAbsenceOfError(t *testing.T) {
 // just because nothing NEW claimed in the last 60s.
 func TestClaimLivenessReadyTreatsSaturatedQueueAsHealthy(t *testing.T) {
 	t.Parallel()
-	claim := &claimLiveness{} // never claimed anything, ever
+	claim := &claimLiveness{}
+	// Two long jobs entered their handlers an hour ago and are still inside.
+	claim.handlerInvoked("sync_provider", time.Now().Add(-time.Hour))
+	claim.handlerInvoked("sync_provider", time.Now().Add(-time.Hour))
 	dependencies := &workerDependencies{
 		queueTelemetryRequired: true,
 		queueTelemetry: &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
@@ -296,6 +299,55 @@ func TestClaimLivenessReadyTreatsSaturatedQueueAsHealthy(t *testing.T) {
 	ready := dependencies.claimLivenessReady(claim)
 	if err := ready(context.Background()); err != nil {
 		t.Fatalf("ready() on a fully saturated queue = %v, want nil (busy is not the same as wedged)", err)
+	}
+}
+
+// CHAOS-6818 r1b P1: Running == Capacity is only "busy" when every running slot
+// is INSIDE a handler. River counts a job failing at its idempotency Begin as
+// running, so a full queue with a slot stuck before its handler (a stale
+// pooler) and a stale claim clock must fail, and must heal when the stuck slot
+// reaches a handler again.
+func TestClaimLivenessReadyFailsAFullQueueWhoseSlotsAreNotAllInsideHandlers(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.handlerInvoked("sync_provider", time.Now().Add(-time.Hour)) // 1 of 2 running slots inside a handler
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true,
+		queueTelemetry: &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
+			Jobs:            []riverstore.QueueJobTelemetry{{Queue: "sync_provider", Kind: "sync.provider_unit", Available: 12}},
+			QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "sync_provider", Capacity: 2, Running: 2}},
+		}},
+	}
+	ready := dependencies.claimLivenessReady(claim)
+	if err := ready(context.Background()); !errors.Is(err, errClaimLivenessStalledWithBacklog) {
+		t.Fatalf("ready() = %v, want errClaimLivenessStalledWithBacklog (one full-queue slot is stuck before its handler)", err)
+	}
+	claim.handlerInvoked("sync_provider", time.Now()) // the stuck slot finally reaches its handler
+	if err := ready(context.Background()); err != nil {
+		t.Fatalf("ready() after the slot reached its handler = %v, want nil", err)
+	}
+}
+
+// handlerReturned must balance handlerInvoked, never go below zero, and count
+// as claim evidence itself.
+func TestClaimLivenessHandlerReturnedBalancesAndIsEvidence(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	old := time.Now().Add(-time.Hour)
+	claim.handlerInvoked("q", old)
+	claim.handlerReturned("q", old)
+	claim.handlerReturned("q", old) // an unmatched return must not go negative
+	if got := claim.handlersInside("q"); got != 0 {
+		t.Fatalf("handlersInside after balanced+extra return = %d, want 0", got)
+	}
+	claim.handlerInvoked("q", old)
+	if got := claim.handlersInside("q"); got != 1 {
+		t.Fatalf("handlersInside after a fresh invoke = %d, want 1 (a floor bug would leave it 0 or negative)", got)
+	}
+	before := claim.since("q", time.Now())
+	claim.handlerReturned("q", time.Now())
+	if after := claim.since("q", time.Now()); after >= before {
+		t.Fatalf("handlerReturned did not refresh the claim clock: before=%v after=%v", before, after)
 	}
 }
 
@@ -491,5 +543,225 @@ func TestClaimLivenessReadyRefusesOnFirstAttemptWhenGenuinelyFailed(t *testing.T
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("ready() error unexpectedly classifies as a deadline -- a genuine failure must not be retryable")
+	}
+}
+
+// CHAOS-6818 r2c P1: a slot stuck before its handler with NOTHING available.
+func stuckSlotReady(t *testing.T, claim *claimLiveness, running int64) error {
+	t.Helper()
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true,
+		queueTelemetry: &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
+			Jobs:            []riverstore.QueueJobTelemetry{{Queue: "sync", Kind: "sync.dispatch", Available: 0}},
+			QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "sync", Capacity: 1, Running: running}},
+		}},
+	}
+	return dependencies.claimLivenessReady(claim)(context.Background())
+}
+
+func TestClaimLivenessFailsAStuckSlotWithNothingAvailable(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.SetStaleWindow(60 * time.Millisecond)
+	claim.recordClaim("sync", time.Now().Add(-time.Hour)) // no handler activity for an hour
+	// The first observation proves nothing: a job is briefly between claim and handler.
+	if err := stuckSlotReady(t, claim, 1); err != nil {
+		t.Fatalf("first observation of a claimed job must not fail: %v", err)
+	}
+	time.Sleep(90 * time.Millisecond)
+	if err := stuckSlotReady(t, claim, 1); !errors.Is(err, errClaimLivenessSlotStuckBeforeHandler) {
+		t.Fatalf("a slot stuck before its handler past the window with no handler activity = %v, want errClaimLivenessSlotStuckBeforeHandler", err)
+	}
+	// Heals the moment the slot reaches its handler (which is also handler activity).
+	claim.handlerInvoked("sync", time.Now())
+	if err := stuckSlotReady(t, claim, 1); err != nil {
+		t.Fatalf("after the slot reached its handler: %v", err)
+	}
+}
+
+// A job just claimed on a queue that was idle for an hour: the claim clock is
+// stale but the slot has only just been seen, so it must not fail.
+func TestClaimLivenessDoesNotFailAJustClaimedJobOnASparseQueue(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.SetStaleWindow(60 * time.Millisecond)
+	claim.recordClaim("sync", time.Now().Add(-time.Hour))
+	for i := 0; i < 3; i++ {
+		if err := stuckSlotReady(t, claim, 1); err != nil {
+			t.Fatalf("poll %d of a fresh claim: %v", i, err)
+		}
+		// Each poll sees the job finish (Running 0) before the next one claims.
+		if err := stuckSlotReady(t, claim, 0); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+}
+
+// A busy healthy queue: every poll catches some job between claim and handler
+// for far longer than the window, but handlers keep running, so the claim clock
+// stays fresh and readiness must hold.
+func TestClaimLivenessDoesNotFailABusyQueueWhoseHandlersKeepRunning(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.SetStaleWindow(60 * time.Millisecond)
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		claim.recordClaim("sync", time.Now()) // a handler ran a moment ago
+		if err := stuckSlotReady(t, claim, 1); err != nil {
+			t.Fatalf("a busy queue with fresh handler activity failed: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A long job inside its handler is never "stuck before the handler".
+func TestClaimLivenessDoesNotFailALongJobInsideItsHandler(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.SetStaleWindow(60 * time.Millisecond)
+	claim.handlerInvoked("sync", time.Now().Add(-time.Hour))
+	for i := 0; i < 4; i++ {
+		if err := stuckSlotReady(t, claim, 1); err != nil {
+			t.Fatalf("poll %d with the running job inside its handler: %v", i, err)
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+}
+
+// The unbroken-run rule: a poll that sees the slot inside a handler (or gone)
+// restarts the clock, so two short stuck spells never add up to one long one.
+func TestClaimLivenessStuckRunMustBeUnbroken(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.SetStaleWindow(80 * time.Millisecond)
+	claim.recordClaim("sync", time.Now().Add(-time.Hour))
+	if err := stuckSlotReady(t, claim, 1); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := stuckSlotReady(t, claim, 0); err != nil { // the job finished: run broken
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond) // 100 ms since the first sighting, > the 80 ms window
+	if err := stuckSlotReady(t, claim, 1); err != nil {
+		t.Fatalf("a run broken by a poll that saw no stuck slot must restart, got %v", err)
+	}
+}
+
+// No claim can exist before River starts: never fail on preclaim.
+func TestClaimLivenessStuckSlotIsIgnoredInPreclaim(t *testing.T) {
+	t.Parallel()
+	claim := newClaimLiveness(time.Now().Add(-time.Hour), []string{"sync"})
+	claim.SetStaleWindow(30 * time.Millisecond)
+	for i := 0; i < 3; i++ {
+		if err := stuckSlotReady(t, claim, 1); err != nil {
+			t.Fatalf("preclaim poll %d: %v", i, err)
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+}
+
+// judgeQueue is one pure predicate over (backlog, slots-in-handler, activity
+// age, stuck-run age, preclaim). Table-driven over the input space the lead's
+// ruling names: Available x slots-in-handler x stuck-at-idempotency-Begin.
+func TestJudgeQueueOverTheWholeInputSpace(t *testing.T) {
+	t.Parallel()
+	const window = time.Minute
+	young, old := 10*time.Second, 5*time.Minute
+	fresh, stale := 10*time.Second, time.Hour
+	type slots struct {
+		name                      string
+		known                     bool
+		capacity, running, inside int64
+	}
+	shapes := []slots{
+		{"capacity unknown", false, 0, 0, 0},
+		{"idle, free capacity", true, 2, 0, 0},
+		{"free capacity, running job inside handler", true, 2, 1, 1},
+		{"free capacity, running job stuck before handler", true, 2, 1, 0},
+		{"full, every slot inside a handler", true, 1, 1, 1},
+		{"full, slot stuck before handler", true, 1, 1, 0},
+		{"full, some slots inside some stuck", true, 2, 2, 1},
+	}
+	build := func(available int64, shape slots, claimAge, stuckFor time.Duration, preclaim bool) queueFacts {
+		return queueFacts{
+			queue: "q", available: available, capacityKnown: shape.known,
+			capacity: shape.capacity, running: shape.running, inside: shape.inside,
+			claimAge: claimAge, stuckFor: stuckFor, window: window, preclaim: preclaim,
+		}
+	}
+
+	// Named rows: the cases that must FAIL, and the ones that must not.
+	named := []struct {
+		name  string
+		facts queueFacts
+		want  queueVerdict
+	}{
+		{"backlog, free capacity, no handler for the window: consumer not claiming",
+			build(3, shapes[1], stale, young, false), verdictStalledBacklog},
+		{"backlog, capacity unknown, no handler for the window",
+			build(3, shapes[0], stale, young, false), verdictStalledBacklog},
+		{"backlog, full queue with a stuck slot, no handler activity (r1b P1)",
+			build(3, shapes[5], stale, young, false), verdictStalledBacklog},
+		{"NO backlog, the only claimed job stuck before its handler, unbroken past the window (r2c P1)",
+			build(0, shapes[5], stale, old, false), verdictSlotStuck},
+		{"no backlog, free capacity, a stuck job, unbroken past the window",
+			build(0, shapes[3], stale, old, false), verdictSlotStuck},
+		{"no backlog, partly stuck full queue, unbroken past the window",
+			build(0, shapes[6], stale, old, false), verdictSlotStuck},
+		{"backlog behind a full queue whose every slot is inside a handler: long work",
+			build(9, shapes[4], stale, old, false), verdictHealthy},
+		{"no backlog, empty queue", build(0, shapes[1], stale, old, false), verdictHealthy},
+		{"no backlog, job just claimed on a sparse queue (young stuck run)",
+			build(0, shapes[5], stale, young, false), verdictHealthy},
+		{"no backlog, stuck-looking slot but handlers ran recently (busy queue)",
+			build(0, shapes[5], fresh, old, false), verdictHealthy},
+		{"backlog, free capacity, but a handler ran recently",
+			build(3, shapes[1], fresh, young, false), verdictHealthy},
+		{"exactly at the window is not yet past it: stuck run",
+			build(0, shapes[5], stale, window, false), verdictHealthy},
+		{"exactly at the window is not yet past it: no handler activity",
+			build(0, shapes[5], window, old, false), verdictHealthy},
+		{"exactly at the window is not yet past it: backlog arm",
+			build(3, shapes[1], window, young, false), verdictHealthy},
+		{"preclaim: a queue that would fail the backlog arm is a skip",
+			build(3, shapes[1], stale, young, true), verdictPreclaimSkip},
+		{"preclaim: the stuck arm cannot fail",
+			build(0, shapes[5], stale, old, true), verdictHealthy},
+	}
+	for _, test := range named {
+		if got := judgeQueue(test.facts); got != test.want {
+			t.Errorf("%s: verdict %d, want %d (%+v)", test.name, got, test.want, test.facts)
+		}
+	}
+
+	// Properties over the full grid (2 backlogs x 7 shapes x 2 x 2 x 2).
+	for _, available := range []int64{0, 3} {
+		for _, shape := range shapes {
+			for _, claimAge := range []time.Duration{fresh, stale} {
+				for _, stuckFor := range []time.Duration{young, old} {
+					for _, preclaim := range []bool{false, true} {
+						facts := build(available, shape, claimAge, stuckFor, preclaim)
+						verdict := judgeQueue(facts)
+						failing := verdict == verdictSlotStuck || verdict == verdictStalledBacklog
+						where := fmt.Sprintf("%s available=%d claimAge=%v stuckFor=%v preclaim=%v", shape.name, available, claimAge, stuckFor, preclaim)
+						if claimAge <= window && failing {
+							t.Errorf("recent handler activity must never fail (%s)", where)
+						}
+						if preclaim && failing {
+							t.Errorf("preclaim must never fail (%s)", where)
+						}
+						if shape.running <= shape.inside && shape.known && shape.capacity > 0 &&
+							(available <= 0 || shape.running >= shape.capacity) && failing {
+							t.Errorf("every running slot inside a handler on an empty-or-full queue is healthy (%s)", where)
+						}
+						if available <= 0 && shape.running <= shape.inside && failing {
+							t.Errorf("no backlog and no slot outside a handler is healthy (%s)", where)
+						}
+					}
+				}
+			}
+		}
 	}
 }

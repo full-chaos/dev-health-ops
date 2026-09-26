@@ -223,103 +223,72 @@ stayed at zero and nothing alerted.
 → `CheckRequired`) — that part of the fix predates this ticket. What was
 missing is two check FAMILIES no existing dependency probe reproduced:
 
-1. **`idempotency_backend`** (`dev-health-worker` only) — a synchronous
-   `Begin`+`Rollback` against the domain pool, run fresh on every poll. It
-   exercises the exact primitive `internal/jobruntime.PostgresIdempotency.Begin`
-   depends on for every real job's claim. `domain_postgres` is a role-POSTURE
-   introspection query (`has_table_privilege(...)` over `pg_catalog`) and
-   does not prove a transaction can actually be opened — which is precisely
-   the class of failure that stayed silent for two hours: the pool was
-   reachable and the grants were intact, only the pooled connection's
-   transaction path had gone stale.
-2. **`execution_liveness`** (`dev-health-worker` ONLY since CHAOS-6800; the
-   reconciler and the scheduler run `domain_transaction`, below) — TWO required
-   facts, not one:
-   - A ticking DB self-probe (`internal/platform/selfprobe`) that opens and
-     rolls back its own transaction against the domain pool on a fixed clock
-     (20s interval, 60s staleness by default — three misses before readiness
-     flips, absorbing one transient failure without flapping), on its OWN
-     goroutine, regardless of real job traffic.
-   - `dev-health-worker` ONLY: a claim-liveness fact (`claim_liveness.go`)
-     tied to River's real `JobStarted` callback — the same signal every real
-     job execution already produces — with a queue-telemetry idle fallback so
-     a genuinely empty queue still passes without a claim. **This half exists
-     because the DB self-probe alone is not sufficient**: a codex review
-     during this ticket's development correctly found that an independent
-     probe goroutine keeps succeeding even when the real River consumer is
-     deadlocked while the database stays healthy — exactly the "recent jobs
-     are all terminal-without-execution" scenario the ticket's Wanted section
-     names, and a probe disconnected from the real claim path cannot detect
-     it. `dev-health-reconciler`/`dev-health-scheduler` do not need an
-     equivalent: their own poll loops (`joboutbox.ReconcilerLoop`,
-     `internal/syncreconciler.Loop`, `internal/scheduler/sync.Loop`) already
-     self-register a staleness-based `reconciler_loop`/`sync_dispatch_observer`/
-     `scheduler_loop` readiness check tied to real step success — pre-existing,
-     unrelated to this ticket — so `execution_liveness` there is purely the
-     complementary DB-reachability signal.
+1. **`domain_transaction`** (`dev-health-worker`, `dev-health-reconciler`,
+   `dev-health-scheduler`; CHAOS-6800 for the last two, CHAOS-6818 for the worker;
+   replaces the worker's `idempotency_backend`) — a bounded BEGIN/rollback on the
+   process's dedicated one-connection READINESS pool (`RuntimePools.DomainProbe`,
+   the same pool `domain_postgres` and `posture_manifest_lockstep` use), run
+   synchronously and fresh on every readiness poll. `domain_postgres` is a
+   role-POSTURE introspection query and does not prove a transaction can be
+   opened; this does. It never touches the shared WORK pool.
+2. **`execution_liveness`** (`dev-health-worker` ONLY) — claim evidence only
+   (`claim_liveness.go`): a queue with available jobs and no handler invocation
+   inside the staleness window (60s) turns it red; an empty queue is healthy,
+   and so is a full queue whose every running slot is inside a handler (long
+   jobs). A full queue with a slot stuck BEFORE its handler (River counts it as
+   running) is not healthy: `HandlerReturned` pairs `HandlerInvoked` so the
+   check can tell. The same holds with NO backlog (the only claimed job stalls at
+   its `Begin`): a slot seen stuck before its handler on every poll for longer
+   than the window, with no handler activity on the queue for that window, turns
+   it red; a job merely between claim and handler, or a busy queue whose handlers
+   keep running, never does. `HandlerInvoked` fires only after every pre-handler gate,
+   including the idempotency claim's `Begin` on the WORK pool, so **a job that
+   fails at `Begin` produces no evidence: failing jobs are how a stale or
+   recreated pooler (CHAOS-4029) turns readiness red**. This replaced the
+   worker's ticking work-pool self-probe (removed in CHAOS-6818): with no way to
+   tell "the work pool is busy" from "the transaction path is broken" except a
+   heuristic over shared-pool contention, every such heuristic found a new hole
+   in review. The stale-pooler scenario is pinned by
+   `TestARecreatedPoolerFlipsReadinessThroughFailingJobsWithinTheWindow`.
 
-   **Idle-safety without a startup deadlock:** the claim clock is seeded to
-   "now" at construction, not the zero value. `claimLivenessReady` is one of
-   the checks `preclaimReadinessComponent` evaluates BEFORE the River client
-   ever starts, so a zero-seeded clock would require evidence (a real claim)
-   that cannot yet exist on every single restart — observed live during this
-   ticket's own development: rebuilding go-worker after an unrelated
-   pgbouncer outage, with genuine multi-minute queue backlog already
-   accumulated, the worker could never pass preclaim-readiness again. Seeding
-   to "now" treats admission as the starting gun and gives the real consumer
-   a full staleness window to make its first claim before the signal can ever
-   fail — see `newClaimLiveness`'s doc comment.
-
-**`domain_transaction` (`dev-health-reconciler`, `dev-health-scheduler`; CHAOS-6800,
-replaces their `execution_liveness`).** A bounded BEGIN/rollback on the
-process's dedicated one-connection READINESS pool (`RuntimePools.DomainProbe`, the
-same pool `domain_postgres` and `posture_manifest_lockstep` use), checked
-synchronously on every readiness poll. The ticking `selfprobe` monitor on the
-shared WORK pool that these two services used to run is removed: with no claim or
-work evidence to prove liveness from, it could not tell "the work pool is busy"
-from "the transaction path is broken" without a heuristic over shared-pool
-contention, and three review rounds found a new hole in every such heuristic.
-Work-pool saturation is now an operator signal only:
-`scheduler_database_pool_saturation_ratio{pool="domain"}` /
-`reconciler_database_pool_saturation_ratio{pool="domain"}` (plus `_acquired_conns`
+**Class rule (D2588):** readiness = "can this replica run its own checks on its
+own probe pool". It is never a heuristic over shared work-pool contention.
+Work-pool saturation is an operator signal only:
+`<service>_database_pool_saturation_ratio{pool="domain"}` (plus `_acquired_conns`
 and `_max_conns`) and a rate-limited warning log; it never decides ready/not-ready.
-The `scheduler_execution_liveness` / `reconciler_execution_liveness` self-probe
-metrics and `self-probe-*` lifecycle components no longer exist for these two.
+`dev-health-reconciler`/`dev-health-scheduler` do not run `execution_liveness`:
+their own poll loops already self-register staleness checks
+(`reconciler_loop`/`sync_dispatch_observer`/`scheduler_loop`) tied to real step
+success. The `*_execution_liveness` self-probe gauges/counters
+(`dev_health_execution_liveness_seconds_since_success{probe=...}`,
+`dev_health_execution_liveness_probe_failures_total{probe=...}`), the
+`self-probe-*` lifecycle components and `worker_readiness_busy_total` no longer
+exist for any of the three services.
 
-Both `idempotency_backend` and the DB half of `execution_liveness` fail closed
-with reason `never_proven` before their first sample completes — absence of a
-signal is never silently read as healthy — and all self-heal on their own the
-moment the dependency recovers; no restart is required. `dev-health-scheduler`
-additionally keeps its existing `executed_proof_evidence` check (CHAOS-4124)
-unchanged — that proves the executed-proof evidence snapshot loaded;
-`execution_liveness` proves the transaction path the snapshot's own refresh
-depends on is alive at all, which is a strictly earlier precondition.
+**Idle-safety without a startup deadlock:** the claim clock is seeded to
+"now" at construction, not the zero value. `claimLivenessReady` is one of
+the checks `preclaimReadinessComponent` evaluates BEFORE the River client
+ever starts, so a zero-seeded clock would require evidence (a real claim)
+that cannot yet exist on every restart. Seeding to "now" treats admission as
+the starting gun and gives the real consumer a full staleness window to make
+its first claim — see `newClaimLiveness`'s doc comment.
 
-**Telemetry:** every registered check already gets a per-name gauge
-(`dev_health_runtime_check_failed{check="execution_liveness"}` etc,
-`internal/platform/health/server.go`). `internal/platform/selfprobe` adds
-two more, per probe name (`worker_execution_liveness`,
-`reconciler_execution_liveness`, `scheduler_execution_liveness`):
+`domain_transaction` is synchronous (no first-sample gap) and self-heals the
+moment the dependency recovers; no restart is needed. `dev-health-scheduler` additionally keeps its
+`executed_proof_evidence` check (CHAOS-4124) unchanged.
 
-- `dev_health_execution_liveness_seconds_since_success{probe="..."}` — a
-  gauge, `-1` before the first success, otherwise the age of the last one.
-  Alert on this crossing the staleness window independently of `/readyz`
-  being polled at all.
-- `dev_health_execution_liveness_probe_failures_total{probe="...",reason="..."}`
-  — a counter over the bounded reason set (`begin_failed`, `rollback_failed`,
-  `timeout`, `unconfigured`, `panicked`); never the underlying driver error
-  text, which can carry a DSN.
+**Telemetry:** every registered check gets a per-name gauge
+(`dev_health_runtime_check_failed{check="execution_liveness"}`,
+`{check="domain_transaction"}` etc, `internal/platform/health/server.go`).
 
 **Operator troubleshooting:** `/readyz` reporting `execution_liveness` failed
-with everything else green (`domain_postgres`, `idempotency_backend` both
-passing on `dev-health-worker`) means the CLAIM path specifically is wedged —
-a queue has available work and nothing has claimed from it recently: suspect
-the River consumer itself (a deadlock, a stuck goroutine, GC pressure), not
-the database. `idempotency_backend` (or `execution_liveness` alongside it)
-failing means the domain pool itself is unreachable or cannot open a
-transaction RIGHT NOW — check the pooler (`pgbouncer`) first, not the role's
-grants (those are `domain_postgres`'s job, and `domain_postgres` would also be
-failing if grants were the problem).
+with `domain_transaction` green on `dev-health-worker` means no job is reaching
+its handler while work is waiting: either the consumer is wedged (deadlock,
+stuck goroutine) or every job fails at its idempotency `Begin` on the WORK pool
+(stale pooled connections after a pooler recreate — check the worker log for the
+Begin error and `worker_database_pool_saturation_ratio`). `domain_transaction`
+failing means the readiness pool cannot open a transaction RIGHT NOW: check the
+pooler (`pgbouncer`) first, not the role's grants (that is `domain_postgres`).
 
 ### Stream-runner profiles remain separate
 

@@ -3,44 +3,31 @@ package workerservice
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
-	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/poolpg"
 )
 
-// TestExecutionLivenessCatchesAWedgedDomainPoolAfterAdmission is the direct
-// red-on-baseline reproduction of the CHAOS-4029 incident: on 2026-08-20 the
-// domain pool moved 17 seconds after every worker had already passed
-// preclaim readiness, and every job failed at PostgresIdempotency.Begin for
-// two hours while /readyz kept answering 200, because nothing re-observed
-// the process's own execution path after admission.
-//
-// This test proves the fix: idempotency_backend (synchronous) and
-// execution_liveness (ticking self-probe) both start healthy once the
-// process is admitted, both flip a running process to NOT ready once the
-// domain pool wedges -- with NO restart and NO reconstruction of
-// dependencies, exactly mirroring "the pool moved under a live process" --
-// and both self-heal the moment the dependency recovers.
-//
-// Before the CHAOS-4029 fix (i.e. on origin/main, before this change),
-// neither idempotency_backend nor execution_liveness exists as a check
-// name, and domain_postgres alone does not reproduce this failure mode: it
-// tests role POSTURE via a SELECT-shaped introspection query, not a live
-// Begin/transaction round trip, so it stays green through exactly the
-// class of failure this test injects. Running this test against that
-// baseline fails immediately at the components[2].(*selfprobe.Monitor) type
-// assertion below (the baseline's third component is preclaim-readiness,
-// not a liveness monitor, since neither new check nor the monitor exists
-// yet) -- which is the point: this is a genuinely new, previously-absent
-// signal, not a restatement of an existing one.
-func TestExecutionLivenessCatchesAWedgedDomainPoolAfterAdmission(t *testing.T) {
+// TestDomainTransactionCatchesAWedgedReadinessPoolAfterAdmission is what remains
+// of CHAOS-4029's "the pool moved under a live process" reproduction after
+// CHAOS-6818: the synchronous BEGIN/rollback check (domain_transaction) runs on
+// the dedicated READINESS pool, so a wedged readiness pool flips a running
+// process to NOT ready with no restart and heals the moment it recovers, while
+// execution_liveness now rests on real WORK evidence alone (claim liveness) and
+// is NOT moved by that probe: the ticking DB self-probe on the work pool is gone.
+func TestDomainTransactionCatchesAWedgedReadinessPoolAfterAdmission(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	queues := []string{"coverage", "heartbeat", "retention", "webhooks"}
 	runtimeRegistry, err := jobruntime.Load(defaultContractRoot)
@@ -52,15 +39,6 @@ func TestExecutionLivenessCatchesAWedgedDomainPoolAfterAdmission(t *testing.T) {
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
 		return database, nil
 	}
-	// fakeWorkerDatabase is not *postgresWorkerDatabase, so the production
-	// operational-family and River-process builders (which both need a real
-	// pgxpool-backed database) cannot compose it -- neither concern is what
-	// this test is about. Swap in fakes that report exactly the same
-	// handlers/queues the production operational builder would for this
-	// queue selection (proven by TestProductionOperationalBuilderConstructsNativeSyncCoverageRefresh
-	// against the same registry and queue set), so queue_completeness and
-	// job_registry both pass for real, and this test's readiness assertions
-	// exercise the real registered CHAOS-4029 checks end-to-end.
 	sources.buildOperational = fakeHandlerBuilder(
 		"operational",
 		mustSelectedQueueSpecs(t, runtimeRegistry, queues...),
@@ -86,31 +64,6 @@ func TestExecutionLivenessCatchesAWedgedDomainPoolAfterAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configureWorkerDependenciesWithSources() error = %v", err)
 	}
-
-	// The execution_liveness monitor is the third registered component (see
-	// the ordering asserted by TestCeleryRoutedHandlersCannotPassQueueCompleteness).
-	// Shrink its sampling interval and staleness window from the production
-	// defaults (20s / 60s) to real-but-small durations BEFORE Start, so this
-	// test proves the same staleness mechanics selfprobe's own unit tests
-	// prove with a fake clock, but end-to-end through the real wiring, in
-	// well under a second of wall-clock time instead of a minute.
-	livenessMonitor, ok := components[2].(*selfprobe.Monitor)
-	if !ok {
-		t.Fatalf("components[2] = %#v, want *selfprobe.Monitor", components[2])
-	}
-	livenessMonitor.SetInterval(20 * time.Millisecond)
-	livenessMonitor.SetStaleness(80 * time.Millisecond)
-
-	// Every registered component starts, exactly as the real lifecycle
-	// runtime does before opening the readiness gate (cmd's shell always
-	// runs Start on every returned component ahead of health.Gate.Start --
-	// see internal/platform/lifecycle). river-workers is skipped: its
-	// worker-presence wiring requires a real *postgresWorkerDatabase, which
-	// is orthogonal to what this test proves (readiness signal behavior),
-	// and fakeRiverProcessBuilder above already keeps its OWN Start a no-op
-	// -- only the presence field, populated unconditionally in
-	// configureWorkerDependenciesWithSources regardless of which River
-	// process builder ran, needs a real database.
 	for _, component := range components {
 		if component.Name() == "river-workers" {
 			continue
@@ -118,66 +71,38 @@ func TestExecutionLivenessCatchesAWedgedDomainPoolAfterAdmission(t *testing.T) {
 		if err := component.Start(context.Background()); err != nil {
 			t.Fatalf("start %s: %v", component.Name(), err)
 		}
+		if strings.Contains(component.Name(), "self-probe") {
+			t.Fatalf("component %q: the ticking self-probe on the work pool must not exist any more", component.Name())
+		}
 	}
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatalf("open readiness gate: %v", err)
 	}
 
-	// Admission: the process is healthy and ready, exactly like the four
-	// workers that passed preclaim-readiness at 20:32:21 on 2026-08-20.
+	// Admission: healthy and ready.
 	status := registry.Readiness(context.Background())
 	if !status.Ready {
 		t.Fatalf("expected the freshly admitted worker to be ready, got %#v", status)
 	}
 
-	// The incident: the domain pool wedges AFTER admission, with the process
-	// still running and never restarted -- pgbouncer-1 was recreated 17
-	// seconds after the last successful claim, and nothing about the worker
-	// process itself changed.
+	// The readiness pool wedges AFTER admission, never restarted.
 	database.setTxOpenerErr(errors.New("dependency_unavailable"))
-
-	// idempotency_backend is synchronous and re-evaluated on every /readyz
-	// poll (health.Registry.CheckRequired), so it must already be failing
-	// on the very next poll -- no staleness window needed for this one.
 	status = registry.Readiness(context.Background())
 	if status.Ready {
-		t.Fatal("expected readiness to fail once the domain pool wedges, got Ready=true")
+		t.Fatal("expected readiness to fail once the readiness pool wedges, got Ready=true")
 	}
-	if !slices.Contains(status.Failed, "idempotency_backend") {
-		t.Fatalf("expected idempotency_backend to fail immediately, got failed=%v", status.Failed)
+	if !slices.Contains(status.Failed, "domain_transaction") {
+		t.Fatalf("expected domain_transaction to fail immediately, got failed=%v", status.Failed)
 	}
-
-	// execution_liveness is staleness-based (it proves the process's OWN
-	// background loop is still pumping, not just that this one HTTP request
-	// could reach the database) -- give its ticking self-probe time to
-	// observe the same wedge and cross the (deliberately shrunk) staleness
-	// window.
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		status = registry.Readiness(context.Background())
-		if slices.Contains(status.Failed, "execution_liveness") {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("execution_liveness never failed after the domain pool wedged; failed=%v", status.Failed)
-		}
-		time.Sleep(5 * time.Millisecond)
+	if slices.Contains(status.Failed, "execution_liveness") {
+		t.Fatalf("execution_liveness moved with the readiness-pool probe: it must rest on work evidence alone, failed=%v", status.Failed)
 	}
 
-	// Self-heal: the ticket requires recovery WITHOUT a restart the moment
-	// the dependency comes back, mirroring "recovers on its own" from the
-	// CHAOS-4029 acceptance criterion.
+	// Self-heal, no restart.
 	database.setTxOpenerErr(nil)
-	deadline = time.Now().Add(2 * time.Second)
-	for {
-		status = registry.Readiness(context.Background())
-		if status.Ready {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("readiness did not self-heal after the domain pool recovered; failed=%v", status.Failed)
-		}
-		time.Sleep(5 * time.Millisecond)
+	status = registry.Readiness(context.Background())
+	if !status.Ready {
+		t.Fatalf("readiness did not self-heal after the readiness pool recovered; failed=%v", status.Failed)
 	}
 
 	for _, component := range components {
@@ -242,7 +167,7 @@ func TestExecutionLivenessCatchesAWedgedConsumerWithAHealthyDatabase(t *testing.
 	// Capture the constructed *claimLiveness (see workerDependencySources'
 	// injectable newClaimLiveness) so this test can shrink its staleness
 	// window from the production 60s to a real-but-small duration, exactly
-	// as it does for livenessMonitor below -- otherwise proving staleness
+	// would be needed for a monitor -- otherwise proving staleness
 	// would require sleeping out a full minute. newClaimLiveness's own
 	// construction-time seeding (the codex-round-1 grace-period fix) still
 	// applies: the window is shrunk immediately after construction, well
@@ -273,10 +198,6 @@ func TestExecutionLivenessCatchesAWedgedConsumerWithAHealthyDatabase(t *testing.
 	if claim == nil {
 		t.Fatal("expected sources.newClaimLiveness to have been called")
 	}
-	livenessMonitor, ok := components[2].(*selfprobe.Monitor)
-	if !ok {
-		t.Fatalf("components[2] = %#v, want *selfprobe.Monitor", components[2])
-	}
 	for _, component := range components {
 		if component.Name() == "river-workers" {
 			continue
@@ -303,10 +224,10 @@ func TestExecutionLivenessCatchesAWedgedConsumerWithAHealthyDatabase(t *testing.
 		Jobs: []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: 5}},
 	})
 
-	// The domain pool self-probe is, and stays, perfectly healthy -- this is
-	// the whole point of the test.
-	if err := livenessMonitor.Ready(context.Background()); err != nil {
-		t.Fatalf("expected the domain-pool self-probe to be healthy throughout, got %v", err)
+	// The readiness pool stays perfectly healthy throughout (domain_transaction
+	// passes): execution_liveness must still fail on the claim evidence alone.
+	if status = registry.Readiness(context.Background()); slices.Contains(status.Failed, "domain_transaction") {
+		t.Fatalf("expected domain_transaction to be healthy throughout, got failed=%v", status.Failed)
 	}
 
 	// Readiness must still fail once claim's (shrunk) staleness window
@@ -375,5 +296,229 @@ func TestExecutionLivenessCatchesAWedgedConsumerWithAHealthyDatabase(t *testing.
 			t.Errorf("shutdown %s: %v", component.Name(), err)
 		}
 		cancel()
+	}
+}
+
+// CHAOS-6818 (lead D2588 addendum): the CHAOS-4029 signal "the work pool's pooled
+// connections died after a pooler recreate, every job fails at its idempotency
+// Begin" is NOT judged by a probe any more but by work evidence: a job that fails
+// at that Begin never reaches its handler (jobruntime's
+// TestHandlerInvokedNeverFiresBeforeTenantBudgetOrIdempotencyGatesPass pins that
+// HandlerInvoked fires only after the idempotency gate passes), so it never
+// refreshes its queue's claim clock, and a queue with available jobs and no
+// handler invocation inside the window turns execution_liveness red. Here a REAL
+// pgxpool against a test server whose connections are dropped (the recreated
+// pgbouncer) fails Begin the way PostgresIdempotency.Begin's first line does;
+// readiness flips inside the (shrunk) window with domain_transaction still green,
+// and recovers the moment a job reaches its handler again.
+func TestARecreatedPoolerFlipsReadinessThroughFailingJobsWithinTheWindow(t *testing.T) {
+	runRecreatedPoolerScenario(t, nil, 5)
+}
+
+// CHAOS-6818 r1b P1: the same scenario with the queue FULL. River counts a job
+// that is failing at its idempotency Begin as running, so Running == Capacity
+// while nothing is inside a handler; the old "saturated => healthy" exemption
+// hid exactly the state the removed self-probe used to catch.
+func TestARecreatedPoolerFlipsReadinessEvenWhenEveryClaimSlotIsRunning(t *testing.T) {
+	runRecreatedPoolerScenario(t, []riverstore.QueueCapacityTelemetry{
+		{Queue: "heartbeat", Capacity: 1, Running: 1, Saturation: 1},
+	}, 5)
+}
+
+// CHAOS-6818 r2c P1: the same, with NO available jobs. The only job is already
+// claimed (River counts it running) and stalls at its idempotency Begin on the
+// stale pooler, so the backlog is zero while the slot is stuck before its
+// handler. `Available <= 0` used to skip the queue before that was looked at.
+func TestARecreatedPoolerFlipsReadinessWhenTheOnlyClaimedJobIsStuckAndNothingIsAvailable(t *testing.T) {
+	runRecreatedPoolerScenario(t, []riverstore.QueueCapacityTelemetry{
+		{Queue: "heartbeat", Capacity: 1, Running: 1, Saturation: 1},
+	}, 0)
+}
+
+func runRecreatedPoolerScenario(t *testing.T, capacities []riverstore.QueueCapacityTelemetry, available int64) {
+	t.Helper()
+	t.Chdir(filepath.Join("..", ".."))
+	queues := []string{"coverage", "heartbeat", "retention", "webhooks"}
+	runtimeRegistry, err := jobruntime.Load(defaultContractRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry := &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
+		Jobs: []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: 0}},
+	}}
+	database := &fakeWorkerDatabase{telemetry: telemetry}
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) { return database, nil }
+	sources.buildOperational = fakeHandlerBuilder(
+		"operational",
+		mustSelectedQueueSpecs(t, runtimeRegistry, queues...),
+		selectedQueueBudgets(queues, queues, map[string]int{
+			"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4,
+		})...,
+	)
+	sources.buildRiverProcess = fakeRiverProcessBuilder("river-worker")
+	var claim *claimLiveness
+	sources.newClaimLiveness = func(now time.Time, queues []string) *claimLiveness {
+		claim = newClaimLiveness(now, queues)
+		claim.SetStaleWindow(150 * time.Millisecond)
+		return claim
+	}
+	registry := health.NewRegistry(2 * time.Second)
+	components, err := configureWorkerDependenciesWithSources(
+		context.Background(),
+		config.Config{
+			Queues:                 queues,
+			WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+			RiverDatabaseSchema:    "river",
+			DomainDatabaseMaxConns: 4,
+			QueueDatabaseMaxConns:  2,
+		},
+		registry,
+		sources,
+	)
+	if err != nil {
+		t.Fatalf("configureWorkerDependenciesWithSources() error = %v", err)
+	}
+	for _, component := range components {
+		if component.Name() == "river-workers" {
+			continue
+		}
+		if err := component.Start(context.Background()); err != nil {
+			t.Fatalf("start %s: %v", component.Name(), err)
+		}
+	}
+	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if status := registry.Readiness(context.Background()); !status.Ready {
+		t.Fatalf("the admitted worker is not ready: %v", status.Failed)
+	}
+
+	// The work pool: a real pgxpool against a server we can "recreate".
+	workServer := poolpg.Start(t)
+	poolConfig, err := pgxpool.ParseConfig("postgres://role:secret@" + workServer.Addr() + "/db?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolConfig.MaxConns = 2
+	workPool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(workPool.Close)
+	attempt := func() error { // what PostgresIdempotency.Begin's first line does
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		tx, err := workPool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		return tx.Rollback(ctx)
+	}
+	if err := attempt(); err != nil {
+		t.Fatalf("a job's Begin on a healthy pooler failed: %v", err)
+	}
+
+	// The pooler is recreated: established connections die, jobs are waiting.
+	workServer.DropConnections(true)
+	telemetry.setSnapshot(riverstore.QueueTelemetrySnapshot{
+		Jobs:            []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: available}},
+		QueueCapacities: capacities,
+	})
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if err := attempt(); err == nil {
+			t.Fatal("a job's Begin succeeded against a recreated pooler")
+		}
+		status := registry.Readiness(context.Background())
+		if slices.Contains(status.Failed, "execution_liveness") {
+			if !slices.Equal(status.Failed, []string{"execution_liveness"}) {
+				t.Fatalf("expected ONLY execution_liveness to flip (the probe pool is healthy), failed=%v", status.Failed)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("failing jobs with a backlog never flipped execution_liveness inside the window; failed=%v", status.Failed)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Recovery: the pooler is back, a job's Begin succeeds, its handler runs (the
+	// HandlerInvoked tap records the claim), readiness heals with no restart.
+	workServer.DropConnections(false)
+	if err := attempt(); err != nil {
+		t.Fatalf("a job's Begin against the recovered pooler failed: %v", err)
+	}
+	claim.recordClaim("heartbeat", time.Now())
+	if status := registry.Readiness(context.Background()); !status.Ready {
+		t.Fatalf("readiness did not recover once a job reached its handler again: %v", status.Failed)
+	}
+
+	for _, component := range components {
+		if component.Name() == "river-workers" {
+			continue
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		if err := component.Shutdown(shutdownCtx); err != nil {
+			t.Errorf("shutdown %s: %v", component.Name(), err)
+		}
+		cancel()
+	}
+}
+
+// CHAOS-6818 r1b P3: the observer the worker hands to every family builder must be
+// the claim-liveness one, wired to BOTH taps. Swapping it for the plain metrics
+// collector (or dropping the return tap) must fail here, not pass silently.
+func TestProductionObserverFeedsClaimLivenessThroughBothHandlerTaps(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	queues := []string{"heartbeat"}
+	runtimeRegistry, err := jobruntime.Load(defaultContractRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := &fakeWorkerDatabase{telemetry: &fakeQueueTelemetry{}}
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) { return database, nil }
+	specs := mustSelectedQueueSpecs(t, runtimeRegistry, queues...)
+	budgets := selectedQueueBudgets(queues, queues, map[string]int{"heartbeat": 1})
+	var observed jobruntime.Observer
+	sources.buildOperational = func(
+		_ config.Config, _ workerDatabase, _ *jobruntime.Registry, observer jobruntime.Observer, _ *slog.Logger, _ *river.Workers,
+	) (workerFamily, error) {
+		observed = observer
+		return workerFamily{handlers: specs, queues: budgets}, nil
+	}
+	sources.buildRiverProcess = fakeRiverProcessBuilder("river-worker")
+	var claim *claimLiveness
+	sources.newClaimLiveness = func(now time.Time, queues []string) *claimLiveness {
+		claim = newClaimLiveness(now, queues)
+		return claim
+	}
+	if _, err := configureWorkerDependenciesWithSources(
+		context.Background(),
+		config.Config{
+			Queues: queues, WorkerQueueConcurrency: map[string]int{"heartbeat": 1},
+			RiverDatabaseSchema: "river", DomainDatabaseMaxConns: 4, QueueDatabaseMaxConns: 2,
+		},
+		health.NewRegistry(2*time.Second), sources,
+	); err != nil {
+		t.Fatalf("configureWorkerDependenciesWithSources() error = %v", err)
+	}
+	invoked, ok := observed.(jobruntime.HandlerInvocationObserver)
+	if !ok {
+		t.Fatalf("the observer given to family builders (%T) lacks HandlerInvoked", observed)
+	}
+	returned, ok := observed.(jobruntime.HandlerReturnObserver)
+	if !ok {
+		t.Fatalf("the observer given to family builders (%T) lacks HandlerReturned", observed)
+	}
+	labels := jobruntime.JobLabels{Queue: "heartbeat", Kind: "system.heartbeat"}
+	invoked.HandlerInvoked(context.Background(), labels)
+	if got := claim.handlersInside("heartbeat"); got != 1 {
+		t.Fatalf("HandlerInvoked through the production observer left handlersInside = %d, want 1", got)
+	}
+	returned.HandlerReturned(context.Background(), labels)
+	if got := claim.handlersInside("heartbeat"); got != 0 {
+		t.Fatalf("HandlerReturned through the production observer left handlersInside = %d, want 0", got)
 	}
 }

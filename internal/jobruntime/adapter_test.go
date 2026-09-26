@@ -216,6 +216,10 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			if observer.handlerInvocations != wantHandlerInvocations {
 				t.Fatalf("handler invocations = %d, want %d", observer.handlerInvocations, wantHandlerInvocations)
 			}
+			if observer.handlerReturns != wantHandlerInvocations {
+				// CHAOS-6818: HandlerReturned pairs every HandlerInvoked, panics included.
+				t.Fatalf("handler returns = %d, want %d", observer.handlerReturns, wantHandlerInvocations)
+			}
 			if test.claimState == ClaimProceed {
 				if len(claim.completions) != 1 || claim.completions[0].Result != test.wantResult {
 					t.Fatalf("claim completions: %+v", claim.completions)
@@ -322,8 +326,9 @@ func TestHandlerInvokedNeverFiresBeforeTenantBudgetOrIdempotencyGatesPass(t *tes
 			// Work's own error (if any) is not the point of this test --
 			// only that the handler was never invoked, whatever the outcome.
 			_ = adapter.Work(context.Background(), job)
-			if observer.handlerInvocations != 0 {
-				t.Fatalf("handler invocations = %d, want 0 (gate %q must have refused before the handler)", observer.handlerInvocations, test.name)
+			if observer.handlerInvocations != 0 || observer.handlerReturns != 0 {
+				t.Fatalf("handler invocations/returns = %d/%d, want 0/0 (gate %q must have refused before the handler)",
+					observer.handlerInvocations, observer.handlerReturns, test.name)
 			}
 		})
 	}
@@ -807,12 +812,18 @@ type recordingObserver struct {
 	// so every existing table-driven case in this file also exercises it,
 	// not only the new cases added for it.
 	handlerInvocations int
+	// handlerReturns counts HandlerReturnObserver calls (CHAOS-6818): one per
+	// HandlerInvoked, including when the handler panics.
+	handlerReturns int
 }
 
 func (*recordingObserver) RuntimeRegistered(context.Context, RuntimeInfo) {}
 func (*recordingObserver) JobStarted(context.Context, JobLabels)          {}
 func (observer *recordingObserver) HandlerInvoked(context.Context, JobLabels) {
 	observer.handlerInvocations++
+}
+func (observer *recordingObserver) HandlerReturned(context.Context, JobLabels) {
+	observer.handlerReturns++
 }
 func (observer *recordingObserver) JobFinished(_ context.Context, _ JobLabels, result Result, category ErrorCategory, _ time.Duration) {
 	observer.result, observer.category = result, category
@@ -904,4 +915,50 @@ func TestAdapterAcceptsEnvelopeCarryingTraceParent(t *testing.T) {
 	if observer.result != ResultSuccess || observer.category != CategoryNone {
 		t.Fatalf("observed %s/%s, want success/none", observer.result, observer.category)
 	}
+}
+
+// CHAOS-6818: HandlerReturned fires when the handler returns, BEFORE the
+// completion claim runs on the work pool, so a job stuck finishing its claim is
+// not counted as "inside a handler".
+func TestHandlerReturnedFiresBeforeTheCompletionClaim(t *testing.T) {
+	t.Parallel()
+	registry, err := newRegistry(testContractRegistry(), testMigrationState())
+	if err != nil {
+		t.Fatalf("newRegistry: %v", err)
+	}
+	spec, _ := registry.Descriptor(jobcontract.KindRetentionCleanup)
+	observer := &recordingObserver{}
+	returnsWhenClaimFinished := -1
+	claim := &orderingClaim{recordingClaim: recordingClaim{state: ClaimProceed}, onFinish: func() {
+		returnsWhenClaimFinished = observer.handlerReturns
+	}}
+	adapter, err := NewAdapter(registry, spec, HandlerFunc[RetentionCleanupArgs](func(context.Context, *Execution[RetentionCleanupArgs]) error {
+		if observer.handlerInvocations != 1 || observer.handlerReturns != 0 {
+			t.Errorf("inside the handler: invocations/returns = %d/%d, want 1/0", observer.handlerInvocations, observer.handlerReturns)
+		}
+		return nil
+	}), Dependencies{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Observer:    observer,
+		TenantScope: tenantScopeFunc(func(ctx context.Context, _ ScopeRequest) (context.Context, error) { return ctx, nil }),
+		Budget:      budgetFunc(func(context.Context, BudgetRequest) (BudgetLease, error) { return &recordingLease{}, nil }),
+		Idempotency: idempotencyFunc(func(context.Context, ClaimRequest) (IdempotencyClaim, error) { return claim, nil }),
+	})
+	if err != nil {
+		t.Fatalf("NewAdapter: %v", err)
+	}
+	_ = adapter.Work(context.Background(), retentionJob(t, 1))
+	if returnsWhenClaimFinished != 1 {
+		t.Fatalf("handler returns when the completion claim ran = %d, want 1 (HandlerReturned must precede Finish)", returnsWhenClaimFinished)
+	}
+}
+
+type orderingClaim struct {
+	recordingClaim
+	onFinish func()
+}
+
+func (claim *orderingClaim) Finish(ctx context.Context, completion Completion) error {
+	claim.onFinish()
+	return claim.recordingClaim.Finish(ctx, completion)
 }

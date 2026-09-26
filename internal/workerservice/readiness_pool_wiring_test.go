@@ -2,6 +2,7 @@ package workerservice
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -50,6 +51,9 @@ func TestDomainReadinessChecksRunOnTheReadinessPoolNotTheWorkPool(t *testing.T) 
 		"DomainPostureCheck": func(d *postgresWorkerDatabase, ctx context.Context) error {
 			return d.DomainPostureCheck(nil)(ctx)
 		},
+		"DomainTransactionReady": func(d *postgresWorkerDatabase, ctx context.Context) error {
+			return d.DomainTransactionReady(ctx)
+		},
 		"PostureManifestLockstep": func(d *postgresWorkerDatabase, ctx context.Context) error {
 			_, err := d.PostureManifestLockstep(ctx, "digest")
 			return err
@@ -69,5 +73,19 @@ func TestDomainReadinessChecksRunOnTheReadinessPoolNotTheWorkPool(t *testing.T) 
 				t.Fatalf("%s returned after %s, before its %s deadline: it ran on the closed work pool", name, elapsed, budget)
 			}
 		})
+	}
+}
+
+// CHAOS-6818: a worker database with no pool must answer "unavailable" from
+// DomainTransactionReady, never "ready" (absence of a pool is not health).
+func TestDomainTransactionReadyFailsClosedWithoutAReadinessPool(t *testing.T) {
+	for name, database := range map[string]*postgresWorkerDatabase{
+		"nil database": nil,
+		"nil pools":    {},
+		"empty pools":  {pools: &postgres.RuntimePools{}},
+	} {
+		if err := database.DomainTransactionReady(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) {
+			t.Errorf("%s: DomainTransactionReady() = %v, want errWorkerDependencyUnavailable", name, err)
+		}
 	}
 }

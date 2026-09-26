@@ -22,6 +22,10 @@ type Server struct {
 	// stallBegin makes the server accept BEGIN and never answer it: a database
 	// that took the connection and then hangs (CHAOS-6771 r1).
 	stallBegin atomic.Bool
+	// dropConnections makes the server close every connection at its next query
+	// without answering: a recreated pooler whose established server-side
+	// connections just died (the CHAOS-4029 2026-08-20 shape).
+	dropConnections atomic.Bool
 }
 
 // Addr is the host:port the server listens on.
@@ -29,6 +33,10 @@ func (s *Server) Addr() string { return s.addr }
 
 // StallBegin makes every later BEGIN hang (true) or answer normally (false).
 func (s *Server) StallBegin(stall bool) { s.stallBegin.Store(stall) }
+
+// DropConnections makes every later query kill its connection (true) or answer
+// normally (false). Connections opened while dropping die at their first query.
+func (s *Server) DropConnections(drop bool) { s.dropConnections.Store(drop) }
 
 // Serve starts the fake server on a loopback port and returns its address. It
 // stops with the test.
@@ -105,6 +113,9 @@ func (server *Server) serve(ctx context.Context, connection net.Conn) {
 		}
 		switch typed := message.(type) {
 		case *pgproto3.Query:
+			if server.dropConnections.Load() {
+				return
+			}
 			sql := strings.ToUpper(strings.TrimSpace(typed.String))
 			switch {
 			case strings.HasPrefix(sql, "BEGIN") && server.stallBegin.Load():

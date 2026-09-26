@@ -47,6 +47,14 @@ func Command(resolve ResolveDSN) cli.Command {
 				},
 			},
 			{
+				Name:    "preflight",
+				Summary: "print, read-only, what the upgrade will do to this database with this build (exit 0 at_head, 10 applies_cleanly, 1 needs_manual, 3 not measured)",
+				Kind:    cli.Verb,
+				Run: func(ctx context.Context, env cli.Env) int {
+					return preflight(ctx, resolve, env)
+				},
+			},
+			{
 				Name:    "current",
 				Summary: "print the revisions the database records, as `alembic current` does",
 				Kind:    cli.Verb,

@@ -32,9 +32,9 @@ import (
 // clock was never refreshed, so a backlog with running work turned readiness red
 // on a healthy worker (prod, go-sync, 2026-09-26).
 //
-// Every always-registered bare kind on the queue is driven (dispatch, finalize,
-// post-sync, reference discovery, ownership derivation); team autoimport is only
-// registered when its route is river, and shares the same middleware seam.
+// Every bare kind on the queue is driven (dispatch, finalize, post-sync,
+// reference discovery, team autoimport, ownership derivation): the checked-in
+// contract routes autoimport to river, so the composition registers it.
 //
 // This drives the PRODUCTION composition (composeSelectedWorkerFamilies with the
 // production claimLivenessObserver, the same call configureWorkerDependencies
@@ -150,6 +150,11 @@ func TestSyncCoordinatorWorkersFeedClaimLiveness(t *testing.T) {
 		syncdispatchcontract.KindFinalizeSyncRun:    syncdispatchruntime.FinalizeSyncRunArgs{TransportArgs: transport()},
 		syncdispatchcontract.KindPostSync:           syncdispatchruntime.PostSyncArgs{TransportArgs: transport()},
 		syncdispatchcontract.KindReferenceDiscovery: syncdispatchruntime.ReferenceDiscoveryArgs{TransportArgs: transport()},
+		jobcontract.KindTeamAutoimport: syncdispatchruntime.TeamAutoimportJobArgs{
+			Version: jobcontract.ContractVersionV1, OrgID: uuid.NewString(), CorrelationID: "corr-sync-taps-autoimport",
+			Idempotency: "sync-taps-autoimport", Domain: jobcontract.DomainLink{Type: "sync_run", ID: runID},
+			Payload: jobcontract.TeamAutoimportPayload{SyncRunID: runID},
+		},
 		jobcontract.KindTeamRepoOwnershipDerivation: syncdispatchruntime.TeamRepoOwnershipDerivationJobArgs{
 			Version: jobcontract.ContractVersionV1, OrgID: uuid.NewString(), CorrelationID: "corr-sync-taps",
 			Idempotency: "sync-taps-derivation", Domain: jobcontract.DomainLink{Type: "sync_run", ID: runID},

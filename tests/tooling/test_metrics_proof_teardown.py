@@ -38,6 +38,8 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -156,14 +158,76 @@ def _teardown_source() -> str:
     )
 
 
+# CHAOS-6922 / CHAOS-5066: a process started from a NON-interactive shell with `&` (a
+# lane's background test run, `cmd &` in a script) inherits SIGINT and SIGQUIT as
+# IGNORED, and an ignored-on-entry signal can neither be trapped nor reset by bash. The
+# shells these tests start would then inherit that from pytest, so
+# test_a_cancelled_run_tears_down_and_exits_instead_of_resuming failed whenever the
+# suite was launched backgrounded (9 s, no load involved) and passed in the foreground.
+# The tests measure the SCRIPT's trap wiring, so the shell under test starts with the
+# default disposition whatever way pytest was launched: this launcher resets the two
+# signals in the exec'd process itself (no preexec_fn), then becomes bash.
+_LAUNCH_WITH_DEFAULT_SIGNALS = (
+    "import os, signal, sys\n"
+    "signal.signal(signal.SIGINT, signal.SIG_DFL)\n"
+    "signal.signal(signal.SIGQUIT, signal.SIG_DFL)\n"
+    "os.execvp('bash', ['bash', '-c', sys.argv[1]])\n"
+)
+
+
 def _run(body: str, timeout: int = 60) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["bash", "-c", body],
+        [sys.executable, "-c", _LAUNCH_WITH_DEFAULT_SIGNALS, body],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=timeout,
         env={**os.environ},
+    )
+
+
+_TRAP_PROBE = """trap 'echo CAUGHT' INT
+kill -INT $$
+sleep 0.2
+echo AFTER
+"""
+
+
+def test_the_shell_under_test_can_trap_sigint_however_pytest_was_launched():
+    """The precondition of every signal test in this file, asserted directly.
+
+    If the launcher stops resetting the disposition, the tests that send SIGINT fail
+    with "the script resumed", which reads as a defect in the teardown script. This
+    fails first and names the real cause.
+    """
+    result = _run(_TRAP_PROBE)
+    assert "CAUGHT" in result.stdout, (
+        "the shell under test could not trap SIGINT: it inherited SIGINT as IGNORED "
+        "(pytest was launched backgrounded, `cmd &`, and _LAUNCH_WITH_DEFAULT_SIGNALS "
+        f"no longer resets it). stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+
+def test_a_shell_started_with_sigint_ignored_cannot_trap_it():
+    """The failure mode CHAOS-6922 was, pinned: bash cannot trap a signal that was
+    ignored when it started. This is why the launcher above must reset it -- and why a
+    script launched backgrounded (CHAOS-5066) runs without its INT trap."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os, signal, sys\n"
+            "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+            "os.execvp('bash', ['bash', '-c', sys.argv[1]])\n",
+            _TRAP_PROBE,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=REPO_ROOT,
+    )
+    assert "CAUGHT" not in result.stdout and "AFTER" in result.stdout, (
+        f"a shell that inherited SIGINT ignored trapped it after all: {result.stdout!r}"
     )
 
 
@@ -359,26 +423,57 @@ def test_a_cancelled_run_tears_down_and_exits_instead_of_resuming(tmp_path):
     """
     full = _composed_teardown_and_trap_source()
     marker = tmp_path / "resumed"
+    worker_pid_file = tmp_path / "worker.pid"
     body = f"""set -euo pipefail
 TMP_DIR="$(mktemp -d)"
 API_PID=""; WORKER_PID=""; RECONCILER_PID=""
 TEARDOWN_WAIT_SECS=1
 {full}
 set -m
-( trap "" TERM; while :; do sleep 1; done ) & WORKER_PID=$!
+( trap "" TERM; while :; do sleep 1; done ) >/dev/null 2>&1 & WORKER_PID=$!
+echo "$WORKER_PID" > {worker_pid_file}
 set +m
 ( sleep 0.3; kill -INT $$ ) &
 sleep 5
 echo RESUMED > {marker}
 """
-    result = _run(body, timeout=45)
-    assert not marker.exists(), "the script resumed after a cancellation signal"
+    started = time.monotonic()
+    # Measured (CHAOS-6922, 60 runs, 24 at once): 6.1-6.15 s every time. The run is
+    # deterministic, not load-sensitive: bash defers the INT trap until the foreground
+    # `sleep 5` ends, then the teardown waits TEARDOWN_WAIT_SECS=1 before SIGKILL. So
+    # 20 s is ~3x the observed maximum; a run that reaches it is a real hang, and the
+    # subprocess timeout then names it instead of the test passing on a slow fallback.
+    result = _run(body, timeout=20)
+    elapsed = time.monotonic() - started
+    assert not marker.exists(), (
+        "the script resumed after a cancellation signal "
+        f"(elapsed {elapsed:.1f}s; if the shell could not trap SIGINT, "
+        "test_the_shell_under_test_can_trap_sigint_however_pytest_was_launched fails too)"
+    )
     # subprocess reports death-by-signal as -signum; a shell in between would
     # report the same thing as 128+signum. Accept either spelling, reject 0.
     assert result.returncode in (-2, 130), (
         f"want death-by-SIGINT (-2, or 130 via a shell) so the run reports "
-        f"cancellation rather than success, got {result.returncode}"
+        f"cancellation rather than success, got {result.returncode} "
+        f"(elapsed {elapsed:.1f}s, stderr {result.stderr!r})"
     )
+    # The mechanism, not only the outcome: the handler's teardown really stopped the
+    # SIGTERM-ignoring worker (stop_service escalates to SIGKILL after
+    # TEARDOWN_WAIT_SECS), so the exit above was a cancellation that cleaned up.
+    worker_pid = int(worker_pid_file.read_text())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(worker_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        os.kill(worker_pid, 9)
+        pytest.fail(
+            f"the cancelled run exited but left the worker (pid {worker_pid}) running: "
+            "the trap did not tear down the services"
+        )
 
 
 def test_teardown_is_fast_with_the_cleanup_signal_disposition_in_effect():

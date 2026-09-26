@@ -286,11 +286,36 @@ func rawFloatString(float float64) (DateTime, string) {
 	return speedateUnix(whole, rustF64ToU32(math.Round((normalized-float64(whole))*1e6)))
 }
 
-func parseString(text string) (DateTime, *ValidationError) {
+func parseString(text string) (DateTime, *ValidationError) { return parseStringAware(text, false) }
+
+// ParseAwareDatetime is pydantic's `AwareDatetime`: ParseDatetime, except that a
+// datetime STRING without an offset is refused as timezone_aware before its year
+// is judged (a naive 0000-01-01 is a timezone_aware error, not a year-0 one).
+// The failure's Type is "timezone_aware" for that refusal; a value that parses
+// but is naive from any other source is refused the same way by the caller
+// (numbers are UTC-aware).
+func ParseAwareDatetime(value any) (DateTime, *ValidationError) {
+	if text, isString := value.(string); isString {
+		return parseStringAware(text, true)
+	}
+	parsed, failure := ParseDatetime(value)
+	if failure == nil && !parsed.Aware {
+		return DateTime{}, &ValidationError{"timezone_aware", "Input should have timezone info"}
+	}
+	return parsed, failure
+}
+
+func parseStringAware(text string, requireAware bool) (DateTime, *ValidationError) {
 	if parsed, failure, ok := numericString(text); ok {
+		if failure == nil && requireAware && !parsed.Aware {
+			return DateTime{}, &ValidationError{"timezone_aware", "Input should have timezone info"}
+		}
 		return parsed, failure
 	}
 	if parsed, ok := parseFull(text); ok {
+		if requireAware && !parsed.Aware {
+			return DateTime{}, &ValidationError{"timezone_aware", "Input should have timezone info"}
+		}
 		// speedate's year is the one written in the text, the wall clock
 		// (Time is the UTC instant): 0001-01-01T00:00:00+05:00 is year 1, an
 		// instant in year 0 that Python's datetime accepts.

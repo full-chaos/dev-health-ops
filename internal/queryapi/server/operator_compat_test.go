@@ -80,7 +80,7 @@ func TestCompatHealthzAndMetrics(t *testing.T) {
 	}
 	// The old listener's target_info, one sample of 1 naming the service and the SDK.
 	if !strings.Contains(body, `target_info{service_name="dev-health-query-api",telemetry_sdk_language="go",telemetry_sdk_name="opentelemetry",telemetry_sdk_version="`+sdk.Version()+`"} 1`) ||
-		!strings.Contains(body, "# TYPE target_info gauge\n") || !strings.HasSuffix(body, "} 1\n") {
+		!strings.Contains(body, "\n# HELP target_info Target metadata\n# TYPE target_info gauge\n") || !strings.HasSuffix(body, "} 1\n") {
 		t.Fatalf("/metrics lacks the old target_info series:\n%s", body)
 	}
 }

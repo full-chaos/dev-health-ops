@@ -2,8 +2,8 @@ package server
 
 import (
 	"fmt"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -41,34 +41,42 @@ func OperatorCompat(registry *health.Registry, operator *health.Server, serviceN
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		status := registry.Readiness(r.Context())
-		if !status.Ready {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter
-			_, _ = w.Write([]byte("not ready: " + compatFailureClass(status.Failed)))
+		if status.Ready {
+			w.WriteHeader(http.StatusOK)
+			for _, check := range status.Checks {
+				if check.Name == notConfiguredCheckName {
+					_, _ = w.Write([]byte("ready: /query not configured"))
+					return
+				}
+			}
+			_, _ = w.Write([]byte("ready"))
 			return
 		}
-		body := "ready"
-		for _, check := range status.Checks {
-			if check.Name == notConfiguredCheckName {
-				body = "ready: /query not configured"
-			}
+		// Only fixed bodies are ever written: the class is chosen from a closed set,
+		// never composed from an error or a request.
+		w.WriteHeader(http.StatusServiceUnavailable)
+		switch compatFailureClass(status.Failed) {
+		case readyzClassClickHouse:
+			_, _ = w.Write([]byte("not ready: clickhouse"))
+		case readyzClassPostgres:
+			_, _ = w.Write([]byte("not ready: postgres"))
+		case readyzClassJWKS:
+			_, _ = w.Write([]byte("not ready: jwks"))
+		case readyzClassPosture:
+			_, _ = w.Write([]byte("not ready: postgres_posture"))
+		default:
+			_, _ = w.Write([]byte("not ready: dependency"))
 		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
 	})
 	metrics := operator.Handler()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		recorder := httptest.NewRecorder()
-		metrics.ServeHTTP(recorder, r)
-		for key, values := range recorder.Header() {
-			w.Header()[key] = values
+		// The operator's answer goes straight through; on 200 the old target_info
+		// series follows it (the operator's text ends in a newline, so it starts a line).
+		tracked := &statusTracker{ResponseWriter: w}
+		metrics.ServeHTTP(tracked, r)
+		if tracked.status == http.StatusOK {
+			_, _ = io.WriteString(w, targetInfo(serviceName))
 		}
-		w.WriteHeader(recorder.Code)
-		body := recorder.Body.String()
-		if recorder.Code == http.StatusOK {
-			body = strings.TrimRight(body, "\n") + "\n" + targetInfo(serviceName)
-		}
-		_, _ = w.Write([]byte(body))
 	})
 	return mux
 }
@@ -109,4 +117,15 @@ func targetInfo(serviceName string) string {
 		pairs = append(pairs, fmt.Sprintf("%s=%q", label.Key, label.Value.AsString()))
 	}
 	return "# HELP target_info Target metadata\n# TYPE target_info gauge\ntarget_info{" + strings.Join(pairs, ",") + "} 1\n"
+}
+
+// statusTracker passes a response through and remembers its status.
+type statusTracker struct {
+	http.ResponseWriter
+	status int
+}
+
+func (t *statusTracker) WriteHeader(status int) {
+	t.status = status
+	t.ResponseWriter.WriteHeader(status)
 }

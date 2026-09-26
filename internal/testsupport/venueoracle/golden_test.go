@@ -41,7 +41,7 @@ func sampleRequests() []Request {
 }
 
 func sampleGolden(requests []Request) goldenFile {
-	file := goldenFile{Header: goldenHeader{Test: "TestSample", PythonBuild: goldenBuild, Recipe: "record it"}, Rows: map[string]goldenRows{"rows": {Rows: "a | b"}}}
+	file := goldenFile{Header: goldenHeader{Test: "TestSample", PythonBuild: goldenBuild, ProducerDigest: strings.Repeat("a", 64), Recipe: "record it"}, Rows: map[string]goldenRows{"rows": {Rows: "a | b"}}}
 	for index, request := range requests {
 		entry := requestKey(request)
 		entry.Status, entry.Headers, entry.Body = 200+index, map[string]string{"content-type": "application/json"}, `{"n":`+string(rune('0'+index))+`}`
@@ -151,6 +151,7 @@ func TestRecordingWritesTheHeaderAndNeverAProof(t *testing.T) {
 	if !golden.Recording() {
 		t.Fatal("recording golden reports frozen")
 	}
+	golden.state = statePython
 	value := golden.Rows(t, "rows", func() string { return "x | y" })
 	if value != "x | y" {
 		t.Fatalf("recording must return what the source computed, got %q", value)
@@ -160,7 +161,7 @@ func TestRecordingWritesTheHeaderAndNeverAProof(t *testing.T) {
 	}
 }
 
-func TestPinnedCheckoutMustBeCleanAndAtTheBuild(t *testing.T) {
+func TestPinnedCheckoutMustBeTheBuildItsSourceByteForByte(t *testing.T) {
 	dir := t.TempDir()
 	run := func(args ...string) string {
 		t.Helper()
@@ -171,64 +172,71 @@ func TestPinnedCheckoutMustBeCleanAndAtTheBuild(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	run("init", "-q")
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o644); err != nil {
-		t.Fatal(err)
+	write := func(name, content string) {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	run("add", "a.txt")
+	run("init", "-q")
+	write("src/app/routes.py", "ROUTE = 1\n")
+	write("README.md", "docs\n")
+	run("add", ".")
 	run("commit", "-q", "-m", "one")
 	head := run("rev-parse", "HEAD")
-	if err := verifyPinnedCheckout(dir, head); err != nil {
-		t.Fatalf("a clean checkout at the build was refused: %v", err)
+	digest, err := verifyPinnedCheckout(dir, head)
+	if err != nil || len(digest) != 64 {
+		t.Fatalf("a clean checkout at the build was refused: %q %v", digest, err)
 	}
-	if err := verifyPinnedCheckout(dir, strings.Repeat("b", 40)); err == nil || !strings.Contains(err.Error(), "the test pins") {
+	if again, err := verifyPinnedCheckout(dir, head); err != nil || again != digest {
+		t.Fatalf("the producer digest is not stable: %q %q %v", digest, again, err)
+	}
+	if _, err := verifyPinnedCheckout(dir, strings.Repeat("b", 40)); err == nil || !strings.Contains(err.Error(), "the test pins") {
 		t.Fatalf("a checkout at another build was accepted: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("edited\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "uncommitted or untracked") {
+	// A tracked file edited.
+	write("src/app/routes.py", "ROUTE = 2\n")
+	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "uncommitted or untracked") {
 		t.Fatalf("a dirty checkout was accepted: %v", err)
 	}
-	run("checkout", "-q", "--", "a.txt")
-	if err := verifyPinnedCheckout(dir, head); err != nil {
+	// The same edit hidden from git status: the planted producer drift. Only the
+	// byte-for-byte comparison with the commit's blobs sees it.
+	run("update-index", "--assume-unchanged", "src/app/routes.py")
+	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "differs from the pinned commit's blob") {
+		t.Fatalf("a source edit hidden by assume-unchanged was accepted: %v", err)
+	}
+	run("update-index", "--no-assume-unchanged", "src/app/routes.py")
+	run("checkout", "-q", "--", "src/app/routes.py")
+	if _, err := verifyPinnedCheckout(dir, head); err != nil {
 		t.Fatalf("the restored checkout was refused: %v", err)
 	}
 	// An untracked source file is a route the pinned build never had.
-	if err := os.WriteFile(filepath.Join(dir, "untracked_route.py"), []byte("x = 1\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "uncommitted or untracked") {
+	write("src/app/untracked_route.py", "x = 1\n")
+	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "uncommitted or untracked") {
 		t.Fatalf("an untracked file was accepted: %v", err)
 	}
-	if err := os.Remove(filepath.Join(dir, "untracked_route.py")); err != nil {
+	if err := os.Remove(filepath.Join(dir, "src/app/untracked_route.py")); err != nil {
 		t.Fatal(err)
 	}
-	// An ignored file the pinned commit does not hold (a sitecustomize.py on the
-	// Python path runs at start-up) is refused; the byte-code cache a Python run
-	// leaves behind is allowed.
-	if err := os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("sitecustomize.py\n__pycache__/\n*.pyc\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "src", "__pycache__"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "src", "__pycache__", "m.cpython-314.pyc"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyPinnedCheckout(dir, head); err != nil {
+	// An ignored file under src (a sitecustomize.py on the Python path runs at
+	// start-up) is refused; the byte-code cache a Python run leaves is allowed.
+	write(".git/info/exclude", "sitecustomize.py\n__pycache__/\n*.pyc\n")
+	write("src/app/__pycache__/m.cpython-314.pyc", "x")
+	if _, err := verifyPinnedCheckout(dir, head); err != nil {
 		t.Fatalf("the byte-code cache was refused: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "src", "sitecustomize.py"), []byte("print('hook')\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "ignored file") {
+	write("src/sitecustomize.py", "print('hook')\n")
+	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "sitecustomize.py") {
 		t.Fatalf("an ignored startup hook was accepted: %v", err)
 	}
-	if err := os.Remove(filepath.Join(dir, "src", "sitecustomize.py")); err != nil {
+	if err := os.Remove(filepath.Join(dir, "src/sitecustomize.py")); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyPinnedCheckout(t.TempDir(), head); err == nil || !strings.Contains(err.Error(), "not a git checkout") {
+	if _, err := verifyPinnedCheckout(t.TempDir(), head); err == nil || !strings.Contains(err.Error(), "not a git checkout") {
 		t.Fatalf("a directory that is no checkout was accepted: %v", err)
 	}
 }
@@ -243,20 +251,6 @@ func TestStableUUIDIsDeterministicDistinctAndWellFormed(t *testing.T) {
 	}
 	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(first) {
 		t.Fatalf("%q is not a version-5 UUID", first)
-	}
-}
-
-func TestARecordingIsNeverWrittenFromAFailedRun(t *testing.T) {
-	golden := &Golden{spec: GoldenSpec{Path: "x.json"}, recording: true}
-	if err := golden.recordable(false); err == nil || !strings.Contains(err.Error(), "no request was served") {
-		t.Fatalf("empty recording: error = %v", err)
-	}
-	golden.recorded.Requests = []goldenRequest{{Name: "a"}}
-	if err := golden.recordable(true); err == nil || !strings.Contains(err.Error(), "already failed") {
-		t.Fatalf("failed run: error = %v", err)
-	}
-	if err := golden.recordable(false); err != nil {
-		t.Fatalf("passing run with answers: error = %v", err)
 	}
 }
 
@@ -329,41 +323,77 @@ func TestAFrozenSnapshotNobodyAskedForIsRefused(t *testing.T) {
 	}
 }
 
-func TestARecordingIsWrittenOnlyByARunThatFinishedAndDidNotFailSince(t *testing.T) {
+func TestARecordingWritesACandidateBesideTheGoldenNeverTheGolden(t *testing.T) {
 	dir := t.TempDir()
+	final := filepath.Join(dir, "sub", "g.json")
 	newRecording := func() *Golden {
-		golden, err := openGolden(GoldenSpec{Path: filepath.Join(dir, "sub", "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+		golden, err := openGolden(GoldenSpec{Path: final, PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
 		if err != nil {
 			t.Fatal(err)
 		}
 		golden.recorded.Requests = []goldenRequest{{Name: "a"}}
+		golden.recorded.Header.ProducerDigest = strings.Repeat("c", 64)
 		return golden
 	}
-	unfinished := newRecording()
-	if _, written, err := unfinished.writeRecording(false); written || err != nil {
-		t.Fatalf("a run that never reached Finish wrote a golden (%v, %v)", written, err)
+	if _, err := newRecording().writeCandidate(true); err == nil || !strings.Contains(err.Error(), "already failed") {
+		t.Fatalf("a failed run wrote a candidate: %v", err)
 	}
-	failedLater := newRecording()
-	failedLater.finished = true
-	if _, written, err := failedLater.writeRecording(true); written || err != nil {
-		t.Fatalf("a run that failed after Finish (a later cleanup) wrote a golden (%v, %v)", written, err)
+	empty, err := openGolden(GoldenSpec{Path: final, PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "sub", "g.json")); err == nil {
-		t.Fatal("a golden is on disk that no passing run wrote")
+	if _, err := empty.writeCandidate(false); err == nil || !strings.Contains(err.Error(), "no request was served") {
+		t.Fatalf("an empty recording wrote a candidate: %v", err)
 	}
-	good := newRecording()
-	good.finished = true
-	digest, written, err := good.writeRecording(false)
-	if err != nil || !written || len(digest) != 64 {
-		t.Fatalf("a finished passing run did not write: %q %v %v", digest, written, err)
+	unverified := newRecording()
+	unverified.recorded.Header.ProducerDigest = ""
+	if _, err := unverified.writeCandidate(false); err == nil || !strings.Contains(err.Error(), "never verified") {
+		t.Fatalf("a recording whose producer was never verified wrote a candidate: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "sub", "g.json"))
+	if _, err := os.Stat(final + GoldenCandidateSuffix); err == nil {
+		t.Fatal("a candidate is on disk that no passing run wrote")
+	}
+	digest, err := newRecording().writeCandidate(false)
+	if err != nil || len(digest) != 64 {
+		t.Fatalf("a passing run did not write: %q %v", digest, err)
+	}
+	raw, err := os.ReadFile(final + GoldenCandidateSuffix)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(raw)
 	if hex.EncodeToString(sum[:]) != digest {
-		t.Fatal("the printed digest is not the digest of the file written")
+		t.Fatal("the printed digest is not the digest of the candidate written")
+	}
+	if _, err := os.Stat(final); err == nil {
+		t.Fatal("a recording wrote the golden itself: only the record verb may, after a fresh-process replay")
+	}
+}
+
+func TestTheLifecycleOrderIsEnforcedWithANamedError(t *testing.T) {
+	golden := &Golden{spec: GoldenSpec{Path: "x.json"}}
+	if err := golden.stepErr("Diff", statePython, stateDiffed); err == nil || !strings.Contains(err.Error(), "Diff called when the golden is opened") {
+		t.Fatalf("Diff before any answer was fetched: %v", err)
+	}
+	if err := golden.stepErr("Finish", stateDiffed); err == nil || !strings.Contains(err.Error(), "Finish called when the golden is opened") {
+		t.Fatalf("Finish before Diff: %v", err)
+	}
+	if err := golden.stepErr("Rows", statePython, stateDiffed); err == nil || !strings.Contains(err.Error(), "Rows called when the golden is opened") {
+		t.Fatalf("Rows before any answer: %v", err)
+	}
+	golden.state = statePython
+	if err := golden.stepErr("Python", stateOpen, statePython, stateDiffed); err != nil {
+		t.Fatalf("a second Python call was refused: %v", err)
+	}
+	golden.afterDiff(2)
+	if golden.state != stateDiffed || golden.compared != 2 {
+		t.Fatalf("state %v compared %d", golden.state, golden.compared)
+	}
+	golden.state = stateFinished
+	for _, call := range []string{"Python", "Rows", "Diff", "Finish"} {
+		if err := golden.stepErr(call, stateOpen, statePython, stateDiffed); err == nil || !strings.Contains(err.Error(), "finished") {
+			t.Fatalf("%s after Finish was accepted: %v", call, err)
+		}
 	}
 }
 
@@ -411,21 +441,13 @@ func TestThePublicFrozenWorkflowEndToEnd(t *testing.T) {
 }
 
 func TestAnAnswerNobodyComparedIsRefusedUnlessTheTestDeclaresItInspected(t *testing.T) {
-	requests := sampleRequests()
-	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(requests))
-	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, "TestSample", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := golden.frozenAnswers(requests); err != nil {
-		t.Fatal(err)
-	}
-	golden.compared = 1 // Diff was handed one of the two answers
-	if err := golden.unusedAnswers(); err == nil || !strings.Contains(err.Error(), "Diff compared 1") {
+	golden := &Golden{spec: GoldenSpec{Path: "x.json"}, handed: 2}
+	golden.afterDiff(1) // Diff was handed one of the two answers
+	if err := golden.answersCompared(); err == nil || !strings.Contains(err.Error(), "Diff compared 1") {
 		t.Fatalf("an answer nobody compared was accepted: %v", err)
 	}
 	golden.Consumed(1) // the test read the other one itself
-	if err := golden.unusedAnswers(); err != nil {
+	if err := golden.answersCompared(); err != nil {
 		t.Fatalf("a declared inspection was refused: %v", err)
 	}
 }

@@ -831,6 +831,9 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 	if len(python) != len(requests) {
 		t.Fatalf("diff: %d python responses for %d requests", len(python), len(requests))
 	}
+	if options.Golden != nil {
+		options.Golden.beforeDiff(t)
+	}
 	var receipt strings.Builder
 	for index, request := range requests {
 		goResponse := Do(t, goBase, request)
@@ -854,7 +857,7 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 	if options.Golden == nil {
 		writeProof(t)
 	} else {
-		options.Golden.compared += len(requests)
+		options.Golden.afterDiff(len(requests))
 	}
 	return receipt.String()
 }

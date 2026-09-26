@@ -233,7 +233,7 @@ async def test_register_then_login_returns_tokens(journey_app):
 
 
 @pytest.mark.asyncio
-async def test_full_journey_register_login_create_credential_create_sync_config(
+async def test_full_journey_register_login_create_sync_config(
     journey_app,
 ):
     ac, current_user, session_maker, ch_store = journey_app
@@ -265,17 +265,6 @@ async def test_full_journey_register_login_create_credential_create_sync_config(
         role="owner",
         is_superuser=False,
     )
-
-    cred_resp = await ac.post(
-        "/api/v1/admin/credentials",
-        json={
-            "provider": "github",
-            "name": "default",
-            "credentials": {"token": "ghp_test_token"},
-        },
-    )
-    assert cred_resp.status_code == 200
-    assert cred_resp.json()["provider"] == "github"
 
     sync_resp = await ac.post(
         "/api/v1/admin/sync-configs",

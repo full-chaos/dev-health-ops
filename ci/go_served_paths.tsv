@@ -94,3 +94,6 @@ rev186	query-api	/api/v1/work-units/{}/explain
 187	go-api	/api/v1/admin/llm-settings
 187	go-api	/api/v1/admin/llm-settings/budget
 187	go-api	/api/v1/admin/llm-settings/spend
+187	go-api	/api/v1/admin/credentials
+187	go-api	/api/v1/admin/credentials/test
+187	go-api	/api/v1/admin/credentials/{}/{}

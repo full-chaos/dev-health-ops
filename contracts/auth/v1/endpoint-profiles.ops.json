@@ -889,7 +889,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/credentials.py",
-        "line": 120,
+        "line": 111,
         "router_local_path": "/credentials"
       },
       "gaps": [],
@@ -954,7 +954,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/credentials.py",
-        "line": 135,
+        "line": 120,
         "router_local_path": "/credentials/{credential_id}/repos"
       },
       "gaps": [],
@@ -1019,7 +1019,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/credentials.py",
-        "line": 261,
+        "line": 246,
         "router_local_path": "/credentials/{provider}/{name}"
       },
       "gaps": [],
@@ -1084,7 +1084,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/credentials.py",
-        "line": 277,
+        "line": 257,
         "router_local_path": "/credentials"
       },
       "gaps": [],
@@ -1149,7 +1149,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/credentials.py",
-        "line": 303,
+        "line": 265,
         "router_local_path": "/credentials/{provider}/{name}"
       },
       "gaps": [],
@@ -1214,7 +1214,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/credentials.py",
-        "line": 346,
+        "line": 277,
         "router_local_path": "/credentials/{provider}/{name}"
       },
       "gaps": [],
@@ -1279,7 +1279,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/credentials.py",
-        "line": 365,
+        "line": 286,
         "router_local_path": "/credentials/test"
       },
       "gaps": [],

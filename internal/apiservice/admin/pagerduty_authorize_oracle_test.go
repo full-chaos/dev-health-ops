@@ -34,33 +34,34 @@ const (
 // that a verifier one plane stored decrypts through the other plane's own
 // decrypt and hashes to the code_challenge the URL carried.
 func TestPagerDutyAuthorizeVenueOracle(t *testing.T) {
-	runPagerDutyAuthorizeOracle(t, "full")
+	runPagerDutyAuthorizeOracle(t, "full", "221534550e01fe0067882f638288ba4c8c173c2c6dfdd90c94ea7e60f286843c")
 }
 
 // TestPagerDutyAuthorizeWithoutClientIDVenueOracle: PAGER_DUTY_CLIENT_ID
 // unset on both planes -- PagerDutyOAuthConfig.from_env() is None, a 400
 // (after the feature gate).
 func TestPagerDutyAuthorizeWithoutClientIDVenueOracle(t *testing.T) {
-	runPagerDutyAuthorizeOracle(t, "noclientid")
+	runPagerDutyAuthorizeOracle(t, "noclientid", "904dc24d7b92f594a83bd0263cb59bf22268d391e3c0c5a771b85a9528464b9c")
 }
 
 // TestPagerDutyAuthorizeWithoutEncryptionKeyVenueOracle: no
 // SETTINGS_ENCRYPTION_KEY -- encrypt_value raises inside the store's create,
 // an unhandled 500 that must also roll back the expired-row cleanup.
 func TestPagerDutyAuthorizeWithoutEncryptionKeyVenueOracle(t *testing.T) {
-	runPagerDutyAuthorizeOracle(t, "nokey")
+	runPagerDutyAuthorizeOracle(t, "nokey", "32873a78f80d7fc59e29acf645db0469085fabab6f9794f9082230634911c2a4")
 }
 
-func runPagerDutyAuthorizeOracle(t *testing.T, mode string) {
+func runPagerDutyAuthorizeOracle(t *testing.T, mode, digest string) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, pagerDutyGolden("authorize_"+mode, t.Name(), digest))
+	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-authorize-32-by"
 
 	orgs := map[string]uuid.UUID{}
 	for _, slug := range []string{"a", "b", "off", "cleanup", "othercleanup"} {
-		orgs[slug] = uuid.New()
+		orgs[slug] = uuid.MustParse(venueoracle.StableUUID("pd-auth-org-" + slug))
 	}
-	adminID, memberID := uuid.New(), uuid.New()
+	adminID, memberID := uuid.MustParse(venueoracle.StableUUID("pd-auth-admin")), uuid.MustParse(venueoracle.StableUUID("pd-auth-member"))
 
 	pythonEnv := []string{"PAGER_DUTY_REDIRECT_URI=" + pagerDutyAuthorizeVenueRedirectURI}
 	if mode != "noclientid" {
@@ -159,13 +160,14 @@ VALUES ($1, $2, 'v1:not-decryptable-here', now() - interval '2 hours', now() - i
 		clientID = ""
 	}
 
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: clientID, RedirectURI: pagerDutyAuthorizeVenueRedirectURI}
 	})
 	goAnswers := map[string]string{}
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
 			return normalizeAuthorizeURL(t, body)
 		},
@@ -179,11 +181,10 @@ VALUES ($1, $2, 'v1:not-decryptable-here', now() - interval '2 hours', now() - i
 
 	compare := func(name, query string) {
 		t.Helper()
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		if source != goRows {
-			t.Errorf("%s differs after the writes:\n python: %s\n go:     %s", name, source, goRows)
-		}
+		golden.CompareRows(t, name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		}, goRows)
 	}
 	// The random state hash is excluded: per org, how many requests are
 	// held, that each lives exactly 15 minutes (or is the seeded expired
@@ -194,13 +195,14 @@ VALUES ($1, $2, 'v1:not-decryptable-here', now() - interval '2 hours', now() - i
 FROM pagerduty_oauth_authorization_requests GROUP BY org_id ORDER BY org_id`)
 
 	if mode != "full" {
+		golden.Finish(t)
 		return
 	}
 	// The cross-plane PKCE property, for the answers each plane gave:
 	// the stored verifier opens with Python's own decrypt_value, is 86
 	// characters (secrets.token_urlsafe(64)), and its S256 hash is the
 	// code_challenge the URL carried.
-	checkPKCE := func(plane, dbName, body string) {
+	checkPKCE := func(plane, dbName, requestName, body string) {
 		t.Helper()
 		var parsed struct {
 			AuthorizeURL string `json:"authorize_url"`
@@ -224,16 +226,32 @@ FROM pagerduty_oauth_authorization_requests GROUP BY org_id ORDER BY org_id`)
 		}
 		state := query.Get("state")
 		stateHash := sha256.Sum256([]byte(state))
-		ciphertext := venueoracle.TableRows(t, ctx, venue.AdminURI(t, dbName),
-			`SELECT code_verifier_encrypted FROM pagerduty_oauth_authorization_requests WHERE state_hash = '`+hex.EncodeToString(stateHash[:])+`'`)
-		if ciphertext == "" {
+		// openVerifier reads the stored ciphertext for the URL's state and
+		// opens it with Python's own decrypt_value ("" when no row is stored).
+		openVerifier := func() string {
+			ciphertext := venueoracle.TableRows(t, ctx, venue.AdminURI(t, dbName),
+				`SELECT code_verifier_encrypted FROM pagerduty_oauth_authorization_requests WHERE state_hash = '`+hex.EncodeToString(stateHash[:])+`'`)
+			if ciphertext == "" {
+				return ""
+			}
+			results := venue.CallPython(t, venueoracle.PythonCall{Target: "dev_health_ops.core.encryption:decrypt_value", Args: []any{ciphertext}})
+			var opened string
+			if err := json.Unmarshal(results[0], &opened); err != nil {
+				t.Fatalf("%s: decode decrypt_value result: %v", plane, err)
+			}
+			return opened
+		}
+		var verifier string
+		if plane == "python" {
+			// The Python plane's stored verifier is part of what its executed
+			// build answered; it is frozen with the golden (a random test value).
+			verifier = golden.InspectRows(t, "pkce verifier: "+requestName, openVerifier)
+		} else {
+			verifier = openVerifier()
+		}
+		if verifier == "" {
 			t.Errorf("%s: no stored request for the URL's state", plane)
 			return
-		}
-		results := venue.CallPython(t, venueoracle.PythonCall{Target: "dev_health_ops.core.encryption:decrypt_value", Args: []any{ciphertext}})
-		var verifier string
-		if err := json.Unmarshal(results[0], &verifier); err != nil {
-			t.Fatalf("%s: decode decrypt_value result: %v", plane, err)
 		}
 		if len(verifier) != 86 {
 			t.Errorf("%s: verifier length %d, want 86", plane, len(verifier))
@@ -250,14 +268,15 @@ FROM pagerduty_oauth_authorization_requests GROUP BY org_id ORDER BY org_id`)
 		if request.Name != "W authorize" && request.Name != "W authorize other org" {
 			continue
 		}
-		checkPKCE("python", venue.SourceDB, python[index].Body)
+		checkPKCE("python", venue.SourceDB, request.Name, python[index].Body)
 		body, ok := goAnswers[request.Name]
 		if !ok {
 			t.Errorf("go plane gave no 200 answer for %q", request.Name)
 			continue
 		}
-		checkPKCE("go", venue.GoDB, body)
+		checkPKCE("go", venue.GoDB, request.Name, body)
 	}
+	golden.Finish(t)
 }
 
 // normalizeAuthorizeURL blanks the three random members of a 200 body's

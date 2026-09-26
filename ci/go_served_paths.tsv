@@ -83,3 +83,14 @@ rev186	query-api	/api/v1/work-units/{}/explain
 187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings/{}/activate
 187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings/{}/revoke
 187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings/{}/rotate
+187	go-api	/api/v1/admin/retention-policies
+187	go-api	/api/v1/admin/retention-policies/{}
+187	go-api	/api/v1/admin/retention-policies/{}/execute
+187	go-api	/api/v1/admin/ip-allowlist
+187	go-api	/api/v1/admin/ip-allowlist/{}
+187	go-api	/api/v1/admin/settings
+187	go-api	/api/v1/admin/settings/{}
+187	go-api	/api/v1/admin/settings/{}/{}
+187	go-api	/api/v1/admin/llm-settings
+187	go-api	/api/v1/admin/llm-settings/budget
+187	go-api	/api/v1/admin/llm-settings/spend

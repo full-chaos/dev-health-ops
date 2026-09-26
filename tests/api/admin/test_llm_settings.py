@@ -22,7 +22,6 @@ from dev_health_ops.api.services.auth import (
     set_impersonation_context,
 )
 from dev_health_ops.api.services.configuration import SettingsService
-from dev_health_ops.core.encryption import decrypt_value
 from dev_health_ops.llm import credentials as llm_credentials
 from dev_health_ops.llm.agent.contracts import (
     AgentDecisionResult,
@@ -43,7 +42,6 @@ from dev_health_ops.llm.credentials import (
     BYO_LLM_BASE_URL_FALLBACK_ALERT_WINDOW,
     BYO_LLM_BASE_URL_FALLBACK_DEDUPE_WINDOW,
     evaluate_org_llm_status,
-    resolve_llm_org_settings_credentials,
 )
 from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.dev_persistence import DevConversation, DevRun
@@ -619,53 +617,6 @@ async def test_binary_ready_role_absent_reports_unavailable_not_ready(session_ma
 
 
 @pytest.mark.asyncio
-async def test_admin_llm_settings_encrypts_and_masks_api_key(session_maker):
-    state = await _seed_org(session_maker, "team")
-    app = _make_app(session_maker, state)
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        resp = await ac.put(
-            "/api/v1/admin/llm-settings",
-            json={
-                "provider": "openai",
-                "model": "gpt-test",
-                "api_key": "sk-secret-value",
-                "base_url": "https://api.openai.com/v1",
-            },
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()
-        assert data == {
-            "provider": "openai",
-            "model": "gpt-test",
-            "api_key": "sk-s…alue",
-            "base_url": "https://api.openai.com/v1",
-        }
-
-        get_resp = await ac.get("/api/v1/admin/llm-settings")
-        assert get_resp.status_code == 200
-        assert get_resp.json()["api_key"] == "sk-s…alue"
-
-    async with session_maker() as session:
-        result = await session.execute(
-            select(Setting).where(
-                Setting.org_id == state["org_id"],
-                Setting.category == SettingCategory.LLM.value,
-                Setting.key == "api_key",
-            )
-        )
-        setting = result.scalar_one()
-        assert setting.is_encrypted is True
-        assert setting.value != "sk-secret-value"
-        assert decrypt_value(setting.value or "") == "sk-secret-value"
-
-    credentials = resolve_llm_org_settings_credentials("openai", org_id=state["org_id"])
-    assert credentials.api_key == "sk-secret-value"
-    assert credentials.base_url == "https://api.openai.com/v1"
-
-
-@pytest.mark.asyncio
 async def test_admin_llm_settings_rejects_excessive_concurrency(session_maker):
     state = await _seed_org(session_maker, "team")
     app = _make_app(session_maker, state)
@@ -681,111 +632,6 @@ async def test_admin_llm_settings_rejects_excessive_concurrency(session_maker):
 
 
 @pytest.mark.asyncio
-async def test_admin_llm_budget_persists_separately_and_exposes_contract(
-    session_maker, monkeypatch
-):
-    monkeypatch.setenv("BYO_LLM_MAX_BUDGET_MICRO_USD", "5000000")
-    state = await _seed_org(session_maker, "team")
-    app = _make_app(session_maker, state)
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
-        updated = await ac.put(
-            "/api/v1/admin/llm-settings",
-            json={
-                "provider": "openai",
-                "model": "gpt-5-mini",
-                "api_key": "sk-secret-value",
-                "budget_limit_micro_usd": 2000000,
-            },
-        )
-        budget = await ac.get("/api/v1/admin/llm-settings/budget")
-
-    assert updated.status_code == 200, updated.text
-    assert budget.status_code == 200, budget.text
-    body = budget.json()
-    assert body == {
-        "used_micro_usd": 0,
-        "limit_micro_usd": 2000000,
-        "remaining_micro_usd": 2000000,
-        "window": "calendar_month_utc",
-        "reset_at": body["reset_at"],
-        "enforcement_available": True,
-        "reason": "available",
-        "maximum_limit_micro_usd": 5000000,
-        "pricing_version": "openai-public-2025-08-07.v1",
-    }
-
-    async with session_maker() as session:
-        svc = SettingsService(session, state["org_id"])
-        credentials = await svc.list_by_category(SettingCategory.LLM.value)
-        monetary = await svc.list_by_category("llm_budget")
-    assert {row["key"] for row in credentials}.isdisjoint(
-        {row["key"] for row in monetary}
-    )
-    assert monetary[0]["value"] == "2000000"
-
-
-@pytest.mark.asyncio
-async def test_admin_llm_budget_rejects_above_operator_maximum(
-    session_maker, monkeypatch
-):
-    monkeypatch.setenv("BYO_LLM_MAX_BUDGET_MICRO_USD", "1000")
-    state = await _seed_org(session_maker, "team")
-    app = _make_app(session_maker, state)
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
-        response = await ac.put(
-            "/api/v1/admin/llm-settings",
-            json={
-                "provider": "openai",
-                "model": "gpt-5-mini",
-                "api_key": "sk-secret-value",
-                "budget_limit_micro_usd": 1001,
-            },
-        )
-
-    assert response.status_code == 400
-    assert response.json()["detail"]["error"] == "budget_limit_exceeds_maximum"
-
-
-@pytest.mark.asyncio
-async def test_admin_llm_budget_rejects_above_licensed_maximum(
-    session_maker, monkeypatch
-):
-    monkeypatch.setenv("BYO_LLM_MAX_BUDGET_MICRO_USD", "5000")
-    state = await _seed_org(session_maker, "team")
-    async with session_maker() as session:
-        license_result = await session.execute(
-            select(OrgLicense).where(OrgLicense.org_id == uuid.UUID(state["org_id"]))
-        )
-        license_result.scalar_one().limits_override = {"byo_llm_budget_micro_usd": 750}
-        await session.commit()
-    app = _make_app(session_maker, state)
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
-        response = await ac.put(
-            "/api/v1/admin/llm-settings",
-            json={
-                "provider": "openai",
-                "model": "gpt-5-mini",
-                "api_key": "sk-secret-value",
-                "budget_limit_micro_usd": 751,
-            },
-        )
-        budget = await ac.get("/api/v1/admin/llm-settings/budget")
-
-    assert response.status_code == 400
-    assert budget.status_code == 200
-    assert budget.json()["maximum_limit_micro_usd"] == 750
-
-
-@pytest.mark.asyncio
 async def test_llm_budget_rejects_non_admin(session_maker):
     state = await _seed_org(session_maker, "team")
     app = _make_app(session_maker, state, role="member")
@@ -796,98 +642,6 @@ async def test_llm_budget_rejects_non_admin(session_maker):
         response = await ac.get("/api/v1/admin/llm-settings/budget")
 
     assert response.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_llm_budget_blocks_impersonated_admin_write(session_maker):
-    state = await _seed_org(session_maker, "team")
-    app = _make_app(
-        session_maker,
-        state,
-        impersonated_by=str(uuid.uuid4()),
-    )
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
-        response = await ac.put(
-            "/api/v1/admin/llm-settings",
-            json={"provider": "openai", "budget_limit_micro_usd": 1000},
-        )
-
-    assert response.status_code == 403
-    assert response.json()["detail"]["error"] == "impersonated_write_forbidden"
-
-
-@pytest.mark.asyncio
-async def test_admin_llm_settings_requires_team_or_enterprise(session_maker):
-    state = await _seed_org(session_maker, "community")
-    app = _make_app(session_maker, state)
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        resp = await ac.put(
-            "/api/v1/admin/llm-settings",
-            json={"provider": "openai", "api_key": "sk-secret"},
-        )
-
-    assert resp.status_code == 402
-    assert resp.json()["detail"]["required_tier"] == "team"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("category", ["llm", "llm_budget"])
-async def test_generic_settings_routes_reject_llm_categories(
-    session_maker, category: str
-):
-    # Review finding: the generic settings routes must NOT be a back door for
-    # category='llm' (would bypass the BYO-LLM tier gate + forced encryption).
-    state = await _seed_org(session_maker, "team")
-    app = _make_app(session_maker, state)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        put_resp = await ac.put(
-            f"/api/v1/admin/settings/{category}/api_key",
-            json={"value": "sk-leak", "encrypt": False},
-        )
-        assert put_resp.status_code == 403
-        assert put_resp.json()["detail"]["error"] == "use_llm_settings_endpoint"
-        post_resp = await ac.post(
-            "/api/v1/admin/settings",
-            json={"key": "api_key", "value": "sk-leak", "category": category},
-        )
-        assert post_resp.status_code == 403
-        get_resp = await ac.get(f"/api/v1/admin/settings/{category}/api_key")
-        assert get_resp.status_code == 403
-        del_resp = await ac.delete(f"/api/v1/admin/settings/{category}/api_key")
-        assert del_resp.status_code == 403
-        list_resp = await ac.get(f"/api/v1/admin/settings/{category}")
-        assert list_resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_generic_get_setting_masks_encrypted_value(session_maker):
-    # Review finding: the generic single-setting GET must not return decrypted
-    # secrets in plaintext.
-    state = await _seed_org(session_maker, "team")
-    app = _make_app(session_maker, state)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        post_resp = await ac.post(
-            "/api/v1/admin/settings",
-            json={
-                "key": "token",
-                "value": "ghp-secret-value",
-                "category": "github",
-                "encrypt": True,
-            },
-        )
-        assert post_resp.status_code == 200, post_resp.text
-        get_resp = await ac.get("/api/v1/admin/settings/github/token")
-        assert get_resp.status_code == 200
-        body = get_resp.json()
-        assert body["value"] == "[ENCRYPTED]"
-        assert "ghp-secret-value" not in body["value"]
 
 
 def test_resolve_provider_name_uses_org_settings_in_auto(monkeypatch):

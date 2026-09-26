@@ -26,14 +26,16 @@ var dbFailureText = regexp.MustCompile(`"error":"[^"]*sentinel retention delete 
 // and the rows the writes touched are compared after.
 func TestRetentionRoutesVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, governanceGolden("retention", "TestRetentionRoutesVenueOracle", "ff40f48c0d06e424776de5e0aecc4d761e1d38c126e2043ca1db5e1ef71b87e4"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("ret")
 	const jwtKey = "venue-oracle-test-secret-key-for-retention-flow-32-bytes!"
 
-	orgEnterprise, orgCommunity, orgOverride, orgTierOnly, orgBogus := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	superID := uuid.New()
-	adminEnt, adminComm, adminOvr, adminTier, adminBogus, memberEnt := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	pAudit, pInactive, pMetrics, pTier, pHuge := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	orgFail, adminFail, pFail := uuid.New(), uuid.New(), uuid.New()
+	orgEnterprise, orgCommunity, orgOverride, orgTierOnly, orgBogus := nextID(), nextID(), nextID(), nextID(), nextID()
+	superID := nextID()
+	adminEnt, adminComm, adminOvr, adminTier, adminBogus, memberEnt := nextID(), nextID(), nextID(), nextID(), nextID(), nextID()
+	pAudit, pInactive, pMetrics, pTier, pHuge := nextID(), nextID(), nextID(), nextID(), nextID()
+	orgFail, adminFail, pFail := nextID(), nextID(), nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   root,
@@ -52,7 +54,7 @@ VALUES ($1, $2, $2, $3, 'stripe', true, now(), now())`, id, slug, tier)
 			}
 			license := func(orgID uuid.UUID, tier, overrides string) {
 				exec(`INSERT INTO org_licenses (id, org_id, tier, is_valid, license_type, managed_by, features_override, created_at, updated_at)
-VALUES ($1, $2, $3, true, 'saas', 'stripe', $4::json, now(), now())`, uuid.New(), orgID, tier, overrides)
+VALUES ($1, $2, $3, true, 'saas', 'stripe', $4::json, now(), now())`, nextID(), orgID, tier, overrides)
 			}
 			org(orgEnterprise, "ret-ent", "enterprise")
 			license(orgEnterprise, "enterprise", "{}")
@@ -97,7 +99,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $7::timestamptz)`, id, org, rty
 			policy(pFail, orgFail, "audit_logs", 30, nil, true, "2026-02-06T00:00:00+00:00")
 			audit := func(org uuid.UUID, action, ageDays string) {
 				exec(`INSERT INTO audit_logs (id, org_id, action, resource_type, resource_id, changes, request_metadata, status, created_at)
-VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 || ' days')::interval)`, uuid.New(), org, action, ageDays)
+VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 || ' days')::interval)`, nextID(), org, action, ageDays)
 			}
 			audit(orgFail, "fail-old", "400")
 			// Rows of the audit trail around the 30-day cutoff, plus other orgs'.
@@ -176,7 +178,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		noBody("resource types put is 405", "PUT", "/resource-types", "ent"),
 		get("get", "/"+pAudit.String(), "ent"),
 		get("get null description", "/"+pInactive.String(), "ent"),
-		get("get unknown", "/"+uuid.New().String(), "ent"),
+		get("get unknown", "/"+nextID().String(), "ent"),
 		get("get malformed", "/nope", "ent"),
 		get("get other org", "/"+pTier.String(), "ent"),
 		get("get community", "/"+pAudit.String(), "comm"),
@@ -195,7 +197,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		send("execute invalid json", "POST", "/"+pAudit.String()+"/execute", "ent", `{`),
 		venueoracle.Request{Name: "execute non-json content type", Method: "POST", Path: admin + "/" + pAudit.String() + "/execute",
 			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["ent"], "Content-Type": "text/plain"}, Body: venueoracle.B64("dry_run")},
-		send("execute unknown policy", "POST", "/"+uuid.New().String()+"/execute", "ent", `{}`),
+		send("execute unknown policy", "POST", "/"+nextID().String()+"/execute", "ent", `{}`),
 		send("execute other org policy", "POST", "/"+pTier.String()+"/execute", "ent", `{}`),
 		send("execute inactive", "POST", "/"+pInactive.String()+"/execute", "ent", `{"dry_run":false}`),
 		send("execute not implemented type", "POST", "/"+pMetrics.String()+"/execute", "ent", `{"dry_run":false}`),
@@ -251,7 +253,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 			Body: venueoracle.B64(`{"resource_type":"nope"}`)},
 		venueoracle.Request{Name: "W create with non-hex 32-char X-User-Id", Method: "POST", Path: admin, Headers: withUser("tier", strings.Repeat("z", 32)),
 			Body: venueoracle.B64(`{"resource_type":"work_items"}`)},
-		venueoracle.Request{Name: "W create with unknown X-User-Id", Method: "POST", Path: admin, Headers: withUser("tier", uuid.New().String()),
+		venueoracle.Request{Name: "W create with unknown X-User-Id", Method: "POST", Path: admin, Headers: withUser("tier", nextID().String()),
 			Body: venueoracle.B64(`{"resource_type":"git_commits"}`)},
 		get("W list after creates", "?limit=500", "ent"),
 		get("W list tier org after creates", "?limit=500", "tier"),
@@ -272,7 +274,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		send("W patch days boolean false", "PATCH", "/"+pInactive.String(), "ent", `{"retention_days":false}`),
 		send("W patch days boolean", "PATCH", "/"+pInactive.String(), "ent", `{"retention_days":true}`),
 		send("W patch bad bool", "PATCH", "/"+pAudit.String(), "ent", `{"is_active":"perhaps"}`),
-		send("W patch unknown", "PATCH", "/"+uuid.New().String(), "ent", `{}`),
+		send("W patch unknown", "PATCH", "/"+nextID().String(), "ent", `{}`),
 		send("W patch malformed id", "PATCH", "/nope", "ent", `{}`),
 		send("W patch other org", "PATCH", "/"+pTier.String(), "ent", `{}`),
 		send("W patch community refused", "PATCH", "/"+pAudit.String(), "comm", `{}`),
@@ -293,7 +295,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		noBody("W delete other org", "DELETE", "/"+pTier.String(), "ent"),
 		noBody("W delete community", "DELETE", "/"+pAudit.String(), "comm"),
 	)
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, goPool := startGoServer(t, ctx, venue, jwtKey)
 
 	// CHAOS-6809, the named divergence: an org that holds custom_retention
@@ -305,7 +307,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		get("resource types override grants", "/resource-types", "ovr"),
 		get("resource types tier only", "/resource-types", "tier"),
 	}
-	pythonEntitled := venue.ServePython(t, entitled)
+	pythonEntitled := golden.Python(t, venue, entitled)
 	const wantResourceTypes = `["audit_logs","metrics_daily","work_items","git_commits","sync_logs"]`
 	for i, request := range entitled {
 		if pythonEntitled[i].Status != http.StatusPaymentRequired {
@@ -318,6 +320,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 	}
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Inspect: func(request venueoracle.Request, response venueoracle.Response) {
 			if request.Name == "execute database failure on delete" && !strings.Contains(response.Body, "sentinel retention delete failure") {
 				t.Errorf("%s: the error text does not carry the database failure: %s", request.Name, response.Body)
@@ -359,7 +362,9 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 
 	compare := func(name, query string) {
 		t.Helper()
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		source := golden.Rows(t, name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		})
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
 		if source == "" {
 			t.Errorf("%s: the query matched no rows on the Python plane; the comparison proves nothing", name)
@@ -373,4 +378,5 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 	created_by_id::text, (updated_at > '2026-06-01')::text
 FROM org_retention_policies ORDER BY org_id::text, resource_type`))
 	compare("audit_logs rows", `SELECT org_id::text, action FROM audit_logs ORDER BY org_id::text, action`)
+	golden.Finish(t)
 }

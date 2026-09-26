@@ -153,19 +153,27 @@ func scenarios() []scenario {
 // TestAdminLLMBudgetVenueOracle answers GET /api/v1/admin/llm-settings/budget
 // for one organization per state with the real Python api and the real Go api
 // and requires the same status and the same response text.
+// budgetNow is the clock of the frozen golden: a moment in the calendar month
+// the Python plane's answers were executed in. The reservations are seeded in
+// that month's window and the Go plane's clock is set to it, so a replay in any
+// later month reads the same window the Python plane read.
+var budgetNow = time.Date(2026, 9, 26, 0, 30, 0, 0, time.UTC)
+
 func TestAdminLLMBudgetVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, goldenSpec("budget", "TestAdminLLMBudgetVenueOracle", "9e319b62f82f312fb891adc3155a0da68083d2df70fcb978acb24dd0bf0d3361"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("budget")
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-budget-32-bytes!"
 	t.Setenv("BYO_LLM_MAX_BUDGET_MICRO_USD", operatorMax)
 	cases := scenarios()
 	orgs := make([]uuid.UUID, len(cases))
 	admins := make([]uuid.UUID, len(cases))
 	for i := range cases {
-		orgs[i], admins[i] = uuid.New(), uuid.New()
+		orgs[i], admins[i] = nextID(), nextID()
 	}
-	memberOrg, member := uuid.New(), uuid.New()
-	windowStart, _ := llmbudget.MonthWindow(time.Now())
+	memberOrg, member := nextID(), nextID()
+	windowStart, _ := llmbudget.MonthWindow(budgetNow)
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root: root, JWTKey: jwtKey,
@@ -184,12 +192,12 @@ func TestAdminLLMBudgetVenueOracle(t *testing.T) {
 				exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, false, 0, now(), now())`, id, email)
 				exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), org, id, role)
+VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), org, id, role)
 				tokens[key] = map[string]any{"user_id": id.String(), "email": email, "org_id": org.String(), "role": role}
 			}
 			setting := func(org uuid.UUID, category, key string, value string) {
 				exec(`INSERT INTO settings (id, org_id, category, key, value, is_encrypted, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, false, '2026-02-01T00:00:00+00:00', '2026-02-01T00:00:00+00:00')`, uuid.New(), org.String(), category, key, value)
+VALUES ($1, $2, $3, $4, $5, false, '2026-02-01T00:00:00+00:00', '2026-02-01T00:00:00+00:00')`, nextID(), org.String(), category, key, value)
 			}
 			for i, c := range cases {
 				org := orgs[i]
@@ -201,11 +209,11 @@ VALUES ($1, $2, $2, $3, 'stripe', true, now(), now())`, org, fmt.Sprintf("llm-bu
 						overrides = "{}"
 					}
 					exec(`INSERT INTO org_licenses (id, org_id, tier, is_valid, license_type, managed_by, limits_override, created_at, updated_at)
-VALUES ($1, $2, $3, true, 'saas', 'stripe', $4::json, now(), now())`, uuid.New(), org, c.license, overrides)
+VALUES ($1, $2, $3, true, 'saas', 'stripe', $4::json, now(), now())`, nextID(), org, c.license, overrides)
 				}
 				if c.killSwitch {
 					exec(`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, expires_at, config, reason, created_by, created_at, updated_at)
-VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NULL, NULL, 'kill switch', NULL, now(), now())`, uuid.New(), org)
+VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NULL, NULL, 'kill switch', NULL, now(), now())`, nextID(), org)
 				}
 				addUser(fmt.Sprintf("admin%d", i), org, admins[i], "admin")
 				if c.provider != nil {
@@ -232,15 +240,15 @@ VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NUL
 					switch res.status {
 					case "reserved":
 					case "usage_unavailable":
-						reconciled = time.Now()
+						reconciled = budgetNow
 					case "voided":
-						actualCost, input, cached, output, reconciled = int64(0), 0, 0, 0, time.Now()
+						actualCost, input, cached, output, reconciled = int64(0), 0, 0, 0, budgetNow
 					default:
-						actualCost, input, cached, output, reconciled = *res.actual, 10, 0, 5, time.Now()
+						actualCost, input, cached, output, reconciled = *res.actual, 10, 0, 5, budgetNow
 					}
 					exec(`INSERT INTO byo_llm_budget_reservations (id, org_id, window_start, idempotency_key, provider, model, reserved_micro_usd, actual_micro_usd, status, pricing_version, input_tokens, cached_input_tokens, output_tokens, created_at, reconciled_at)
 VALUES ($1, $2, $3, $4, 'openai', 'gpt-5-mini', $5, $6, $7, $8, $9, $10, $11, now(), $12)`,
-						uuid.New(), org, windowStart, fmt.Sprintf("key-%d-%d", i, r), res.reserved, actualCost, res.status, llmbudget.PricingVersion, input, cached, output, reconciled)
+						nextID(), org, windowStart, fmt.Sprintf("key-%d-%d", i, r), res.reserved, actualCost, res.status, llmbudget.PricingVersion, input, cached, output, reconciled)
 				}
 			}
 			exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
@@ -262,11 +270,12 @@ VALUES ($1, 'llm-budget-member', 'llm-budget-member', 'team', 'stripe', true, no
 			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["member"]}},
 		venueoracle.Request{Name: "no credentials", Method: "GET", Path: "/api/v1/admin/llm-settings/budget"},
 	)
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 
 	goBase := startGoServer(t, ctx, venue, jwtKey)
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
+	golden.Finish(t)
 }
 
 func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) string {
@@ -295,7 +304,7 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	routes := apiservice.Routes(apiservice.Deps{Pool: pool, Valkey: client, Auth: auth, Guard: guard}, logger)
+	routes := apiservice.Routes(apiservice.Deps{Pool: pool, Valkey: client, Auth: auth, Guard: guard, Now: func() time.Time { return budgetNow }}, logger)
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, routes, scope.OrgScope, scope.Impersonation)
 	if err != nil {

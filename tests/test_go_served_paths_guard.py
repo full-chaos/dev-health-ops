@@ -50,7 +50,7 @@ def test_the_real_tree_passes(real_routes):
     # recogniser that found none would make every other assertion here vacuous;
     # each family deleted after them adds its own routes, pinned by that
     # family's own sentinel test, so the floor is not edited per family).
-    assert len(stubs) >= 32
+    assert len(stubs) >= 55
     assert {checker.normalize(route["path"]) for route in stubs} <= set(manifest)
 
 

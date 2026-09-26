@@ -1,0 +1,6071 @@
+[
+ {
+  "name": "base",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/domain/simple",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "plainpassword123",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/simple",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "plainpassword123",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/simple",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "plainpassword123",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/simple",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "plainpassword123",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/simple",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "plainpassword123",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/simple",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "plainpassword123",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/simple",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "plainpassword123"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "plainpassword123"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "plainpassword123"
+   }
+  }
+ },
+ {
+  "name": "host/simple",
+  "python": {
+   "Domain": {
+    "host": "plainpassword123",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "plainpassword123",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "plainpassword123",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/domain/percent",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw%with%percent",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/percent",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw%with%percent",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/percent",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw%with%percent",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/percent",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw%with%percent",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/percent",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw%with%percent",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/percent",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw%with%percent",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/percent",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw%with%percent"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw%with%percent"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw%with%percent"
+   }
+  }
+ },
+ {
+  "name": "host/percent",
+  "python": {
+   "Domain": {
+    "host": "pw%with%percent",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "pw%with%percent",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "pw%with%percent",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/domain/space",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw with space",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/space",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw with space",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/space",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw with space",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/space",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw with space",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/space",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw with space",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/space",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw with space",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/space",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw with space"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw with space"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw with space"
+   }
+  }
+ },
+ {
+  "name": "host/space",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/unicode",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw☃snowman",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/unicode",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw☃snowman",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/unicode",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw☃snowman",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/unicode",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw☃snowman",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/unicode",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw☃snowman",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/unicode",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw☃snowman",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/unicode",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw☃snowman"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw☃snowman"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw☃snowman"
+   }
+  }
+ },
+ {
+  "name": "host/unicode",
+  "python": {
+   "Domain": {
+    "host": "pw☃snowman",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "pw☃snowman",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "pw☃snowman",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/domain/empty",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/empty",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/empty",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/domain/gen-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": ":/?#[]@",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/gen-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": ":/?#[]@",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/gen-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": ":/?#[]@",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/gen-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": ":/?#[]@",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/gen-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": ":/?#[]@",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/gen-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": ":/?#[]@",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/gen-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": ":/?#[]@"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": ":/?#[]@"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": ":/?#[]@"
+   }
+  }
+ },
+ {
+  "name": "host/gen-delims",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/sub-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "!$\u0026'()*+,;=",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/sub-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "!$\u0026'()*+,;=",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/sub-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "!$\u0026'()*+,;=",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/sub-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "!$\u0026'()*+,;=",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/sub-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "!$\u0026'()*+,;=",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/sub-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "!$\u0026'()*+,;=",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/sub-delims",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "!$\u0026'()*+,;="
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "!$\u0026'()*+,;="
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "!$\u0026'()*+,;="
+   }
+  }
+ },
+ {
+  "name": "host/sub-delims",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/quote-and-backslash",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw\"with\\back",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/quote-and-backslash",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw\"with\\back",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/quote-and-backslash",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw\"with\\back",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/quote-and-backslash",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw\"with\\back",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/quote-and-backslash",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw\"with\\back",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/quote-and-backslash",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw\"with\\back",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/quote-and-backslash",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw\"with\\back"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw\"with\\back"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw\"with\\back"
+   }
+  }
+ },
+ {
+  "name": "host/quote-and-backslash",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/percent-encoded-lookalike",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "%41%2f%zz",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/percent-encoded-lookalike",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "%41%2f%zz",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/percent-encoded-lookalike",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "%41%2f%zz",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/percent-encoded-lookalike",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "%41%2f%zz",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/percent-encoded-lookalike",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "%41%2f%zz",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/percent-encoded-lookalike",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "%41%2f%zz",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/percent-encoded-lookalike",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "%41%2f%zz"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "%41%2f%zz"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "%41%2f%zz"
+   }
+  }
+ },
+ {
+  "name": "host/percent-encoded-lookalike",
+  "python": {
+   "Domain": {
+    "host": "%41%2f%zz",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "%41%2f%zz",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "%41%2f%zz",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/domain/plus-and-tilde",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "a+b~c",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/plus-and-tilde",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "a+b~c",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/plus-and-tilde",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "a+b~c",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/plus-and-tilde",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "a+b~c",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/plus-and-tilde",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "a+b~c",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/plus-and-tilde",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "a+b~c",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/plus-and-tilde",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "a+b~c"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "a+b~c"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "a+b~c"
+   }
+  }
+ },
+ {
+  "name": "host/plus-and-tilde",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/newline-free-tab",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "a\tb",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/newline-free-tab",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "a\tb",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/newline-free-tab",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "a\tb",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/newline-free-tab",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "a\tb",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/newline-free-tab",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "a\tb",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/newline-free-tab",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "a\tb",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/newline-free-tab",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "a\tb"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "a\tb"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "a\tb"
+   }
+  }
+ },
+ {
+  "name": "host/newline-free-tab",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/gen-':'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw:with:char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/gen-':'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw:with:char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/gen-':'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw:with:char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/gen-':'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw:with:char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/gen-':'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw:with:char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/gen-':'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw:with:char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/gen-':'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw:with:char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw:with:char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw:with:char"
+   }
+  }
+ },
+ {
+  "name": "host/gen-':'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/gen-'/'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw/with/char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/gen-'/'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw/with/char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/gen-'/'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw/with/char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/gen-'/'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw/with/char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/gen-'/'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw/with/char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/gen-'/'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw/with/char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/gen-'/'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw/with/char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw/with/char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw/with/char"
+   }
+  }
+ },
+ {
+  "name": "host/gen-'/'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/gen-'?'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw?with?char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/gen-'?'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw?with?char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/gen-'?'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw?with?char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/gen-'?'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw?with?char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/gen-'?'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw?with?char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/gen-'?'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw?with?char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/gen-'?'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw?with?char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw?with?char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw?with?char"
+   }
+  }
+ },
+ {
+  "name": "host/gen-'?'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/gen-'#'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw#with#char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/gen-'#'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw#with#char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/gen-'#'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw#with#char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/gen-'#'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw#with#char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/gen-'#'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw#with#char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/gen-'#'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw#with#char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/gen-'#'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw#with#char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw#with#char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw#with#char"
+   }
+  }
+ },
+ {
+  "name": "host/gen-'#'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/gen-'['",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw[with[char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/gen-'['",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw[with[char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/gen-'['",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw[with[char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/gen-'['",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw[with[char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/gen-'['",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw[with[char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/gen-'['",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw[with[char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/gen-'['",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw[with[char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw[with[char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw[with[char"
+   }
+  }
+ },
+ {
+  "name": "host/gen-'['",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/gen-']'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw]with]char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/gen-']'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw]with]char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/gen-']'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw]with]char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/gen-']'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw]with]char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/gen-']'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw]with]char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/gen-']'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw]with]char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/gen-']'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw]with]char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw]with]char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw]with]char"
+   }
+  }
+ },
+ {
+  "name": "host/gen-']'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/gen-'@'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw@with@char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/gen-'@'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw@with@char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/gen-'@'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw@with@char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/gen-'@'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw@with@char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/gen-'@'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw@with@char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/gen-'@'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw@with@char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/gen-'@'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw@with@char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw@with@char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw@with@char"
+   }
+  }
+ },
+ {
+  "name": "host/gen-'@'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/sub-'!'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw!with!char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/sub-'!'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw!with!char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/sub-'!'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw!with!char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/sub-'!'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw!with!char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/sub-'!'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw!with!char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/sub-'!'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw!with!char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/sub-'!'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw!with!char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw!with!char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw!with!char"
+   }
+  }
+ },
+ {
+  "name": "host/sub-'!'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/sub-'$'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw$with$char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/sub-'$'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw$with$char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/sub-'$'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw$with$char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/sub-'$'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw$with$char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/sub-'$'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw$with$char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/sub-'$'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw$with$char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/sub-'$'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw$with$char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw$with$char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw$with$char"
+   }
+  }
+ },
+ {
+  "name": "host/sub-'$'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/sub-'\u0026'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw\u0026with\u0026char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/sub-'\u0026'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw\u0026with\u0026char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/sub-'\u0026'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw\u0026with\u0026char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/sub-'\u0026'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw\u0026with\u0026char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/sub-'\u0026'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw\u0026with\u0026char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/sub-'\u0026'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw\u0026with\u0026char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/sub-'\u0026'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw\u0026with\u0026char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw\u0026with\u0026char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw\u0026with\u0026char"
+   }
+  }
+ },
+ {
+  "name": "host/sub-'\u0026'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/sub-'\\''",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw'with'char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/sub-'\\''",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw'with'char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/sub-'\\''",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw'with'char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/sub-'\\''",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw'with'char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/sub-'\\''",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw'with'char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/sub-'\\''",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw'with'char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/sub-'\\''",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw'with'char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw'with'char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw'with'char"
+   }
+  }
+ },
+ {
+  "name": "host/sub-'\\''",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/sub-'('",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw(with(char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/sub-'('",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw(with(char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/sub-'('",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw(with(char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/sub-'('",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw(with(char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/sub-'('",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw(with(char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/sub-'('",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw(with(char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/sub-'('",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw(with(char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw(with(char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw(with(char"
+   }
+  }
+ },
+ {
+  "name": "host/sub-'('",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/sub-')'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw)with)char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/sub-')'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw)with)char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/sub-')'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw)with)char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/sub-')'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw)with)char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/sub-')'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw)with)char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/sub-')'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw)with)char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/sub-')'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw)with)char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw)with)char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw)with)char"
+   }
+  }
+ },
+ {
+  "name": "host/sub-')'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/sub-'*'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw*with*char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/sub-'*'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw*with*char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/sub-'*'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw*with*char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/sub-'*'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw*with*char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/sub-'*'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw*with*char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/sub-'*'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw*with*char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/sub-'*'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw*with*char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw*with*char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw*with*char"
+   }
+  }
+ },
+ {
+  "name": "host/sub-'*'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/sub-'+'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw+with+char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/sub-'+'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw+with+char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/sub-'+'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw+with+char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/sub-'+'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw+with+char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/sub-'+'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw+with+char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/sub-'+'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw+with+char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/sub-'+'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw+with+char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw+with+char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw+with+char"
+   }
+  }
+ },
+ {
+  "name": "host/sub-'+'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/sub-','",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw,with,char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/sub-','",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw,with,char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/sub-','",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw,with,char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/sub-','",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw,with,char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/sub-','",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw,with,char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/sub-','",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw,with,char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/sub-','",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw,with,char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw,with,char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw,with,char"
+   }
+  }
+ },
+ {
+  "name": "host/sub-','",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/sub-';'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw;with;char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/sub-';'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw;with;char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/sub-';'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw;with;char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/sub-';'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw;with;char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/sub-';'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw;with;char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/sub-';'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw;with;char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/sub-';'",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw;with;char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw;with;char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw;with;char"
+   }
+  }
+ },
+ {
+  "name": "host/sub-';'",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "password/domain/sub-'='",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "pw=with=char",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/domain/sub-'='",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw=with=char",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/queue/sub-'='",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "pw=with=char",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/queue/sub-'='",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw=with=char",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "password/coordinator/sub-'='",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "pw=with=char",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "role/coordinator/sub-'='",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "pw=with=char",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "database/sub-'='",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "pw=with=char"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "pw=with=char"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "pw=with=char"
+   }
+  }
+ },
+ {
+  "name": "host/sub-'='",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "database/review#db",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "review#db"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "review#db"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "review#db"
+   }
+  }
+ },
+ {
+  "name": "role/empty-with-password",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "ubuntu",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "port/6432",
+  "python": {
+   "Domain": {
+    "host": "postgres.internal",
+    "port": 6432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "postgres.internal",
+    "port": 6432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "postgres.internal",
+    "port": 6432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/127.0.0.1",
+  "python": {
+   "Domain": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/::1",
+  "python": {
+   "Domain": {
+    "host": "::1",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "::1",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "::1",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/::ffff:127.0.0.1",
+  "python": {
+   "Domain": {
+    "host": "::ffff:127.0.0.1",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "::ffff:127.0.0.1",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "::ffff:127.0.0.1",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/2001:db8::1",
+  "python": {
+   "Domain": {
+    "host": "2001:db8::1",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "2001:db8::1",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "2001:db8::1",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/fe80::1%eth0",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "host/POSTGRES.Internal",
+  "python": {
+   "Domain": {
+    "host": "POSTGRES.Internal",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "POSTGRES.Internal",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "POSTGRES.Internal",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/pg_host.svc.cluster.local",
+  "python": {
+   "Domain": {
+    "host": "pg_host.svc.cluster.local",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "pg_host.svc.cluster.local",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "pg_host.svc.cluster.local",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/pg.internal.",
+  "python": {
+   "Domain": {
+    "host": "pg.internal.",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "pg.internal.",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "pg.internal.",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/bücher.example",
+  "python": {
+   "Domain": {
+    "host": "bücher.example",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "bücher.example",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "bücher.example",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/a",
+  "python": {
+   "Domain": {
+    "host": "a",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "a",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "a",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/0.0.0.0",
+  "python": {
+   "Domain": {
+    "host": "0.0.0.0",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "0.0.0.0",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "0.0.0.0",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/::",
+  "python": {
+   "Domain": {
+    "host": "::",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "::",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "::",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/[::1]",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ },
+ {
+  "name": "host/1.2.3",
+  "python": {
+   "Domain": {
+    "host": "1.2.3",
+    "port": 5432,
+    "user": "devhealth_domain",
+    "password": "d-pw",
+    "database": "devhealth"
+   },
+   "Queue": {
+    "host": "1.2.3",
+    "port": 5432,
+    "user": "devhealth_queue",
+    "password": "q-pw",
+    "database": "devhealth"
+   },
+   "Coordinator": {
+    "host": "1.2.3",
+    "port": 5432,
+    "user": "devhealth_coordinator",
+    "password": "c-pw",
+    "database": "devhealth"
+   }
+  }
+ },
+ {
+  "name": "host/postgres.internal:5433",
+  "python": {
+   "Domain": {
+    "refused": true
+   },
+   "Queue": {
+    "refused": true
+   },
+   "Coordinator": {
+    "refused": true
+   }
+  }
+ }
+]

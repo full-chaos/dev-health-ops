@@ -79,7 +79,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|ci-leg LEG [SHARD COUNT]|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -123,10 +123,17 @@ usage() {
          (no Go toolchain, containers or Python), run on every PR by
          tests/tooling/test_venue_oracle_registry.py.
          `venue-oracles SHARD COUNT` (CHAOS-6574) runs the SHARD-th of COUNT
-         slices of the registry rows marked run (every COUNT-th row of the
-         sorted sequence, so the tests of one package spread over all slices);
-         the hosted job runs COUNT matrix legs. A slice that selects zero
-         rows fails; no arguments runs every row.
+         slices of the registry rows marked run, cost-balanced by the measured
+         seconds in ci/venue_oracle_weights.tsv (ci/venue_oracle_shard.awk, the
+         longest-processing-time assignment; CHAOS-6891), so the tests of one
+         package spread over all slices; the hosted job runs COUNT matrix legs.
+         A slice that selects zero rows fails; no arguments runs every row.
+         Each leg logs its predicted and actual test seconds against
+         VENUE_LEG_BUDGET_SECONDS (default 1800) and warns when over.
+  venue-oracle-plan COUNT
+         Print the cost-balanced plan of COUNT legs: every run row with its leg
+         and weight, then one "#leg" line per leg (rows, predicted seconds).
+         Needs no Go, containers or Python.
   ci-leg LEG [SHARD COUNT]
          One parallel slice of `ci` for the go-quality workflow (CHAOS-6690):
          static (format, vet, build, contract, integration-vet, shard plans),
@@ -1959,6 +1966,38 @@ check_live_python_oracles() {
 # shellcheck source=ci/lib/venue_oracle_registry.sh
 . "${ROOT}/ci/lib/venue_oracle_registry.sh"
 
+# The venue-oracles shard plan (CHAOS-6891). A leg used to be every COUNT-th row of
+# the sorted registry, blind to what a row costs: the legs' test time ranged 1677s
+# to 2207s in the last green run against a 2400s job cap with ~200s of setup, the
+# worst leg finished at 39:59, and three new rows pushed two other legs over. The
+# legs are now cost-balanced (ci/venue_oracle_shard.awk, the longest-processing-time
+# assignment ci/go_race_shard.awk uses) by the measured seconds in
+# ci/venue_oracle_weights.tsv (regenerate: ci/venue_oracle_weights.py). A wrong or
+# missing weight costs balance, never coverage: the legs always partition the run
+# rows. tests/tooling/test_venue_oracle_shards.py fails a PR whose registry rows
+# lack a weight or whose heaviest leg would exceed the leg's test-time budget.
+VENUE_ORACLE_WEIGHTS="${ROOT}/ci/venue_oracle_weights.tsv"
+VENUE_ORACLE_DEFAULT_WEIGHT=60
+# venue_oracle_run_rows prints every registry `run` row as "<package dir>\t<test>",
+# sorted by (package, test).
+venue_oracle_run_rows() {
+  venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2 | awk '$3 == "run" { printf "%s\t%s\n", $1, $2 }'
+}
+# venue_oracle_assign SHARD COUNT [plan]: the shard's rows ("<package dir>\t<test>"),
+# or with `plan` every row with its shard and weight plus one "#leg" line per shard.
+venue_oracle_assign() {
+  local shard="$1" count="$2" plan="${3:-}"
+  venue_oracle_run_rows | awk -v shard="${shard}" -v count="${count}" -v plan="${plan:+1}" \
+    -v weights="${VENUE_ORACLE_WEIGHTS}" -v defw="${VENUE_ORACLE_DEFAULT_WEIGHT}" -f "${ROOT}/ci/venue_oracle_shard.awk"
+}
+# venue-oracle-plan COUNT: print the cost-balanced plan of COUNT legs (rows, predicted
+# seconds). Needs neither Go, containers nor Python.
+check_venue_oracle_plan() {
+  local count="${1:-}"
+  case "${count}" in ""|*[!0-9]*|0) die "venue-oracle-plan COUNT must be a positive integer, got '${count}'" ;; esac
+  venue_oracle_assign 0 "${count}" plan || die "venue-oracle-plan: the registry could not be read (see above)"
+}
+
 # check_venue_oracles [SHARD COUNT] (CHAOS-6574). With no arguments it runs every
 # registry `run` row (the local full run). With SHARD COUNT it runs the rows
 # whose 0-based position in the registry's sorted `run` sequence, modulo COUNT,
@@ -1986,9 +2025,18 @@ check_venue_oracles() {
   check_venue_oracle_registry >&2 || die "venue-oracles: ci/venue_oracle_registry.d/ disagrees with the tree (see above)"
 
   local proof_dir dir kind name file names="" total=0 prev_pkg="" index
-  local run_index=0 pkg_has_run=0 registered_runs=0
+  local pkg_has_run=0 registered_runs=0 slice_file="" predicted_seconds="" leg_started
   local -a vo_dirs=() vo_names=() local_only=()
+  leg_started="$(date +%s)"
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-oracles.XXXXXX")"
+  if [ -n "${shard}" ]; then
+    # This leg's rows, from the cost-balanced plan; and what the plan predicts for it.
+    slice_file="${proof_dir}/slice.tsv"
+    venue_oracle_assign "${shard}" "${shard_count}" > "${slice_file}" \
+      || { rm -rf -- "${proof_dir}"; die "venue-oracles: could not plan the legs (see above)"; }
+    read -r _ predicted_seconds < <(venue_oracle_assign 0 "${shard_count}" plan \
+      | awk -F'\t' -v shard="${shard}" '$1 == "#leg" && $2 == shard { print $3, $4 }')
+  fi
 
   # Registry rows are sorted by package, so one package's rows are adjacent.
   # A trailing sentinel row flushes the last package.
@@ -2015,11 +2063,10 @@ check_venue_oracles() {
       run)
         pkg_has_run=1
         registered_runs=$((registered_runs + 1))
-        if [ -z "${shard}" ] || [ $((run_index % shard_count + 1)) -eq "${shard}" ]; then
+        if [ -z "${shard}" ] || grep -qxF -- "${dir}"$'\t'"${name}" "${slice_file}"; then
           names="${names:+${names}|}${name}"
           total=$((total + 1))
         fi
-        run_index=$((run_index + 1))
         ;;
       local)
         file="$(grep -lE "^func ${name}[(\[]" "${ROOT}/${dir}"/*_test.go | head -n1)"
@@ -2039,7 +2086,7 @@ check_venue_oracles() {
   fi
 
   if [ -n "${shard}" ]; then
-    printf 'venue-oracles: shard %s/%s runs %d of %d registered run row(s) across %d package(s)\n' "${shard}" "${shard_count}" "${total}" "${registered_runs}" "${#vo_dirs[@]}"
+    printf 'venue-oracles: shard %s/%s runs %d of %d registered run row(s) across %d package(s); the cost-balanced plan predicts %ss of tests for this leg (budget %ss, ci/venue_oracle_weights.tsv)\n' "${shard}" "${shard_count}" "${total}" "${registered_runs}" "${#vo_dirs[@]}" "${predicted_seconds:-?}" "${VENUE_LEG_BUDGET_SECONDS:-1800}"
   else
     printf 'venue-oracles: %d registered test(s) across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
   fi
@@ -2111,6 +2158,14 @@ check_venue_oracles() {
     "${total}" "${#compared[@]}" "${#go_only[@]}" "${#local_only[@]}"
   for name in "${go_only[@]}"; do printf '  go-only:    %s\n' "${name}"; done
   for name in "${local_only[@]}"; do printf '  local-only: %s\n' "${name}"; done
+  # The leg's test time against what the plan predicted and the budget: the log
+  # says how close to the job cap a leg ran BEFORE a cap cancels it (CHAOS-6891).
+  local elapsed budget="${VENUE_LEG_BUDGET_SECONDS:-1800}"
+  elapsed=$(( $(date +%s) - leg_started ))
+  printf 'venue-oracles: leg %ss of tests (predicted %ss, budget %ss)\n' "${elapsed}" "${predicted_seconds:-n/a}" "${budget}"
+  if [ "${elapsed}" -gt "${budget}" ]; then
+    printf '::warning title=venue-oracles leg over its test-time budget::%ss of tests against a %ss budget: rebalance ci/venue_oracle_weights.tsv (ci/venue_oracle_weights.py) or add a leg before the job cap cancels it\n' "${elapsed}" "${budget}"
+  fi
   [ "${failed}" -eq 0 ] || return 1
 }
 
@@ -3131,6 +3186,10 @@ case "${1:-all}" in
   venue-oracles)
     { [ "$#" -eq 1 ] || [ "$#" -eq 3 ]; } || die "venue-oracles accepts no arguments, or SHARD COUNT (1-based shard of COUNT)"
     check_venue_oracles "${2:-}" "${3:-}"
+    ;;
+  venue-oracle-plan)
+    [ "$#" -eq 2 ] || die "venue-oracle-plan accepts COUNT"
+    check_venue_oracle_plan "$2"
     ;;
   ci-leg)
     { [ "$#" -eq 2 ] || [ "$#" -eq 4 ]; } || die "ci-leg accepts LEG, or 'race SHARD COUNT'"

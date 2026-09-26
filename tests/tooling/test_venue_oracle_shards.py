@@ -22,6 +22,24 @@ WHAT THIS PINS (executed against the real ci/check_go.sh with a stand-in
    a package registered with only local-only rows fails in every leg.
 4. The workflow's matrix list is exactly 1..N, the count passed to the verb is
    N, the leg timeout is bounded, and the trigger set is unchanged.
+
+COST-BALANCED LEGS (CHAOS-6891)
+-------------------------------
+The legs were every COUNT-th row, blind to cost: at 154 rows the legs' test time
+ranged 1677-2207 s against a 2400 s job cap with ~200 s of setup, the worst leg
+ended at 39:59 and three new rows pushed two other legs over (run 36228118954).
+The legs are now the longest-processing-time assignment by the measured seconds
+in ci/venue_oracle_weights.tsv (ci/venue_oracle_shard.awk). With no weights every
+row weighs the same and the assignment IS the old every-COUNT-th-row split, which
+is what the scratch-tree tests below still pin. This file also pins:
+5. every registry `run` row has a weight and every weight names a `run` row;
+6. the heaviest PLANNED leg of the real registry fits VENUE_LEG_BUDGET_SECONDS
+   (the workflow's), and that budget plus setup and drift fits the job cap: the PR
+   that adds tests must regenerate the weights or add a leg BEFORE it merges;
+7. the legs partition the rows whatever the weights say (a wrong weight costs
+   balance, never coverage), the assignment is deterministic and balanced to
+   within one row's weight, and each leg logs its planned and actual seconds and
+   warns over the budget.
 """
 
 from __future__ import annotations
@@ -43,6 +61,7 @@ CI_FILES = (
     "venue_oracle_discovery.awk",
     "venue_oracle_names.awk",
     "venue_oracle_proof.awk",
+    "venue_oracle_shard.awk",
     "lib/venue_oracle_registry.sh",
 )
 HARNESS = '"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"'
@@ -57,6 +76,7 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 printf '%s %s\\n' "${{pkg}}" "${{pattern}}" >> "${{FAKE_GO_LOG}}"
+if [ -n "${{FAKE_GO_SLEEP:-}}" ]; then sleep "${{FAKE_GO_SLEEP}}"; fi
 names="${{pattern#^(}}"; names="${{names%)\\$}}"
 IFS='|' read -ra list <<< "${{names}}"
 for n in "${{list[@]}}"; do
@@ -67,7 +87,10 @@ exit 0
 
 
 def _run_verb(
-    tree: Path, *args: str
+    tree: Path,
+    *args: str,
+    env_extra: dict[str, str] | None = None,
+    verb: str = "venue-oracles",
 ) -> tuple[subprocess.CompletedProcess[str], list[tuple[str, str]]]:
     """Run `check_go.sh venue-oracles *args` in `tree`; return (proc, [(pkg, test)])."""
     real_go = shutil.which("go")
@@ -87,9 +110,10 @@ def _run_verb(
         "DEV_HEALTH_LIVE_PYTHON_ORACLES": "1",
         "TMPDIR": str(tree / "tmp"),
         "DEV_HEALTH_GO_CACHE": str(tree / "tmp" / "gocache"),
+        **(env_extra or {}),
     }
     proc = subprocess.run(
-        ["bash", str(tree / "ci" / "check_go.sh"), "venue-oracles", *args],
+        ["bash", str(tree / "ci" / "check_go.sh"), verb, *args],
         cwd=tree,
         env=env,
         capture_output=True,
@@ -257,7 +281,7 @@ def test_real_registry_shards_partition_and_balance(tmp_path: Path) -> None:
         seen.extend(ran)
     assert len(seen) == len(set(seen)), "a test ran in two shards"
     assert sorted(seen) == all_rows
-    assert max(sizes) - min(sizes) <= 1, f"unbalanced slices: {sizes}"
+    assert min(sizes) >= 1, f"a leg ran nothing: {sizes}"
 
 
 # ---------------------------------------------------------------------------
@@ -322,3 +346,247 @@ def test_the_receipt_artifact_is_per_shard() -> None:
     assert "matrix.shard" in uploads[0]["with"]["name"], (
         "four legs uploading one artifact name collide"
     )
+
+
+# ---------------------------------------------------------------------------
+# Cost-balanced legs (CHAOS-6891).
+# ---------------------------------------------------------------------------
+
+WEIGHTS_FILE = ROOT / "ci" / "venue_oracle_weights.tsv"
+JOB_SETUP_SECONDS = 200  # measured: leg wall time minus its test time, 192-212 s
+DRIFT_SECONDS = 200  # room for a slow runner beyond the planned seconds
+
+
+def _weights(path: Path = WEIGHTS_FILE) -> list[tuple[str, str, int]]:
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        package, test, seconds = line.split("\t")
+        rows.append((package, test, int(seconds)))
+    return rows
+
+
+def _plan(
+    tree: Path, count: int
+) -> tuple[list[tuple[str, str, int, int]], dict[int, tuple[int, int]]]:
+    """(rows as (pkg, test, leg, weight), {leg: (rows, seconds)}) from the plan verb."""
+    proc, _ = _run_verb(tree, str(count), verb="venue-oracle-plan")
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    rows, legs = [], {}
+    for line in proc.stdout.splitlines():
+        fields = line.split("\t")
+        if fields[0] == "#leg":
+            legs[int(fields[1])] = (int(fields[2]), int(fields[3]))
+        elif len(fields) == 4:
+            rows.append((fields[0], fields[1], int(fields[2]), int(fields[3])))
+    return rows, legs
+
+
+def _real_tree(tmp_path: Path) -> Path:
+    tree = tmp_path / "real"
+    tree.mkdir()
+    for name in ("go.mod", "ci", "internal", "cmd", "src"):
+        source = ROOT / name
+        if source.is_dir():
+            os.symlink(source, tree / name)
+        elif source.exists():
+            shutil.copy(source, tree / name)
+    return tree
+
+
+def test_the_weights_file_is_well_formed_and_matches_the_registry() -> None:
+    weights = _weights()
+    assert weights == sorted(weights, key=lambda w: (w[0], w[1])), (
+        "ci/venue_oracle_weights.tsv is not sorted by (package, test)"
+    )
+    keys = [(package, test) for package, test, _ in weights]
+    assert len(keys) == len(set(keys)), "a weight row is duplicated"
+    assert all(seconds >= 1 for _, _, seconds in weights), "a weight below 1 second"
+    registry = set(_registry_run_rows(ROOT))
+    missing = sorted(registry - set(keys))
+    assert not missing, (
+        f"registry run rows with no weight: {missing[:5]}...: regenerate "
+        "ci/venue_oracle_weights.tsv (python3 ci/venue_oracle_weights.py <saved run log>)"
+    )
+    stale = sorted(set(keys) - registry)
+    assert not stale, f"weights for tests that are not registry run rows: {stale[:5]}"
+
+
+def test_the_planned_heaviest_leg_fits_the_budget(tmp_path: Path) -> None:
+    job = _job()
+    budget = int(job["env"]["VENUE_LEG_BUDGET_SECONDS"])
+    cap = job["timeout-minutes"] * 60
+    assert budget + JOB_SETUP_SECONDS + DRIFT_SECONDS <= cap, (
+        f"the budget {budget}s plus {JOB_SETUP_SECONDS}s setup and {DRIFT_SECONDS}s "
+        f"drift does not fit the {cap}s job cap"
+    )
+    count = len(_matrix_shards())
+    rows, legs = _plan(_real_tree(tmp_path), count)
+    assert sorted(legs) == list(range(1, count + 1))
+    assert (
+        sum(n for n, _ in legs.values()) == len(rows) == len(_registry_run_rows(ROOT))
+    )
+    heaviest = max(seconds for _, seconds in legs.values())
+    assert heaviest <= budget, (
+        f"the heaviest of the {count} planned venue legs is {heaviest}s of tests, over the "
+        f"{budget}s budget: regenerate ci/venue_oracle_weights.tsv from a recent run log "
+        "(ci/venue_oracle_weights.py) or add a leg to the matrix and the verb's COUNT"
+    )
+
+
+def test_weights_balance_the_legs_and_never_drop_a_test(tmp_path: Path) -> None:
+    tree = _scratch_tree(tmp_path, PACKAGES)
+    (tree / "ci" / "venue_oracle_weights.tsv").write_text(
+        "# weights\n"
+        "internal/a\tTestA1\t500\n"
+        "internal/a\tTestA2\t20\n"
+        "internal/a\tTestA3\t20\n"
+        "internal/b\tTestB1\t300\n"
+        "internal/c\tTestC1\t10\n"
+        "internal/nowhere\tTestGone\t9999\n",  # a weight for a test that is not there: ignored
+        encoding="utf-8",
+    )
+    all_rows = _registry_run_rows(tree)
+    first = _plan(tree, 3)
+    assert first == _plan(tree, 3), "the plan is not deterministic"
+    rows, legs = first
+    assert sorted((p, t) for p, t, _, _ in rows) == all_rows, (
+        "the plan dropped or added a test"
+    )
+    total = sum(w for _, _, _, w in rows)
+    assert sum(seconds for _, seconds in legs.values()) == total
+    heaviest_row = max(w for _, _, _, w in rows)
+    # longest-processing-time: no leg exceeds the average by more than one row's weight
+    assert max(seconds for _, seconds in legs.values()) <= total / 3 + heaviest_row
+    # and the verb runs exactly the plan's legs, each test once
+    seen = []
+    for leg in (1, 2, 3):
+        proc, ran = _run_verb(tree, str(leg), "3")
+        assert proc.returncode == 0, proc.stderr + proc.stdout
+        assert sorted(ran) == sorted((p, t) for p, t, k, _ in rows if k == leg), leg
+        assert f"predicts {legs[leg][1]}s of tests for this leg" in proc.stdout
+        seen.extend(ran)
+    assert sorted(seen) == all_rows
+
+
+def test_the_500_second_row_gets_a_leg_to_itself(tmp_path: Path) -> None:
+    tree = _scratch_tree(
+        tmp_path, {"internal/a": ["TestA1", "TestA2", "TestA3", "TestA4"]}
+    )
+    (tree / "ci" / "venue_oracle_weights.tsv").write_text(
+        "internal/a\tTestA1\t500\ninternal/a\tTestA2\t100\ninternal/a\tTestA3\t100\ninternal/a\tTestA4\t100\n",
+        encoding="utf-8",
+    )
+    rows, legs = _plan(tree, 2)
+    heavy = next(leg for p, t, leg, _ in rows if t == "TestA1")
+    assert [t for _, t, leg, _ in rows if leg == heavy] == ["TestA1"], rows
+    assert legs[heavy] == (1, 500) and sum(s for _, s in legs.values()) == 800
+
+
+def test_the_plan_verb_rejects_a_bad_count(tmp_path: Path) -> None:
+    tree = _scratch_tree(tmp_path, PACKAGES)
+    for count in ("0", "x"):
+        proc, _ = _run_verb(tree, count, verb="venue-oracle-plan")
+        assert proc.returncode != 0, count
+        assert "COUNT must be a positive integer" in proc.stderr
+
+
+def test_a_leg_logs_its_plan_and_warns_over_the_budget(tmp_path: Path) -> None:
+    tree = _scratch_tree(tmp_path, {"internal/a": ["TestA1"]})
+    ok, _ = _run_verb(tree, "1", "1", env_extra={"VENUE_LEG_BUDGET_SECONDS": "1800"})
+    assert ok.returncode == 0, ok.stderr
+    assert "venue-oracles: leg " in ok.stdout and "budget 1800s" in ok.stdout
+    assert "::warning" not in ok.stdout
+    slow, _ = _run_verb(
+        tree,
+        "1",
+        "1",
+        env_extra={"VENUE_LEG_BUDGET_SECONDS": "1", "FAKE_GO_SLEEP": "2"},
+    )
+    assert slow.returncode == 0, slow.stderr
+    assert "::warning title=venue-oracles leg over its test-time budget" in slow.stdout
+
+
+def test_the_weights_generator_reads_a_run_log(tmp_path: Path) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "venue_oracle_weights", ROOT / "ci" / "venue_oracle_weights.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    prefix = "venue-oracles (shard 1/7)\tRun the shard\t2026-09-26T08:02:13.4333960Z "
+    other = "venue-oracles (shard 2/7)\tRun the shard\t2026-09-26T08:02:14.0000000Z "
+    lines = [
+        prefix + "    --- PASS: TestNotTop/sub (9.00s)",  # a subtest: not a row
+        prefix + "--- PASS: TestOne (10.20s)",
+        other + "--- PASS: TestTwo (30.00s)",  # another leg's test, interleaved
+        prefix + "--- PASS: TestThree (5.01s)",
+        prefix + "ok  \tgithub.com/full-chaos/dev-health-ops/internal/a\t15.3s",
+        other + "ok  \tgithub.com/full-chaos/dev-health-ops/internal/b\t31.0s",
+        "--- PASS: TestOne (99.00s)",  # a plain (unprefixed) log line, other leg id ""
+        "FAIL\tgithub.com/full-chaos/dev-health-ops/internal/a\t1.0s",
+    ]
+    seen: dict[tuple[str, str], float] = {}
+    module.parse_log(lines, seen)
+    assert seen == {
+        ("internal/a", "TestOne"): 99.0,  # the largest across the logs
+        ("internal/a", "TestThree"): 5.01,
+        ("internal/b", "TestTwo"): 30.0,
+    }
+    text, unmeasured = module.build(
+        [
+            ("internal/a", "TestOne"),
+            ("internal/a", "TestThree"),
+            ("internal/b", "TestTwo"),
+            ("internal/c", "TestKept"),
+            ("internal/c", "TestNew"),
+            ("internal/d", "TestStill"),
+        ],
+        seen,
+        {
+            ("internal/c", "TestKept"): (77, False),
+            ("internal/d", "TestStill"): (5, True),
+            ("internal/gone", "TestGone"): (5, False),
+        },
+    )
+    body = [line for line in text.splitlines() if line and not line.startswith("#")]
+    assert body == [
+        "internal/a\tTestOne\t99",
+        "internal/a\tTestThree\t6",  # rounded up
+        "internal/b\tTestTwo\t30",
+        "internal/c\tTestKept\t77",  # no log measured it: the existing weight stays
+        "internal/c\tTestNew\t600\tunmeasured",  # a new row: planned pessimistically
+        "internal/d\tTestStill\t5\tunmeasured",  # still unmeasured: flag kept
+    ]
+    assert unmeasured == [("internal/c", "TestNew"), ("internal/d", "TestStill")]
+    # a measurement clears the flag
+    text, unmeasured = module.build(
+        [("internal/d", "TestStill")],
+        {("internal/d", "TestStill"): 41.2},
+        {("internal/d", "TestStill"): (5, True)},
+    )
+    assert "internal/d\tTestStill\t42\n" in text and unmeasured == []
+    assert module.PROVISIONAL_WEIGHT >= 600
+    assert text.startswith("# Measured seconds of one venue-oracles registry `run` row")
+
+
+def test_an_unmeasured_row_is_planned_pessimistically() -> None:
+    # CHAOS-6891: the first plan gave two rows nobody had measured a 60 s default;
+    # one took 560 s and its leg ran 2109 s of tests against a 2400 s cap. A row in
+    # the weights file marked `unmeasured` (a new test: venue oracles run on main
+    # only, so its author cannot measure it) must carry at least the provisional
+    # 600 s, above the slowest row ever measured, until a run log measures it.
+    for line in WEIGHTS_FILE.read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            package, test, seconds, *marker = line.split("\t")
+            if marker == ["unmeasured"]:
+                assert int(seconds) >= 600, (
+                    f"{package} {test} is unmeasured but planned at {seconds}s: "
+                    "regenerate with ci/venue_oracle_weights.py"
+                )
+            else:
+                assert marker == [], f"unknown weights column {marker} in {line!r}"

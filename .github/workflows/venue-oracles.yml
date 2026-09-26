@@ -9,9 +9,9 @@
 # roll starts until it is green again.
 #
 # ONE PRODUCER. The job lives only in this workflow (go.yml must not declare
-# it again). It is a 5-leg matrix (CHAOS-6574: one sequential job outgrew its
-# timeout), so a commit carries five `venue-oracles (shard K/5)` contexts, all
-# informational (R430), none required.
+# it again). It is a 7-leg matrix (CHAOS-6574: one sequential job outgrew its
+# timeout; CHAOS-6891: cost-balanced legs), so a commit carries seven
+# `venue-oracles (shard K/7)` contexts, all informational (R430), none required.
 #
 # RELEVANCE. A push to main decides relevance INSIDE the job, not with a
 # trigger path filter: `ci/go_relevance.py` (the decider go-quality.yml
@@ -63,26 +63,35 @@ jobs:
     # closure -- discovered the hard way when this job's own PR first failed
     # go-quality with `ModuleNotFoundError: alembic`.
     runs-on: ubuntu-latest
-    # SHARDED (CHAOS-6574). One sequential job took 67 min at 87 tests and was
-    # CANCELLED at its 75-minute timeout on two consecutive main pushes (a
-    # cancel reads as no signal). The matrix runs 5 legs; leg K runs every
-    # 5th row of the registry's sorted `run` sequence (`check_go.sh
-    # venue-oracles K 5`), so one package's tests spread over all legs
-    # (apiservice/admin alone was 23 min). Keep the matrix list and the count
-    # passed to the verb in step: tests/tooling/test_venue_oracle_shards.py
-    # pins both. Each package's own go test is bounded at 40 minutes inside
-    # the verb; a leg is bounded at 40 minutes here (~16 min of tests plus
-    # setup expected). The fifth leg (CHAOS-6678) makes room for the metrics
-    # table sweep, which runs the Python api's route tests (~7 min) and put
-    # a 4-leg slice (21-27 min measured) near the 40-minute bound.
-    name: venue-oracles (shard ${{ matrix.shard }}/5)
+    # SHARDED (CHAOS-6574), COST-BALANCED (CHAOS-6891). One sequential job took 67
+    # min at 87 tests and was CANCELLED at its 75-minute timeout on two
+    # consecutive main pushes (a cancel reads as no signal). The matrix runs 7
+    # legs; leg K runs the rows the cost-balanced plan gives it (`check_go.sh
+    # venue-oracles K 7`: longest-processing-time assignment by the measured
+    # seconds in ci/venue_oracle_weights.tsv), so one package's tests spread over
+    # the legs (apiservice/admin alone is ~36 min). It was every 5th row of the
+    # sorted registry, blind to cost: at 154 rows (~10,000 s of tests) the legs
+    # ranged 1677-2207 s of tests against this 2400 s cap with ~200 s of setup,
+    # the worst leg ended at 39:59 and the next three rows pushed two legs over
+    # (run 36228118954). Keep the matrix list and the count passed to the verb in
+    # step: tests/tooling/test_venue_oracle_shards.py pins both, and fails a PR
+    # whose registry has a row without a weight or whose heaviest planned leg
+    # exceeds VENUE_LEG_BUDGET_SECONDS (the cap minus setup and drift). Each
+    # package's own go test is bounded at 40 minutes inside the verb; a leg logs
+    # its planned and actual test seconds and warns over the budget. When the
+    # guard fails: regenerate the weights from a saved run log
+    # (ci/venue_oracle_weights.py) or add a leg here.
+    name: venue-oracles (shard ${{ matrix.shard }}/7)
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+      # Test seconds one leg may plan and run: the 2400 s job cap minus ~200 s of
+      # setup minus drift. The verb warns over it; the shard test fails a plan over it.
+      VENUE_LEG_BUDGET_SECONDS: '1800'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -205,7 +214,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"
-          bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 5 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
+          bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 7 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
 
       - name: Upload the venue oracle receipt
         if: steps.relevance.outputs.relevant == 'true' && always()

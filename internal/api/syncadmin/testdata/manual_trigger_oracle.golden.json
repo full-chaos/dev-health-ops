@@ -1,0 +1,1035 @@
+{
+  "header": {
+    "test": "TestManualTriggerVenueOracleFrozen",
+    "python_build": "c2b14a3f2ed3d43bef927d88025a9c18eda4ce6e",
+    "producer_digest": "b812562970c9c153f8c0acfdf8a6f39083cec8666ac6e084177b471de77b229e",
+    "recipe": "DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/syncadmin/ -test '^TestManualTriggerVenueOracleFrozen$' -python-root \u003cclean worktree at c2b14a3f2ed3d43bef927d88025a9c18eda4ce6e\u003e"
+  },
+  "requests": [
+    {
+      "name": "trigger guard: no token",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/b0aa56ff-59a3-5b52-8704-cf5bd10b7c68/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7a03a43b-2d30-4267-8dcb-f60d19bd6143"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "trigger guard: member",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/b0aa56ff-59a3-5b52-8704-cf5bd10b7c68/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "771356c2af573c28a34d925b2854a1ab1f08008ed5a39b89a90433c5c2d3c394",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "41b8433d-b58e-4c12-91d0-2dbedc270601"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "trigger guard: no org",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/825ffc4d-062a-5d5f-ba86-fddc8f670576/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "431caf52b227b202a5abe7a3812e5bd9375bfdf42c9a8a8d83af9a0830048c16",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "54258a0e-7526-43f2-8705-694207173671"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "trigger: not a uuid",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/zzz/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1c06d1cb-9747-442e-91bb-1a4651e13b9b"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "trigger: unknown config",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/394fc69b-3620-550d-8156-53177aa34ae3/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6dbe5333-e546-484e-b5b9-8538070fdc1a"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "trigger: another org's config",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/a4d3346d-cd83-59fa-814c-a90213607ccf/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9f564194-7e2a-43f9-92d5-d7ebb7f6472b"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "backfill guard: no token",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/fd8c050f-6412-56f7-8170-d92d7c0419db/backfill",
+      "body_sha256": "73f9918e31a353168eab2aeab959b38ee50174c93cac0a48d1bbac2f0ff56204",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0a52b167-2f4e-4aac-87c8-79b74a98eefd"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "backfill guard: member",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/fd8c050f-6412-56f7-8170-d92d7c0419db/backfill",
+      "body_sha256": "73f9918e31a353168eab2aeab959b38ee50174c93cac0a48d1bbac2f0ff56204",
+      "request_headers_sha256": "cc69b4de2cc45c9943e29e299f984bde1beb503446b17653166dbbe39173ac00",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d855c78d-5b0d-4de8-9ba2-7ebabfdc3e58"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "backfill: the body is validated before the config",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/2f2014dd-1173-52f3-80f0-46772e0c44b9/backfill",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 422,
+      "headers": {
+        "content-length": "169",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "61b03a5a-4783-4735-a130-52bdee4e4a9b"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\"],\"msg\":\"Value error, backfill requires since and before, either top-level or in selector\",\"input\":{},\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "backfill: no body",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/fd8c050f-6412-56f7-8170-d92d7c0419db/backfill",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a12ed2c1-6ca0-4b29-9d9d-e288a4c98427"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "backfill: another org's config",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/a4d3346d-cd83-59fa-814c-a90213607ccf/backfill",
+      "body_sha256": "73f9918e31a353168eab2aeab959b38ee50174c93cac0a48d1bbac2f0ff56204",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a015c0bc-581a-46ef-97d9-fdcd8d06418b"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "backfill: not a uuid",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/zzz/backfill",
+      "body_sha256": "73f9918e31a353168eab2aeab959b38ee50174c93cac0a48d1bbac2f0ff56204",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 404,
+      "headers": {
+        "content-length": "41",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f039338a-c351-475e-9ff3-db105527d7da"
+      },
+      "body": "{\"detail\":\"Sync configuration not found\"}"
+    },
+    {
+      "name": "trigger: paused",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/08d978ae-6e59-5e50-b53e-01b497498bbe/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 409,
+      "headers": {
+        "content-length": "65",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "65c7b70e-1cf5-4f4c-8fdc-c00037e66e8d"
+      },
+      "body": "{\"detail\":\"Sync configuration is paused and cannot be triggered\"}"
+    },
+    {
+      "name": "backfill: paused",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/18e36fea-6894-56c9-9652-2f46b04f2982/backfill",
+      "body_sha256": "73f9918e31a353168eab2aeab959b38ee50174c93cac0a48d1bbac2f0ff56204",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 409,
+      "headers": {
+        "content-length": "66",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8c18e452-7e55-42bf-97e6-27795bc8ec57"
+      },
+      "body": "{\"detail\":\"Sync configuration is paused and cannot be backfilled\"}"
+    },
+    {
+      "name": "trigger: no linked integration",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/14701764-d6cd-5b7e-9861-2ad4d1bbc2b0/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 400,
+      "headers": {
+        "content-length": "57",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1e3b5b50-fe57-4138-888d-c77eaead7443"
+      },
+      "body": "{\"detail\":\"Sync configuration has no linked integration\"}"
+    },
+    {
+      "name": "trigger: no credential is allowed",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/d80043dd-1526-5a2f-9670-e85cd0c34e08/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 202,
+      "headers": {
+        "content-length": "190",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "01d6d54f-7f99-484c-8757-980731eb45e6"
+      },
+      "body": "{\"status\":\"triggered\",\"config_id\":\"d80043dd-1526-5a2f-9670-e85cd0c34e08\",\"sync_run_id\":\"7cda95ad-9b4e-5e9b-8a38-c0b35f32f074\",\"run_id\":\"5c0fefbb-dbd5-50a3-a7ae-484aaf24d718\",\"total_units\":6}"
+    },
+    {
+      "name": "trigger: credential inactive",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/280be8c4-62ca-5eeb-9c88-ffd3e43b7386/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 409,
+      "headers": {
+        "content-length": "35",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "388db3fc-2867-47d8-b0bb-43e8fa53e3c8"
+      },
+      "body": "{\"detail\":\"Credential is inactive\"}"
+    },
+    {
+      "name": "trigger: credential failed its last test",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/f741e687-f7aa-50d4-8f8d-034c1f56d30e/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 409,
+      "headers": {
+        "content-length": "43",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a0033578-7950-476f-b8bf-1a55e6944b2c"
+      },
+      "body": "{\"detail\":\"token rejected by the provider\"}"
+    },
+    {
+      "name": "trigger: credential failed without text",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/a0c58de4-9b8d-5f19-ac67-59162d3af961/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 409,
+      "headers": {
+        "content-length": "40",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c05a5751-2312-4ad5-91ea-d0d4d4a5e0f4"
+      },
+      "body": "{\"detail\":\"Credential preflight failed\"}"
+    },
+    {
+      "name": "backfill: credential failed its last test",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/ba6deccc-4076-53c8-827e-6f736b3c9356/backfill",
+      "body_sha256": "73f9918e31a353168eab2aeab959b38ee50174c93cac0a48d1bbac2f0ff56204",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 409,
+      "headers": {
+        "content-length": "43",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "09261ff5-1796-4ee8-932c-1190d4184f22"
+      },
+      "body": "{\"detail\":\"token rejected by the provider\"}"
+    },
+    {
+      "name": "trigger: pagerduty needs the operational target",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/391d0319-7bf6-588f-949e-cc22657f321e/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 409,
+      "headers": {
+        "content-length": "54",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "036942ea-b452-43c4-b34e-874383cc36cf"
+      },
+      "body": "{\"detail\":\"PagerDuty sync target must be operational\"}"
+    },
+    {
+      "name": "trigger: pagerduty needs a credential",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/dbc8fade-6ba7-5794-8967-4d18f70c8b31/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 409,
+      "headers": {
+        "content-length": "77",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4361dbe7-5a24-47f6-8758-fedd8c63b9bc"
+      },
+      "body": "{\"detail\":\"PagerDuty sync requires an active organization-scoped credential\"}"
+    },
+    {
+      "name": "clock: trigger, gated target (feature on for this org)",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/368f1bf3-fa0f-5773-a62f-23220bc0fac6/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "7f0d598233557866428b1a64732a1c59740740aaae2a35631c2bcd482c460fe3",
+      "status": 202,
+      "headers": {
+        "content-length": "190",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "758a592c-d21e-4624-bda6-242f80d2baf4"
+      },
+      "body": "{\"status\":\"triggered\",\"config_id\":\"368f1bf3-fa0f-5773-a62f-23220bc0fac6\",\"sync_run_id\":\"1570cbbc-e6ab-5815-b798-6c161aafb092\",\"run_id\":\"369e6d4e-be86-5a38-9b09-cd775893c031\",\"total_units\":6}"
+    },
+    {
+      "name": "clock: backfill, gated target (feature on for this org)",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/c11b844e-da92-5d11-a1a9-ed58383cbb8a/backfill",
+      "body_sha256": "73f9918e31a353168eab2aeab959b38ee50174c93cac0a48d1bbac2f0ff56204",
+      "request_headers_sha256": "92516d5f498a8353c1944c87277f21a98fbe879292b4c253b3c64e7a32a79d76",
+      "status": 202,
+      "headers": {
+        "content-length": "299",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9b05be85-e9d2-4372-bb2b-4becf881c01b"
+      },
+      "body": "{\"status\":\"accepted\",\"config_id\":\"c11b844e-da92-5d11-a1a9-ed58383cbb8a\",\"task_id\":\"sync_run:c3b729a2-19e4-5816-841e-df29bc97aecc\",\"backfill_job_id\":\"6465768c-7dd4-451f-8442-b89625e5329a\",\"sync_run_id\":\"c3b729a2-19e4-5816-841e-df29bc97aecc\",\"mode\":\"fanout\",\"since\":\"2026-09-01\",\"before\":\"2026-09-30\"}"
+    },
+    {
+      "name": "trigger: work items over the tier limit",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/656ac07c-f148-5857-b84e-ea61acc789c0/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "7f0d598233557866428b1a64732a1c59740740aaae2a35631c2bcd482c460fe3",
+      "status": 403,
+      "headers": {
+        "content-length": "93",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7f57d088-d3a2-4f1b-976d-01965e593c4d"
+      },
+      "body": "{\"detail\":\"Work items limit exceeded: 1200/1000. Upgrade your tier to sync more work items.\"}"
+    },
+    {
+      "name": "trigger: work items under the limit",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/4d0af3a1-618b-53e1-9146-03fc7d0220bb/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 202,
+      "headers": {
+        "content-length": "190",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "87c26520-aee6-42c0-8294-9d3bed6cbb52"
+      },
+      "body": "{\"status\":\"triggered\",\"config_id\":\"4d0af3a1-618b-53e1-9146-03fc7d0220bb\",\"sync_run_id\":\"4e5786ee-727c-5227-8314-449e9f0c489a\",\"run_id\":\"51dabf9b-f692-5763-b985-d2b1c954ed3a\",\"total_units\":6}"
+    },
+    {
+      "name": "backfill: over the community backfill_days limit",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/c4a61f91-9c4f-513d-bd7b-1ba26a103e26/backfill",
+      "body_sha256": "dc662aa741c2aadbb7ab3a9d1b62c8d3dd979054f220276beed3c44c7842a189",
+      "request_headers_sha256": "92516d5f498a8353c1944c87277f21a98fbe879292b4c253b3c64e7a32a79d76",
+      "status": 403,
+      "headers": {
+        "content-length": "74",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e1b9d164-c787-47f0-9acd-80688cb23fee"
+      },
+      "body": "{\"detail\":\"Backfill limit exceeded: requested 272 days, limit is 30 days\"}"
+    },
+    {
+      "name": "clock: backfill, 31 days (enterprise has no limit)",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/d9febea0-886b-5d44-84eb-b96016c291c1/backfill",
+      "body_sha256": "5712a7beddbecf7486adeeba58125366d43723b522971ca7681435e06e114a0c",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 202,
+      "headers": {
+        "content-length": "299",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "da2635e0-0c63-4e24-b88c-7c6e38407457"
+      },
+      "body": "{\"status\":\"accepted\",\"config_id\":\"d9febea0-886b-5d44-84eb-b96016c291c1\",\"task_id\":\"sync_run:57c800a6-612a-50f2-9724-d539fd2492bf\",\"backfill_job_id\":\"5f9db181-7956-45a7-9ce5-54103983fb2e\",\"sync_run_id\":\"57c800a6-612a-50f2-9724-d539fd2492bf\",\"mode\":\"fanout\",\"since\":\"2026-08-01\",\"before\":\"2026-09-01\"}"
+    },
+    {
+      "name": "backfill 422: selector mixed with flat fields",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/fd8c050f-6412-56f7-8170-d92d7c0419db/backfill",
+      "body_sha256": "adab82fde1acc9b1d381bdeec5ca274eebb011f8243e9c617a257432d4f48fcb",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 422,
+      "headers": {
+        "content-length": "255",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "46a061a5-934f-48af-a3f0-76c2a9267397"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\"],\"msg\":\"Value error, backfill selector cannot be mixed with legacy flat fields\",\"input\":{\"selector\":{\"since\":\"2026-09-01T00:00:00Z\",\"before\":\"2026-09-02T00:00:00Z\"},\"since\":\"2026-09-01\"},\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "backfill 422: naive selector datetime",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/fd8c050f-6412-56f7-8170-d92d7c0419db/backfill",
+      "body_sha256": "34fda2b49262ff22e817a2f1a1ddb23033ec2d02b32bfb66fda7ab1b8b3d86a9",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 422,
+      "headers": {
+        "content-length": "142",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0365fce9-a310-47b5-9ade-5efee58855e6"
+      },
+      "body": "{\"detail\":[{\"type\":\"timezone_aware\",\"loc\":[\"body\",\"selector\",\"since\"],\"msg\":\"Input should have timezone info\",\"input\":\"2026-09-01T00:00:00\"}]}"
+    },
+    {
+      "name": "backfill 422: selector before not after since",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/fd8c050f-6412-56f7-8170-d92d7c0419db/backfill",
+      "body_sha256": "63fd7a37366c995631c7d2a796788684eb355a73b1e5597ca4540daab3482685",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 422,
+      "headers": {
+        "content-length": "219",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "24e67332-6e74-489d-8be5-72fedbe4c609"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"selector\"],\"msg\":\"Value error, backfill selector before must be after since\",\"input\":{\"since\":\"2026-09-02T00:00:00Z\",\"before\":\"2026-09-01T00:00:00Z\"},\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "backfill 422: flat dates missing one",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/fd8c050f-6412-56f7-8170-d92d7c0419db/backfill",
+      "body_sha256": "3b95c724d876e9094ac0bbaf99b5c247ea8b0276d9087518a73363531f074678",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 422,
+      "headers": {
+        "content-length": "189",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "727fe0e9-30e3-45ae-ab8c-1478d495e15b"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\"],\"msg\":\"Value error, backfill requires since and before, either top-level or in selector\",\"input\":{\"since\":\"2026-09-01\"},\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "backfill 422: a bad date",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/fd8c050f-6412-56f7-8170-d92d7c0419db/backfill",
+      "body_sha256": "38ce4ee6c0aaa3f7df01e294558e7754c526a05f65a153cd24c7a08fc86d8b75",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 422,
+      "headers": {
+        "content-length": "254",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7f14a6bc-ada0-4ec5-864b-0c3b600c83c3"
+      },
+      "body": "{\"detail\":[{\"type\":\"date_from_datetime_parsing\",\"loc\":[\"body\",\"since\"],\"msg\":\"Input should be a valid date or datetime, month value is outside expected range of 1-12\",\"input\":\"2026-13-45\",\"ctx\":{\"error\":\"month value is outside expected range of 1-12\"}}]}"
+    },
+    {
+      "name": "clock: trigger, planner-managed parent",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/3b941810-b7b7-5073-9ffc-51b271dc0719/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 202,
+      "headers": {
+        "content-length": "190",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4695fa2b-9fb0-4733-adcb-91df96c82da2"
+      },
+      "body": "{\"status\":\"triggered\",\"config_id\":\"3b941810-b7b7-5073-9ffc-51b271dc0719\",\"sync_run_id\":\"952802a5-5155-53e0-9613-e507e6f2af12\",\"run_id\":\"0ad1d955-711c-587f-9f0e-f3c80e5c0bfa\",\"total_units\":6}"
+    },
+    {
+      "name": "clock: trigger, full resync option",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/8d2baf6e-32ed-5a2f-b43f-7eb8f1dcdae7/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 202,
+      "headers": {
+        "content-length": "190",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "96a9014b-b923-48a1-b455-b956ae1295ae"
+      },
+      "body": "{\"status\":\"triggered\",\"config_id\":\"8d2baf6e-32ed-5a2f-b43f-7eb8f1dcdae7\",\"sync_run_id\":\"6bd3e2fe-d0c9-5783-a3f6-6e9f052c71c4\",\"run_id\":\"7957a386-9377-5105-87e8-d7dcf50e018f\",\"total_units\":6}"
+    },
+    {
+      "name": "clock: trigger, falsy full resync option",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/fe9614bc-61a5-571d-9272-80aae3ff4623/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 202,
+      "headers": {
+        "content-length": "161",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2351cde7-bda8-4ac6-9cb4-ad28c23ee486"
+      },
+      "body": "{\"status\":\"pending\",\"config_id\":\"fe9614bc-61a5-571d-9272-80aae3ff4623\",\"occurrence_id\":\"sha256:7e4c1227a4051917789eba5b5c4a6a2d0d445707572a0250df8b37a82b484a07\"}"
+    },
+    {
+      "name": "clock: trigger, child pinned to one source",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/e65ae2a6-333e-594a-a391-c5a5be6636b8/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 202,
+      "headers": {
+        "content-length": "190",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "42bdc60a-ec4b-4103-a4e4-eff8c358e40e"
+      },
+      "body": "{\"status\":\"triggered\",\"config_id\":\"e65ae2a6-333e-594a-a391-c5a5be6636b8\",\"sync_run_id\":\"047c3b38-bf68-5508-ac35-8a3ff0cbf8b7\",\"run_id\":\"8462a958-406c-5119-bbfb-a0a808fc0961\",\"total_units\":5}"
+    },
+    {
+      "name": "clock: trigger, child pinned, no targets",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/38326569-40fc-5e3b-9e8e-cb460c5d1ce9/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 202,
+      "headers": {
+        "content-length": "190",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a9a839ee-8361-4fa4-a70a-9bd830866dfe"
+      },
+      "body": "{\"status\":\"triggered\",\"config_id\":\"38326569-40fc-5e3b-9e8e-cb460c5d1ce9\",\"sync_run_id\":\"3e84c8c2-17de-5122-874a-ead4462a5d17\",\"run_id\":\"e8434494-2d0c-5cf8-8e4b-10169190174d\",\"total_units\":3}"
+    },
+    {
+      "name": "clock: backfill, legacy dates",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/f6725f5b-0734-596b-bcef-6f7c9aa85ce8/backfill",
+      "body_sha256": "73f9918e31a353168eab2aeab959b38ee50174c93cac0a48d1bbac2f0ff56204",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 202,
+      "headers": {
+        "content-length": "299",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6dd13e56-bb8b-4f1a-a87e-a7514a609f35"
+      },
+      "body": "{\"status\":\"accepted\",\"config_id\":\"f6725f5b-0734-596b-bcef-6f7c9aa85ce8\",\"task_id\":\"sync_run:f8f223a7-db52-52c3-a31a-4fc4e350aea9\",\"backfill_job_id\":\"216e2d28-c356-406b-84b9-578a775ab1e7\",\"sync_run_id\":\"f8f223a7-db52-52c3-a31a-4fc4e350aea9\",\"mode\":\"fanout\",\"since\":\"2026-09-01\",\"before\":\"2026-09-30\"}"
+    },
+    {
+      "name": "clock: backfill, structured selector",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/c51aeccd-53df-5899-bfbe-f19c75898e92/backfill",
+      "body_sha256": "3ffb7830537120013c8b5d71f7e2702514272d6fc799bde0d80899cfda51d9c5",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 202,
+      "headers": {
+        "content-length": "329",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "35f1f031-3a6e-442c-a34a-b6293b4eb092"
+      },
+      "body": "{\"status\":\"accepted\",\"config_id\":\"c51aeccd-53df-5899-bfbe-f19c75898e92\",\"task_id\":\"sync_run:296c8999-6a74-5945-846f-05cf2d8d548e\",\"backfill_job_id\":\"c901d5ca-eca1-4806-a5a1-b7d496b302ab\",\"sync_run_id\":\"296c8999-6a74-5945-846f-05cf2d8d548e\",\"mode\":\"fanout\",\"since\":\"2026-09-01T00:00:00+00:00\",\"before\":\"2026-09-30T00:00:00+00:00\"}"
+    },
+    {
+      "name": "clock: backfill, selector with an offset",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/2f76723a-3e39-5e2e-ad0a-0e0a97a0ee2a/backfill",
+      "body_sha256": "aaf3925fe30d12a3b66e9560ea45124a94b5186962a48368033a1c6f894319e6",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 202,
+      "headers": {
+        "content-length": "329",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e9e1b8da-a299-490b-9751-ba473ebfaa84"
+      },
+      "body": "{\"status\":\"accepted\",\"config_id\":\"2f76723a-3e39-5e2e-ad0a-0e0a97a0ee2a\",\"task_id\":\"sync_run:4cb797c6-1ea7-506c-b9e0-ed842371c70e\",\"backfill_job_id\":\"595c4d3f-1ac0-4cd8-b98f-c9b048f56057\",\"sync_run_id\":\"4cb797c6-1ea7-506c-b9e0-ed842371c70e\",\"mode\":\"fanout\",\"since\":\"2026-09-01T23:00:00-05:00\",\"before\":\"2026-09-30T01:30:00+05:30\"}"
+    },
+    {
+      "name": "clock: backfill, scoped selector",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/48e77488-20ee-5135-81e4-51a5eb2543a9/backfill",
+      "body_sha256": "b44809be8c1ee6cee0fb3d09326153a21519cce16d4d4a46821a08f431f50052",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 202,
+      "headers": {
+        "content-length": "329",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5d4b31aa-fd03-4b5a-84ea-dec66832f871"
+      },
+      "body": "{\"status\":\"accepted\",\"config_id\":\"48e77488-20ee-5135-81e4-51a5eb2543a9\",\"task_id\":\"sync_run:2a8e0cd1-6774-5e64-9115-874745227a78\",\"backfill_job_id\":\"99d97e96-2a2e-412c-b5cd-aaa997e1c776\",\"sync_run_id\":\"2a8e0cd1-6774-5e64-9115-874745227a78\",\"mode\":\"fanout\",\"since\":\"2026-09-01T00:00:00+00:00\",\"before\":\"2026-09-05T00:00:00+00:00\"}"
+    },
+    {
+      "name": "clock: backfill, explicit empty scope",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/a8f87c5a-84a7-5baa-b1b8-db2c2ad3b07c/backfill",
+      "body_sha256": "58707b90be563649786dc16fe6c05695977d108490e0805d64446fea83429e49",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 202,
+      "headers": {
+        "content-length": "329",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "34aa5e64-5a2a-49bc-82d3-b3f7ee675d5a"
+      },
+      "body": "{\"status\":\"accepted\",\"config_id\":\"a8f87c5a-84a7-5baa-b1b8-db2c2ad3b07c\",\"task_id\":\"sync_run:f53e5eff-bb33-548a-96bb-88fef191192b\",\"backfill_job_id\":\"ecb5976a-2815-4765-bed0-59970d5bba29\",\"sync_run_id\":\"f53e5eff-bb33-548a-96bb-88fef191192b\",\"mode\":\"fanout\",\"since\":\"2026-09-01T00:00:00+00:00\",\"before\":\"2026-09-05T00:00:00+00:00\"}"
+    },
+    {
+      "name": "clock: backfill, dataset scope only",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/8de3d74a-fae2-515b-878a-f920ea9c520e/backfill",
+      "body_sha256": "394c58a370fbcec2aae373e09b552e3ed8a03394ac2999afa2b5f4fa5eb96dcb",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 202,
+      "headers": {
+        "content-length": "329",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "25f1c053-a5b8-4e3a-9c64-fd18ddfa2ef3"
+      },
+      "body": "{\"status\":\"accepted\",\"config_id\":\"8de3d74a-fae2-515b-878a-f920ea9c520e\",\"task_id\":\"sync_run:07baf5a8-a2d5-58ee-80af-ff60dc78ca9f\",\"backfill_job_id\":\"21dc01bd-6af8-49e3-863e-97441b70b777\",\"sync_run_id\":\"07baf5a8-a2d5-58ee-80af-ff60dc78ca9f\",\"mode\":\"fanout\",\"since\":\"2026-09-01T00:00:00+00:00\",\"before\":\"2026-09-05T00:00:00+00:00\"}"
+    },
+    {
+      "name": "clock: backfill, one day",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/fd8c050f-6412-56f7-8170-d92d7c0419db/backfill",
+      "body_sha256": "923b76a8ec58cfb09a1559c6b2816403073e7087cc1045a71090d57fe94d7b0d",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 202,
+      "headers": {
+        "content-length": "299",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e6ff2f28-4908-4a38-8beb-f0aa72b60897"
+      },
+      "body": "{\"status\":\"accepted\",\"config_id\":\"fd8c050f-6412-56f7-8170-d92d7c0419db\",\"task_id\":\"sync_run:d41de8e6-e386-5c1a-ab96-85bfb79e29f5\",\"backfill_job_id\":\"2ba79b6a-6f2b-4a77-998c-87ec6b8321aa\",\"sync_run_id\":\"d41de8e6-e386-5c1a-ab96-85bfb79e29f5\",\"mode\":\"fanout\",\"since\":\"2026-09-01\",\"before\":\"2026-09-01\"}"
+    },
+    {
+      "name": "clock: backfill, a source id that is not a uuid is quarantined",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/3f5466ce-d919-5054-bd35-c822c7390101/backfill",
+      "body_sha256": "059ed1b68439d5ffe1b2af729dc6cef6e67bffa51e8ae05672b01c9e11d6befd",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 202,
+      "headers": {
+        "content-length": "223",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ced4fd42-bc07-4b0b-8455-4da3ca38d05a"
+      },
+      "body": "{\"status\":\"failed\",\"config_id\":\"3f5466ce-d919-5054-bd35-c822c7390101\",\"occurrence_id\":\"sha256:05330c85a30646e30f12391f7c120e746933f099a4d20fc5b2deb216edec2adc\",\"reason\":\"scheduled sync occurrence quarantined: invalid_plan\"}"
+    },
+    {
+      "name": "pending: trigger, the scheduler is stopped",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/8088609f-3351-51af-bf31-05a9bc0101a2/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 202,
+      "headers": {
+        "content-length": "161",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c97cecaf-bee8-4e30-8c94-4876698caf22"
+      },
+      "body": "{\"status\":\"pending\",\"config_id\":\"8088609f-3351-51af-bf31-05a9bc0101a2\",\"occurrence_id\":\"sha256:c7978fb2166ced34c765a7d9c18d63e4cada5f6571c953af3b5c81fed889b647\"}"
+    },
+    {
+      "name": "pending: backfill, the scheduler is stopped",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/24df4925-e8b2-5b3c-b50a-bcc1963fe048/backfill",
+      "body_sha256": "73f9918e31a353168eab2aeab959b38ee50174c93cac0a48d1bbac2f0ff56204",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 202,
+      "headers": {
+        "content-length": "161",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1dde9da7-c718-4c21-aab0-5cf13bfe71f1"
+      },
+      "body": "{\"status\":\"pending\",\"config_id\":\"24df4925-e8b2-5b3c-b50a-bcc1963fe048\",\"occurrence_id\":\"sha256:67ae571fae14f2875905df5b8f8f185614af02aa68db5135bdea4b82d28d15c0\"}"
+    },
+    {
+      "name": "diverging: trigger, legacy configuration",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/d0904401-0fae-5c45-8ac2-2b5eb76202b7/trigger",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fafbd1851e4a6a7a586849e028774d310a9347706ebaa91474f3c3b945f1d306",
+      "status": 202,
+      "headers": {
+        "content-length": "190",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7e2cb75c-77b0-4b93-93d6-cf27e4f4d5be"
+      },
+      "body": "{\"status\":\"triggered\",\"config_id\":\"d0904401-0fae-5c45-8ac2-2b5eb76202b7\",\"sync_run_id\":\"54dcc871-4b4b-4581-ad1f-eab42587e3f3\",\"run_id\":\"9552bd18-6d1c-4af7-88ec-7e022e8b41eb\",\"total_units\":4}"
+    },
+    {
+      "name": "diverging: backfill, legacy configuration",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/a437d3c5-75a5-53d3-afac-567e773cfdad/backfill",
+      "body_sha256": "73f9918e31a353168eab2aeab959b38ee50174c93cac0a48d1bbac2f0ff56204",
+      "request_headers_sha256": "0391f648b55b711e44e95120307ba06aee5c8e90d5c46926b6f1395854a0b0c1",
+      "status": 202,
+      "headers": {
+        "content-length": "299",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "113a8567-374c-4245-a440-a627c24d43b8"
+      },
+      "body": "{\"status\":\"accepted\",\"config_id\":\"a437d3c5-75a5-53d3-afac-567e773cfdad\",\"task_id\":\"sync_run:5b5178c1-8ea7-45c3-a31e-8ce41bfe38b8\",\"backfill_job_id\":\"391545b5-cc95-41c7-9baa-f0393d0151da\",\"sync_run_id\":\"5b5178c1-8ea7-45c3-a31e-8ce41bfe38b8\",\"mode\":\"fanout\",\"since\":\"2026-09-01\",\"before\":\"2026-09-30\"}"
+    }
+  ],
+  "rows": {
+    "backfill_jobs": {
+      "rows": "cfg-b-days-30pending2026-09-01 00:00:00 +0000 UTC 2026-09-01 00:00:00 +0000 UTC 0 0 0sync_run:d41de8e6-e386-5c1a-ab96-85bfb79e29f5 | cfg-b-days-31pending2026-08-01 00:00:00 +0000 UTC 2026-09-01 00:00:00 +0000 UTC 0 0 0sync_run:57c800a6-612a-50f2-9724-d539fd2492bf | cfg-b-empty-scopepending2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTC 0 0 0sync_run:f53e5eff-bb33-548a-96bb-88fef191192b | cfg-b-gated-incidentspending2026-09-01 00:00:00 +0000 UTC 2026-09-30 00:00:00 +0000 UTC 0 0 0sync_run:c3b729a2-19e4-5816-841e-df29bc97aecc | cfg-b-legacy-datespending2026-09-01 00:00:00 +0000 UTC 2026-09-30 00:00:00 +0000 UTC 0 0 0sync_run:f8f223a7-db52-52c3-a31a-4fc4e350aea9 | cfg-b-mixed-scopepending2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTC 0 0 0sync_run:07baf5a8-a2d5-58ee-80af-ff60dc78ca9f | cfg-b-scopedpending2026-09-01 00:00:00 +0000 UTC 2026-09-04 00:00:00 +0000 UTC 0 0 0sync_run:2a8e0cd1-6774-5e64-9115-874745227a78 | cfg-b-selectorpending2026-09-01 00:00:00 +0000 UTC 2026-09-29 00:00:00 +0000 UTC 0 0 0sync_run:296c8999-6a74-5945-846f-05cf2d8d548e | cfg-b-selector-offsetpending2026-09-01 00:00:00 +0000 UTC 2026-09-30 00:00:00 +0000 UTC 0 0 0sync_run:4cb797c6-1ea7-506c-b9e0-ed842371c70e"
+    },
+    "scheduled_jobs": {
+      "rows": "cfg-b-days-30sync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-b-days-31sync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-b-empty-scopesync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-b-gated-incidentssync15e6c4573-798c-5be3-9c11-3c4e2b464053 | cfg-b-invalid-sourcesync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-b-legacy-datessync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-b-mixed-scopesync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-b-pendingsync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-b-scopedsync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-b-selectorsync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-b-selector-offsetsync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-t-child-pinnedsync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-t-child-pinned-untargetedsync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-t-full-resyncsync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-t-full-resync-falsysync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-t-gated-incidentssync15e6c4573-798c-5be3-9c11-3c4e2b464053 | cfg-t-no-credentialsync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-t-parentsync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-t-pendingsync17e73af61-9d78-536f-af91-1c54823f4d21 | cfg-t-work-items-under-limitsync17e73af61-9d78-536f-af91-1c54823f4d21"
+    },
+    "scheduled_sync_occurrences": {
+      "rows": "cfg-b-days-30sha256:43cdd859c49e1b566635e050023d247ff14603c975eb0c6b304396d483b10111sync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-b-days-31sha256:4c3ac54bf8065d14105678faf20bc32f2bd65a7b6fa4417da3bd68370d3b91b6sync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-b-empty-scopesha256:f5f64606b9926a0e9f79c2db4cfc119cc98bb36f08572e5e5f4ee3c383806158sync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-b-gated-incidentssha256:1658920c4ee92af868e921b52b07a3b4428a7dee7df8bdb7fffd5685e5ef817csync_scheduler_occurrence_v15e6c4573-798c-5be3-9c11-3c4e2b4640532026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-b-invalid-sourcesha256:05330c85a30646e30f12391f7c120e746933f099a4d20fc5b2deb216edec2adcsync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCquarantinedinvalid_plan | cfg-b-legacy-datessha256:1c99686999818053348cb078747f8372de5553f33977d60057a853f09682d117sync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-b-mixed-scopesha256:63a8f7b635dc96658547d66818ab2f458656397e7b0e21f8c052c9453a99fa8csync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-b-pendingsha256:67ae571fae14f2875905df5b8f8f185614af02aa68db5135bdea4b82d28d15c0sync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-b-scopedsha256:f33aafb86fa617590e1f536aed7c7f9b33465f20025954ed88fba9be3118d66esync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-b-selectorsha256:cf3f25bfd27a42efa973e5fb92a05647fec0e80bf9b244ee71d76366de3bdf20sync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-b-selector-offsetsha256:ff6b1b497200b5f953e18fea2e0f54f2bc597e014bdf2f0881c7bc0db3011259sync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-t-child-pinnedsha256:8e2787220820133730617d4e871b1f5aa72a0405d1af677d553e5dd57f13cfaesync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-t-child-pinned-untargetedsha256:56f906b0ae62f85926dfd88a1e43d1a2418b16e7c30854bb33fb07fc7668e087sync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-t-full-resyncsha256:3504ad099d6bfb94e0104ccdb2823d1f852ee2d550338226f5aefcbdd90487ddsync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-t-full-resync-falsysha256:7e4c1227a4051917789eba5b5c4a6a2d0d445707572a0250df8b37a82b484a07sync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCretryplanner_error | cfg-t-gated-incidentssha256:e319eb6ecf0586794985012f3b15dc4a4e3e5b419a26263add918fc9429cdb09sync_scheduler_occurrence_v15e6c4573-798c-5be3-9c11-3c4e2b4640532026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-t-no-credentialsha256:2db507c5e2753ebd29ea076a86b4edd185a4c9faac6b35ba8161dc0363be0c7fsync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-t-parentsha256:b410656a4c901560733be5b3ebae8d934c01a08cf9f96e2302d3ce674d551201sync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-t-pendingsha256:c7978fb2166ced34c765a7d9c18d63e4cada5f6571c953af3b5c81fed889b647sync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e | cfg-t-work-items-under-limitsha256:3ae852e376f73fb01a3536c56278bcdcaad0560320749ea54d92172549f1444dsync_scheduler_occurrence_v17e73af61-9d78-536f-af91-1c54823f4d212026-09-24 12:34:56.123456 +0000 UTCcompleted\u003cnil\u003e"
+    },
+    "sync_coverage_projections": {
+      "rows": "cfg-b-cred-failedfalse | cfg-b-days-30true | cfg-b-days-31true | cfg-b-empty-scopetrue | cfg-b-gated-incidentstrue | cfg-b-invalid-sourcetrue | cfg-b-legacy-datestrue | cfg-b-limit-org-bfalse | cfg-b-limit-org-b-okfalse | cfg-b-mixed-scopetrue | cfg-b-pausedfalse | cfg-b-pendingtrue | cfg-b-scopedtrue | cfg-b-selectortrue | cfg-b-selector-offsettrue | cfg-t-child-pinnedtrue | cfg-t-child-pinned-untargetedtrue | cfg-t-cred-failedfalse | cfg-t-cred-failed-notextfalse | cfg-t-cred-inactivefalse | cfg-t-full-resynctrue | cfg-t-full-resync-falsytrue | cfg-t-gated-incidentstrue | cfg-t-guard-memberAfalse | cfg-t-guard-noorgfalse | cfg-t-no-credentialtrue | cfg-t-other-orgfalse | cfg-t-pagerduty-no-credentialfalse | cfg-t-pagerduty-wrong-targetfalse | cfg-t-parenttrue | cfg-t-parent-againfalse | cfg-t-pausedfalse | cfg-t-pendingtrue | cfg-t-work-items-over-limitfalse | cfg-t-work-items-under-limittrue"
+    },
+    "sync_manual_triggers": {
+      "rows": "cfg-b-days-30backfill2026-09-01 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTC{225c4b3e-2a08-5515-a1ab-04dcfa49ed10,bd5e29af-2e71-5547-82cd-71cdab9e00f2}\u003cnil\u003ebackfill | cfg-b-days-31backfill2026-08-01 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTC{c1e7e864-337d-577b-a34b-3eb62557113e,af7ea4a4-d681-520d-981a-392186b11bb0}\u003cnil\u003ebackfill | cfg-b-empty-scopebackfill2026-09-01 00:00:00 +0000 UTC 2026-09-05 00:00:00 +0000 UTC{}{}backfill | cfg-b-gated-incidentsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTC{e91a1e2a-3f05-5f37-a764-9af9519405c3,f1384a0e-113c-5c2f-bd86-f3e73e919809}\u003cnil\u003ebackfill | cfg-b-invalid-sourcebackfill2026-09-01 00:00:00 +0000 UTC 2026-09-05 00:00:00 +0000 UTC{not-a-uuid}\u003cnil\u003ebackfill | cfg-b-legacy-datesbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTC{764e2c7e-061b-5f27-b4bd-21848ee6aae0,cc05a567-6ea9-54ea-90d4-910a530543d1}\u003cnil\u003ebackfill | cfg-b-mixed-scopebackfill2026-09-01 00:00:00 +0000 UTC 2026-09-05 00:00:00 +0000 UTC \u003cnil\u003e{prs}backfill | cfg-b-pendingbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTC{7e3240c7-841c-5c5f-84d8-7eac32ef7cc7,f1488e1b-a0be-5ae5-8083-1430de1d7ce5}\u003cnil\u003ebackfill | cfg-b-scopedbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-05 00:00:00 +0000 UTC{59fc6aff-eae3-504e-ba1a-21a15065bd87}{commits}backfill | cfg-b-selectorbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-30 00:00:00 +0000 UTC \u003cnil\u003e \u003cnil\u003ebackfill | cfg-b-selector-offsetbackfill2026-09-02 04:00:00 +0000 UTC 2026-09-29 20:00:00 +0000 UTC \u003cnil\u003e \u003cnil\u003ebackfill | cfg-t-child-pinnedincremental\u003cnil\u003e \u003cnil\u003e{5fe0772e-c975-57fb-b133-885bd7b6b428}{repo-metadata,commits,commit-stats,files,prs,pr-reviews,pr-comments}manual | cfg-t-child-pinned-untargetedincremental\u003cnil\u003e \u003cnil\u003e{d4a769d5-3747-5add-a4f8-1d2592b70a94}\u003cnil\u003emanual | cfg-t-full-resyncfull_resync\u003cnil\u003e \u003cnil\u003e{214d0bf2-7b6c-5e9f-8e28-ab15470f3760,e533f004-e00e-5d7e-a103-955c95e10eb5}\u003cnil\u003emanual | cfg-t-full-resync-falsyincremental\u003cnil\u003e \u003cnil\u003e{4863612c-e090-5098-a466-f914e638f7d7,4c06da3b-4ee7-5631-88fb-52bbe7d36b17}\u003cnil\u003emanual | cfg-t-gated-incidentsincremental\u003cnil\u003e \u003cnil\u003e{7888a15e-e5cd-566d-96bc-1c0d82fc4ca2,bb4586f1-12b6-57f0-9132-58831d534a15}\u003cnil\u003emanual | cfg-t-no-credentialincremental\u003cnil\u003e \u003cnil\u003e{313fa67c-8688-5555-ae4f-fcbfbc95e495,eb6830b9-7426-5d2a-86f1-2ae1085562e1}\u003cnil\u003emanual | cfg-t-parentincremental\u003cnil\u003e \u003cnil\u003e{6dd06063-491f-5ac9-b7c7-07012daa8c11,e140f963-0f6b-5941-9328-1620f528a231}\u003cnil\u003emanual | cfg-t-pendingincremental\u003cnil\u003e \u003cnil\u003e{1d87a659-a834-5466-9ba1-fabfd600e579,08fa16df-3c29-50da-b014-44ff728013a5}\u003cnil\u003emanual | cfg-t-work-items-under-limitincremental\u003cnil\u003e \u003cnil\u003e{b5a3f796-ab00-5857-b164-8da12cdf7b33,ebd89fc6-6e4a-5f7f-8e60-1f3e847c8f97}\u003cnil\u003emanual"
+    },
+    "sync_run_units": {
+      "rows": "cfg-b-days-30commitsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-30prsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-30securitybackfill2026-09-01 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-30commitsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-30prsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-30securitybackfill2026-09-01 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31commitsbackfill2026-08-01 00:00:00 +0000 UTC 2026-08-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31commitsbackfill2026-08-08 00:00:00 +0000 UTC 2026-08-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31commitsbackfill2026-08-15 00:00:00 +0000 UTC 2026-08-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31commitsbackfill2026-08-22 00:00:00 +0000 UTC 2026-08-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31commitsbackfill2026-08-29 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31prsbackfill2026-08-01 00:00:00 +0000 UTC 2026-08-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31prsbackfill2026-08-08 00:00:00 +0000 UTC 2026-08-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31prsbackfill2026-08-15 00:00:00 +0000 UTC 2026-08-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31prsbackfill2026-08-22 00:00:00 +0000 UTC 2026-08-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31prsbackfill2026-08-29 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31securitybackfill2026-08-01 00:00:00 +0000 UTC 2026-08-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31securitybackfill2026-08-08 00:00:00 +0000 UTC 2026-08-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31securitybackfill2026-08-15 00:00:00 +0000 UTC 2026-08-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31securitybackfill2026-08-22 00:00:00 +0000 UTC 2026-08-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31securitybackfill2026-08-29 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31commitsbackfill2026-08-01 00:00:00 +0000 UTC 2026-08-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31commitsbackfill2026-08-08 00:00:00 +0000 UTC 2026-08-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31commitsbackfill2026-08-15 00:00:00 +0000 UTC 2026-08-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31commitsbackfill2026-08-22 00:00:00 +0000 UTC 2026-08-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31commitsbackfill2026-08-29 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31prsbackfill2026-08-01 00:00:00 +0000 UTC 2026-08-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31prsbackfill2026-08-08 00:00:00 +0000 UTC 2026-08-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31prsbackfill2026-08-15 00:00:00 +0000 UTC 2026-08-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31prsbackfill2026-08-22 00:00:00 +0000 UTC 2026-08-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31prsbackfill2026-08-29 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31securitybackfill2026-08-01 00:00:00 +0000 UTC 2026-08-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31securitybackfill2026-08-08 00:00:00 +0000 UTC 2026-08-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31securitybackfill2026-08-15 00:00:00 +0000 UTC 2026-08-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31securitybackfill2026-08-22 00:00:00 +0000 UTC 2026-08-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-days-31securitybackfill2026-08-29 00:00:00 +0000 UTC 2026-09-01 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentscommitsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentscommitsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentscommitsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentscommitsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentscommitsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentsprsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentsprsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentsprsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentsprsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentsprsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentssecuritybackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentssecuritybackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentssecuritybackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentssecuritybackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentssecuritybackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentscommitsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentscommitsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentscommitsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentscommitsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentscommitsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentsprsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentsprsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentsprsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentsprsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentsprsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentssecuritybackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentssecuritybackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentssecuritybackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentssecuritybackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-gated-incidentssecuritybackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datescommitsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datescommitsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datescommitsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datescommitsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datescommitsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datesprsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datesprsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datesprsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datesprsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datesprsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datessecuritybackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datessecuritybackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datessecuritybackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datessecuritybackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datessecuritybackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datescommitsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datescommitsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datescommitsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datescommitsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datescommitsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datesprsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datesprsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datesprsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datesprsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datesprsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datessecuritybackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datessecuritybackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datessecuritybackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datessecuritybackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-legacy-datessecuritybackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-mixed-scopeprsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-05 00:00:00 +0000 UTCplannedgithub | cfg-b-mixed-scopeprsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-05 00:00:00 +0000 UTCplannedgithub | cfg-b-pendingcommitsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingcommitsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingcommitsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingcommitsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingcommitsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingprsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingprsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingprsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingprsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingprsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingsecuritybackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingsecuritybackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingsecuritybackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingsecuritybackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingsecuritybackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingcommitsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingcommitsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingcommitsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingcommitsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingcommitsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingprsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingprsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingprsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingprsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingprsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingsecuritybackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingsecuritybackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingsecuritybackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingsecuritybackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-pendingsecuritybackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-scopedcommitsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-05 00:00:00 +0000 UTCplannedgithub | cfg-b-selectorcommitsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorcommitsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorcommitsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorcommitsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorcommitsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 00:00:00 +0000 UTCplannedgithub | cfg-b-selectorprsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorprsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorprsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorprsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorprsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 00:00:00 +0000 UTCplannedgithub | cfg-b-selectorsecuritybackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorsecuritybackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorsecuritybackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorsecuritybackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorsecuritybackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 00:00:00 +0000 UTCplannedgithub | cfg-b-selectorcommitsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorcommitsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorcommitsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorcommitsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorcommitsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 00:00:00 +0000 UTCplannedgithub | cfg-b-selectorprsbackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorprsbackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorprsbackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorprsbackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorprsbackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 00:00:00 +0000 UTCplannedgithub | cfg-b-selectorsecuritybackfill2026-09-01 00:00:00 +0000 UTC 2026-09-07 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorsecuritybackfill2026-09-08 00:00:00 +0000 UTC 2026-09-14 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorsecuritybackfill2026-09-15 00:00:00 +0000 UTC 2026-09-21 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorsecuritybackfill2026-09-22 00:00:00 +0000 UTC 2026-09-28 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selectorsecuritybackfill2026-09-29 00:00:00 +0000 UTC 2026-09-30 00:00:00 +0000 UTCplannedgithub | cfg-b-selector-offsetcommitsbackfill2026-09-02 04:00:00 +0000 UTC 2026-09-08 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetcommitsbackfill2026-09-09 00:00:00 +0000 UTC 2026-09-15 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetcommitsbackfill2026-09-16 00:00:00 +0000 UTC 2026-09-22 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetcommitsbackfill2026-09-23 00:00:00 +0000 UTC 2026-09-29 20:00:00 +0000 UTCplannedgithub | cfg-b-selector-offsetprsbackfill2026-09-02 04:00:00 +0000 UTC 2026-09-08 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetprsbackfill2026-09-09 00:00:00 +0000 UTC 2026-09-15 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetprsbackfill2026-09-16 00:00:00 +0000 UTC 2026-09-22 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetprsbackfill2026-09-23 00:00:00 +0000 UTC 2026-09-29 20:00:00 +0000 UTCplannedgithub | cfg-b-selector-offsetsecuritybackfill2026-09-02 04:00:00 +0000 UTC 2026-09-08 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetsecuritybackfill2026-09-09 00:00:00 +0000 UTC 2026-09-15 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetsecuritybackfill2026-09-16 00:00:00 +0000 UTC 2026-09-22 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetsecuritybackfill2026-09-23 00:00:00 +0000 UTC 2026-09-29 20:00:00 +0000 UTCplannedgithub | cfg-b-selector-offsetcommitsbackfill2026-09-02 04:00:00 +0000 UTC 2026-09-08 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetcommitsbackfill2026-09-09 00:00:00 +0000 UTC 2026-09-15 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetcommitsbackfill2026-09-16 00:00:00 +0000 UTC 2026-09-22 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetcommitsbackfill2026-09-23 00:00:00 +0000 UTC 2026-09-29 20:00:00 +0000 UTCplannedgithub | cfg-b-selector-offsetprsbackfill2026-09-02 04:00:00 +0000 UTC 2026-09-08 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetprsbackfill2026-09-09 00:00:00 +0000 UTC 2026-09-15 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetprsbackfill2026-09-16 00:00:00 +0000 UTC 2026-09-22 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetprsbackfill2026-09-23 00:00:00 +0000 UTC 2026-09-29 20:00:00 +0000 UTCplannedgithub | cfg-b-selector-offsetsecuritybackfill2026-09-02 04:00:00 +0000 UTC 2026-09-08 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetsecuritybackfill2026-09-09 00:00:00 +0000 UTC 2026-09-15 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetsecuritybackfill2026-09-16 00:00:00 +0000 UTC 2026-09-22 23:59:59.999999 +0000 UTCplannedgithub | cfg-b-selector-offsetsecuritybackfill2026-09-23 00:00:00 +0000 UTC 2026-09-29 20:00:00 +0000 UTCplannedgithub | cfg-t-child-pinnedcommit-statsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-01 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-child-pinnedcommitsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-child-pinnedfilesincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-01 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-child-pinnedprsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-child-pinnedrepo-metadataincremental\u003cnil\u003e 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-child-pinned-untargetedcommitsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-child-pinned-untargetedprsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-child-pinned-untargetedsecurityincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-full-resynccommitsfull_resync2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-full-resyncprsfull_resync2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-full-resyncsecurityfull_resync2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-full-resynccommitsfull_resync2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-full-resyncprsfull_resync2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-full-resyncsecurityfull_resync2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-gated-incidentscommitsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-gated-incidentsprsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-gated-incidentssecurityincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-gated-incidentscommitsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-gated-incidentsprsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-gated-incidentssecurityincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-no-credentialcommitsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-no-credentialprsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-no-credentialsecurityincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-no-credentialcommitsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-no-credentialprsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-no-credentialsecurityincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-parentcommitsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-parentprsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-parentsecurityincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-parentcommitsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-parentprsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-parentsecurityincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-pendingcommitsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-pendingprsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-pendingsecurityincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-pendingcommitsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-pendingprsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-pendingsecurityincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-work-items-under-limitcommitsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-work-items-under-limitprsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-work-items-under-limitsecurityincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-work-items-under-limitcommitsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-work-items-under-limitprsincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub | cfg-t-work-items-under-limitsecurityincremental2026-08-25 12:34:56.123456 +0000 UTC 2026-09-24 12:34:56.123456 +0000 UTCplannedgithub"
+    },
+    "sync_runs": {
+      "rows": "cfg-b-days-30backfillplanned6 0 0backfill\u003cnil\u003e \u003cnil\u003e | cfg-b-days-31backfillplanned30 0 0backfill\u003cnil\u003e \u003cnil\u003e | cfg-b-empty-scopebackfillplanned0 0 0backfill\u003cnil\u003e \u003cnil\u003e | cfg-b-gated-incidentsbackfillplanned30 0 0backfill\u003cnil\u003e \u003cnil\u003e | cfg-b-legacy-datesbackfillplanned30 0 0backfill\u003cnil\u003e \u003cnil\u003e | cfg-b-mixed-scopebackfillplanned2 0 0backfill\u003cnil\u003e \u003cnil\u003e | cfg-b-pendingbackfillplanned30 0 0backfill\u003cnil\u003e \u003cnil\u003e | cfg-b-scopedbackfillplanned1 0 0backfill\u003cnil\u003e \u003cnil\u003e | cfg-b-selectorbackfillplanned30 0 0backfill\u003cnil\u003e \u003cnil\u003e | cfg-b-selector-offsetbackfillplanned24 0 0backfill\u003cnil\u003e \u003cnil\u003e | cfg-t-child-pinnedincrementalplanned5 0 0manual\u003cnil\u003e \u003cnil\u003e | cfg-t-child-pinned-untargetedincrementalplanned3 0 0manual\u003cnil\u003e \u003cnil\u003e | cfg-t-full-resyncfull_resyncplanned6 0 0manual\u003cnil\u003e \u003cnil\u003e | cfg-t-gated-incidentsincrementalplanned6 0 0manual\u003cnil\u003e \u003cnil\u003e | cfg-t-no-credentialincrementalplanned6 0 0manual\u003cnil\u003e \u003cnil\u003e | cfg-t-parentincrementalplanned6 0 0manual\u003cnil\u003e \u003cnil\u003e | cfg-t-pendingincrementalplanned6 0 0manual\u003cnil\u003e \u003cnil\u003e | cfg-t-work-items-under-limitincrementalplanned6 0 0manual\u003cnil\u003e \u003cnil\u003e"
+    }
+  }
+}

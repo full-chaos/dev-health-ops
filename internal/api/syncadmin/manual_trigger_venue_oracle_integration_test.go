@@ -366,7 +366,7 @@ func TestManualTriggerVenueOracleFrozen(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/manual_trigger_oracle.golden.json",
 		PythonBuild: manualGoldenBuild,
-		SHA256:      "PIN:manual_trigger_oracle.golden",
+		SHA256:      "d5629084a00f3c529662d14c328ea085a57780a230cc7ffc6d8de24977991d75",
 		Recipe:      "DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/syncadmin/ -test '^TestManualTriggerVenueOracleFrozen$' -python-root <clean worktree at " + manualGoldenBuild + ">",
 	})
 	runManualTriggerOracle(t, golden)

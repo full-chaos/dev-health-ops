@@ -100,14 +100,13 @@ same reason: `dho migrate roles` bootstraps the logins the running application
 build must find. There is no chart-default fallback.
 */}}
 {{- $rolesImage := .Values.migrations.hook.provisionRoles.image | default .Values.migrations.hook.riverMigrate.image | default .Values.migrations.hook.routeActivate.image }}
-{{- $rolesPullPolicy := .Values.migrations.hook.provisionRoles.pullPolicy | default .Values.migrations.hook.riverMigrate.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default .Values.image.pullPolicy }}
-{{- $rolesImageIsDigestPinned := and $rolesImage (contains "@sha256:" $rolesImage) }}
-{{- $rolesImageIsImmutableTag := and $rolesImage (regexMatch "^.+:sha-[0-9a-f]{12}$" $rolesImage) }}
-{{- $rolesImageIsSideloadedLocal := and $rolesImage (regexMatch "^.+:local$" $rolesImage) (or (eq $rolesPullPolicy "Never") (eq $rolesPullPolicy "IfNotPresent")) }}
-{{- if not (or $rolesImageIsDigestPinned $rolesImageIsImmutableTag $rolesImageIsSideloadedLocal) }}
-{{- fail (printf "the provision-roles hook image %q (migrations.hook.provisionRoles.image, else migrations.hook.riverMigrate.image, else migrations.hook.routeActivate.image) is not a pinned dho image. The hook runs `dho migrate roles` and needs the operator image built from the same commit as image.repository/image.tag: set one of them to repo@sha256:<digest> or repo:sha-<12 hex>; repo:local is accepted only with pullPolicy Never or IfNotPresent." $rolesImage) }}
-{{- end }}
-{{- include "dev-health.lockstepImageCheck" (dict "context" . "image" $rolesImage "labelWithValue" (printf "the provision-roles hook image (migrations.hook.provisionRoles.image, else migrations.hook.riverMigrate.image, else migrations.hook.routeActivate.image: %s)" $rolesImage) "reason" "`dho migrate roles` must run the same build as the application it is provisioning for.") }}
+{{- /*
+CHAOS-6958: IfNotPresent is this hook's OWN default -- never
+.Values.image.pullPolicy (the application image's policy), which used to leak a
+local dev Never onto this PINNED REGISTRY image and make it unpullable.
+*/}}
+{{- $rolesPullPolicy := .Values.migrations.hook.provisionRoles.pullPolicy | default .Values.migrations.hook.riverMigrate.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default "IfNotPresent" }}
+{{- include "dev-health.pinnedOperatorImageCheck" (dict "context" . "image" $rolesImage "pullPolicy" $rolesPullPolicy "flagLabel" "the provision-roles hook image (migrations.hook.provisionRoles.image, else migrations.hook.riverMigrate.image, else migrations.hook.routeActivate.image)" "verb" "`dho migrate roles`") }}
 {{- if and (not $poolerSecret.create) (not $poolerSecret.externalSecretName) }}
 {{- fail "migrations.hook.provisionRoles.enabled=true needs a Secret carrying the RIVER_*_DATABASE_PASSWORD keys (three, plus RIVER_KEDA_READONLY_PASSWORD when KEDA autoscaling is enabled): either set goWorkers.pgbouncer.secret.create=true, or point goWorkers.pgbouncer.secret.externalSecretName at a pre-created one. The provisioning Job sets each role's password from that Secret, and a role created with a password the poolers do not share cannot authenticate." }}
 {{- end }}
@@ -290,24 +289,16 @@ route-activate's: repo@sha256:<digest>, repo:sha-<12 hex>, or repo:local with
 pullPolicy Never or IfNotPresent.
 */}}
 {{- $riverImage := .Values.migrations.hook.riverMigrate.image | default .Values.migrations.hook.routeActivate.image }}
-{{- $riverPullPolicy := .Values.migrations.hook.riverMigrate.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default .Values.image.pullPolicy }}
-{{- $riverImageIsDigestPinned := and $riverImage (contains "@sha256:" $riverImage) }}
-{{- $riverImageIsImmutableTag := and $riverImage (regexMatch "^.+:sha-[0-9a-f]{12}$" $riverImage) }}
-{{- $riverImageIsSideloadedLocal := and $riverImage (regexMatch "^.+:local$" $riverImage) (or (eq $riverPullPolicy "Never") (eq $riverPullPolicy "IfNotPresent")) }}
-{{- if not (or $riverImageIsDigestPinned $riverImageIsImmutableTag $riverImageIsSideloadedLocal) }}
-{{- fail (printf "the River hook image %q (migrations.hook.riverMigrate.image, else migrations.hook.routeActivate.image) is not a pinned dho image. The hook runs `dho migrate river --apply-and-check` and needs the operator image built from the same commit as image.repository/image.tag: set migrations.hook.riverMigrate.image or migrations.hook.routeActivate.image to repo@sha256:<digest> or repo:sha-<12 hex>; repo:local is accepted only with pullPolicy Never or IfNotPresent." $riverImage) }}
-{{- end }}
 {{- /*
-Lockstep check: this River hook image and the api/migrate image
-(dev-health.image, image.repository/image.tag) must come from the SAME
-commit -- the exact rule route-activate-hooks.yaml already applies to its
-own operator image, for the same reason: `dho migrate river` writes a
-posture the running application build must match. Shared with
-route-activate-hooks.yaml's identical check via
-dev-health.lockstepImageCheck (_helpers.tpl) -- see that template's own
-comment for the digest-pin exemption both callers carry.
+CHAOS-6958: IfNotPresent is this hook's OWN default -- never
+.Values.image.pullPolicy (the application image's policy), which used to leak a
+local dev Never onto this PINNED REGISTRY image and make it unpullable. The
+identity check, the real-digest check and the lockstep check all live in
+dev-health.pinnedOperatorImageCheck now (_helpers.tpl); see that definition's
+own comment for what each one closes.
 */}}
-{{- include "dev-health.lockstepImageCheck" (dict "context" . "image" $riverImage "labelWithValue" (printf "the River hook image (migrations.hook.riverMigrate.image, else migrations.hook.routeActivate.image: %s)" $riverImage) "reason" "`dho migrate river` must run the same build as the application it is migrating for.") }}
+{{- $riverPullPolicy := .Values.migrations.hook.riverMigrate.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default "IfNotPresent" }}
+{{- include "dev-health.pinnedOperatorImageCheck" (dict "context" . "image" $riverImage "pullPolicy" $riverPullPolicy "flagLabel" "the River hook image (migrations.hook.riverMigrate.image, else migrations.hook.routeActivate.image)" "verb" "`dho migrate river --apply-and-check`") }}
 {{- /*
 This hook owns the River step, so the elevated DSN reaches it under
 MIGRATION_DATABASE_URI and reaches the weight-0 migrate Job under POSTGRES_URI

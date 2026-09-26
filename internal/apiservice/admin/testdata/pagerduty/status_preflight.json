@@ -1,0 +1,994 @@
+{
+  "header": {
+    "test": "TestPagerDutyStatusAndPreflightVenueOracle",
+    "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
+    "producer_digest": "c0f6de73e34fa0583fea646a33b5f133309c1639cf5fc59dd5ebe0f439faed19",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestPagerDutyStatusAndPreflightVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+  },
+  "requests": [
+    {
+      "name": "status oauth connected",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "eeadbe90f7b3f886f8821f945b74108e3e75c48cff86e3bedd20f70f0f29a26b",
+      "status": 200,
+      "headers": {
+        "content-length": "262",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "da95fffe-58e2-4aab-a299-56e9a19d1798"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"auth_mode\":\"oauth\",\"region\":\"us\",\"subdomain\":\"acme\",\"account_id\":\"acct-1\",\"account_display\":\"Acme Co\",\"granted_scopes\":[\"incidents.read\",\"services.read\"],\"expires_at\":\"2026-05-01T00:00:00Z\",\"has_refresh_token\":true}"
+    },
+    {
+      "name": "status oauth inactive",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4a493f03e4ad7e84fe6373048cff496a033c342081c9449fa7c5bfe3c5ed9a18",
+      "status": 200,
+      "headers": {
+        "content-length": "205",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "abb2f995-339e-4324-96b2-56fd9d51ad0d"
+      },
+      "body": "{\"connected\":false,\"credential_name\":\"default\",\"auth_mode\":\"oauth\",\"region\":\"us\",\"subdomain\":\"gone\",\"account_id\":null,\"account_display\":null,\"granted_scopes\":[],\"expires_at\":null,\"has_refresh_token\":false}"
+    },
+    {
+      "name": "status oauth no metadata row",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "479ce3db502886a19515357201481f848373cb35c8d31a96fc815886c3c0a106",
+      "status": 200,
+      "headers": {
+        "content-length": "205",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e5cb721d-d9eb-481a-9ead-89da3aeccf4d"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"auth_mode\":\"oauth\",\"region\":\"eu\",\"subdomain\":\"stale\",\"account_id\":null,\"account_display\":null,\"granted_scopes\":[],\"expires_at\":null,\"has_refresh_token\":false}"
+    },
+    {
+      "name": "status api_token",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e5773e7645db868046b1f7d05729313080a1f21e9b0973c1317ccebfa2bd027f",
+      "status": 200,
+      "headers": {
+        "content-length": "207",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f60b364b-ed81-4ec1-9308-301baa134727"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"auth_mode\":\"api_token\",\"region\":\"us\",\"subdomain\":\"tok\",\"account_id\":null,\"account_display\":null,\"granted_scopes\":[],\"expires_at\":null,\"has_refresh_token\":false}"
+    },
+    {
+      "name": "status client_credentials",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "f4c29f0cff36d19d6671b17365d50b341b499c85db0440e7adde7fa97a144596",
+      "status": 200,
+      "headers": {
+        "content-length": "220",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a2fe0562-85ed-42de-80b4-ec243247c9d7"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"auth_mode\":\"client_credentials\",\"region\":\"eu\",\"subdomain\":\"cc\",\"account_id\":\"cc-acct\",\"account_display\":null,\"granted_scopes\":[],\"expires_at\":null,\"has_refresh_token\":false}"
+    },
+    {
+      "name": "status unrecognized auth_mode",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "b8678c49fcd89ab707595d3d4f3f9095f911a52a25a4fba600bfcdee5328b1e4",
+      "status": 200,
+      "headers": {
+        "content-length": "212",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "baa058e1-10fe-437d-a38c-b6cbbdf1d62a"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"auth_mode\":\"unknown_mode\",\"region\":\"us\",\"subdomain\":\"weird\",\"account_id\":null,\"account_display\":null,\"granted_scopes\":[],\"expires_at\":null,\"has_refresh_token\":false}"
+    },
+    {
+      "name": "status no descriptor at all",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4d943c98be5548d9488f07c1d790c287af89a89c7200fa9746bb338f286a9287",
+      "status": 200,
+      "headers": {
+        "content-length": "200",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e91ba888-e547-44fd-9d15-4b7ba8adad25"
+      },
+      "body": "{\"connected\":false,\"credential_name\":\"default\",\"auth_mode\":null,\"region\":null,\"subdomain\":null,\"account_id\":null,\"account_display\":null,\"granted_scopes\":[],\"expires_at\":null,\"has_refresh_token\":false}"
+    },
+    {
+      "name": "status custom credential_name",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status?credential_name=secondary",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "632f20eebc13015ee6d822f6205cc5652294468e77f5d6b98ea82ca978df83f2",
+      "status": 200,
+      "headers": {
+        "content-length": "211",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7712e80c-70e6-4eca-aaca-9863be41ff4d"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"secondary\",\"auth_mode\":\"api_token\",\"region\":\"us\",\"subdomain\":\"named\",\"account_id\":null,\"account_display\":null,\"granted_scopes\":[],\"expires_at\":null,\"has_refresh_token\":false}"
+    },
+    {
+      "name": "status unknown credential_name on a connected org",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status?credential_name=nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "eeadbe90f7b3f886f8821f945b74108e3e75c48cff86e3bedd20f70f0f29a26b",
+      "status": 200,
+      "headers": {
+        "content-length": "197",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0834b3f4-ea49-414b-8fb7-01695a7a084e"
+      },
+      "body": "{\"connected\":false,\"credential_name\":\"nope\",\"auth_mode\":null,\"region\":null,\"subdomain\":null,\"account_id\":null,\"account_display\":null,\"granted_scopes\":[],\"expires_at\":null,\"has_refresh_token\":false}"
+    },
+    {
+      "name": "status empty credential_name query value",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status?credential_name=",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4d943c98be5548d9488f07c1d790c287af89a89c7200fa9746bb338f286a9287",
+      "status": 200,
+      "headers": {
+        "content-length": "193",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "08b881c4-7984-44f8-b634-d62be2037b96"
+      },
+      "body": "{\"connected\":false,\"credential_name\":\"\",\"auth_mode\":null,\"region\":null,\"subdomain\":null,\"account_id\":null,\"account_display\":null,\"granted_scopes\":[],\"expires_at\":null,\"has_refresh_token\":false}"
+    },
+    {
+      "name": "status member refused",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d464e1e642ac3bf44e13784a46a27215f6a5bd1f6cbad0356cc9f1e94c38f31",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bfa8aa68-5c1d-481f-86a5-893d024a4593"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "status superuser without org",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa1ea6c796c71d96dec74c9931285bca20969bbbc4214d3156f1e68a620d8168",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "906d3ca5-bf51-4126-b962-ce553671798c"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "status unauthenticated",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5db8f95b-2586-4624-8aa9-0ae971669743"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "status post is 405",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/status",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b016f6fa-0769-40e8-80dc-3060d022819b"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "preflight oauth all granted",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "418f9358a91972596c532997834190ba62d151d7f5f7914d328eee03d5594ed8",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 200,
+      "headers": {
+        "content-length": "239",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "74a736d4-4324-4dd2-adaf-103123619f14"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"datasets\":[{\"requested\":\"incidents\",\"required_scopes\":[\"incidents.read\"],\"granted\":true,\"missing\":[]},{\"requested\":\"services\",\"required_scopes\":[\"services.read\"],\"granted\":true,\"missing\":[]}]}"
+    },
+    {
+      "name": "preflight oauth some missing",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "6db805530ae7da717e0d6b6843b19ba35727e6f305ab55cc4ce3098d1e016e2a",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 200,
+      "headers": {
+        "content-length": "384",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4e4000f9-7292-4cb1-abe4-d8e4266b524c"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"datasets\":[{\"requested\":\"incidents\",\"required_scopes\":[\"incidents.read\"],\"granted\":true,\"missing\":[]},{\"requested\":\"escalation-policies\",\"required_scopes\":[\"escalation_policies.read\"],\"granted\":false,\"missing\":[\"escalation_policies.read\"]},{\"requested\":\"teams\",\"required_scopes\":[\"teams.read\"],\"granted\":false,\"missing\":[\"teams.read\"]}]}"
+    },
+    {
+      "name": "preflight oauth business-services family",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "a3266b71f41b7393a7f6c7c7987248db2190a4fd9406e959432c6ce3c5e67bdf",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 200,
+      "headers": {
+        "content-length": "254",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2783a933-148d-4d8d-a8cc-941817897b64"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"datasets\":[{\"requested\":\"business-services\",\"required_scopes\":[\"services.read\"],\"granted\":true,\"missing\":[]},{\"requested\":\"incident-alerts\",\"required_scopes\":[\"incidents.read\"],\"granted\":true,\"missing\":[]}]}"
+    },
+    {
+      "name": "preflight oauth duplicate dataset",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "40743c8a502eba8dd284dae98f7e964bd1a665748e3ea928286dd0c09d83701b",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 200,
+      "headers": {
+        "content-length": "251",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3a06f69c-9a6d-41c2-a03c-6b665c443c50"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"datasets\":[{\"requested\":\"users\",\"required_scopes\":[\"users.read\"],\"granted\":false,\"missing\":[\"users.read\"]},{\"requested\":\"users\",\"required_scopes\":[\"users.read\"],\"granted\":false,\"missing\":[\"users.read\"]}]}"
+    },
+    {
+      "name": "preflight oauth empty datasets",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "afe7805075e901977b020219c3507f1c737679d4683cb466765ca11f65b87c7c",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 200,
+      "headers": {
+        "content-length": "60",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cc8f4ba9-a799-451a-9e47-614ddad31619"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"datasets\":[]}"
+    },
+    {
+      "name": "preflight oauth inactive still computes",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "e6e7a23a803a745983362e70b00e46d1408448c00410858067988b98be20626c",
+      "request_headers_sha256": "f1dffa1b611f9fa5e1bd9de9187259265692cb8e3f1c14df9b82d3b66bac42cf",
+      "status": 200,
+      "headers": {
+        "content-length": "168",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1dabfb45-eb20-45b6-b0dc-d5262e7c24ee"
+      },
+      "body": "{\"connected\":false,\"credential_name\":\"default\",\"datasets\":[{\"requested\":\"incidents\",\"required_scopes\":[\"incidents.read\"],\"granted\":false,\"missing\":[\"incidents.read\"]}]}"
+    },
+    {
+      "name": "preflight oauth no metadata row",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "e6e7a23a803a745983362e70b00e46d1408448c00410858067988b98be20626c",
+      "request_headers_sha256": "a7f482812377b70e149171bb7b4aea4ddaeb19a80fd59fd530b40f9626a71aa3",
+      "status": 200,
+      "headers": {
+        "content-length": "168",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9ee0b42c-378a-4f2a-acf4-a030ed662213"
+      },
+      "body": "{\"connected\":false,\"credential_name\":\"default\",\"datasets\":[{\"requested\":\"incidents\",\"required_scopes\":[\"incidents.read\"],\"granted\":false,\"missing\":[\"incidents.read\"]}]}"
+    },
+    {
+      "name": "preflight api_token grantable bypasses scopes",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "7dcee16f0982e594f04f0b03fce14db2532583af2ec1ed708831e3c8de6a7898",
+      "request_headers_sha256": "857025501f7d86915645835f28248eba862fde4a9eeb74334dd33059069109c4",
+      "status": 200,
+      "headers": {
+        "content-length": "238",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ca91e02f-f369-41c2-9bf5-ab63d1101b1c"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"datasets\":[{\"requested\":\"incidents\",\"required_scopes\":[\"incidents.read\"],\"granted\":true,\"missing\":[]},{\"requested\":\"on-calls\",\"required_scopes\":[\"oncalls.read\"],\"granted\":true,\"missing\":[]}]}"
+    },
+    {
+      "name": "preflight client_credentials grantable bypasses scopes",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "8f50c7633994d60451630de4a98b67d14328e761bf3529f623e706de63e0bbd8",
+      "request_headers_sha256": "605a984b09d155b60dc7fc6bc139ab9290c9fee09ce9c60f14afcceffabfb751",
+      "status": 200,
+      "headers": {
+        "content-length": "150",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fb2b2031-896e-4ff8-867d-db816c0e6d00"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"datasets\":[{\"requested\":\"schedules\",\"required_scopes\":[\"schedules.read\"],\"granted\":true,\"missing\":[]}]}"
+    },
+    {
+      "name": "preflight unrecognized auth_mode not grantable",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "e6e7a23a803a745983362e70b00e46d1408448c00410858067988b98be20626c",
+      "request_headers_sha256": "df1643d2e88982870ad8d9a1f3c5bfe95ed6b27aa69023d5f2a1069592935786",
+      "status": 200,
+      "headers": {
+        "content-length": "167",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1da5e7bb-4d7f-47b5-9e56-53f9b1144480"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"datasets\":[{\"requested\":\"incidents\",\"required_scopes\":[\"incidents.read\"],\"granted\":false,\"missing\":[\"incidents.read\"]}]}"
+    },
+    {
+      "name": "preflight no descriptor at all",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "e6e7a23a803a745983362e70b00e46d1408448c00410858067988b98be20626c",
+      "request_headers_sha256": "eb101098ce7b1e6ad8a55dfcc83db3803b47374f9dad70b09092fc757db861f1",
+      "status": 200,
+      "headers": {
+        "content-length": "168",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "62c9d018-73f6-475f-b0e4-7255b1d4af85"
+      },
+      "body": "{\"connected\":false,\"credential_name\":\"default\",\"datasets\":[{\"requested\":\"incidents\",\"required_scopes\":[\"incidents.read\"],\"granted\":false,\"missing\":[\"incidents.read\"]}]}"
+    },
+    {
+      "name": "preflight custom credential_name",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "30f489706fb516880ec180c65e257201e5893f11c100e4580bf8a04ac207fbe1",
+      "request_headers_sha256": "750b8986d6742ae0b828101d246fcaa778721f7b25efedd3eede5375f84b98da",
+      "status": 200,
+      "headers": {
+        "content-length": "152",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e7d00086-8693-46d1-b56e-e46907013052"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"secondary\",\"datasets\":[{\"requested\":\"incidents\",\"required_scopes\":[\"incidents.read\"],\"granted\":true,\"missing\":[]}]}"
+    },
+    {
+      "name": "preflight unknown dataset",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "44e1497ea6a4750d034f37a6af781a84ae4b0e8969301f9d9416798fc0f8e9f1",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 400,
+      "headers": {
+        "content-length": "59",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "09f98807-bff4-4610-8cc6-af86572afeea"
+      },
+      "body": "{\"detail\":\"Unknown PagerDuty datasets: not-a-real-dataset\"}"
+    },
+    {
+      "name": "preflight mixed known and unknown datasets",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "dcb87e8ae105373f0cfad195f8c7bd68ad015e6f7fc2d15d1e96be3570977e9c",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 400,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "57634fbe-2f04-4c7f-915c-2b7d99115d81"
+      },
+      "body": "{\"detail\":\"Unknown PagerDuty datasets: also-bogus, bogus-one\"}"
+    },
+    {
+      "name": "preflight duplicate unknown datasets are named once",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "a27e34e0c1347852a47b862e639247ac3e714e021cfc2f032117bae5fe73aed2",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 400,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f501e4bf-2062-47db-9f6f-7c45b5730f74"
+      },
+      "body": "{\"detail\":\"Unknown PagerDuty datasets: bogus-one, bogus-two\"}"
+    },
+    {
+      "name": "preflight unknown datasets are sorted by code point",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "b95da233cce18e699ee5df105ca6987290f16d2be74f7dd7417526390708aea7",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 400,
+      "headers": {
+        "content-length": "53",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e1f246b4-9e6c-4a50-b7a2-b2999b578365"
+      },
+      "body": "{\"detail\":\"Unknown PagerDuty datasets: B, a, zz, é\"}"
+    },
+    {
+      "name": "preflight credential_name whitespace only",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "20ae3dd96ab00af42000508e0acb88701f6ba3880346a7c978fea0936621581c",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "146",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bdd573f2-56ab-4f72-a657-fb81dd7504fd"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"credential_name\"],\"msg\":\"Value error, value must not be blank\",\"input\":\"   \",\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "preflight credential_name empty string",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "151a4eb754c16d30b5210d5b69267e1a4396a1ad8d4643a6c2bb6890587cf8ff",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "143",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a6a79ed8-c40c-467d-9c29-3f0ab84a7115"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"credential_name\"],\"msg\":\"Value error, value must not be blank\",\"input\":\"\",\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "preflight credential_name padded",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "3a80a8eb7823ddd4ebd572752d5424b6869fc10b21ab188fd12d66772e87efc3",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 200,
+      "headers": {
+        "content-length": "150",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a033c7fd-4176-4726-a659-ab9510df637f"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"datasets\":[{\"requested\":\"incidents\",\"required_scopes\":[\"incidents.read\"],\"granted\":true,\"missing\":[]}]}"
+    },
+    {
+      "name": "preflight credential_name null",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "8cfb53f009466e2bb849ca5814ea72ccfe90f0f21c7563b7840b91e122354132",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "87af1e70-8226-4aab-9150-4980ae62b02c"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"credential_name\"],\"msg\":\"Input should be a valid string\",\"input\":null}]}"
+    },
+    {
+      "name": "preflight credential_name number",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "3012eb092864c8e2aebc95e6424692e47469179dd79b52da005e73f8971a6816",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "117",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f108cd9b-db8a-4688-98fc-690552a1f0af"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"credential_name\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+    },
+    {
+      "name": "preflight enabled_datasets missing",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "99",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2ef109ff-b98d-4adf-b20f-49fa675aa88b"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"enabled_datasets\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "preflight enabled_datasets null",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "6ff57d25288d1f83c5992bd46bf8039268e3d501fbbac561d4b872e5b728be23",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "117",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "896c53e7-0c18-4c78-a146-01f1cc772e6e"
+      },
+      "body": "{\"detail\":[{\"type\":\"list_type\",\"loc\":[\"body\",\"enabled_datasets\"],\"msg\":\"Input should be a valid list\",\"input\":null}]}"
+    },
+    {
+      "name": "preflight enabled_datasets not a list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "537e9cceb2213607783a1d07fdf4f8d9c13a4599d0c18ed886deb3f1c39e72b3",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a8a5c07c-b09d-4029-a430-cc7476e1737e"
+      },
+      "body": "{\"detail\":[{\"type\":\"list_type\",\"loc\":[\"body\",\"enabled_datasets\"],\"msg\":\"Input should be a valid list\",\"input\":\"incidents\"}]}"
+    },
+    {
+      "name": "preflight enabled_datasets element not a string",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "738e4507d83d382de64d653a7003879e1adb132099a6cf1f8f48f91b5bc87480",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ff1394fb-e26a-47bd-82a5-a400d892dfff"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"enabled_datasets\",1],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+    },
+    {
+      "name": "preflight extra field",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "02b6e32fb718093cffa5dc0b633ffed8ec7fd3716ffff60a29a8d29ee181b607",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "111",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9555a3fa-1260-4f25-8d63-11e0ca7b9a59"
+      },
+      "body": "{\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"bogus\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1}]}"
+    },
+    {
+      "name": "preflight several errors then extra",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "2fd824533eacb2bbadfbbed61d634316d203e4c5502df25b5c620c1277de37ee",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "349",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "856ed8bd-892d-4f89-b9f7-1707077ca373"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"credential_name\"],\"msg\":\"Value error, value must not be blank\",\"input\":\"\",\"ctx\":{\"error\":{}}},{\"type\":\"list_type\",\"loc\":[\"body\",\"enabled_datasets\"],\"msg\":\"Input should be a valid list\",\"input\":\"nope\"},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"bogus\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1}]}"
+    },
+    {
+      "name": "preflight body list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "10891fbd-dfbf-4701-8a82-743ccae68796"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "preflight body null",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "bb99e5bb3a756453730056b900774c14cb31358abd79a0903bf0e0349d0ade7a",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c12343c1-4c1b-4b93-b625-3c980b021d80"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "preflight invalid json",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "request_headers_sha256": "1c97076c4fee4df1a3d240871ca855500fc2004e579830782d611bb59516d6fe",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4113ed8d-6136-4bf5-8dae-fab80fb5faa8"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
+    },
+    {
+      "name": "preflight non-json content type",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "5e21d86b709b6aa2d5fff6d7cfed56ab73bf002020a6399a955c0b09791d4613",
+      "request_headers_sha256": "aad71757e3163609a280d09d397231fba08618c7eb29add2fb0bea3d80b6472c",
+      "status": 422,
+      "headers": {
+        "content-length": "148",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0609af3e-4c4a-43ff-af08-1076fdb341f2"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":\"x\"}]}"
+    },
+    {
+      "name": "preflight unauthenticated",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "e6e7a23a803a745983362e70b00e46d1408448c00410858067988b98be20626c",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0ba7d56f-0769-4505-8c52-3717cbb0897c"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "preflight member refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "e6e7a23a803a745983362e70b00e46d1408448c00410858067988b98be20626c",
+      "request_headers_sha256": "42a47398ecc5866f061403fcbe585c053369459f69ed5c3a6a27bc8f2393c734",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bb8ef39e-ce99-4235-8aab-e94fefaf0a8b"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "preflight superuser without org",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "e6e7a23a803a745983362e70b00e46d1408448c00410858067988b98be20626c",
+      "request_headers_sha256": "4373e42067580dcd8119cbe56ae9063d2f13471c2f8e1b35b5d0c0cd565c11ad",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ce2eca98-6851-474b-8347-087d57e93469"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "preflight get is 405",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/preflight",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "eeadbe90f7b3f886f8821f945b74108e3e75c48cff86e3bedd20f70f0f29a26b",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5a7539ea-8d51-4a71-a7b8-2fbba166e833"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    }
+  ]
+}

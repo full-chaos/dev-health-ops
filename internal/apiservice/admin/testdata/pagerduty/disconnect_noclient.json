@@ -1,0 +1,101 @@
+{
+  "header": {
+    "test": "TestPagerDutyDisconnectWithoutClientIDVenueOracle",
+    "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
+    "producer_digest": "c0f6de73e34fa0583fea646a33b5f133309c1639cf5fc59dd5ebe0f439faed19",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestPagerDutyDisconnectWithoutClientIDVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+  },
+  "requests": [
+    {
+      "name": "W disconnect with a stored token and no client id (pending retry)",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "f8cc741a1c0fdbd5ccf5b5ebf5221dbf74e45e3b9ec14c3a75a5799a9727471f",
+      "status": 503,
+      "headers": {
+        "content-length": "57",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4b76397b-df49-4f14-b19a-f87396eed669"
+      },
+      "body": "{\"detail\":\"PagerDuty remote revocation is pending retry\"}"
+    },
+    {
+      "name": "W disconnect again once nothing is stored",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "f8cc741a1c0fdbd5ccf5b5ebf5221dbf74e45e3b9ec14c3a75a5799a9727471f",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "733c369e-b2c8-423f-9a2f-39d80366e0b9"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    },
+    {
+      "name": "W disconnect with an undecryptable token and no client id",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "9b006bcf3018e045dd83ba62ab3fe23acd0cd5cbb67119001b7b7b69623fbf45",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2283ba5e-1408-493f-85e1-7df136d69577"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    },
+    {
+      "name": "W disconnect with no credential and no client id",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "621f0b6dcac4209c128556fde7c4019b5e3ffc1e3687b8d58292363e3dbb5e17",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8209437f-4623-4a03-aa6b-1741fefc2c34"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    }
+  ],
+  "rows": {
+    "python revocations of the connected org": {
+      "rows": "0"
+    },
+    "rows: integration_credentials": {
+      "rows": "9e80272e-8785-5f67-9ea6-9d6436fd9ca4pagerdutydefaulttruetrue | d63f4834-fc80-5f13-a6ee-c98e41880b04pagerdutydefaultfalsetrue | fb550dbe-4e77-5dbe-a582-b76ebeb3cb8fpagerdutydefaultfalsetrue"
+    },
+    "rows: provider_oauth_credential": {
+      "rows": "9e80272e-8785-5f67-9ea6-9d6436fd9ca4pagerdutydefault"
+    }
+  }
+}

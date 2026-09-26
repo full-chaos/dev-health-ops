@@ -18,7 +18,8 @@ import (
 // copies of one database, byte for byte.
 func TestPagerDutyStatusAndPreflightVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, pagerDutyGolden("status_preflight", "TestPagerDutyStatusAndPreflightVenueOracle", "1589a05061aec79cc786b799369edf43c10bd87d58ea6bcefce06a1a09b06218"))
+	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-status-32-bytes!"
 
 	type orgSpec struct {
@@ -27,9 +28,9 @@ func TestPagerDutyStatusAndPreflightVenueOracle(t *testing.T) {
 	}
 	orgs := map[string]*orgSpec{}
 	for _, slug := range []string{"empty", "oauth", "oauth-inactive", "oauth-nometadata", "token", "creds", "custom-name", "unknownmode"} {
-		orgs[slug] = &orgSpec{id: uuid.New(), slug: "pd-" + slug}
+		orgs[slug] = &orgSpec{id: uuid.MustParse(venueoracle.StableUUID("pd-status-org-" + slug)), slug: "pd-" + slug}
 	}
-	adminID, memberID, superID := uuid.New(), uuid.New(), uuid.New()
+	adminID, memberID, superID := uuid.MustParse(venueoracle.StableUUID("pd-status-admin")), uuid.MustParse(venueoracle.StableUUID("pd-status-member")), uuid.MustParse(venueoracle.StableUUID("pd-status-super"))
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   root,
@@ -168,8 +169,9 @@ VALUES ($1, 'pagerduty', $2, 'v1:not-decryptable-here', 1, now(), now(), $3, $4,
 		get("preflight get is 405", path+"/preflight", "admin"),
 	}
 
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
+	golden.Finish(t)
 }

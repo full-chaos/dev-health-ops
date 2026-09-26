@@ -294,3 +294,54 @@ VALUES (gen_random_uuid(), $1, 'paths connector' || $2::text, 'github', '[]'::js
 	fail("llmorgsettings.ResolveUsableProvider", err)
 	return failures
 }
+
+// CHAOS-6804 r1: the production readiness path (queryAPIPostureCheck ->
+// NewCachedQueryAPIPostureCheck -> CheckNoWait) must run the strengthened proofs,
+// not only the shared manifest check. A role that satisfies the manifest but holds
+// a privilege in a third schema must end up NotReady through THAT path, and a
+// clean role must end up ready.
+func TestQueryAPIPostureCheckInProductionRefusesAGrantOutsideTheManagedSchemas(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIRoleFixture(t, ctx)
+	env := func(key string) string {
+		if key == "QUERY_API_DATABASE_ROLE" {
+			return fixture.role
+		}
+		return ""
+	}
+	check := queryAPIPostureCheck(env, fixture.rolePool)
+	waitReady := func(what string, want func(error) bool) error {
+		deadline := time.Now().Add(60 * time.Second)
+		for {
+			err := check(ctx)
+			if want(err) {
+				return err
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: last answer %v", what, err)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	waitReady("a clean role becomes ready", func(err error) bool { return err == nil })
+
+	for _, statement := range []string{
+		"CREATE SCHEMA third_party",
+		"CREATE TABLE third_party.secrets (id int)",
+		"GRANT USAGE ON SCHEMA third_party TO " + fixture.role,
+		"GRANT SELECT ON third_party.secrets TO " + fixture.role,
+	} {
+		if _, err := fixture.admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	// The cache serves the earlier pass until it ages out (TTL 30 s, refreshed in
+	// the background), so this waits for the refresh to see the grant.
+	err := waitReady("the grant outside the managed schemas is refused", func(err error) bool {
+		return err != nil && strings.Contains(err.Error(), "third_party.secrets")
+	})
+	if !errors.Is(err, postgresstore.ErrPostureRefused) {
+		t.Fatalf("the refusal must be a posture refusal: %v", err)
+	}
+}

@@ -2561,8 +2561,8 @@ func queryAPIPostureCheck(getenv getenvFunc, pgPool *pgxpool.Pool) func(context.
 	if role == "" {
 		return nil
 	}
-	cached := postgresstore.NewCachedPostureCheck(
-		pgPool, role, queryAPIRiverSchema(getenv), postgresstore.QueryAPIPosture(),
+	cached := postgresstore.NewCachedQueryAPIPostureCheck(
+		pgPool, role, queryAPIRiverSchema(getenv),
 		postgresstore.PostureCheckOptions{Logger: slog.Default()},
 	)
 	cached.Warm()

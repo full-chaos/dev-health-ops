@@ -602,3 +602,150 @@ func TestProvisionScriptQueryAPIRoleOptIn(t *testing.T) {
 		t.Fatalf("the script-provisioned role failed readiness after the manifest was granted: %v", err)
 	}
 }
+
+// CHAOS-6804 r1 P1: the login must BE the role, not merely act as it. With a
+// startup option `-c role=<query-api role>` the session authenticates as another
+// login (session_user) while current_user reads as the least-privilege role; a
+// posture check that only reads current_user passes a DSN that still carries the
+// owner's or a superuser's credential (which can RESET ROLE).
+func TestCheckQueryAPIAuthorizationRefusesALoginThatOnlyActsAsTheRole(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIFixture(t)
+	role := fixture.newRole(t, ctx, "_actsas")
+	grantQueryAPIManifest(t, ctx, fixture.admin, role, nil)
+
+	// A different login that is a member of the role and connects with
+	// options=-c role=<role>.
+	other, err := containers.RoleName("qapi_actsas_login", fixture.inst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName := fixture.dbName
+	for _, statement := range []string{
+		"CREATE ROLE " + other + " LOGIN SUPERUSER PASSWORD '" + apiAuthorizationPass + "'",
+		"GRANT " + role + " TO " + other,
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + other,
+	} {
+		if _, err := fixture.admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	t.Cleanup(func() { containers.DropRole(fixture.admin, other, t.Logf) })
+	config, err := pgxpool.ParseConfig(fixture.uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.User, config.ConnConfig.Password = other, apiAuthorizationPass
+	config.ConnConfig.RuntimeParams["role"] = role
+	actsAs, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(actsAs.Close)
+
+	var sessionUser, currentUser string
+	if err := actsAs.QueryRow(ctx, "SELECT session_user, current_user").Scan(&sessionUser, &currentUser); err != nil {
+		t.Fatal(err)
+	}
+	if sessionUser != other || currentUser != role {
+		t.Fatalf("the plant did not produce a session acting as the role: session_user=%q current_user=%q", sessionUser, currentUser)
+	}
+	err = CheckQueryAPIAuthorization(ctx, actsAs, role, "river")
+	if !errors.Is(err, ErrPostureRefused) {
+		t.Fatalf("a login that only acts as the role (session_user=%s) passed the posture check: error %v", sessionUser, err)
+	}
+	if strings.Contains(err.Error(), apiAuthorizationPass) {
+		t.Fatalf("the refusal leaks a credential: %v", err)
+	}
+	if err := CheckQueryAPIAuthorization(ctx, fixture.connect(t, ctx, role), role, "river"); err != nil {
+		t.Fatalf("the control (a direct login as the role) failed: %v", err)
+	}
+}
+
+// CHAOS-6804 r1 P1: "holds exactly the manifest" must not stop at the public and
+// River schemas. A privilege on ANY relation or sequence in another schema, or
+// CREATE on one, is a privilege outside the manifest.
+func TestCheckQueryAPIAuthorizationRefusesPrivilegesOutsideTheManagedSchemas(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIFixture(t)
+	for _, statement := range []string{
+		"CREATE SCHEMA third_party",
+		"CREATE TABLE third_party.secrets (id int)",
+		"CREATE SEQUENCE third_party.counter",
+		"CREATE VIEW third_party.secrets_view AS SELECT id FROM third_party.secrets",
+	} {
+		if _, err := fixture.admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	cases := []struct {
+		name  string
+		plant func(role string) []string
+		named string
+	}{
+		{"SELECT on a table in another schema", func(r string) []string {
+			return []string{"GRANT USAGE ON SCHEMA third_party TO " + r, "GRANT SELECT ON third_party.secrets TO " + r}
+		}, "third_party.secrets"},
+		{"a write on a table in another schema", func(r string) []string {
+			return []string{"GRANT USAGE ON SCHEMA third_party TO " + r, "GRANT INSERT ON third_party.secrets TO " + r}
+		}, "third_party.secrets"},
+		{"SELECT on a view in another schema", func(r string) []string {
+			return []string{"GRANT USAGE ON SCHEMA third_party TO " + r, "GRANT SELECT ON third_party.secrets_view TO " + r}
+		}, "third_party.secrets_view"},
+		{"USAGE on a sequence in another schema", func(r string) []string {
+			return []string{"GRANT USAGE ON SCHEMA third_party TO " + r, "GRANT USAGE ON SEQUENCE third_party.counter TO " + r}
+		}, "third_party.counter"},
+		{"a PUBLIC grant on a table in another schema", func(string) []string {
+			return []string{"GRANT USAGE ON SCHEMA third_party TO PUBLIC", "GRANT SELECT ON third_party.secrets TO PUBLIC"}
+		}, "third_party.secrets"},
+		{"TRUNCATE alone on a table in another schema", func(r string) []string {
+			return []string{"GRANT TRUNCATE ON third_party.secrets TO " + r}
+		}, "third_party.secrets"},
+		{"TRIGGER alone on a table in another schema", func(r string) []string {
+			return []string{"GRANT TRIGGER ON third_party.secrets TO " + r}
+		}, "third_party.secrets"},
+		{"REFERENCES alone on a table in another schema", func(r string) []string {
+			return []string{"GRANT REFERENCES ON third_party.secrets TO " + r}
+		}, "third_party.secrets"},
+		{"a COLUMN-level SELECT on a table in another schema", func(r string) []string {
+			return []string{"GRANT SELECT (id) ON third_party.secrets TO " + r}
+		}, "third_party.secrets"},
+		{"a COLUMN-level UPDATE on a table in another schema", func(r string) []string {
+			return []string{"GRANT UPDATE (id) ON third_party.secrets TO " + r}
+		}, "third_party.secrets"},
+		{"CREATE on another schema", func(r string) []string {
+			return []string{"GRANT CREATE ON SCHEMA third_party TO " + r}
+		}, "third_party"},
+	}
+	for index, test := range cases {
+		role := fixture.newRole(t, ctx, fmt.Sprintf("_o%d", index))
+		grantQueryAPIManifest(t, ctx, fixture.admin, role, nil)
+		pool := fixture.connect(t, ctx, role)
+		if err := CheckQueryAPIAuthorization(ctx, pool, role, "river"); err != nil {
+			t.Fatalf("%s: the control role must be ready before the defect is planted: %v", test.name, err)
+		}
+		for _, statement := range test.plant(role) {
+			if _, err := fixture.admin.Exec(ctx, statement); err != nil {
+				t.Fatalf("%s: plant %q: %v", test.name, statement, err)
+			}
+		}
+		err := CheckQueryAPIAuthorization(ctx, pool, role, "river")
+		if !errors.Is(err, ErrPostureRefused) || !errors.Is(err, ErrUnavailable) {
+			t.Errorf("%s: error %v, want ErrUnavailable+ErrPostureRefused", test.name, err)
+		} else if !strings.Contains(err.Error(), test.named) {
+			t.Errorf("%s: the refusal must name %s: %v", test.name, test.named, err)
+		}
+		for _, statement := range []string{
+			"REVOKE ALL ON SCHEMA third_party FROM PUBLIC",
+			"REVOKE ALL ON ALL TABLES IN SCHEMA third_party FROM PUBLIC",
+		} {
+			if _, err := fixture.admin.Exec(ctx, statement); err != nil {
+				t.Fatalf("%s: undo %q: %v", test.name, statement, err)
+			}
+		}
+	}
+}

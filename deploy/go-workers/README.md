@@ -1069,10 +1069,18 @@ sides:
   any database, schema, relation or function: pointing it at the registry owner
   must never strip that owner. A role that does not exist yet is skipped with a
   warning.
-- query-api's `/readyz` is not ready (`postgres_posture`) until the pool logs in
-  AS that role and the role holds exactly the manifest: no more (an unlisted
+- query-api's `/readyz` is not ready (`postgres_posture`) until the pool
+  authenticates AS that role (`session_user` and `current_user` both the role: a
+  login that only ACTS as it, e.g. `options=-c role=...` on a wider credential,
+  is refused) and the role holds exactly the manifest: no more (an unlisted
   SELECT, an extra write, a PUBLIC or membership grant, an owned object, any
-  River-schema privilege) and no less. The whole-catalog query takes 1.4-1.9 s
+  River-schema privilege) and no less, AND holds no privilege at all outside
+  those schemas (any table-, column- or sequence-level privilege, or CREATE, in
+  another non-system schema). The migrate leg only REVOKEs on the public and
+  River schemas, so a grant elsewhere is refused loudly by the check, naming the
+  first one, never silently revoked; revoke it by hand. A database that grants
+  another schema's relations to PUBLIC therefore keeps the new pod NotReady
+  (the old ReplicaSet keeps serving) until that is revoked. The whole-catalog query takes 1.4-1.9 s
   on the production catalog, longer than the 2 s probe timeout, so the probe
   never runs it: the proof starts in the background when the process starts,
   and `/readyz` reads the last answer without waiting (`CheckNoWait`). Until the

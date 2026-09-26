@@ -464,6 +464,10 @@ type terminalDelivery struct {
 	dedupeKey string
 	jobID     int64
 	state     string
+	// errorClass is the bracketed class of the job's LAST recorded error ("retryable",
+	// "validation", ...), never its text: the adapter's fixed error string carries the class
+	// in brackets and nothing else that may be logged or stored (CHAOS-6890).
+	errorClass string
 }
 
 func (delivery terminalDelivery) proven() bool {
@@ -1254,7 +1258,8 @@ func partitionPublishedUnits(
 // crash loop. worker_job_outbox.river_job_id is already a real bigint, so no
 // cast is needed on either side and none is written.
 const selectTerminalDeliveryStatesSQL = `
-SELECT job.id, job.state::text
+SELECT job.id, job.state::text,
+	COALESCE(left(substring(job.errors[cardinality(job.errors)] ->> 'error' from '\[([A-Za-z0-9_]+)\]'), 40), '')
 FROM %s AS job
 WHERE job.id = ANY($1::bigint[])
 	AND job.finalized_at IS NOT NULL
@@ -1298,28 +1303,38 @@ func (sweep *UnreclaimableSweep) deadDeliveries(
 		return nil, sweepUnavailable(sweepStepJobStateQuery, err)
 	}
 	defer rows.Close()
-	states := make(map[int64]string, len(ids))
+	type jobVerdict struct{ state, errorClass string }
+	states := make(map[int64]jobVerdict, len(ids))
 	for rows.Next() {
 		var id int64
-		var state string
-		if err := rows.Scan(&id, &state); err != nil {
+		var verdict jobVerdict
+		if err := rows.Scan(&id, &verdict.state, &verdict.errorClass); err != nil {
 			return nil, sweepUnavailable(sweepStepJobStateScan, err)
 		}
-		states[id] = state
+		states[id] = verdict
 	}
 	if err := rows.Err(); err != nil {
 		return nil, sweepUnavailable(sweepStepJobStateRows, err)
 	}
 	dead := make([]unreclaimableCandidate, 0, len(delivered))
 	for _, candidate := range delivered {
-		state, ok := states[candidate.delivery.jobID]
-		if !ok || state == "" {
+		verdict, ok := states[candidate.delivery.jobID]
+		if !ok || verdict.state == "" {
 			continue
 		}
-		candidate.delivery.state = state
+		candidate.delivery.state = verdict.state
+		candidate.delivery.errorClass = verdict.errorClass
 		dead = append(dead, candidate)
 	}
 	return dead, nil
+}
+
+// lastErrorClassClause names the class of the job's last error in a reason, or nothing.
+func lastErrorClassClause(class string) string {
+	if class == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (last error class %q)", class)
 }
 
 func unreclaimableDedupeKey(unitID string) string {
@@ -1417,6 +1432,9 @@ func (sweep *UnreclaimableSweep) terminalize(
 		// queue schema they may not hold.
 		fields["river_job_state"] = candidate.delivery.state
 		fields["river_job_id"] = strconv.FormatInt(candidate.delivery.jobID, 10)
+		if candidate.delivery.errorClass != "" {
+			fields["river_job_last_error_class"] = candidate.delivery.errorClass
+		}
 	}
 	payload, err := json.Marshal(fields)
 	if err != nil {
@@ -1487,9 +1505,10 @@ func unreclaimableReason(candidate unreclaimableCandidate) string {
 	if candidate.delivery.proven() && candidate.attempts > 0 {
 		return fmt.Sprintf(
 			"unreclaimable dispatch for %s: a handler ran this unit %d time(s), but its River delivery "+
-				"(job %d) is terminal in state %q, the outbox delivery budget is spent and no worker has "+
+				"(job %d) is terminal in state %q%s, the outbox delivery budget is spent and no worker has "+
 				"touched the unit for the idle window, so nothing will execute it again",
 			candidate.pair(), candidate.attempts, candidate.delivery.jobID, candidate.delivery.state,
+			lastErrorClassClause(candidate.delivery.errorClass),
 		)
 	}
 	if candidate.delivery.proven() {

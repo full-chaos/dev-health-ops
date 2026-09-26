@@ -4,6 +4,7 @@ package syncreconciler
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +61,18 @@ func TestUnreclaimableSweepTerminalizesADeadDeliveryUnitAHandlerAlreadyRan(t *te
 			}
 			if reason == nil || !strings.Contains(*reason, tc.jobState) {
 				t.Fatalf("unit reason = %v, want it to name the River state %q", reason, tc.jobState)
+			}
+			// The reason names the class of the job's last error, never its text.
+			_, _, _, payload := sweepUnitState(t, ctx, pool, unit)
+			if !strings.Contains(*reason, `last error class "retryable"`) || strings.Contains(*reason, "dev-health job failed") {
+				t.Fatalf("unit reason = %q, want the error CLASS (retryable) and none of the error text", *reason)
+			}
+			var decoded map[string]string
+			if err := json.Unmarshal(payload, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded["river_job_last_error_class"] != "retryable" || strings.Contains(string(payload), "dev-health job failed") {
+				t.Fatalf("result payload = %s, want river_job_last_error_class and no error text", payload)
 			}
 		})
 	}

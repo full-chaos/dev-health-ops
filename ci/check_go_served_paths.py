@@ -19,7 +19,12 @@ This gate fails when
 3. a served stub names a different plane than the manifest routes its path to
    (the stub's ``plane`` argument: ``GO_API``/``QUERY_API``, the literal, or the
    function's default ``query-api`` when omitted; an unreadable value fails too);
-4. the manifest itself is malformed (columns, plane, path form, duplicates).
+4. the manifest itself is malformed (columns, plane, path form, duplicates);
+5. the manifest disagrees with its receipt line (``# receipt: <rev> rows=<n>
+   sha256=<hex>``): the row count and the digest of the sorted ``plane<TAB>path``
+   lines must equal the ones prod-ops records from the ingress dump, so a row
+   dropped, added or re-planed by hand fails instead of drifting from what is
+   deployed.
 
 Routes come from ``ci/discover_ops_routes.py`` (the served application, not a
 source regex); the stub is recognised on the endpoint function's AST, so a body
@@ -39,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import importlib.util
 import json
 import re
@@ -136,6 +142,45 @@ def _stub_call(body: list[ast.stmt]) -> ast.Call | None:
         else None
     )
     return call if name in STUB_NAMES else None
+
+
+_RECEIPT = re.compile(
+    r"^#\s*receipt:\s*(?P<rev>\S+)\s+rows=(?P<rows>\d+)\s+sha256=(?P<digest>[0-9a-f]{64})\s*$"
+)
+
+
+def receipt_digest(rows: dict[str, ManifestRow]) -> str:
+    """The digest of the manifest's ``plane<TAB>path`` lines, sorted: the value
+    the receipt line pins (independent of row order and of the rev column)."""
+    lines = sorted(f"{row.plane}\t{row.path}" for row in rows.values())
+    return hashlib.sha256(("\n".join(lines) + "\n").encode()).hexdigest()
+
+
+def check_receipt(path: Path, rows: dict[str, ManifestRow]) -> list[str]:
+    """Problems between the manifest's rows and its ``# receipt:`` line."""
+    found = [
+        match
+        for line in path.read_text().splitlines()
+        if (match := _RECEIPT.match(line.strip()))
+    ]
+    if len(found) != 1:
+        return [
+            f"{path}: want exactly one '# receipt: <rev> rows=<n> sha256=<hex>' line "
+            f"(the row count and digest prod-ops records from the ingress dump), found {len(found)}"
+        ]
+    receipt = found[0]
+    problems: list[str] = []
+    if int(receipt["rows"]) != len(rows):
+        problems.append(
+            f"{path}: the receipt records {receipt['rows']} rows, the manifest has {len(rows)}: "
+            "a row was dropped or added without the ingress dump behind it"
+        )
+    if receipt["digest"] != receipt_digest(rows):
+        problems.append(
+            f"{path}: the receipt digest {receipt['digest']} does not match the manifest's "
+            f"rows ({receipt_digest(rows)}): a path or plane differs from the ingress dump"
+        )
+    return problems
 
 
 def _is_stub_body(body: list[ast.stmt]) -> bool:
@@ -275,6 +320,8 @@ def main(argv: list[str] | None = None) -> int:
     manifest_path = args.manifest or root / MANIFEST_RELATIVE
 
     manifest, problems = load_manifest(manifest_path)
+    if manifest_path.is_file():
+        problems.extend(check_receipt(manifest_path, manifest))
     if args.routes_json is not None:
         routes = json.loads(args.routes_json.read_text())["routes"]
     else:

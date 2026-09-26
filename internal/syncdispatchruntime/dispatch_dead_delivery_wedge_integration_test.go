@@ -70,7 +70,7 @@ func runDeadDeliveryScenario(t *testing.T, occupantsFinish bool) {
 
 		clock := time.Now().UTC().Truncate(time.Microsecond)
 		var captured bytes.Buffer
-		logger := slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		logger := slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo}))
 		service, err := NewNativeDispatchSyncRunService(pool, logger, &fakeBudgetEstimator{}, mustDispatchProducer(t, pool), &fakeJobRegistry{
 			descriptors: map[string]jobruntime.Descriptor{jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river")},
 		})
@@ -216,11 +216,13 @@ WHERE o.id = numbered.id`, clock); err != nil {
 		}
 
 		progress := claimed > 0 || newDeliveries > 0 || occupantsReleased > 0 || runsFailed > 0
-		loud := dispatchErrors > 0 || strings.Contains(captured.String(), `"msg":"dispatch_sync_run.no_progress"`)
+		// The signal must be visible at the production log threshold (Info) AND at ERROR: the handler
+		// here drops everything below Info, and the record must carry level ERROR (r1 P3).
+		loud := strings.Contains(captured.String(), `"level":"ERROR","msg":"dispatch_sync_run.no_progress"`)
 		if !progress && !loud {
 			t.Fatalf("after %d stale windows (%v each) the bucket (cap %d) is wedged and nothing said so: "+
 				"%d of %d planned units claimed, %d occupant units released, %d new deliveries, %d runs failed, "+
-				"%d Dispatch errors and no dispatch_sync_run.no_progress ERROR, yet the passes re-armed their run %d times -- a dead-delivery unit is reclaimed every "+
+				"%d Dispatch errors and no dispatch_sync_run.no_progress record at level ERROR, yet the passes re-armed their run %d times -- a dead-delivery unit is reclaimed every "+
 				"window, republished onto its terminal delivery (nothing delivered) and counted as a fresh capacity consumer, "+
 				"so every planned unit stays concurrency_capped while each pass returns nil (CHAOS-6890)",
 				cycles, staleWindow, bucketCap, claimed, len(waitingUnits), occupantsReleased, newDeliveries, runsFailed,
@@ -261,7 +263,7 @@ WHERE dedupe_key=$2`, now, "sync.provider_unit:"+deadUnit); err != nil {
 		insert(healthyUnit, dispatchTestSourceB)
 
 		var captured bytes.Buffer
-		logger := slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		logger := slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo}))
 		service, err := NewNativeDispatchSyncRunService(pool, logger, &fakeBudgetEstimator{}, mustDispatchProducer(t, pool), &fakeJobRegistry{
 			descriptors: map[string]jobruntime.Descriptor{jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river")},
 		})

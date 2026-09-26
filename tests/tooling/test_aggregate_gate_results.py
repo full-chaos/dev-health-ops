@@ -1498,6 +1498,58 @@ def test_paths_filter_covers_the_acceptance_runtime_dependencies() -> None:
     )
 
 
+def _tracked_files() -> list[str]:
+    proc = subprocess.run(
+        ["git", "ls-files"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [line for line in proc.stdout.splitlines() if line]
+
+
+def test_paths_filter_selects_every_directory_the_tooling_suite_reads() -> None:
+    """CHAOS-6930: a change that only touches a directory the tooling suite reads must
+    run it.
+
+    #3288 changed only `tools/**` (a proof script and a fixture). The filter had no
+    `tools/**` entry, so the tooling job did not run, the required `test` check read green,
+    and a fixture the whole-tree guards in tests/tooling read (test_go_workflow_path_
+    filters) sat red on main until the next PR that ran the suite.
+
+    The directories are DERIVED, not listed: every top-level directory holding a tracked
+    fixture-like file (a non-Go file under a `fixtures/` or `testdata/` directory, the
+    files the tooling suite's whole-tree guards walk) must be selected, and so must the
+    four the ticket names.
+    """
+    patterns = _code_filter_patterns()
+    fixture_directories: dict[str, str] = {}
+    for tracked in _tracked_files():
+        parts = tracked.split("/")
+        if len(parts) < 2 or tracked.endswith(".go"):
+            continue
+        if any(segment in ("fixtures", "testdata") for segment in parts[:-1]):
+            fixture_directories.setdefault(parts[0], tracked)
+    assert len(fixture_directories) >= 3, (
+        f"only {sorted(fixture_directories)} hold fixtures: the derivation measured nothing"
+    )
+    uncovered = sorted(
+        f"{directory} (e.g. {example})"
+        for directory, example in fixture_directories.items()
+        if not _is_covered(example, patterns)
+    )
+    assert not uncovered, (
+        f"the `code` filter of test.yml does not select on {uncovered}: a PR that only "
+        "changes them skips the tooling suite and the required `test` check goes green "
+        f"without running the guards that read them. Patterns: {patterns}"
+    )
+    for named in ("tools/x", "ci/x", "tests/tooling/x", ".github/workflows/x"):
+        assert _is_covered(named, patterns), (
+            f"the `code` filter does not select {named}"
+        )
+
+
 # --------------------------------------------------------------------------
 # Tool scope. CHAOS-3513 Codex round 1.
 #

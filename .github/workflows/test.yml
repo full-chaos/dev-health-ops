@@ -145,6 +145,15 @@ jobs:
               - 'internal/**'
               - 'cmd/**'
               - 'contracts/**'
+              # CHAOS-6930: tests/tooling walks the WHOLE tree (test_go_workflow_
+              # path_filters reads every tracked fixture file, whatever its
+              # directory), and tools/ holds tracked fixtures and the shell proofs
+              # for the review wrapper. #3288 changed only tools/**, this filter
+              # had no entry for it, the tooling suite did not run and the
+              # required `test` check went green over a guard that was red on main.
+              # test_paths_filter_selects_every_directory_the_tooling_suite_reads
+              # derives the directories that need an entry from the tracked fixtures.
+              - 'tools/**'
 
   # Fast, pytest-xdist-parallelized unit suite on the supported Python
   # version. This is the per-PR signal that the required `test` gate (below)

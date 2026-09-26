@@ -66,6 +66,13 @@ type Golden struct {
 	// the Python plane's answers in several calls (one per batch of requests),
 	// and the frozen file holds them in the order they were asked.
 	served int
+	// compared counts the answers Diff compared with the Go plane's, consumed the
+	// answers the test says it inspected itself (Consumed): together they must be
+	// every answer handed out, or a comparison was skipped.
+	compared, consumed int
+	// rootVerified is set by PythonRoot once it verified the recording checkout;
+	// a recording run refuses to serve Python from an unverified root.
+	rootVerified bool
 	// rowsUsed records which frozen row comparisons the test asked for: a
 	// snapshot nothing consumed is a comparison that no longer happens.
 	rowsUsed map[string]bool
@@ -117,6 +124,12 @@ var buildPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // OpenGolden opens spec for the running test. It never returns a golden the
 // test could not trust: a frozen file must exist, name the pinned build, and
 // hash to the pinned digest.
+//
+// Call it BEFORE the test registers any cleanup of its own: a recording is
+// written by a cleanup registered here, and cleanups run last-in first-out, so
+// one registered earlier would run after the write and could fail after the file
+// exists. (The recording message says so; a golden written beside a failing
+// earlier cleanup is to be deleted and recorded again.)
 func OpenGolden(t *testing.T, spec GoldenSpec) *Golden {
 	t.Helper()
 	g, err := openGolden(spec, t.Name(), os.Getenv(goldenUpdateEnv) == "1")
@@ -180,6 +193,7 @@ func (g *Golden) PythonRoot(t *testing.T, root string) string {
 	if err := verifyPinnedCheckout(pinned, g.spec.PythonBuild); err != nil {
 		t.Fatalf("recording: %v", err)
 	}
+	g.rootVerified = true
 	return pinned
 }
 
@@ -196,7 +210,20 @@ func verifyPinnedCheckout(dir, build string) error {
 		return fmt.Errorf("git status in %s: %w", dir, err)
 	}
 	if strings.TrimSpace(string(status)) != "" {
-		return fmt.Errorf("%s has uncommitted or untracked files (ignored files aside): a golden is executed on a clean build", dir)
+		return fmt.Errorf("%s has uncommitted or untracked files: a golden is executed on a clean build", dir)
+	}
+	// Ignored files are code the pinned commit does not hold too (a
+	// sitecustomize.py on the Python path runs at start-up): only the byte-code
+	// cache a Python run leaves behind is allowed.
+	ignored, err := exec.Command("git", "-C", dir, "ls-files", "--others", "--ignored", "--exclude-standard").Output()
+	if err != nil {
+		return fmt.Errorf("git ls-files in %s: %w", dir, err)
+	}
+	for _, name := range strings.Split(strings.TrimSpace(string(ignored)), "\n") {
+		if name == "" || strings.HasSuffix(name, ".pyc") || strings.Contains("/"+name, "/__pycache__/") {
+			continue
+		}
+		return fmt.Errorf("%s holds the ignored file %s that the pinned commit does not: a golden is executed on a clean build (only __pycache__ and .pyc are allowed)", dir, name)
 	}
 	return nil
 }
@@ -275,6 +302,9 @@ func bearerIdentity(value string) string {
 func (g *Golden) Python(t *testing.T, v *Venue, requests []Request) []Response {
 	t.Helper()
 	if g.recording {
+		if err := g.recordingRootErr(); err != nil {
+			t.Fatal(err)
+		}
 		answers := v.ServePython(t, requests)
 		for index, request := range requests {
 			entry := requestKey(request)
@@ -333,6 +363,9 @@ func (g *Golden) frozenRows(name string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("golden %s holds no row comparison %q; regenerate: %s", g.spec.Path, name, g.spec.Recipe)
 	}
+	if g.rowsUsed[name] {
+		return "", fmt.Errorf("golden %s: the row comparison %q was asked for twice; a frozen snapshot answers one comparison; regenerate with a distinct name per comparison: %s", g.spec.Path, name, g.spec.Recipe)
+	}
 	g.rowsUsed[name] = true
 	return entry.Rows, nil
 }
@@ -378,7 +411,7 @@ func (g *Golden) persist(t *testing.T) {
 	case err != nil:
 		t.Errorf("%v", err)
 	case written:
-		t.Errorf("recorded %s on build %s: pin SHA256 %s in the test and re-run without %s (a recording run is not a proof)",
+		t.Errorf("recorded %s on build %s: pin SHA256 %s in the test and re-run without %s (a recording run is not a proof; if a cleanup registered before OpenGolden also failed, delete the file and record again)",
 			g.spec.Path, g.spec.PythonBuild, digest, goldenUpdateEnv)
 	case g.finished:
 		t.Logf("recording %s not written: the run failed after it finished", g.spec.Path)
@@ -448,10 +481,19 @@ func uuidV5(namespace [16]byte, name string) string {
 // asked for: an unused answer is a comparison that no longer happens.
 func (g *Golden) unusedAnswers() error {
 	if g.served != len(g.loaded.Requests) {
-		return fmt.Errorf("golden %s holds %d answers but the test used %d: an unused frozen answer is a comparison that no longer happens; regenerate: %s", g.spec.Path, len(g.loaded.Requests), g.served, g.spec.Recipe)
+		return fmt.Errorf("golden %s holds %d answers but the test asked for %d: an unused frozen answer is a comparison that no longer happens; regenerate: %s", g.spec.Path, len(g.loaded.Requests), g.served, g.spec.Recipe)
+	}
+	if g.compared+g.consumed != g.served {
+		return fmt.Errorf("golden %s handed out %d answers, but Diff compared %d and the test declared %d as inspected (Consumed): an answer nobody compared is a comparison that no longer happens", g.spec.Path, g.served, g.compared, g.consumed)
 	}
 	return nil
 }
+
+// Consumed declares that the test itself inspected n of the answers Python
+// returned (for example a /metrics scrape it reads a counter from), so they are
+// not left uncompared: Finish requires every answer handed out to have been
+// either compared by Diff or declared here.
+func (g *Golden) Consumed(n int) { g.consumed += n }
 
 // recordable is an error when a recording must not be written: a run that
 // already failed (a plane disagreed, an assertion broke) holds answers nobody
@@ -462,6 +504,15 @@ func (g *Golden) recordable(failed bool) error {
 	}
 	if len(g.recorded.Requests) == 0 {
 		return fmt.Errorf("recording %s: no request was served through the golden", g.spec.Path)
+	}
+	return nil
+}
+
+// recordingRootErr is an error when a recording run has not verified the
+// checkout it is about to execute Python from.
+func (g *Golden) recordingRootErr() error {
+	if !g.rootVerified {
+		return fmt.Errorf("recording: serve Python only from the root golden.PythonRoot returned (it verifies the checkout is clean and at the pinned build); it was never called")
 	}
 	return nil
 }

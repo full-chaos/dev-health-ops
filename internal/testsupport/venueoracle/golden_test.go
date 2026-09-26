@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -122,7 +124,7 @@ func TestFrozenGoldenRefusesWhatItCannotTrust(t *testing.T) {
 	if _, err := golden.frozenAnswers(sampleRequests()[:1]); err != nil {
 		t.Fatalf("a shorter request list: error = %v", err)
 	}
-	if err := golden.unusedAnswers(); err == nil || !strings.Contains(err.Error(), "holds 2 answers but the test used 1") {
+	if err := golden.unusedAnswers(); err == nil || !strings.Contains(err.Error(), "holds 2 answers but the test asked for 1") {
 		t.Fatalf("an unused frozen answer: error = %v", err)
 	}
 	if _, err := golden.frozenAnswers(sampleRequests()); err == nil || !strings.Contains(err.Error(), "the test asks for 2 more") {
@@ -131,6 +133,7 @@ func TestFrozenGoldenRefusesWhatItCannotTrust(t *testing.T) {
 	if _, err := golden.frozenAnswers(sampleRequests()[1:]); err != nil {
 		t.Fatalf("the remaining request: error = %v", err)
 	}
+	golden.compared = 2 // Diff compared both answers
 	if err := golden.unusedAnswers(); err != nil {
 		t.Fatalf("every answer used: error = %v", err)
 	}
@@ -197,6 +200,33 @@ func TestPinnedCheckoutMustBeCleanAndAtTheBuild(t *testing.T) {
 	}
 	if err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "uncommitted or untracked") {
 		t.Fatalf("an untracked file was accepted: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "untracked_route.py")); err != nil {
+		t.Fatal(err)
+	}
+	// An ignored file the pinned commit does not hold (a sitecustomize.py on the
+	// Python path runs at start-up) is refused; the byte-code cache a Python run
+	// leaves behind is allowed.
+	if err := os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("sitecustomize.py\n__pycache__/\n*.pyc\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "src", "__pycache__"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "__pycache__", "m.cpython-314.pyc"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPinnedCheckout(dir, head); err != nil {
+		t.Fatalf("the byte-code cache was refused: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "sitecustomize.py"), []byte("print('hook')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "ignored file") {
+		t.Fatalf("an ignored startup hook was accepted: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "src", "sitecustomize.py")); err != nil {
+		t.Fatal(err)
 	}
 	if err := verifyPinnedCheckout(t.TempDir(), head); err == nil || !strings.Contains(err.Error(), "not a git checkout") {
 		t.Fatalf("a directory that is no checkout was accepted: %v", err)
@@ -337,13 +367,34 @@ func TestARecordingIsWrittenOnlyByARunThatFinishedAndDidNotFailSince(t *testing.
 	}
 }
 
-// The public replay workflow a test uses, from OpenGolden to Finish.
+// The public replay workflow a test uses, from OpenGolden to Finish, with the
+// comparison done by Diff against a Go plane.
 func TestThePublicFrozenWorkflowEndToEnd(t *testing.T) {
 	t.Setenv(goldenUpdateEnv, "")
-	requests := sampleRequests()
+	t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
+	body := B64(`{"a":1}`)
+	requests := []Request{
+		{Name: "first", Method: "GET", Path: "/x"},
+		{Name: "second", Method: "POST", Path: "/y", Body: body},
+	}
 	file := sampleGolden(requests)
 	file.Header.Test = t.Name()
+	for index := range file.Requests {
+		file.Requests[index].Headers["content-length"] = "7"
+	}
 	path, digest := writeGoldenFile(t, t.TempDir(), file)
+	goPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/x":
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"n":0}`))
+		default:
+			w.WriteHeader(201)
+			_, _ = w.Write([]byte(`{"n":1}`))
+		}
+	}))
+	t.Cleanup(goPlane.Close)
 	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
 	answers := golden.Python(t, nil, requests)
 	if len(answers) != 2 || answers[1].Status != 201 {
@@ -352,5 +403,57 @@ func TestThePublicFrozenWorkflowEndToEnd(t *testing.T) {
 	if got := golden.Rows(t, "rows", func() string { t.Fatal("frozen replay must not read the source database"); return "" }); got != "a | b" {
 		t.Fatalf("rows = %q", got)
 	}
+	Diff(t, goPlane.URL, requests, answers, DiffOptions{Golden: golden})
+	if golden.compared != 2 {
+		t.Fatalf("Diff compared %d answers, want 2", golden.compared)
+	}
 	golden.Finish(t)
+}
+
+func TestAnAnswerNobodyComparedIsRefusedUnlessTheTestDeclaresItInspected(t *testing.T) {
+	requests := sampleRequests()
+	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(requests))
+	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, "TestSample", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := golden.frozenAnswers(requests); err != nil {
+		t.Fatal(err)
+	}
+	golden.compared = 1 // Diff was handed one of the two answers
+	if err := golden.unusedAnswers(); err == nil || !strings.Contains(err.Error(), "Diff compared 1") {
+		t.Fatalf("an answer nobody compared was accepted: %v", err)
+	}
+	golden.Consumed(1) // the test read the other one itself
+	if err := golden.unusedAnswers(); err != nil {
+		t.Fatalf("a declared inspection was refused: %v", err)
+	}
+}
+
+func TestAFrozenRowSnapshotAnswersOneComparison(t *testing.T) {
+	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(sampleRequests()))
+	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, "TestSample", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := golden.frozenRows("rows"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := golden.frozenRows("rows"); err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Fatalf("a reused row snapshot was accepted: %v", err)
+	}
+}
+
+func TestARecordingRefusesPythonFromARootItNeverVerified(t *testing.T) {
+	golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := golden.recordingRootErr(); err == nil || !strings.Contains(err.Error(), "PythonRoot") {
+		t.Fatalf("an unverified root was accepted: %v", err)
+	}
+	golden.rootVerified = true
+	if err := golden.recordingRootErr(); err != nil {
+		t.Fatalf("a verified root was refused: %v", err)
+	}
 }

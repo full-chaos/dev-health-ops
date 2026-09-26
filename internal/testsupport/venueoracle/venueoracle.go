@@ -853,6 +853,8 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 	}
 	if options.Golden == nil {
 		writeProof(t)
+	} else {
+		options.Golden.compared += len(requests)
 	}
 	return receipt.String()
 }

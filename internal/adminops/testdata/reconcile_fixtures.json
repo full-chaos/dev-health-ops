@@ -1,0 +1,138 @@
+{
+ "invoices": [
+  {
+   "created": 1700000000,
+   "currency": "usd",
+   "customer": "cus_x",
+   "id": "in_match_a",
+   "object": "invoice",
+   "status": "paid"
+  },
+  {
+   "created": 1700000000,
+   "currency": "usd",
+   "customer": "cus_x",
+   "id": "in_mismatch_a",
+   "object": "invoice",
+   "status": "paid"
+  },
+  {
+   "created": 1700000000,
+   "currency": "usd",
+   "customer": "cus_x",
+   "id": "in_old",
+   "object": "invoice",
+   "status": "open"
+  },
+  {
+   "created": 1700000000,
+   "currency": "usd",
+   "customer": "cus_x",
+   "id": "in_null_status",
+   "object": "invoice",
+   "status": null
+  },
+  {
+   "created": 1700000000,
+   "currency": "usd",
+   "customer": "cus_x",
+   "id": "in_stripe_only",
+   "object": "invoice",
+   "status": "draft"
+  },
+  {
+   "created": 1700000000,
+   "currency": "usd",
+   "customer": "cus_x",
+   "id": "in_match_b",
+   "object": "invoice",
+   "status": "void"
+  },
+  {
+   "created": 1700000000,
+   "currency": "usd",
+   "customer": "cus_x",
+   "id": "in_recent_b",
+   "object": "invoice",
+   "status": "open"
+  }
+ ],
+ "refunds": [
+  {
+   "amount": 100,
+   "created": 1700000000,
+   "currency": "usd",
+   "id": "re_match_a",
+   "object": "refund",
+   "status": "succeeded"
+  },
+  {
+   "amount": 100,
+   "created": 1700000000,
+   "currency": "usd",
+   "id": "re_mismatch_a",
+   "object": "refund",
+   "status": "succeeded"
+  },
+  {
+   "amount": 100,
+   "created": 1700000000,
+   "currency": "usd",
+   "id": "re_null_status",
+   "object": "refund",
+   "status": null
+  },
+  {
+   "amount": 100,
+   "created": 1700000000,
+   "currency": "usd",
+   "id": "re_stripe_only",
+   "object": "refund",
+   "status": "failed"
+  }
+ ],
+ "subscriptions": [
+  {
+   "created": 1700000000,
+   "customer": "cus_x",
+   "id": "sub_match_a",
+   "object": "subscription",
+   "status": "active"
+  },
+  {
+   "created": 1700000000,
+   "customer": "cus_x",
+   "id": "sub_mismatch_a",
+   "object": "subscription",
+   "status": "active"
+  },
+  {
+   "created": 1700000000,
+   "customer": "cus_x",
+   "id": "sub_match_b",
+   "object": "subscription",
+   "status": "trialing"
+  },
+  {
+   "created": 1700000000,
+   "customer": "cus_x",
+   "id": "sub_stripe_only",
+   "object": "subscription",
+   "status": "past_due"
+  },
+  {
+   "created": 1700000000,
+   "customer": "cus_x",
+   "id": "sub_dup",
+   "object": "subscription",
+   "status": "canceled"
+  },
+  {
+   "created": 1700000000,
+   "customer": "cus_x",
+   "id": "sub_\u00fcn\u00ef",
+   "object": "subscription",
+   "status": "active"
+  }
+ ]
+}

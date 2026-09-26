@@ -2,12 +2,19 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stripe/stripe-go/v86"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
@@ -57,11 +64,19 @@ type reconcileReport struct {
 // fetchLocalRows is _fetch_local_rows: the same statement, no order (the
 // report lists follow the database's row order on both planes). A read
 // failure is logged and read as no rows.
-func (h handlers) fetchLocalRows(ctx context.Context, tx pgx.Tx, table, stripeColumn string, org *uuid.UUID) []localRow {
+func (h handlers) fetchLocalRows(ctx context.Context, tx pgx.Tx, table, stripeColumn string, org *uuid.UUID, since *time.Time) []localRow {
 	sql, args := `SELECT id, `+stripeColumn+` as stripe_id, status, updated_at, org_id FROM `+table, []any{}
+	var where []string
 	if org != nil {
-		sql += ` WHERE org_id = $1`
 		args = append(args, *org)
+		where = append(where, fmt.Sprintf("org_id = $%d", len(args)))
+	}
+	if since != nil {
+		args = append(args, *since)
+		where = append(where, fmt.Sprintf("updated_at >= $%d", len(args)))
+	}
+	if len(where) > 0 {
+		sql += ` WHERE ` + strings.Join(where, ` AND `)
 	}
 	var out []localRow
 	err := savepoint(ctx, tx, func(sp pgx.Tx) error {
@@ -296,6 +311,81 @@ func concat[T any](parts ...[]T) []T {
 	return out
 }
 
+// reconcileResult is what reconcile_all returns: the combined report and the
+// two instants it stamps.
+type reconcileResult struct {
+	report             reconcileReport
+	started, completed time.Time
+}
+
+// reconcileAll is ReconciliationService.reconcile_all: the subscription, invoice
+// and refund comparisons of one organisation (every organisation when org is nil),
+// each with its audit rows when an organisation is named.
+func (h handlers) reconcileAll(ctx context.Context, tx pgx.Tx, client *stripe.Client, org *uuid.UUID) reconcileResult {
+	started := h.nowUTC()
+	if org != nil {
+		h.writeAudit(ctx, tx, auditRecord{
+			OrgID: *org, ResourceID: uuid.New(), Action: "reconciliation.started", ResourceType: "reconciliation",
+			Description: "Started billing reconciliation", Status: "unresolved",
+		})
+	}
+	step := func(resourceType, table, stripeColumn string) reconcileReport {
+		local := h.fetchLocalRows(ctx, tx, table, stripeColumn, org, nil)
+		return compareRows(resourceType, local, h.fetchStripeRows(ctx, client, table))
+	}
+	subs := step("subscription", "subscriptions", "stripe_subscription_id")
+	if org != nil {
+		h.logReport(ctx, tx, *org, subs)
+	}
+	invoices := step("invoice", "invoices", "stripe_invoice_id")
+	if org != nil {
+		h.logReport(ctx, tx, *org, invoices)
+	}
+	refunds := step("refund", "refunds", "stripe_refund_id")
+	combined := reconcileReport{
+		subscriptions: subs.subscriptions, invoices: invoices.invoices, refunds: refunds.refunds,
+		mismatches:    concat(subs.mismatches, invoices.mismatches, refunds.mismatches),
+		missingLocal:  concat(subs.missingLocal, invoices.missingLocal, refunds.missingLocal),
+		missingStripe: concat(subs.missingStripe, invoices.missingStripe, refunds.missingStripe),
+	}
+	completed := h.nowUTC()
+	if org != nil {
+		h.logReport(ctx, tx, *org, combined)
+	}
+	return reconcileResult{report: combined, started: started, completed: completed}
+}
+
+// reconcileInvoices is ReconciliationService.reconcile_invoices with a since: the
+// invoices updated on or after it are compared with Stripe's (whose listing takes
+// no since), and the run is logged for an organisation. Only the count of local
+// invoices it checked is used by its caller.
+func (h handlers) reconcileInvoices(ctx context.Context, tx pgx.Tx, client *stripe.Client, org *uuid.UUID, since *time.Time) reconcileReport {
+	local := h.fetchLocalRows(ctx, tx, "invoices", "stripe_invoice_id", org, since)
+	report := compareRows("invoice", local, h.fetchStripeRows(ctx, client, "invoices"))
+	if org != nil {
+		h.logReport(ctx, tx, *org, report)
+	}
+	return report
+}
+
+// reportJSON is ReconciliationReport.to_dict.
+func reportJSON(result reconcileResult) *pyjson.Object {
+	mismatches := make([]pyjson.Value, 0, len(result.report.mismatches))
+	for _, m := range result.report.mismatches {
+		mismatches = append(mismatches, mismatchJSON(m))
+	}
+	out := pyjson.NewObject()
+	out.Set("started_at", pytime.ISOFormat(result.started))
+	out.Set("completed_at", pytime.ISOFormat(result.completed))
+	out.Set("subscriptions_checked", result.report.subscriptions)
+	out.Set("invoices_checked", result.report.invoices)
+	out.Set("refunds_checked", result.report.refunds)
+	out.Set("mismatches", mismatches)
+	out.Set("missing_local", stringList(result.report.missingLocal))
+	out.Set("missing_stripe", stringList(result.report.missingStripe))
+	return out
+}
+
 // reconcile is trigger_reconciliation (reconcile_all).
 func (h handlers) reconcile(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
@@ -314,50 +404,56 @@ func (h handlers) reconcile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.serve(w, r, "reconcile", func(tx pgx.Tx) (reply, error) {
-		ctx := r.Context()
-		started := h.nowUTC()
-		if org != nil {
-			h.writeAudit(ctx, tx, auditRecord{
-				OrgID: *org, ResourceID: uuid.New(), Action: "reconciliation.started", ResourceType: "reconciliation",
-				Description: "Started billing reconciliation", Status: "unresolved",
-			})
-		}
-		step := func(resourceType, table, stripeColumn string) reconcileReport {
-			local := h.fetchLocalRows(ctx, tx, table, stripeColumn, org)
-			return compareRows(resourceType, local, h.fetchStripeRows(ctx, client, table))
-		}
-		subs := step("subscription", "subscriptions", "stripe_subscription_id")
-		if org != nil {
-			h.logReport(ctx, tx, *org, subs)
-		}
-		invoices := step("invoice", "invoices", "stripe_invoice_id")
-		if org != nil {
-			h.logReport(ctx, tx, *org, invoices)
-		}
-		refunds := step("refund", "refunds", "stripe_refund_id")
-		combined := reconcileReport{
-			subscriptions: subs.subscriptions, invoices: invoices.invoices, refunds: refunds.refunds,
-			mismatches:    concat(subs.mismatches, invoices.mismatches, refunds.mismatches),
-			missingLocal:  concat(subs.missingLocal, invoices.missingLocal, refunds.missingLocal),
-			missingStripe: concat(subs.missingStripe, invoices.missingStripe, refunds.missingStripe),
-		}
-		completed := h.nowUTC()
-		if org != nil {
-			h.logReport(ctx, tx, *org, combined)
-		}
-		mismatches := make([]pyjson.Value, 0, len(combined.mismatches))
-		for _, m := range combined.mismatches {
-			mismatches = append(mismatches, mismatchJSON(m))
-		}
-		out := pyjson.NewObject()
-		out.Set("started_at", pytime.ISOFormat(started))
-		out.Set("completed_at", pytime.ISOFormat(completed))
-		out.Set("subscriptions_checked", combined.subscriptions)
-		out.Set("invoices_checked", combined.invoices)
-		out.Set("refunds_checked", combined.refunds)
-		out.Set("mismatches", mismatches)
-		out.Set("missing_local", stringList(combined.missingLocal))
-		out.Set("missing_stripe", stringList(combined.missingStripe))
-		return ok(out), nil
+		return ok(reportJSON(h.reconcileAll(r.Context(), tx, client, org))), nil
 	})
+}
+
+// Reconcile runs the billing reconciliation outside HTTP, for the operator verb
+// (`billing reconcile`); the API's reconcile route runs the same code.
+type Reconcile struct {
+	Pool   *pgxpool.Pool
+	Stripe *stripeclient.Provider
+	Logger *slog.Logger
+	// Now is injectable for tests; nil means time.Now.
+	Now func() time.Time
+}
+
+func (s Reconcile) handlers() handlers {
+	h := handlers{pool: s.Pool, stripe: s.Stripe, logger: s.Logger, now: s.Now}
+	if h.logger == nil {
+		h.logger = slog.New(slog.DiscardHandler)
+	}
+	if h.now == nil {
+		h.now = time.Now
+	}
+	return h
+}
+
+// Run is the body of `billing reconcile`: reconcile_all for org (every
+// organisation when nil) and, when since is set, reconcile_invoices from that
+// instant, whose count of checked invoices replaces the combined report's. The
+// writes (the audit rows of a named organisation) are committed when the run
+// ends. The result is the report as ReconciliationReport.to_dict lays it out.
+func (s Reconcile) Run(ctx context.Context, org *uuid.UUID, since *time.Time) (*pyjson.Object, error) {
+	if s.Pool == nil {
+		return nil, errors.New("billing: no database pool")
+	}
+	client, err := s.Stripe.Client()
+	if err != nil {
+		return nil, err
+	}
+	h := s.handlers()
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	result := h.reconcileAll(ctx, tx, client, org)
+	if since != nil {
+		result.report.invoices = h.reconcileInvoices(ctx, tx, client, org, since).invoices
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return reportJSON(result), nil
 }

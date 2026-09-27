@@ -183,6 +183,13 @@ def test_inventory_row_count_matches_the_baseline():
     billing-edge listener serves the billing host now (executed oracle:
     TestVenueOracleBillingEdge, against its frozen Python golden). The rows
     stand at 346 (290 REST + 56 GraphQL), recounted from the file.
+    = 345, -1 REST under CHAOS-6250: `POST /api/v1/admin/orgs/{org_id}/
+    transfer-ownership/{from_user_id}` is deleted with its route in the same
+    change -- the route already 404s in prod (the Go plane serves the real
+    web-shape route at a different path, `POST /orgs/{org_id}/
+    transfer-ownership`, a ruled intentional divergence), so nothing calls
+    the Python path any more. The rows stand at 345 (289 REST + 56 GraphQL),
+    recounted from the file.
 
     MERGE HAZARD, recorded because it has now nearly landed silently more
     than once. Each change edited these same asserts, and each was correct
@@ -203,9 +210,9 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 290, len(rest)
+    assert len(rest) == 289, len(rest)
     assert len(graphql) == 56, len(graphql)
-    assert len(rows) == 346, len(rows)
+    assert len(rows) == 345, len(rows)
 
 
 def test_no_graphql_subscription_is_profiled():
@@ -277,7 +284,9 @@ def test_classification_summary_matches_the_baseline():
     # billing-edge app rows (its Stripe webhook was protected by the signature
     # check, `GET,HEAD /health` and the 404 catch-all were public). Recounted
     # from the file.
-    assert len(protected) == 321, len(protected)
+    # - 1 more under CHAOS-6250: the deleted transfer-ownership/{from_user_id}
+    # row was protected (require_admin).
+    assert len(protected) == 320, len(protected)
     # 20 + the four fastapi doc routes + /metrics.
     assert len(public) == 25, len(public)
     assert len(protected) + len(public) == len(rows)

@@ -25,6 +25,12 @@ type providerRow struct {
 	LastMetadataSyncAt, LastLoginAt, LastErrorAt *time.Time
 	LastError                                    *string
 	CreatedAt, UpdatedAt                         time.Time
+	// EncryptedSecrets is sso_providers.encrypted_secrets: the OIDC/OAuth
+	// client_secret (and, dead-Python-code aside, the expected_state /
+	// expected_nonce keys _get_expected_state / _get_expected_nonce read).
+	// Not selected by providerColumns (every other route only needs the
+	// public columns); the two OIDC routes fetch it themselves.
+	EncryptedSecrets *string
 }
 
 // setStatus is POST /sso/providers/{provider_id}/activate and /deactivate
@@ -92,6 +98,21 @@ func scanProvider(row pgx.Row) (*providerRow, error) {
 	err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Protocol, &p.Status, &p.DefaultRole, &p.IsDefault,
 		&p.AllowIdpInitiated, &p.AutoProvision, &p.Config, &p.AllowedDomains, &p.LastMetadataSyncAt,
 		&p.LastLoginAt, &p.LastErrorAt, &p.LastError, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// oidcProviderColumns is providerColumns plus encrypted_secrets, for the
+// two routes (initiateOIDCAuth, oidcCallback) that need the client_secret.
+const oidcProviderColumns = providerColumns + `, encrypted_secrets::text`
+
+func scanOIDCProvider(row pgx.Row) (*providerRow, error) {
+	var p providerRow
+	err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Protocol, &p.Status, &p.DefaultRole, &p.IsDefault,
+		&p.AllowIdpInitiated, &p.AutoProvision, &p.Config, &p.AllowedDomains, &p.LastMetadataSyncAt,
+		&p.LastLoginAt, &p.LastErrorAt, &p.LastError, &p.CreatedAt, &p.UpdatedAt, &p.EncryptedSecrets)
 	if err != nil {
 		return nil, err
 	}

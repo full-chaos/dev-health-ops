@@ -2,15 +2,15 @@ module github.com/full-chaos/dev-health-ops
 
 go 1.27.0
 
-require atlassian v0.0.0
-
 // atlassian is the full-chaos/atlassian Go client, vendored (third_party/vendor/atlassian/PROVENANCE.md):
 // its go.mod declares the module path `atlassian`, which the Go proxy refuses.
 replace atlassian => ./third_party/vendor/atlassian
 
 require (
+	atlassian v0.0.0
 	github.com/99designs/gqlgen v0.17.66
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/full-chaos/dev-health-go v0.8.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/jsonschema-go v0.4.3
@@ -36,6 +36,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0
 	go.opentelemetry.io/proto/otlp v1.10.0
 	golang.org/x/crypto v0.55.0
+	golang.org/x/oauth2 v0.37.0
 	golang.org/x/text v0.41.0
 	golang.org/x/tools v0.49.0
 	google.golang.org/grpc v1.81.1
@@ -67,6 +68,7 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
 	github.com/go-faster/errors v0.7.1 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect

@@ -131,16 +131,16 @@ func decodeSAMLConfig(raw *string) (samlConfigValues, error) {
 	return cfg, nil
 }
 
-// validateSAMLConfigHTTPS is D2759's single shared URL policy
-// (validateHTTPSOrLoopback, loginnonce.go), replacing this function's own
-// former ad-hoc `strings.HasPrefix(x, "http://")` gate: an admin-
-// overridden sp_entity_id/sp_acs_url is refused here, at config-load
-// time, unless it parses as https (or an http loopback address). This
-// runs at every decodeSAMLConfig call site -- samlMetadata,
-// initiateSAMLAuth, samlACSCallback -- so an insecure override never
-// reaches exchange time, which is why the login-nonce cookie's Secure
-// flag is a literal true rather than conditioned on appBaseURL()'s own
-// scheme: this check is the guarantee that makes that literal safe.
+// validateSAMLConfigHTTPS replaces this function's own former ad-hoc
+// `strings.HasPrefix(x, "http://")` gate. sp_acs_url is somewhere a
+// browser/IdP is actually SENT TO -- D2759's single shared URL policy
+// (validateHTTPSOrLoopback, loginnonce.go) applies: refused unless it
+// parses as https (or an http loopback address). This runs at every
+// decodeSAMLConfig call site -- samlMetadata, initiateSAMLAuth,
+// samlACSCallback -- so an insecure override never reaches exchange
+// time, which is why the login-nonce cookie's Secure flag is a literal
+// true rather than conditioned on appBaseURL()'s own scheme: this check
+// is the guarantee that makes that literal safe.
 //
 // D2759 (team-lead, r1 on #3355): the OLD raw-prefix version of this
 // check was case-sensitive -- "HTTP://attacker.example/..." never
@@ -150,20 +150,24 @@ func decodeSAMLConfig(raw *string) (samlConfigValues, error) {
 // "//host" value and an opaque "https:evil" value, neither of which the
 // old check considered at all, are refused too).
 //
+// D2761 (team-lead, correction): sp_entity_id is EXEMPT from that
+// policy -- unlike sp_acs_url, it is a bare IDENTIFIER, not something a
+// browser or IdP is ever sent a request to. This port's first attempt at
+// D2759 ran it through validateHTTPSOrLoopback too, which would have
+// refused a legitimate URN-shaped entityID like "urn:example:sp" (no
+// https/loopback-http scheme) -- an SAML spec-valid value the OLD,
+// narrower "explicit http:// prefix only" check never rejected either.
+// validateAbsoluteURIScheme is the real replacement for THIS field: any
+// absolute URI (url.Parse succeeds and Scheme != "") passes, so
+// "urn:example:sp" and "https://host/metadata" are both fine; only
+// empty, or a relative/schemeless value, is refused.
+//
 // Only checked when the admin actually set an override -- an empty
 // SPEntityID/SPACSURL is skipped, since "" means "fall back to the
-// computed default" (spEntityIDOf/spACSURLOf), not "refuse". Unlike
-// OAuth/OIDC's fields, SPEntityID is conventionally a URI but not
-// necessarily a dereferenceable URL (e.g. "urn:example:sp") in the SAML
-// spec itself; validateHTTPSOrLoopback's own "no scheme -> refuse" rule
-// means a bare non-URL entityID like that is now ALSO refused here where
-// the earlier, narrower "explicit http:// prefix only" check would have
-// let it through -- a deliberate behavior change per D2759's explicit
-// "one shared helper, delete the per-protocol gates, don't patch them
-// individually", recorded here rather than silently absorbed.
+// computed default" (spEntityIDOf/spACSURLOf), not "refuse".
 func validateSAMLConfigHTTPS(cfg samlConfigValues) error {
 	if cfg.SPEntityID != "" {
-		if err := validateHTTPSOrLoopback(cfg.SPEntityID); err != nil {
+		if err := validateAbsoluteURIScheme(cfg.SPEntityID); err != nil {
 			return fmt.Errorf("SAML sp_entity_id %w", err)
 		}
 	}
@@ -171,6 +175,28 @@ func validateSAMLConfigHTTPS(cfg samlConfigValues) error {
 		if err := validateHTTPSOrLoopback(cfg.SPACSURL); err != nil {
 			return fmt.Errorf("SAML sp_acs_url %w", err)
 		}
+	}
+	return nil
+}
+
+// errNotAnAbsoluteURI is validateAbsoluteURIScheme's own error -- see
+// validateSAMLConfigHTTPS's doc comment (D2761) for the field this is
+// scoped to and why it is not validateHTTPSOrLoopback.
+var errNotAnAbsoluteURI = errors.New("must be an absolute URI (a scheme is required)")
+
+// validateAbsoluteURIScheme accepts any absolute URI -- url.Parse
+// succeeds AND the result has a non-empty scheme -- refusing only an
+// unparseable value or a relative/schemeless one (e.g. "sp" or
+// "//host/path", neither of which names a URI scheme at all). It does
+// NOT constrain which scheme: "urn:example:sp", "https://host/metadata"
+// and, yes, "http://host/metadata" are all accepted -- sp_entity_id is
+// an identifier this package never dereferences or redirects a browser
+// to, so the https-or-loopback policy that protects sp_acs_url does not
+// apply here (D2761).
+func validateAbsoluteURIScheme(candidate string) error {
+	parsed, err := url.Parse(candidate)
+	if err != nil || parsed.Scheme == "" {
+		return errNotAnAbsoluteURI
 	}
 	return nil
 }

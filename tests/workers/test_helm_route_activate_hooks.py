@@ -66,6 +66,14 @@ def _render(*sets: str) -> list[dict]:
     return [doc for doc in yaml.safe_load_all(completed.stdout) if doc]
 
 
+def _render_stderr(*sets: str) -> tuple[int, str]:
+    argv = ["helm", "template", _RELEASE, str(_CHART)]
+    for item in sets:
+        argv += ["--set", item]
+    completed = subprocess.run(argv, capture_output=True, text=True)
+    return completed.returncode, completed.stderr
+
+
 def _jobs(*sets: str) -> dict[str, dict]:
     return {
         doc["metadata"]["name"]: doc
@@ -316,13 +324,22 @@ def test_route_activate_operator_image_override_is_honoured() -> None:
     killed): `migrations.hook.routeActivate.image`'s consumer
     (`$operatorImage`) was never exercised with a real override set -- only
     its DEFAULT was pinned above. Pairwise knob x consumer, per the prompt's
-    amendment: set the knob, execute its reader. The override itself must be
-    pinned (this repo's `sha-<12 hex>` immutable-tag convention here, to
-    prove that form is honoured too, not just a digest) -- a floating tag
-    would now fail the image guard before ever reaching this assertion."""
+    amendment: set the knob, execute its reader.
+
+    D2696 (CHAOS-6958): "overridable" means registry, namespace, tag or
+    digest -- NEVER the image NAME, which is a different program, not a
+    different pin of the same one (dev-health.pinnedOperatorImageCheck,
+    _helpers.tpl). This fixture is a SAME-NAME mirror path: a different
+    registry, namespace and digest, the name still `dev-health-go-operator`,
+    so it exercises the override AND goes through the real digest-pinned
+    identity check (the ORIGINAL `sha-<12 hex>`-tagged fixture never reached
+    identity at all -- D2696 scopes identity to digest-pinned references
+    only). See test_route_activate_refuses_a_foreign_operator_name below for
+    the negative control this pairs with."""
+    mirrored = "registry.example.com/mirror/dev-health-go-operator@sha256:" + "c" * 64
     jobs = _jobs(
         *_FULL_CHAIN_ON,
-        "migrations.hook.routeActivate.image=ghcr.io/example/custom-operator:sha-abc123456789",
+        f"migrations.hook.routeActivate.image={mirrored}",
     )
     init_containers = {
         c["name"]: c
@@ -330,7 +347,22 @@ def test_route_activate_operator_image_override_is_honoured() -> None:
     }
     for kind in _KINDS:
         image = init_containers[f"route-activate-{kind.replace('_', '-')}"]["image"]
-        assert image == "ghcr.io/example/custom-operator:sha-abc123456789", image
+        assert image == mirrored, image
+
+
+def test_route_activate_refuses_a_foreign_operator_name() -> None:
+    """D2696: the promised override surface is registry/namespace/tag/digest,
+    never the image NAME -- a digest-pinned image under an unrelated name is
+    refused, even though its pin SHAPE is otherwise identical to the honoured
+    mirror override above."""
+    code, stderr = _render_stderr(
+        "migrations.hook.provisionRoles.enabled=true",
+        "migrations.hook.riverMigrate.enabled=true",
+        "migrations.hook.routeActivate.image=ghcr.io/example/custom-operator@sha256:"
+        + "d" * 64,
+    )
+    assert code != 0, "a digest-pinned foreign-named operator image rendered clean"
+    assert "is not a pinned dho image" in stderr, stderr
 
 
 @pytest.mark.parametrize("kind", _KINDS)

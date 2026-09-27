@@ -70,17 +70,25 @@ name; a repository name is not proof of an image's contents (CHAOS-6488).
 */}}
 {{- $migrateImageSet := .Values.migrations.hook.image | default .Values.migrations.hook.routeActivate.image }}
 {{- $migrateImage := $migrateImageSet | default (include "dev-health.goApiImage" .) }}
-{{- $migratePullPolicy := .Values.migrations.hook.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default .Values.goApi.image.pullPolicy }}
+{{- /*
+CHAOS-6958: IfNotPresent is this Job's OWN default -- never .Values.goApi.image.pullPolicy
+(a DIFFERENT component's policy), which used to leak a local dev Never onto this
+PINNED REGISTRY image and make it unpullable.
+*/}}
+{{- $migratePullPolicy := .Values.migrations.hook.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default "IfNotPresent" }}
 {{- if regexMatch "(^|/)dev-hops-api([:@]|$)" $migrateImage }}
 {{- fail (printf "the migrate Job image %q is the Python image; the Job runs `dho migrate upgrade` and needs the dho (operator) image: set migrations.hook.image or migrations.hook.routeActivate.image" $migrateImage) }}
 {{- end }}
-{{- $migrateImageIsDigestPinned := and $migrateImage (contains "@sha256:" $migrateImage) }}
-{{- $migrateImageIsImmutableTag := and $migrateImage (regexMatch "^.+:sha-[0-9a-f]{12}$" $migrateImage) }}
-{{- $migrateImageIsSideloadedLocal := and $migrateImage (regexMatch "^.+:local$" $migrateImage) (or (eq $migratePullPolicy "Never") (eq $migratePullPolicy "IfNotPresent")) }}
-{{- if and $migrateImageSet (not (or $migrateImageIsDigestPinned $migrateImageIsImmutableTag $migrateImageIsSideloadedLocal)) }}
-{{- fail (printf "the migrate Job image %q (migrations.hook.image, else migrations.hook.routeActivate.image) is not a pinned dho image. The Job runs `dho migrate upgrade`: set it to repo@sha256:<digest> or repo:sha-<12 hex>; repo:local is accepted only with pullPolicy Never or IfNotPresent." $migrateImage) }}
+{{- /*
+Only enforced when EXPLICITLY configured (migrations.hook.image or
+migrations.hook.routeActivate.image): the chart-default goApiImage fallback is a
+KNOWN unpinned default for local renders (CHAOS-6488), unchanged here. Identity,
+real-digest and lockstep all live in dev-health.pinnedOperatorImageCheck now
+(_helpers.tpl) -- see that definition's own comment for what each one closes.
+*/}}
+{{- if $migrateImageSet }}
+{{- include "dev-health.pinnedOperatorImageCheck" (dict "context" . "image" $migrateImage "pullPolicy" $migratePullPolicy "flagLabel" "the migrate Job image (migrations.hook.image, else migrations.hook.routeActivate.image)" "verb" "`dho migrate upgrade`") }}
 {{- end }}
-{{- include "dev-health.lockstepImageCheck" (dict "context" . "image" $migrateImage "labelWithValue" (printf "the migrate Job image (migrations.hook.image, else migrations.hook.routeActivate.image: %s)" $migrateImage) "reason" "`dho migrate upgrade` must run the same build as the application it is migrating for.") }}
 ---
 apiVersion: batch/v1
 kind: Job

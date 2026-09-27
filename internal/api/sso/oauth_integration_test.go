@@ -26,7 +26,6 @@ package sso_test
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -201,23 +200,9 @@ func TestOAuthCallbackRefusesATamperedState(t *testing.T) {
 	assertSSOAuditStage(t, ctx, st.pool, orgID, "state_auth")
 }
 
-// flipMiddleByte tampers a base64url-encoded AEAD token reliably: it
-// decodes to raw bytes, flips every bit of the MIDDLE byte, and
-// re-encodes. Unlike flipping the string's LAST base64 character (as
-// oidc_integration_test.go's flipLastRune does), which can land on a
-// padding-only bit range of the final character and silently decode to
-// the SAME underlying bytes depending on the payload's length modulo 3 --
-// observed here to intermittently pass a "tampered" state's GCM tag check
-// roughly half the time -- a middle byte is never a padding position, so
-// this always changes the ciphertext GCM authenticates over.
-func flipMiddleByte(s string) string {
-	raw, err := base64.RawURLEncoding.DecodeString(s)
-	if err != nil || len(raw) == 0 {
-		return s + "x"
-	}
-	raw[len(raw)/2] ^= 0xFF
-	return base64.RawURLEncoding.EncodeToString(raw)
-}
+// flipMiddleByte is shared with oidc_integration_test.go/
+// saml_integration_test.go (same sso_test package) -- see its doc comment
+// there.
 
 func TestOAuthCallbackRefusesAnExpiredState(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

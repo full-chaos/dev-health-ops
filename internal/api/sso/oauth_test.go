@@ -63,3 +63,44 @@ func TestFetchOAuthUserInfoGoogleUsernameStaysEmpty(t *testing.T) {
 		t.Fatalf("externalID = %q, want the Google numeric id stringified", claims.externalID)
 	}
 }
+
+// TestValidateOAuthConfigHTTPS pins D2745 P1-2/D2752's class ruling: https
+// is always accepted, http is refused UNLESS the host is loopback
+// (127.0.0.1/localhost/::1, RFC 8252 shape) -- checked unconditionally,
+// no env var, no build tag, no test-injected knob of any kind (D2752: "a
+// runtime switch that weakens a security check never enters the
+// production binary, test or not").
+func TestValidateOAuthConfigHTTPS(t *testing.T) {
+	cases := []struct {
+		name    string
+		baseURL string
+		wantErr bool
+	}{
+		{"https accepted", "https://gitlab.example.internal", false},
+		{"http non-loopback refused", "http://gitlab.example.internal", true},
+		{"http loopback accepted (127.0.0.1)", "http://127.0.0.1:8080", false},
+		{"http loopback accepted (localhost)", "http://localhost:8080", false},
+		{"http loopback accepted (::1)", "http://[::1]:8080", false},
+		{"unset is fine", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateOAuthConfigHTTPS(oauthConfigValues{BaseURL: c.baseURL})
+			if c.wantErr && err == nil {
+				t.Fatalf("base_url=%q: want an error, got nil", c.baseURL)
+			}
+			if !c.wantErr && err != nil {
+				t.Fatalf("base_url=%q: want no error, got %v", c.baseURL, err)
+			}
+			// redirect_uri is checked identically to base_url (same loop,
+			// oauth.go).
+			err = validateOAuthConfigHTTPS(oauthConfigValues{RedirectURI: c.baseURL})
+			if c.wantErr && err == nil {
+				t.Fatalf("redirect_uri=%q: want an error, got nil", c.baseURL)
+			}
+			if !c.wantErr && err != nil {
+				t.Fatalf("redirect_uri=%q: want no error, got %v", c.baseURL, err)
+			}
+		})
+	}
+}

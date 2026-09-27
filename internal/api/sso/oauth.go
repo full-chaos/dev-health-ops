@@ -59,7 +59,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -118,21 +117,18 @@ func decodeOAuthConfig(raw *string) (oauthConfigValues, error) {
 // RedirectURI falls back to appBaseURL()-derived default (an ops-level
 // guarantee, not a per-provider one), same scoping as SAML's check.
 //
-// Loopback http (127.0.0.1/localhost/::1) is allowed only when
-// DEV_HEALTH_ALLOW_HTTP_OAUTH_LOOPBACK=1 is set -- the ruling's own
-// "loopback http allowed only under a test build tag/explicit dev flag
-// prod cannot set", done here as an env var flag (the same shape as
-// DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER, pgmigrate/history.go) rather
-// than a new build tag: prod's deploy config never sets this var, so it
-// is always false in a real deployment; a test sets it via t.Setenv to
-// exercise its own http:// fake-server loopback address (startFakeGitLab,
-// oauth_integration_test.go).
+// D2752 (team-lead): loopback http (127.0.0.1/localhost/::1, RFC 8252
+// shape) is allowed unconditionally, host-checked by isLoopbackHTTPURL --
+// no env var, no build tag, no test-injected knob of any kind. The
+// earlier DEV_HEALTH_ALLOW_HTTP_OAUTH_LOOPBACK env-var gate is REMOVED:
+// "a runtime switch that weakens a security check never enters the
+// production binary, test or not." Everything else must be https.
 func validateOAuthConfigHTTPS(cfg oauthConfigValues) error {
 	for _, candidate := range []string{cfg.BaseURL, cfg.RedirectURI} {
 		if candidate == "" || !strings.HasPrefix(candidate, "http://") {
 			continue
 		}
-		if isLoopbackHTTPURL(candidate) && os.Getenv("DEV_HEALTH_ALLOW_HTTP_OAUTH_LOOPBACK") == "1" {
+		if isLoopbackHTTPURL(candidate) {
 			continue
 		}
 		return errors.New("OAuth base_url/redirect_uri must not use the insecure http:// scheme")

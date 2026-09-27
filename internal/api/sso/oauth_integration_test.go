@@ -69,11 +69,11 @@ type fakeGitLab struct {
 
 func startFakeGitLab(t *testing.T) *fakeGitLab {
 	t.Helper()
-	// D2745 P1-2: this fixture's own base_url is a real http://127.0.0.1
-	// loopback (httptest.Server never serves https), which validateOAuthConfigHTTPS
-	// (oauth.go) now refuses by default -- allowed here, and only here,
-	// via the same env-var escape hatch a real prod deploy never sets.
-	t.Setenv("DEV_HEALTH_ALLOW_HTTP_OAUTH_LOOPBACK", "1")
+	// D2745 P1-2/D2752: this fixture's own base_url is a real
+	// http://127.0.0.1 loopback (httptest.Server never serves https),
+	// which validateOAuthConfigHTTPS (oauth.go) allows unconditionally --
+	// D2752 removed the env-var gate: loopback is always accepted, no
+	// switch of any kind.
 	g := &fakeGitLab{email: "gitlab.user@example.test", username: "gluser", fullName: "GitLab User", userID: "42", confirmed: true}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /oauth/token", g.serveToken)
@@ -683,12 +683,12 @@ func TestOAuthByTypeRefusesANonEntitledOrg(t *testing.T) {
 	}
 }
 
-// TestOAuthConfigRefusesAnInsecureHTTPBaseURL pins D2745 P1-2: a
+// TestOAuthConfigRefusesAnInsecureHTTPBaseURL pins D2745 P1-2/D2752: a
 // non-loopback http:// base_url override is refused at config-load
 // time -- before initiateOAuthAuth ever builds an authorization_url --
-// unlike the loopback exception every OTHER GitLab test in this file
-// relies on (startFakeGitLab's own t.Setenv), which stays gated behind
-// DEV_HEALTH_ALLOW_HTTP_OAUTH_LOOPBACK and is deliberately NOT set here.
+// unlike the loopback host every OTHER GitLab test in this file relies
+// on (startFakeGitLab's own http://127.0.0.1 fake server), which
+// validateOAuthConfigHTTPS accepts unconditionally by host, no switch.
 func TestOAuthConfigRefusesAnInsecureHTTPBaseURL(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

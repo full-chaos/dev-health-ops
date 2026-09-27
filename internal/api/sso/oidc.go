@@ -207,6 +207,30 @@ type oidcConfigValues struct {
 
 var defaultOIDCScopes = []string{"openid", "profile", "email"}
 
+// validateOIDCRedirectURIHTTPS is team-lead's D2749-follow-up ruling
+// ("all three providers share one rule"), now delegating to D2759's
+// shared validateHTTPSOrLoopback (loginnonce.go): https required except
+// a loopback host, checked unconditionally -- no env var, no build tag,
+// no knob of any kind, mirroring D2748 (SAML)/D2752 (OAuth) exactly.
+// D2761 does NOT exempt this field: unlike SAML's sp_entity_id (a bare
+// identifier), redirect_uri is a genuine network endpoint a browser is
+// sent to, same as SAML's sp_acs_url and OAuth's base_url/redirect_uri.
+// Unlike those admin-stored config fields, initiateOIDCAuth's
+// redirect_uri is caller-request-supplied (this route's own optional
+// body field), so this is checked at the point it is read rather than
+// at a "config load" step -- there is none for it. Empty is the
+// caller's own business (field unset, use the computed default), same
+// as every other call site of validateHTTPSOrLoopback.
+func validateOIDCRedirectURIHTTPS(redirectURI string) error {
+	if redirectURI == "" {
+		return nil
+	}
+	if err := validateHTTPSOrLoopback(redirectURI); err != nil {
+		return fmt.Errorf("redirect_uri %w", err)
+	}
+	return nil
+}
+
 func decodeOIDCConfig(raw *string) (oidcConfigValues, error) {
 	object, err := decodeConfigObject(raw)
 	if err != nil {
@@ -321,6 +345,10 @@ func (h handlers) initiateOIDCAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	redirect := appBaseURL() + "/oidc/" + row.ID + "/callback"
 	if redirectSet && redirectURI != "" {
+		if err := validateOIDCRedirectURIHTTPS(redirectURI); err != nil {
+			policy.WriteDetail(w, http.StatusBadRequest, err.Error(), nil)
+			return
+		}
 		redirect = redirectURI
 	}
 	params := url.Values{
@@ -341,13 +369,27 @@ func (h handlers) initiateOIDCAuth(w http.ResponseWriter, r *http.Request) {
 	if authEndpoint == "" {
 		authEndpoint = config.Issuer + "/authorize"
 	}
-	encrypted, err := mintOIDCState(h.StateSecret, oidcState{
+	// D2745 browser-binding class ruling (from CHAOS-6986 P1-3, already
+	// landed on SAML/OAuth): pairs with the NonceHash check in
+	// exchangeAndValidate -- see loginnonce.go's doc comment for the
+	// login-CSRF this closes. D2759: the cookie is per-flow (named by
+	// this state's own random ID, flowID below), not one fixed name per
+	// protocol, so two concurrent /authorize calls never collide.
+	loginNonce, err := randomURLSafe(32)
+	if err != nil {
+		h.fail(w, r, "generate oidc login nonce", err)
+		return
+	}
+	encrypted, flowID, err := mintOIDCState(h.StateSecret, oidcState{
 		ProviderID: row.ID, OrgID: row.OrgID, Nonce: nonce, CodeVerifier: codeVerifier, RedirectURI: redirect,
+		NonceHash: hashLoginNonce(loginNonce),
 	}, h.Now())
 	if err != nil {
 		h.fail(w, r, "mint oidc state", err)
 		return
 	}
+	callbackPath := "/api/v1/auth/oidc/" + row.ID + "/callback"
+	issueLoginNonceCookie(w, "oidc", flowID, loginNonce, callbackPath, oidcStateTTL)
 	out := pyjson.NewObject()
 	out.Set("authorization_url", authEndpoint+"?"+params.Encode())
 	out.Set("state", encrypted)
@@ -401,7 +443,7 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := h.exchangeAndValidate(ctx, row, providerID, stateToken, code, codeVerifierField, codeVerifierSet)
+	claims, err := h.exchangeAndValidate(ctx, w, r, row, providerID, stateToken, code, codeVerifierField, codeVerifierSet)
 	if err != nil {
 		var unauth ssoUnauthenticated
 		if asSSOUnauthenticated(err, &unauth) {
@@ -465,7 +507,7 @@ type oidcClaims struct {
 
 // exchangeAndValidate is process_oidc_callback: verify the state, exchange
 // the code, validate the id_token, optionally fetch userinfo, map claims.
-func (h handlers) exchangeAndValidate(ctx context.Context, row *providerRow, providerID uuid.UUID,
+func (h handlers) exchangeAndValidate(ctx context.Context, w http.ResponseWriter, r *http.Request, row *providerRow, providerID uuid.UUID,
 	stateToken, code string, codeVerifierField string, codeVerifierSet bool) (oidcClaims, error) {
 	now := h.Now()
 	// providerID is the GCM AAD: a state minted for a different provider
@@ -484,6 +526,22 @@ func (h handlers) exchangeAndValidate(ctx context.Context, row *providerRow, pro
 		// package for this provider), but for a different org -- still
 		// unauthenticated FOR this org: nothing proves the caller is
 		// entitled to see or affect this org's provider.
+		return oidcClaims{}, ssoAuthErr("OIDC state mismatch")
+	}
+	// D2745 browser-binding class ruling: the state alone only proves this
+	// package minted it, not which browser is presenting it back
+	// (loginnonce.go's doc comment has the login-CSRF this closes). D2759:
+	// look up the ONE cookie name matching this exact flow (state.ID, from
+	// the just-VERIFIED payload -- never an unauthenticated claim), so two
+	// concurrent flows can never read each other's nonce. A missing cookie
+	// (withheld by SameSite=Lax on a cross-site submission, or simply never
+	// set), a cross-flow cookie, or one that hashes to a different value
+	// than the state sealed is refused here, before the token exchange
+	// ever runs -- unauthenticated: the caller has proven nothing about the
+	// browser binding. Cleared on both this failure path and success,
+	// deferred inside verifyAndClearLoginNonceCookie.
+	callbackPath := "/api/v1/auth/oidc/" + row.ID + "/callback"
+	if !verifyAndClearLoginNonceCookie(w, r, "oidc", state.ID, callbackPath, state.NonceHash) {
 		return oidcClaims{}, ssoAuthErr("OIDC state mismatch")
 	}
 	config, err := decodeOIDCConfig(row.Config)

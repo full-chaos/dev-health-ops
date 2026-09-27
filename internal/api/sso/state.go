@@ -16,6 +16,17 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
+// D2759 (team-lead): this file used to carry its own copies of
+// isLoopbackHTTPURL, oidcLoginNonceCookieName/oidcLoginNonceCookie and
+// hashOIDCLoginNonce -- independently built (this PR predates D2759),
+// byte-for-byte the same class of two defects r1 caught reviewing this
+// PR's tip (case-sensitive http:// gate; one fixed cookie name per
+// protocol, colliding across two concurrent flows). Restacked onto
+// #3350/#3352 for the shared fix instead: loginnonce.go's
+// validateHTTPSOrLoopback, loginNonceCookieName/issueLoginNonceCookie/
+// clearLoginNonceCookie/verifyAndClearLoginNonceCookie, and
+// hashLoginNonce now do this file's old job for all three protocols.
+
 // oidcStateTTL bounds how long a caller has between fetching
 // authorization_url and completing the round trip at the IdP. Google's own
 // authorization code lifetime is 10 minutes; D2727-amended (team-lead)
@@ -77,12 +88,23 @@ const oidcStateHKDFInfo = "dev-health-ops:oidc-state-aead-v1"
 type oidcState struct {
 	ProviderID   string `json:"provider_id"`
 	OrgID        string `json:"org_id"`
-	Nonce        string `json:"nonce"`
+	Nonce        string `json:"nonce"`                   // the OIDC PROTOCOL nonce (id_token replay check) -- NOT the browser-binding login nonce below.
 	CodeVerifier string `json:"code_verifier,omitempty"` // "" when PKCE was not requested.
 	RedirectURI  string `json:"redirect_uri,omitempty"`
-	ID           string `json:"id"` // a random value, no comparison meaning of its own; see the doc comment above.
-	IssuedAt     int64  `json:"issued_at"`
-	ExpiresAt    int64  `json:"expires_at"`
+	// NonceHash is hashLoginNonce (loginnonce.go) of the random value
+	// initiateOIDCAuth also places in the per-flow login-nonce cookie
+	// (D2745's browser-binding class ruling; D2759's shared per-flow
+	// mechanism). Distinct from Nonce above: this one binds the state to
+	// the browser presenting it, not to the id_token the IdP returns.
+	NonceHash string `json:"nonce_hash"`
+	// ID is random; ALSO this flow's login-nonce cookie name suffix
+	// (D2759) -- no longer "no comparison meaning of its own". mintOIDCState
+	// returns it to the caller as flowID so it can be threaded through as
+	// the cookie name, and it is what makes two concurrent /authorize
+	// flows (two tabs, two providers) never collide.
+	ID        string `json:"id"`
+	IssuedAt  int64  `json:"issued_at"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
 var (
@@ -134,29 +156,31 @@ func newGCM(secret, info string) (cipher.AEAD, error) {
 
 // mintOIDCState seals state (stamping ID/IssuedAt/ExpiresAt) into the
 // opaque `state` value initiateOIDCAuth returns, AAD-bound to
-// state.ProviderID.
-func mintOIDCState(secret string, state oidcState, now time.Time) (string, error) {
+// state.ProviderID. Also returns the state's own random ID as flowID
+// (D2759): the caller uses it to name this flow's per-flow login-nonce
+// cookie, so two concurrent /authorize calls never collide.
+func mintOIDCState(secret string, state oidcState, now time.Time) (token, flowID string, err error) {
 	gcm, err := newGCM(secret, oidcStateHKDFInfo)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	id, err := randomURLSafe(16)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	state.ID = id
 	state.IssuedAt = now.Unix()
 	state.ExpiresAt = now.Add(oidcStateTTL).Unix()
 	plaintext, err := json.Marshal(state)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
-		return "", err
+		return "", "", err
 	}
 	sealed := gcm.Seal(nonce, nonce, plaintext, []byte(state.ProviderID))
-	return base64.RawURLEncoding.EncodeToString(sealed), nil
+	return base64.RawURLEncoding.EncodeToString(sealed), id, nil
 }
 
 // verifyOIDCState is the callback's read of a state value: the GCM tag,
@@ -189,7 +213,7 @@ func verifyOIDCState(secret, token, providerID string, now time.Time) (oidcState
 	if err := json.Unmarshal(plaintext, &state); err != nil {
 		return oidcState{}, errInvalidOIDCState
 	}
-	if state.ProviderID != providerID || state.OrgID == "" || state.Nonce == "" || state.ID == "" {
+	if state.ProviderID != providerID || state.OrgID == "" || state.Nonce == "" || state.ID == "" || state.NonceHash == "" {
 		return oidcState{}, errInvalidOIDCState
 	}
 	if now.Unix() > state.ExpiresAt {

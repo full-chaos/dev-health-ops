@@ -1,0 +1,25 @@
+# CHAOS-6987/R460 (2026-09-27): the web-path smoke's own one-off runner. Kept OUT of
+# bigboy-cut.sh's shared -f chain (compose.bigboy.router.yml etc.) on purpose -- the
+# password-file bind mount below only resolves once DHO_SMOKE_ADMIN_PASSWORD_FILE is
+# confirmed non-blank (web-path-smoke.sh's own presence gate), and folding this file
+# into every other invocation would make an empty/unset var break unrelated STEPs.
+# Invoked ONLY by web-path-smoke.sh, after that gate passes.
+services:
+  web-smoke:
+    image: ghcr.io/full-chaos/dev-hops-api@sha256:ab18700f0ef7c29e5833525833c8726752970177c03f3d3bda87188c3bf09295
+    profiles: ["smoke"]
+    entrypoint: ["python3"]
+    command: ["/smoke/web-path-smoke.py"]
+    working_dir: /smoke
+    networks: [dev-health]
+    environment:
+      DHO_SMOKE_ADMIN_EMAIL: ${DHO_SMOKE_ADMIN_EMAIL:?DHO_SMOKE_ADMIN_EMAIL required}
+      DHO_SMOKE_ADMIN_PASSWORD_FILE: ${DHO_SMOKE_ADMIN_PASSWORD_FILE:?DHO_SMOKE_ADMIN_PASSWORD_FILE required}
+      DHO_SMOKE_BASE_URL: http://traefik:3000
+      # A caller (e.g. bigboy-cut.sh) may export this to a per-cut path under
+      # _records/bigboy-<sha8>/ before invoking; unset falls back to the flat name.
+      DHO_SMOKE_RECEIPT_PATH: ${DHO_SMOKE_RECEIPT_PATH:-/receipts/web-path-smoke-receipt.json}
+    volumes:
+      - ./ci/bigboy:/smoke:ro
+      - ./_records:/receipts
+      - ${DHO_SMOKE_ADMIN_PASSWORD_FILE}:${DHO_SMOKE_ADMIN_PASSWORD_FILE}:ro

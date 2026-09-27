@@ -3,6 +3,7 @@ package reconcilerservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -68,6 +69,23 @@ func (dependencyFailure) Unwrap() error { return errReconcilerDependencyUnavaila
 
 // DependencyReason satisfies the shell's reason-code interface.
 func (failure dependencyFailure) DependencyReason() string { return failure.reason }
+
+// dependencyCheckFailed wraps errReconcilerDependencyUnavailable AROUND the check's own error
+// (mirroring internal/workerservice/dependencies.go's helper of the same name) instead of
+// discarding it. Before this, every readiness check here logged its real cause via
+// logDependencyCheckFailure and then returned the bare sentinel, so health.Registry -- which
+// classifies a check by errors.Is(err, context.DeadlineExceeded / Canceled) on whatever the check
+// FUNCTION returns -- never saw it: a dependency that was merely slow (its own query ran into a
+// busy pool's deadline) was indistinguishable from one that was genuinely broken (a real posture
+// mismatch) in the wired refusal log (CHAOS-6883) and in CheckStatus.Cause/TimedOut alike, always
+// reading cause=error, timed_out=false either way (CHAOS-6949). err is always this package's own
+// postgres.Check*Authorization / postgres.*Ready / selfprobe result, each of which already
+// documents that it never exposes catalog or driver connection material (logDependencyCheckFailure's
+// own doc comment), so wrapping it here is exactly as safe as logging it already was.
+// errors.Is(_, errReconcilerDependencyUnavailable) still holds for every existing caller.
+func dependencyCheckFailed(err error) error {
+	return fmt.Errorf("%w: %w", errReconcilerDependencyUnavailable, err)
+}
 
 func dependencyUnavailable(reason string) error { return dependencyFailure{reason: reason} }
 
@@ -920,7 +938,7 @@ func (dependencies *reconcilerDependencies) domainReady(ctx context.Context) err
 	}
 	if err := domainCheck(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "domain_postgres", err)
-		return errReconcilerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -933,7 +951,7 @@ func (dependencies *reconcilerDependencies) domainTransactionReady(ctx context.C
 	}
 	if err := dependencies.database.DomainTransactionReady(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "domain_transaction", err)
-		return errReconcilerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -944,7 +962,7 @@ func (dependencies *reconcilerDependencies) queueReady(ctx context.Context) erro
 	}
 	if err := dependencies.database.QueueReady(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "queue_postgres", err)
-		return errReconcilerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -956,7 +974,7 @@ func (dependencies *reconcilerDependencies) coordinatorReady(ctx context.Context
 	if err := dependencies.database.CoordinatorReady(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "coordinator_postgres", err)
 		dependencies.logCoordinatorPostureGaps(ctx)
-		return errReconcilerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -970,7 +988,7 @@ func (dependencies *reconcilerDependencies) postureManifestLockstepReady(ctx con
 	}
 	if err := dependencies.postureGuard.Ready(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "posture_manifest_lockstep", err)
-		return errReconcilerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -1055,7 +1073,7 @@ func (dependencies *reconcilerDependencies) riverSchemaReady(schema string) heal
 		}
 		if err := dependencies.database.RiverSchemaReady(ctx, schema); err != nil {
 			dependencies.logDependencyCheckFailure(ctx, "river_schema", err)
-			return errReconcilerDependencyUnavailable
+			return dependencyCheckFailed(err)
 		}
 		return nil
 	}

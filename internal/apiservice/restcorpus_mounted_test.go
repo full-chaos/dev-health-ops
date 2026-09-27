@@ -27,6 +27,17 @@ func TestDHOAPICorpusEntriesAreMountedRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// session.Routes (internal/api/session) mounts nothing at all unless
+	// BOTH Verifier and Signer are set (its own doc comment: "returns
+	// nothing unless the protected-route runtime and the token keys are
+	// configured") -- CHAOS-6963 is the first dho-api corpus entry to name
+	// one of its routes, which is what exposed this fixture gap: every
+	// entry before it happened to live in an area this test's Deps already
+	// made mount for an unrelated reason (Pool/ClickHouse).
+	signer, err := edgetoken.NewSigner(strings.Repeat("fixture-key-", 3), "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
 	// A Pool that never connects (pgxpool dials lazily) makes the pool-backed
 	// areas (billing, admin) mount, exactly as in a configured service.
 	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable")
@@ -43,7 +54,7 @@ func TestDHOAPICorpusEntriesAreMountedRoutes(t *testing.T) {
 	}
 	defer func() { _ = clickHouse.Close() }()
 	mounted := map[string]bool{}
-	for _, route := range Routes(Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger())}, quietLogger()) {
+	for _, route := range Routes(Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer}, quietLogger()) {
 		mounted[route.Method+" "+route.Pattern] = true
 	}
 

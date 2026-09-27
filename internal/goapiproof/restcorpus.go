@@ -6280,6 +6280,76 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 	"REST:POST:/api/v1/work-units/{work_unit_id}/explain": workUnitExplainPostEndpointSpec,
 	"REST:GET:/api/v1/opportunities":                      opportunitiesGetEndpointSpec,
 	"REST:POST:/api/v1/opportunities":                     opportunitiesPostEndpointSpec,
+	// The first dho-api (Service: RESTServiceDHOAPI) entries in this file: the auth-family GET rows
+	// D2679/CHAOS-6963 carries at the ingress (internal/api/session/session.go), each the ONLY Python
+	// method on its path, so listing it here proves the candidate origin ahead of the flip the same way
+	// the query-api entries above do. Non-idempotent rows in the SAME families (login, register, refresh,
+	// PATCH orgs/me, telemetry writes, ...) do NOT belong here -- see pass-bigboy-auth.sh (CHAOS-6963)'s
+	// own doc comment for why a session-mutating request cannot be a "match forever, repeatable" corpus
+	// entry the way these four can.
+	//
+	// BodyMode is status_only, not json, for all four: /me and /me/organizations return the run's own
+	// proof identity's `permissions`, which CHAOS-6259's own RISK-NOTES names as a SET compared as a set
+	// (Python's `list(set(...))` has no stable order, Go's is declaration order) -- this corpus has no
+	// unordered-array Parity option yet, and a false MISMATCH on a route the venue oracle already proves
+	// correct (TestSessionVenueOracle, 328/328) would be worse than the narrower status-only claim.
+	// onboarding/state's body depends on the Fixture Org's live integration-connection state, which this
+	// corpus does not own. verify's error body text is not asserted anywhere else to be byte-identical.
+	"REST:GET:/api/v1/auth/me": {
+		Method:  "GET",
+		Path:    "/api/v1/auth/me",
+		Service: RESTServiceDHOAPI,
+		Requests: []RESTRequest{
+			{
+				Name:                "me",
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeStatusOnly,
+			},
+		},
+	},
+	"REST:GET:/api/v1/auth/me/organizations": {
+		Method:  "GET",
+		Path:    "/api/v1/auth/me/organizations",
+		Service: RESTServiceDHOAPI,
+		Requests: []RESTRequest{
+			{
+				Name:                "me_organizations",
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeStatusOnly,
+			},
+		},
+	},
+	"REST:GET:/api/v1/auth/onboarding/state": {
+		Method:  "GET",
+		Path:    "/api/v1/auth/onboarding/state",
+		Service: RESTServiceDHOAPI,
+		Requests: []RESTRequest{
+			{
+				Name:                "onboarding_state",
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeStatusOnly,
+			},
+		},
+	},
+	// verify is policy.Public on both planes (session.go:134, verify.py's own router carries no
+	// current-user dependency): no bearer is sent on either leg, and PublicNoAuth documents that this is
+	// deliberate, not an omission. A garbage token is the only shape this corpus can send without minting
+	// a real, single-use email-verification token (which needs Postgres access this binary does not have
+	// -- see pass-bigboy-auth.sh for the live pass that DOES mint and redeem a real one).
+	"REST:GET:/api/v1/auth/verify": {
+		Method:       "GET",
+		Path:         "/api/v1/auth/verify",
+		Service:      RESTServiceDHOAPI,
+		PublicNoAuth: true,
+		Requests: []RESTRequest{
+			{
+				Name:                "verify_garbage_token",
+				Query:               url.Values{"token": {"00000000000000000000000000000000." + strings.Repeat("0", 64)}},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeStatusOnly,
+			},
+		},
+	},
 }
 
 // quadrantOrgRequest builds one of quadrant's four QuadrantDefinitions
@@ -6537,6 +6607,12 @@ var restRunOrder = []string{
 	"REST:POST:/api/v1/work-units/{work_unit_id}/explain",
 	"REST:GET:/api/v1/opportunities",
 	"REST:POST:/api/v1/opportunities",
+	// dho-api (Service: RESTServiceDHOAPI) entries, D2679/CHAOS-6963: independent of the query-api rows
+	// above (no id producer/consumer relationship), order among themselves is arbitrary.
+	"REST:GET:/api/v1/auth/me",
+	"REST:GET:/api/v1/auth/me/organizations",
+	"REST:GET:/api/v1/auth/onboarding/state",
+	"REST:GET:/api/v1/auth/verify",
 }
 
 // RESTRunOrder returns a fresh copy of restRunOrder -- cmd/go-api-rest-

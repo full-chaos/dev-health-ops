@@ -188,7 +188,7 @@ VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, $8, $9)`,
 // stage is "" for an exchange/validation failure or "provisioning" for a
 // provision_or_get_user failure, matching extra_metadata's own shape.
 func (h handlers) recordSSOFailure(ctx context.Context, w http.ResponseWriter, r *http.Request,
-	orgID string, providerID uuid.UUID, errMsg string, status int, detail, protocol, stage string) {
+	orgID string, providerID uuid.UUID, errMsg string, status int, detail pyjson.Value, protocol, stage string) {
 	tx, err := h.Pool.Begin(ctx)
 	if err != nil {
 		h.fail(w, r, "begin failure record", err)
@@ -250,10 +250,43 @@ WHERE id = $1::uuid`, providerID, sanitized, now.UTC()); err != nil {
 // ask, which is the persistence behavior, not the route's throughput
 // controls.
 func (h handlers) recordSSOUnauthenticated(ctx context.Context, w http.ResponseWriter, r *http.Request,
-	orgID string, providerID uuid.UUID, errMsg string, status int, detail, protocol, stage string) {
+	orgID string, providerID uuid.UUID, errMsg string, status int, detail pyjson.Value, protocol, stage string) {
+	h.recordSSOAuditOnly(ctx, w, r, orgID, providerID, errMsg, status, detail, protocol, stage,
+		"api sso: callback presented unauthenticated input; provider status left unchanged")
+}
+
+// recordSSOAuthenticatedDenial is D2742/D2744's third bucket, alongside
+// recordSSOFailure (flips the row) and recordSSOUnauthenticated (D2738,
+// no mutation because the caller proved nothing): a failure that occurs
+// AFTER the caller authenticated (a state token verified, or an
+// assertion's signature verified) but reflects a per-REQUEST access
+// decision, not an IdP-health signal. CHAOS-6986's auto-provisioning-
+// disabled is the first case; CHAOS-6659's assertion replay (D2744,
+// saml.go) is the second: the caller genuinely holds a real, validly-
+// signed, unexpired assertion, but reusing an already-consumed one says
+// nothing about whether the PROVIDER is broken (unlike a real signature/
+// config failure, which legitimately flips the row via recordSSOFailure),
+// so it is audited (a defender should see repeated denials/replays) but
+// never mutates sso_providers, at its own status code (403 for OAuth's
+// auto-provision-disabled, 400 for SAML's replay -- matching each
+// route's own Python-parity shape) rather than recordSSOFailure's fixed
+// 400 semantics.
+func (h handlers) recordSSOAuthenticatedDenial(ctx context.Context, w http.ResponseWriter, r *http.Request,
+	orgID string, providerID uuid.UUID, errMsg string, status int, detail pyjson.Value, protocol, stage string) {
+	h.recordSSOAuditOnly(ctx, w, r, orgID, providerID, errMsg, status, detail, protocol, stage,
+		"api sso: callback denied an authenticated caller; provider status left unchanged")
+}
+
+// recordSSOAuditOnly is the shared body of D2738's unauthenticated bucket
+// and D2742/D2744's authenticated-but-denied bucket: an audit row and a
+// log line (team-lead's D2742 ruling: "every touched failure path
+// logs"), then the response -- but never a sso_providers write, unlike
+// recordSSOFailure. logMsg distinguishes the two cases for the
+// structured log.
+func (h handlers) recordSSOAuditOnly(ctx context.Context, w http.ResponseWriter, r *http.Request,
+	orgID string, providerID uuid.UUID, errMsg string, status int, detail pyjson.Value, protocol, stage, logMsg string) {
 	sanitized := pythonparity.SanitizeErrorText(errMsg, 4000)
-	h.Logger.WarnContext(ctx, "api sso: callback presented unauthenticated input; provider status left unchanged",
-		"provider_id", providerID.String(), "protocol", protocol, "reason", sanitized)
+	h.Logger.WarnContext(ctx, logMsg, "provider_id", providerID.String(), "protocol", protocol, "reason", sanitized)
 	meta := pyjson.NewObject()
 	meta.Set("protocol", protocol)
 	if stage != "" {

@@ -123,14 +123,18 @@ func Routes(deps Deps) []httpapi.Route {
 		oidcAuthorize = http.HandlerFunc(h.initiateOIDCAuth)
 		oidcCallbackHandler = http.HandlerFunc(h.oidcCallback)
 	}
-	// The three SAML routes (CHAOS-6659) need no state token -- nothing
-	// about the SAML flow depends on anything generated at initiate time
-	// (saml.go's own doc comment) -- so Signer (the login token pair) is
-	// the only real dependency; StateSecret is irrelevant to them.
+	// D2744: the three SAML routes now DO need StateSecret -- a provider
+	// with allow_idp_initiated=false mints/verifies an AEAD RelayState the
+	// same way OIDC's/OAuth's state works (samlstate.go). An earlier
+	// version of this comment said StateSecret was irrelevant here; that
+	// was true only before D2744's fix. Without it, a provider with
+	// allow_idp_initiated=false would 500 on every initiate/callback
+	// instead of running for real, so both are required to mount the real
+	// handlers, matching OIDC's/OAuth's own gate shape.
 	samlMetadataHandler := h.gated(noInput)
 	samlInitiate := h.gated(body(samlAuthRequest))
 	samlACS := h.gated(body(samlCallbackRequest))
-	if deps.Signer != nil {
+	if deps.StateSecret != "" && deps.Signer != nil {
 		samlMetadataHandler = http.HandlerFunc(h.samlMetadata)
 		samlInitiate = http.HandlerFunc(h.initiateSAMLAuth)
 		samlACS = http.HandlerFunc(h.samlACSCallback)

@@ -97,29 +97,49 @@ func TestOIDCStateRefusesTheWrongKey(t *testing.T) {
 }
 
 func TestDeriveStateKeyRefusesAnEmptySecret(t *testing.T) {
-	if _, err := deriveStateKey(""); err == nil {
+	if _, err := deriveStateKey("", oidcStateHKDFInfo); err == nil {
 		t.Fatal("deriveStateKey(\"\"): want an error, got nil")
 	}
 }
 
 func TestDeriveStateKeyIsDeterministicAndSecretDependent(t *testing.T) {
-	a1, err := deriveStateKey(stateTestSecretA)
+	a1, err := deriveStateKey(stateTestSecretA, oidcStateHKDFInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a2, err := deriveStateKey(stateTestSecretA)
+	a2, err := deriveStateKey(stateTestSecretA, oidcStateHKDFInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a1 != a2 {
 		t.Fatal("deriveStateKey: not deterministic for the same secret")
 	}
-	b, err := deriveStateKey(stateTestSecretB)
+	b, err := deriveStateKey(stateTestSecretB, oidcStateHKDFInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a1 == b {
 		t.Fatal("deriveStateKey: two different secrets derived the same key")
+	}
+}
+
+// TestDeriveStateKeyIsInfoDependent is D2744's own coverage note (an r1
+// reviewer flagged this as untested when reviewing CHAOS-6986's OAuth
+// HKDF separation from OIDC's): the SAME secret through a DIFFERENT info
+// string must derive a DIFFERENT key, or samlStateHKDFInfo/
+// oauthStateHKDFInfo collapsing to the same value silently would not be
+// caught by anything.
+func TestDeriveStateKeyIsInfoDependent(t *testing.T) {
+	oidcKey, err := deriveStateKey(stateTestSecretA, oidcStateHKDFInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	samlKey, err := deriveStateKey(stateTestSecretA, samlStateHKDFInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oidcKey == samlKey {
+		t.Fatal("deriveStateKey: oidcStateHKDFInfo and samlStateHKDFInfo derived the same key from the same secret")
 	}
 }
 

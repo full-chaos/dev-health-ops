@@ -100,22 +100,28 @@ func randomURLSafe(n int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// deriveStateKey is HKDF-SHA256(secret, salt=nil, info=oidcStateHKDFInfo,
-// length=32): the AES-256-GCM key. secret must be non-empty; Routes()
-// only mounts the real OIDC handlers when Deps.StateSecret is (sso.go).
-func deriveStateKey(secret string) ([32]byte, error) {
+// deriveStateKey is HKDF-SHA256(secret, salt=nil, info, length=32): the
+// AES-256-GCM key. secret must be non-empty; Routes() only mounts the
+// real OIDC/SAML/OAuth handlers when Deps.StateSecret is (sso.go). info
+// is a fixed, per-protocol constant (oidcStateHKDFInfo, samlStateHKDFInfo,
+// oauthStateHKDFInfo) so each protocol's state universe derives an
+// independent key from the same root secret -- a state token minted for
+// one protocol cannot even be attempted against another's verify
+// function, rather than merely failing to unmarshal into a different
+// struct's required fields.
+func deriveStateKey(secret, info string) ([32]byte, error) {
 	var key [32]byte
 	if secret == "" {
 		return key, errors.New("sso: OIDC state secret is not configured")
 	}
-	if _, err := io.ReadFull(hkdf.New(sha256.New, []byte(secret), nil, []byte(oidcStateHKDFInfo)), key[:]); err != nil {
+	if _, err := io.ReadFull(hkdf.New(sha256.New, []byte(secret), nil, []byte(info)), key[:]); err != nil {
 		return key, err
 	}
 	return key, nil
 }
 
-func newGCM(secret string) (cipher.AEAD, error) {
-	key, err := deriveStateKey(secret)
+func newGCM(secret, info string) (cipher.AEAD, error) {
+	key, err := deriveStateKey(secret, info)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +136,7 @@ func newGCM(secret string) (cipher.AEAD, error) {
 // opaque `state` value initiateOIDCAuth returns, AAD-bound to
 // state.ProviderID.
 func mintOIDCState(secret string, state oidcState, now time.Time) (string, error) {
-	gcm, err := newGCM(secret)
+	gcm, err := newGCM(secret, oidcStateHKDFInfo)
 	if err != nil {
 		return "", err
 	}
@@ -163,7 +169,7 @@ func mintOIDCState(secret string, state oidcState, now time.Time) (string, error
 // reason (never the caller-visible response, which is fixed either way)
 // says which.
 func verifyOIDCState(secret, token, providerID string, now time.Time) (oidcState, error) {
-	gcm, err := newGCM(secret)
+	gcm, err := newGCM(secret, oidcStateHKDFInfo)
 	if err != nil {
 		return oidcState{}, errInvalidOIDCState
 	}

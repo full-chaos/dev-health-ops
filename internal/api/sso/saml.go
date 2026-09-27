@@ -56,9 +56,11 @@ package sso
 import (
 	"bytes"
 	"compress/flate"
+	"context"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -66,12 +68,31 @@ import (
 	"time"
 
 	"github.com/crewjam/saml"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
+
+// D2744 (team-lead, CHAOS-6659 r1 P2): crewjam/saml defaults to a 90s
+// MaxIssueDelay and a 180s MaxClockSkew (its own service_provider.go),
+// both narrower than Python's own tolerance (services/sso.py's
+// SAML_TIMESTAMP_SKEW_MINUTES = 5, applied uniformly and with no separate
+// issue-age limit at all) -- confirmed a real compatibility regression:
+// an assertion Python would accept under real IdP clock skew or a few
+// minutes of delivery delay could be refused by Go alone. Ruled: align
+// to Python's parity value for skew, and bound issue-age at the same 5
+// minutes (never fully unlimited, per the ruling) rather than leaving
+// this port's own tolerance narrower OR wide open. These are package-
+// level vars in crewjam/saml (not per-call options), so this assignment
+// runs once at process start and applies to every ServiceProvider this
+// package constructs.
+func init() {
+	saml.MaxClockSkew = 5 * time.Minute
+	saml.MaxIssueDelay = 5 * time.Minute
+}
 
 // defaultNameIDFormat is get_saml_config()'s own default for
 // name_id_format, used by samlMetadata/initiateSAMLAuth (both still
@@ -286,8 +307,40 @@ func (h handlers) initiateSAMLAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := url.Values{"SAMLRequest": {base64.StdEncoding.EncodeToString(deflated)}}
-	if relaySet && relayState != "" {
-		params.Set("RelayState", relayState)
+	if row.AllowIdpInitiated {
+		// Unchanged from before D2744: Python never checked InResponseTo
+		// either way, so a caller-supplied relay_state passes through
+		// untouched here, matching the existing accepted delta.
+		if relaySet && relayState != "" {
+			params.Set("RelayState", relayState)
+		}
+	} else {
+		// D2744: this provider does NOT allow IdP-initiated logins, so the
+		// round trip must be bound to THIS AuthnRequest -- an AEAD-sealed
+		// RelayState carrying requestID, verified back at the ACS callback
+		// (processSAMLResponse) and fed to ParseXMLResponse's
+		// possibleRequestIDs. This intentionally replaces any caller-
+		// supplied relay_state in this mode (samlstate.go's own doc
+		// comment explains why nothing is lost by doing so).
+		loginNonce, err := randomURLSafe(32)
+		if err != nil {
+			h.fail(w, r, "generate saml login nonce", err)
+			return
+		}
+		token, err := mintSAMLState(h.StateSecret, samlState{
+			ProviderID: row.ID, OrgID: row.OrgID, RequestID: requestID,
+			NonceHash: hashSAMLLoginNonce(loginNonce),
+		}, h.Now())
+		if err != nil {
+			h.fail(w, r, "mint saml state", err)
+			return
+		}
+		// D2745 (browser-binding class ruling, applied here from CHAOS-6986
+		// P1-3): pairs with the NonceHash check in processSAMLResponse --
+		// see samlState.NonceHash's doc comment (samlstate.go) for the
+		// login-CSRF this closes.
+		http.SetCookie(w, samlLoginNonceCookie(loginNonce, int(samlStateTTL/time.Second), strings.HasPrefix(base, "https://")))
+		params.Set("RelayState", token)
 	}
 	out := pyjson.NewObject()
 	out.Set("redirect_url", destination+"?"+params.Encode())
@@ -344,20 +397,25 @@ type samlClaims struct {
 // (which also calls goxmldsig internally, just via a path this package's
 // hand-written one didn't replicate correctly) is the fix, per D2737.
 //
-// Some structural checks Python performs are RELAXED or absent here,
-// each recorded rather than silently matched or silently improved:
-//   - InResponseTo: Python's process_saml_response never checks it (no
-//     state persists between initiate and callback, matching the same
-//     stateless design OIDC's port needed a real fix for -- SAML simply
-//     never depended on any generated-at-initiate value to begin with,
-//     so there is nothing broken to fix here). ServiceProvider.
-//     AllowIDPInitiated=true, with possibleRequestIDs left nil, makes
-//     crewjam/saml skip this check the same way -- a real, supported
-//     mode for exactly this shape of deployment, not a workaround.
-//   - The trusted certificate's own NotBefore/NotAfter window IS checked
-//     by goxmldsig (Python's bare signxml call does not); recorded as an
-//     accepted, minor, security-positive delta, not a ruling.
-func processSAMLResponse(row *providerRow, config samlConfigValues, base, samlResponse string, now time.Time) (samlClaims, error) {
+// errSAMLAssertionReplayed is D2744's replay guard's own sentinel -- a
+// distinct bucket from ssoProcessing/ssoUnauthenticated, since neither
+// matches its shape: the caller DID authenticate (a real, validly-signed,
+// unexpired assertion), so it is not unauthenticated, but reusing an
+// already-consumed assertion is a per-request access decision, not
+// evidence the provider is broken, so it must not flip the row either --
+// routed to recordSSOAuthenticatedDenial (login.go), the same bucket
+// CHAOS-6986's auto-provisioning-disabled uses.
+var errSAMLAssertionReplayed = errors.New("SAML assertion has already been used")
+
+// D2744 (team-lead): InResponseTo is now enforced when the provider's own
+// allow_idp_initiated is false (an earlier version of this port hardcoded
+// AllowIDPInitiated=true for every provider regardless of that column,
+// which r1 found disabled crewjam's own check unconditionally -- see
+// samlstate.go's doc comment for the full finding and fix). The trusted
+// certificate's own NotBefore/NotAfter window IS checked by goxmldsig
+// (Python's bare signxml call does not); recorded as an accepted, minor,
+// security-positive delta, not a ruling.
+func (h handlers) processSAMLResponse(ctx context.Context, row *providerRow, config samlConfigValues, base, samlResponse, relayState, cookieNonce string, now time.Time) (samlClaims, error) {
 	spEntityID := spEntityIDOf(config, row.ID, base)
 	spACSURL := spACSURLOf(config, row.ID, base)
 
@@ -388,12 +446,50 @@ func processSAMLResponse(row *providerRow, config samlConfigValues, base, samlRe
 	if err != nil {
 		return samlClaims{}, ssoErr("Invalid SAML XML")
 	}
+
+	// D2744: honour the provider's own allow_idp_initiated instead of
+	// hardcoding AllowIDPInitiated=true for every provider (samlstate.go's
+	// doc comment has the full finding). When false, the RelayState this
+	// package itself minted at initiate time is required and verified
+	// here, BEFORE ParseXMLResponse runs, so an unsolicited or forged
+	// RelayState is refused before signature verification even matters
+	// for InResponseTo purposes -- this check is itself unauthenticated
+	// (D2738): the caller has proven nothing yet.
+	var possibleRequestIDs []string
+	if !row.AllowIdpInitiated {
+		if relayState == "" {
+			return samlClaims{}, ssoAuthErr("Missing SAML RelayState")
+		}
+		state, err := verifySAMLState(h.StateSecret, relayState, row.ID, now)
+		if err != nil {
+			if errors.Is(err, errSAMLStateExpired) {
+				return samlClaims{}, ssoAuthErr("SAML RelayState expired")
+			}
+			return samlClaims{}, ssoAuthErr("SAML RelayState mismatch")
+		}
+		if state.OrgID != row.OrgID {
+			return samlClaims{}, ssoAuthErr("SAML RelayState mismatch")
+		}
+		// D2745 browser-binding class ruling (from CHAOS-6986 P1-3): the
+		// RelayState alone only proves this package minted it, not which
+		// browser is presenting it back (samlState.NonceHash's doc comment
+		// has the login-CSRF this closes). A missing cookie (blocked by
+		// SameSite=Lax on a cross-site submission, or simply never set
+		// because the browser is not the one that called /initiate) or one
+		// that hashes to a different value than the RelayState sealed is
+		// refused here, before ParseXMLResponse ever runs -- unauthenticated
+		// (D2738): the caller has proven nothing about the browser binding.
+		if cookieNonce == "" || !constantTimeEqual(hashSAMLLoginNonce(cookieNonce), state.NonceHash) {
+			return samlClaims{}, ssoAuthErr("SAML RelayState mismatch")
+		}
+		possibleRequestIDs = []string{state.RequestID}
+	}
 	sp := &saml.ServiceProvider{
 		EntityID:          spEntityID,
 		AcsURL:            *acsURL,
 		IDPMetadata:       &saml.EntityDescriptor{EntityID: config.EntityID},
 		IDPCertificate:    &certBase64,
-		AllowIDPInitiated: true,
+		AllowIDPInitiated: row.AllowIdpInitiated,
 	}
 	// D2738: ParseXMLResponse is this protocol's authentication step --
 	// the SAML analog of OIDC's verifyOIDCState -- so its failure (a
@@ -426,7 +522,7 @@ func processSAMLResponse(row *providerRow, config samlConfigValues, base, samlRe
 	// mismatch simply surfaces via the audit trail rather than
 	// sso_providers.status/last_error -- the same tradeoff OIDC's cross-
 	// provider-replay case already makes.
-	assertion, err := sp.ParseXMLResponse(decoded, nil, *acsURL)
+	assertion, err := sp.ParseXMLResponse(decoded, possibleRequestIDs, *acsURL)
 	if err != nil {
 		reason := err.Error()
 		if invalid, ok := err.(*saml.InvalidResponseError); ok && invalid.PrivateErr != nil {
@@ -454,6 +550,35 @@ func processSAMLResponse(row *providerRow, config samlConfigValues, base, samlRe
 	// port's own attribute extraction).
 	if assertion.Subject == nil || len(assertion.Subject.SubjectConfirmations) == 0 {
 		return samlClaims{}, ssoErr("SAML subject confirmation missing")
+	}
+
+	// D2744 (team-lead, r1 P1): a validly-signed, still-unexpired assertion
+	// carried NO replay protection at all -- the same captured SAMLResponse
+	// could be presented to /acs repeatedly within its NotOnOrAfter window
+	// and mint a fresh token pair each time. Consume this exact
+	// (provider_id, assertion.ID) pair: the primary key on
+	// saml_assertion_replays (0144_add_saml_assertion_replays) refuses a
+	// second INSERT of the same pair outright. This runs AFTER the
+	// assertion has fully authenticated (signature, status, issuer,
+	// audience, subject confirmation all passed), so a second presentation
+	// is d2742's/D2744's "authenticated denial" bucket, not
+	// unauthenticated: the caller genuinely holds a real, validly-signed
+	// assertion, but reusing it is a per-request access decision, not
+	// evidence the provider itself is broken -- audited, never a row
+	// mutation (recordSSOAuthenticatedDenial, login.go).
+	// assertion.Conditions is a pointer, but crewjam's own validateAssertion
+	// (already run inside ParseXMLResponse above) dereferences it
+	// unconditionally to check NotBefore/NotOnOrAfter -- if it were nil,
+	// ParseXMLResponse itself would already have panicked before this line
+	// is ever reached, so no defensive nil-check is added here that
+	// crewjam's own successful-return path does not already guarantee.
+	if _, err := h.Pool.Exec(ctx, `INSERT INTO saml_assertion_replays (provider_id, assertion_id, expires_at)
+VALUES ($1::uuid, $2, $3)`, row.ID, assertion.ID, assertion.Conditions.NotOnOrAfter.UTC()); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+			return samlClaims{}, errSAMLAssertionReplayed
+		}
+		return samlClaims{}, err // an unrelated DB error: the bare 500 (h.fail wraps it upstream).
 	}
 
 	var nameID string
@@ -514,11 +639,13 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	m := pybody.Model{Errors: &errs, Object: object, Loc: []pyjson.Value{"body"}}
 	samlResponseField := pybody.GetAlias(m, "SAMLResponse", "saml_response", pybody.Required, pybody.Str)
+	relayStateField := pybody.GetAlias(m, "RelayState", "relay_state", pybody.Nullable, pybody.Str)
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
 	samlResponse := samlResponseField.Value
+	relayState := relayStateField.Value
 
 	ctx := r.Context()
 	row, err := scanProvider(h.Pool.QueryRow(ctx, `SELECT `+providerColumns+` FROM sso_providers WHERE id = $1::uuid`, providerID))
@@ -547,12 +674,41 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := processSAMLResponse(row, config, appBaseURL(), samlResponse, h.Now())
+	var cookieNonce string
+	if cookie, err := r.Cookie(samlLoginNonceCookieName); err == nil {
+		cookieNonce = cookie.Value
+	}
+	// One-shot: clear it immediately so the same browser cookie cannot be
+	// paired with a second RelayState/replay attempt (defense in depth --
+	// the assertion-replay guard above already refuses a second use of the
+	// same assertion regardless).
+	http.SetCookie(w, samlLoginNonceCookie("", -1, strings.HasPrefix(appBaseURL(), "https://")))
+
+	claims, err := h.processSAMLResponse(ctx, row, config, appBaseURL(), samlResponse, relayState, cookieNonce, h.Now())
 	if err != nil {
+		if errors.Is(err, errSAMLAssertionReplayed) {
+			// D2744: the assertion DID authenticate (signature, status,
+			// issuer, audience, subject confirmation all passed) but has
+			// already been consumed -- audited, no row mutation, matching
+			// CHAOS-6986's auto-provisioning-disabled bucket exactly.
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
+				"SAML authentication failed", "saml", "replay")
+			return
+		}
 		var unauth ssoUnauthenticated
 		if asSSOUnauthenticated(err, &unauth) {
+			// D2744: the RelayState/possibleRequestIDs check (only reached
+			// when the provider's own allow_idp_initiated is false) is a
+			// distinct pre-signature-verification step from
+			// ParseXMLResponse's own failures, so it gets its own stage
+			// tag in the audit trail -- "state_auth", matching OIDC's
+			// naming for the analogous check.
+			stage := "signature_auth"
+			if strings.Contains(unauth.msg, "RelayState") {
+				stage = "state_auth"
+			}
 			h.recordSSOUnauthenticated(ctx, w, r, row.OrgID, providerID, unauth.msg, http.StatusBadRequest,
-				"SAML authentication failed", "saml", "signature_auth")
+				"SAML authentication failed", "saml", stage)
 			return
 		}
 		var processing ssoProcessing

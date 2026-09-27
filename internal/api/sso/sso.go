@@ -6,12 +6,18 @@
 // None of those route functions takes a `session` or `org_id` keyword
 // argument, so the per-org check (_check_org_feature_async) never runs and
 // only the process license decides: has_feature("sso_saml") on the process
-// LicenseManager. The Go api runs without a process license
-// (licensing.ProcessTier), and sso_saml is not a community feature, so
-// each gated route answers exactly what the Python api answers there: its
-// authentication, then its query and body validation, then the 402. Only
-// the provider CRUD routes (create/read/update/delete/list) are behind
-// that gate and are not ported.
+// LicenseManager. D2749 (team-lead): CHAOS-6663 gave the Go api a REAL
+// process license (licensing.ProcessTier) -- community by default, and a
+// real, higher tier when LICENSE_KEY/LICENSE_PUBLIC_KEY are both set and
+// valid -- superseding this comment's earlier "runs without a process
+// license" framing. The claim that actually matters is unchanged: sso_saml
+// is not a community-tier feature, so absent a license whose tier grants
+// it, each gated route still answers exactly what the Python api answers
+// there: its authentication, then its query and body validation, then the
+// 402 -- not because no license exists, but because sso_saml is
+// structurally unported for every route except the eight below. Only the
+// provider CRUD routes (create/read/update/delete/list) are behind that
+// gate and are not ported.
 //
 // Activate and deactivate are not gated: they are ported in full.
 //
@@ -173,9 +179,15 @@ func Routes(deps Deps) []httpapi.Route {
 }
 
 // gated is a gated route: FastAPI validates the query and body (422), then
-// the decorator checks the process license (402). Without a process license
-// the check always refuses; were a future process tier to hold sso_saml, the
-// route would have to be ported first, so it fails loudly instead.
+// the decorator checks the process license (402). D2749: the Go api's own
+// process license (CHAOS-6663, licensing.ProcessHasFeature) is real, not
+// absent -- it defaults to the community tier, and sso_saml is not a
+// community feature, so the check still refuses by default. Were a real,
+// higher-tier license (LICENSE_KEY/LICENSE_PUBLIC_KEY set and valid) to
+// grant sso_saml, this route would still have to be ported first -- it
+// isn't, for every route except the eight this package's own doc comment
+// names -- so it fails loudly instead of silently letting an unported
+// route through on a license upgrade alone.
 func (h handlers) gated(validate validator) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var errs pybody.Errors

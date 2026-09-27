@@ -140,8 +140,9 @@ class FeatureFlag(Base):
         self.is_beta = is_beta
         self.is_deprecated = is_deprecated
         self.config_schema = config_schema
-        self.created_at = datetime.now(timezone.utc)
-        self.updated_at = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        self.created_at = now
+        self.updated_at = now
 
     def __repr__(self) -> str:
         return f"<FeatureFlag {self.key}>"

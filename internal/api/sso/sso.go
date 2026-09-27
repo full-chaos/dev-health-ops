@@ -6,12 +6,12 @@
 // of those route functions takes a `session` or `org_id` keyword argument,
 // so the per-org check (_check_org_feature_async) never runs and only the
 // process license decides: has_feature("sso_saml") on the process
-// LicenseManager (licensing.ProcessHasFeature, verified at start-up by
-// processlicense.Install; CHAOS-6663). Without a process license granting
-// sso_saml, each gated route answers exactly what the Python api answers
-// there: its authentication, then its query and body validation, then the
-// 402. With one, the flows behind that gate are not ported here, so gated()
-// fails loudly (500) instead of pretending to serve them.
+// LicenseManager. The Go api runs without a process license
+// (licensing.ProcessTier), and sso_saml is not a community feature, so
+// each gated route answers exactly what the Python api answers there: its
+// authentication, then its query and body validation, then the 402. The
+// SAML and OAuth flows behind that gate are not reachable on either plane
+// and are not ported.
 //
 // Activate and deactivate are not gated: they are ported in full.
 //

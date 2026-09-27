@@ -14,6 +14,12 @@ for i in $(seq 1 240); do
   [ $ok = 1 ] && break; sleep 30
 done
 [ "${ok:-0}" = 1 ] || { st images-wait 1; exit 1; }; st images-ready 0
+# Resolve the operator digest BEFORE any STEP reads the compose chain: compose.bigboy.workers.yml
+# requires BIGBOY_OPERATOR_IMAGE, so a config read before this export fails on the missing variable
+# (the SSO group cut's secret-refs STEP reported five set secrets as BLANK for exactly that reason).
+BIGBOY_OPERATOR_DIGEST=$(docker buildx imagetools inspect ghcr.io/full-chaos/dev-health-go-operator:sha-$S7 --format '{{json .Manifest}}' | jq -r .digest)
+case "$BIGBOY_OPERATOR_DIGEST" in sha256:*) ;; *) st operator-resolve 1; echo "FAIL: no operator digest for sha-$S7" >&2; exit 1 ;; esac
+export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@$BIGBOY_OPERATOR_DIGEST; echo "operator=$BIGBOY_OPERATOR_DIGEST" > $REC.operator.txt; st operator-resolve 0
 # CHAOS-6967(b)/CHAOS-6987 (D2728) staging (Trap #421 sibling): bigboy's query-api needs the
 # same ~23 GO_API_*_ENABLED env vars prod's deploy chart sets (this switch is a plain in-memory
 # flag flipped once at query-api boot, never Postgres, never the routeswitch ledger), PLUS the
@@ -59,13 +65,16 @@ if [ -n "$VALUES" ]; then
   # CHAOS-6987 (team-lead, hard rule): `docker compose config` output never reaches a pipe, a
   # file, or a screen except through ONE redacting filter (compose-config-redacted.sh) -- it
   # emits NAME=<length> only, never a resolved value, even for a length-only check like this one.
-  REDACTED=$($HERE/compose-config-redacted.sh --env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml -f compose/compose.metrics-api.local.yml -f .remember/lanes/team-lead/reconciler-sweep-override.yml -f compose/compose.bigboy.images.yml -f compose/compose.bigboy.workers.yml)
+  REDACTED=$($HERE/compose-config-redacted.sh --env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml -f compose/compose.metrics-api.local.yml -f .remember/lanes/team-lead/reconciler-sweep-override.yml -f compose/compose.bigboy.images.yml -f compose/compose.bigboy.workers.yml); RED_RC=$?
   BLANK=""
   for entry in $(awk -F': \\$\\{' '/\$\{[A-Z_]+\}$/{print $1}' "$REC.query-api-enabled-flags.generated" | tr -d ' '); do
     LEN=$(echo "$REDACTED" | awk -F= -v n="$entry" '$1==n{print $2}')
     [ -n "$LEN" ] && [ "$LEN" -gt 2 ] || BLANK="$BLANK $entry"
   done
-  if [ -n "$BLANK" ]; then
+  if [ "$RED_RC" -ne 0 ]; then
+    st query-api-secret-refs-nonblank 1
+    echo "FAIL: compose config did not resolve (rc=$RED_RC, see the missing-variable lines above) -- no secret-ref length was read; this is NOT a blank-secret verdict" >&2
+  elif [ -n "$BLANK" ]; then
     st query-api-secret-refs-nonblank 1
     echo "DRIFT: these query-api secret-ref var(s) resolve BLANK through --env-file ops/.env -- an empty verification/signing key must never go live:$BLANK" >&2
   else
@@ -87,7 +96,6 @@ else
   st query-api-enabled-flags-current 2  # SKIPPED, not a pass: no pinned values (DEPLOY_SHA) -- this STEP did not run, it did not pass
   echo "SKIPPED (not checked): the values-driven STEPs need DEPLOY_SHA (see deploy-pin above)." >&2
 fi
-export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@$(docker buildx imagetools inspect ghcr.io/full-chaos/dev-health-go-operator:sha-$S7 --format '{{json .Manifest}}' | jq -r .digest); echo "operator=${BIGBOY_OPERATOR_IMAGE##*@}" > $REC.operator.txt
 docker pull -q $BIGBOY_OPERATOR_IMAGE > /dev/null 2>&1; st operator-pull $?   # --no-build never pulls: the digest must be local before the recreate (rev 190 first run: "No such image")
 $HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; st repin $?
 [ -d $REC ] || { echo "no record dir"; exit 1; }

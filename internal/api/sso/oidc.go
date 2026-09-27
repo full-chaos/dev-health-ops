@@ -242,6 +242,27 @@ func (e oidcProcessing) Error() string { return e.msg }
 
 func oidcErr(msg string) error { return oidcProcessing{msg: msg} }
 
+// oidcUnauthenticated is D2738 (r1 P1: an unauthenticated invalid callback
+// disabling a provider org-wide). It marks a failure that occurred BEFORE
+// the caller proved possession of a state token this package minted for
+// this exact provider/org (state.go's AEAD tag + provider AAD + org check,
+// not yet expired) -- distinct from oidcProcessing, whose failures all
+// occur AFTER that proof and legitimately indicate a broken IdP
+// configuration worth surfacing to an admin. See oidcCallbackUnauthenticated.
+type oidcUnauthenticated struct{ msg string }
+
+func (e oidcUnauthenticated) Error() string { return e.msg }
+
+func oidcAuthErr(msg string) error { return oidcUnauthenticated{msg: msg} }
+
+func asOIDCUnauthenticated(err error, target *oidcUnauthenticated) bool {
+	unauth, ok := err.(oidcUnauthenticated)
+	if ok {
+		*target = unauth
+	}
+	return ok
+}
+
 // decryptProviderSecret is _decrypt_secret(encrypted_secrets, key): decrypt
 // with the configured cipher, falling back to the raw stored value on any
 // failure (an unconfigured cipher, a wrong key, a pre-encryption legacy
@@ -415,6 +436,11 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 
 	claims, err := h.exchangeAndValidate(ctx, row, providerID, stateToken, code, codeVerifierField, codeVerifierSet)
 	if err != nil {
+		var unauth oidcUnauthenticated
+		if asOIDCUnauthenticated(err, &unauth) {
+			h.oidcCallbackUnauthenticated(ctx, w, r, row.OrgID, providerID, unauth.msg)
+			return
+		}
 		var processing oidcProcessing
 		if !asOIDCProcessing(err, &processing) {
 			h.fail(w, r, "oidc callback", err)
@@ -607,6 +633,50 @@ WHERE id = $1::uuid`, providerID, sanitized, now.UTC()); err != nil {
 	policy.WriteDetail(w, status, detail, nil)
 }
 
+// oidcCallbackUnauthenticated is D2738's ruling on the r1 P1 (an
+// unauthenticated invalid callback disabling the provider org-wide): a
+// caller who has NOT proven possession of a state token this package
+// minted for this exact provider/org writes nothing to sso_providers -- no
+// status flip, no last_error -- because at this point the only fact in
+// evidence is "some request arrived with a state value that doesn't
+// verify," which anyone can produce with zero credentials by hitting this
+// public route with garbage. A single such request must never be able to
+// take the whole org's SSO login offline.
+//
+// An audit row is still written (so a defender investigating repeated
+// probing has a trail) and a log line is emitted; the HTTP response is the
+// identical generic detail an authenticated-but-later-failed exchange
+// gets, so a probe cannot distinguish the two cases by response shape.
+//
+// Deferred, not in this change (team-lead's D2738 ruling, RISK-NOTES): real
+// rate limiting of this route, and a dedicated metrics counter for this
+// event. Neither has an existing primitive in this codebase to build on;
+// adding one here would be new infrastructure beyond the ruling's actual
+// ask, which is the persistence behavior, not the route's throughput
+// controls.
+func (h handlers) oidcCallbackUnauthenticated(ctx context.Context, w http.ResponseWriter, r *http.Request,
+	orgID string, providerID uuid.UUID, reason string) {
+	sanitized := pythonparity.SanitizeErrorText(reason, 4000)
+	h.Logger.WarnContext(ctx, "api sso: oidc callback presented an unauthenticated state value; provider status left unchanged",
+		"provider_id", providerID.String(), "reason", sanitized)
+	meta := pyjson.NewObject()
+	meta.Set("protocol", "oidc")
+	meta.Set("stage", "state_auth")
+	metaJSON, err := pyjson.Dumps(meta)
+	if err != nil {
+		h.fail(w, r, "encode audit metadata", err)
+		return
+	}
+	if _, err := (audit.PGWriter{Now: h.Now}).Write(ctx, h.Pool, audit.Entry{
+		OrgID: mustParseUUID(orgID), Action: audit.ActionSSOLogin, ResourceType: audit.ResourceSSOProvider,
+		ResourceID: providerID.String(), Status: "failure", ErrorMessage: &sanitized, RequestMetadata: []byte(metaJSON),
+	}); err != nil {
+		h.fail(w, r, "write audit log", err)
+		return
+	}
+	policy.WriteDetail(w, http.StatusBadRequest, "OIDC authentication failed", nil)
+}
+
 // oidcClaims is process_oidc_callback's returned dict, the fields the
 // router reads from it.
 type oidcClaims struct {
@@ -625,12 +695,16 @@ func (h handlers) exchangeAndValidate(ctx context.Context, row *providerRow, pro
 	state, err := verifyOIDCState(h.StateSecret, stateToken, providerID.String(), now)
 	if err != nil {
 		if errors.Is(err, errOIDCStateExpired) {
-			return oidcClaims{}, oidcErr("OIDC state expired")
+			return oidcClaims{}, oidcAuthErr("OIDC state expired")
 		}
-		return oidcClaims{}, oidcErr("OIDC state mismatch")
+		return oidcClaims{}, oidcAuthErr("OIDC state mismatch")
 	}
 	if state.OrgID != row.OrgID {
-		return oidcClaims{}, oidcErr("OIDC state mismatch")
+		// The AEAD tag verified (this state really was minted by this
+		// package for this provider), but for a different org -- still
+		// unauthenticated FOR this org: nothing proves the caller is
+		// entitled to see or affect this org's provider.
+		return oidcClaims{}, oidcAuthErr("OIDC state mismatch")
 	}
 	config, err := decodeOIDCConfig(row.Config)
 	if err != nil {

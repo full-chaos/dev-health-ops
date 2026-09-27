@@ -516,8 +516,13 @@ func TestOIDCCallbackRefusesADomainNotOnTheAllowlist(t *testing.T) {
 	}
 }
 
-// TestOIDCCallbackRefusesATamperedState pins the state-signature check: a
-// flipped character never reaches the exchange.
+// TestOIDCCallbackRefusesATamperedState pins the state-signature check (a
+// flipped character never reaches the exchange) AND D2738's r1-P1 fix: an
+// unauthenticated state value must never mutate sso_providers -- an
+// attacker who only knows a valid provider id, with zero credentials, could
+// otherwise take the whole org's OIDC login offline with one request. The
+// AUDIT trail still records the reason (for defenders), but status and
+// last_error are asserted byte-for-byte unchanged.
 func TestOIDCCallbackRefusesATamperedState(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -537,16 +542,38 @@ func TestOIDCCallbackRefusesATamperedState(t *testing.T) {
 	if status != http.StatusBadRequest || body["detail"] != "OIDC authentication failed" {
 		t.Fatalf("status=%d body=%v, want 400 OIDC authentication failed", status, body)
 	}
-	// r1 review (CHAOS-6658, P3): config is "{}", so metadata resolution
+	assertProviderRowUnchanged(t, ctx, st.pool, providerID, "active")
+	// The reason still lands in the audit trail (D2738: unauthenticated
+	// failures are still auditable, just never persisted onto the
+	// provider row itself). r1 P3: config is "{}", so metadata resolution
 	// (empty issuer) would ALSO fail with the same 400 -- assert the
 	// RECORDED reason is specifically the state check, not that later
 	// stage, or this test could pass with state validation deleted.
-	var lastError *string
-	if err := st.pool.QueryRow(ctx, `SELECT last_error FROM sso_providers WHERE id = $1`, providerID).Scan(&lastError); err != nil {
+	var meta []byte
+	if err := st.pool.QueryRow(ctx, `SELECT request_metadata::text FROM audit_logs
+WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY created_at DESC LIMIT 1`, orgID).Scan(&meta); err != nil {
 		t.Fatal(err)
 	}
-	if lastError == nil || !strings.Contains(*lastError, "state mismatch") {
-		t.Fatalf("last_error = %v, want a recorded state-mismatch reason (not a later-stage failure)", lastError)
+	if !strings.Contains(string(meta), `"stage":"state_auth"`) && !strings.Contains(string(meta), `"stage": "state_auth"`) {
+		t.Fatalf("audit request_metadata = %s, want a state_auth stage", meta)
+	}
+}
+
+// assertProviderRowUnchanged is D2738's core invariant: an unauthenticated
+// callback failure writes nothing to sso_providers at all.
+func assertProviderRowUnchanged(t *testing.T, ctx context.Context, pool *pgxpool.Pool, providerID uuid.UUID, wantStatus string) {
+	t.Helper()
+	var lastError *string
+	var providerStatus string
+	if err := pool.QueryRow(ctx, `SELECT last_error, status FROM sso_providers WHERE id = $1`, providerID).
+		Scan(&lastError, &providerStatus); err != nil {
+		t.Fatal(err)
+	}
+	if lastError != nil {
+		t.Fatalf("last_error = %v, want nil: an unauthenticated state failure must never mutate the provider row (D2738)", *lastError)
+	}
+	if providerStatus != wantStatus {
+		t.Fatalf("provider status = %q, want unchanged %q (D2738: an unauthenticated state failure must never flip it)", providerStatus, wantStatus)
 	}
 }
 
@@ -597,12 +624,30 @@ WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY creat
 	if !strings.Contains(string(meta), `"stage": "provisioning"`) && !strings.Contains(string(meta), `"stage":"provisioning"`) {
 		t.Fatalf("audit request_metadata = %s, want a provisioning stage", meta)
 	}
+	// D2738's other half: a caller who DID prove possession of a genuine
+	// state (this one came from a real /authorize call) but failed at a
+	// LATER stage is the case that legitimately flips the provider row --
+	// distinguishing this from the state_auth-stage tests above (which
+	// assert the row stays untouched) is the whole point of the ruling.
+	var lastError *string
+	var providerStatus string
+	if err := st.pool.QueryRow(ctx, `SELECT last_error, status FROM sso_providers WHERE id = $1`, providerID).
+		Scan(&lastError, &providerStatus); err != nil {
+		t.Fatal(err)
+	}
+	if lastError == nil || !strings.Contains(*lastError, "provisioning") {
+		t.Fatalf("last_error = %v, want a recorded provisioning-failure reason", lastError)
+	}
+	if providerStatus != "error" {
+		t.Fatalf("provider status = %q, want %q: a genuinely-authenticated later-stage failure must still flip it", providerStatus, "error")
+	}
 }
 
-// TestOIDCCallbackRefusesAnExpiredState pins D2727-amended's expiry check:
-// a state whose auth tag verifies but whose embedded expires_at has
-// passed is refused, and the recorded reason distinguishes it from a
-// tampered/foreign one.
+// TestOIDCCallbackRefusesAnExpiredState pins D2727-amended's expiry check
+// (a state whose auth tag verifies but whose embedded expires_at has
+// passed is refused) AND D2738: an expired state is still unauthenticated
+// for the purpose of provider-row mutation, so it leaves sso_providers
+// untouched exactly like a tampered one.
 func TestOIDCCallbackRefusesAnExpiredState(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -623,19 +668,22 @@ func TestOIDCCallbackRefusesAnExpiredState(t *testing.T) {
 	if status != http.StatusBadRequest || body["detail"] != "OIDC authentication failed" {
 		t.Fatalf("status=%d body=%v, want 400 OIDC authentication failed", status, body)
 	}
-	var lastError *string
-	if err := st.pool.QueryRow(ctx, `SELECT last_error FROM sso_providers WHERE id = $1`, providerID).Scan(&lastError); err != nil {
+	assertProviderRowUnchanged(t, ctx, st.pool, providerID, "active")
+	var meta []byte
+	if err := st.pool.QueryRow(ctx, `SELECT request_metadata::text FROM audit_logs
+WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY created_at DESC LIMIT 1`, orgID).Scan(&meta); err != nil {
 		t.Fatal(err)
 	}
-	if lastError == nil || !strings.Contains(*lastError, "expired") {
-		t.Fatalf("last_error = %v, want a recorded expiry reason", lastError)
+	if !strings.Contains(string(meta), `"stage":"state_auth"`) && !strings.Contains(string(meta), `"stage": "state_auth"`) {
+		t.Fatalf("audit request_metadata = %s, want a state_auth stage", meta)
 	}
 }
 
 // TestOIDCCallbackRefusesStateIssuedForAnotherProvider pins the
-// provider-binding check: a state minted for provider A, submitted to
+// provider-binding check (a state minted for provider A, submitted to
 // provider B's callback path, is refused even though the AEAD auth tag
-// verifies (it is a genuine token this api minted, just for someone else).
+// verifies) AND D2738: cross-provider replay is still unauthenticated FOR
+// provider B, so provider B's row is left untouched.
 func TestOIDCCallbackRefusesStateIssuedForAnotherProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -654,12 +702,14 @@ func TestOIDCCallbackRefusesStateIssuedForAnotherProvider(t *testing.T) {
 	if status != http.StatusBadRequest || body["detail"] != "OIDC authentication failed" {
 		t.Fatalf("status=%d body=%v, want 400 OIDC authentication failed", status, body)
 	}
-	var lastError *string
-	if err := st.pool.QueryRow(ctx, `SELECT last_error FROM sso_providers WHERE id = $1`, providerB).Scan(&lastError); err != nil {
+	assertProviderRowUnchanged(t, ctx, st.pool, providerB, "active")
+	var meta []byte
+	if err := st.pool.QueryRow(ctx, `SELECT request_metadata::text FROM audit_logs
+WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY created_at DESC LIMIT 1`, orgID).Scan(&meta); err != nil {
 		t.Fatal(err)
 	}
-	if lastError == nil || !strings.Contains(*lastError, "mismatch") {
-		t.Fatalf("last_error = %v, want a recorded mismatch reason", lastError)
+	if !strings.Contains(string(meta), `"stage":"state_auth"`) && !strings.Contains(string(meta), `"stage": "state_auth"`) {
+		t.Fatalf("audit request_metadata = %s, want a state_auth stage", meta)
 	}
 }
 

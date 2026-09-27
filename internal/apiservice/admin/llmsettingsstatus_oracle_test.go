@@ -4,6 +4,8 @@ package admin_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -56,6 +58,8 @@ func TestLLMSettingsStatusRouteVenueOracle(t *testing.T) {
 		{slug: "failed", tier: "team"},         // active, readiness=failed
 		{slug: "community", tier: "community"}, // tier gate, 402
 		{slug: "off", tier: "team"},            // flag kill switch, 403
+		{slug: "incomplete", tier: "team"},     // active, readiness blob missing required keys -> never_checked
+		{slug: "fallback", tier: "team"},       // invalid_base_url with a matching audit_logs fallback row -> last_fallback_at set
 	} {
 		spec := spec
 		spec.id = uuid.New()
@@ -127,6 +131,44 @@ VALUES ($1, $2, $3, $4, $5, false, NULL, '2026-02-01T00:00:00+00:00', '2026-02-0
 			row("ready", "llm", "ask_dev_agent_readiness", readinessRecord("ready", ""))
 			row("failed", "llm", "ask_dev_agent_readiness", readinessRecord("failed", "provider_unavailable"))
 
+			// round-1 review finding (codex, P2): a readiness blob missing
+			// fingerprint/readiness_version/checked_at must be treated as
+			// absent (never_checked), matching Python's load() raising
+			// KeyError on the missing dict key -- not merely "falsy", so a
+			// present empty string would NOT trip this, only an absent key.
+			row("incomplete", "llm", "provider", "openai")
+			row("incomplete", "llm", "api_key", "sk-anything")
+			incompleteRecord, err := json.Marshal(map[string]any{"outcome": "ready"})
+			if err != nil {
+				t.Fatalf("encode incomplete readiness record: %v", err)
+			}
+			row("incomplete", "llm", "ask_dev_agent_readiness", string(incompleteRecord))
+
+			// round-1 review finding (codex, P2): last_fallback_at was never
+			// exercised positively (no seeded audit_logs row), so a wrong
+			// resource_id/JSON key/window/predicate would still pass. Seed a
+			// matching fallback audit row: same provider/base_url_hash/
+			// reason_code credentials.py's own _audit_changes_match compares.
+			fallbackBaseURL := "https://10.0.0.1/v1"
+			row("fallback", "llm", "provider", "openai")
+			row("fallback", "llm", "base_url", fallbackBaseURL)
+			row("fallback", "llm", "api_key", "sk-anything")
+			fallbackHashSum := sha256.Sum256([]byte(fallbackBaseURL))
+			fallbackBaseURLHash := hex.EncodeToString(fallbackHashSum[:])[:16]
+			fallbackChanges, err := json.Marshal(map[string]any{
+				"provider":      "openai",
+				"base_url":      fallbackBaseURL,
+				"base_url_hash": fallbackBaseURLHash,
+				"reason":        "LLM base_url host resolves to a non-public address",
+				"reason_code":   "invalid_base_url",
+			})
+			if err != nil {
+				t.Fatalf("encode fallback audit changes: %v", err)
+			}
+			exec(`INSERT INTO audit_logs (id, org_id, action, resource_type, resource_id, changes, request_metadata, status, created_at)
+VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failure', now() - interval '1 hour')`,
+				uuid.New(), orgs["fallback"].id.String(), string(fallbackChanges))
+
 			tokens := map[string]map[string]any{
 				"member":  {"user_id": memberID.String(), "email": "llmstatus-member@example.com", "org_id": orgs["active"].id.String(), "role": "member"},
 				"super":   {"user_id": superID.String(), "email": "llmstatus-super@example.com", "is_superuser": true},
@@ -158,6 +200,8 @@ VALUES ($1, $2, $3, $4, $5, false, NULL, '2026-02-01T00:00:00+00:00', '2026-02-0
 		get("readiness record failed", "failed"),
 		get("community tier gate", "community"),
 		get("kill switch gate", "off"),
+		get("incomplete readiness blob never_checked", "incomplete"),
+		get("invalid base_url with fallback audit row", "fallback"),
 		get("org not a uuid", "notuuid"),
 		get("org missing", "ghost"),
 		get("superuser without org", "super"),

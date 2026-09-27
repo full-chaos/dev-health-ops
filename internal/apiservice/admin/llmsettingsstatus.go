@@ -154,6 +154,14 @@ func (h *handlers) latestOrgByoBaseURLFallbackAt(ctx context.Context, orgID stri
 	if eval.ReasonCode != llmStatusReasonInvalidBaseURL || eval.BaseURLHash == "" {
 		return nil, nil
 	}
+	// round-1 review (codex, P3, acknowledged, not fixed): Postgres's `->>`
+	// always extracts as text regardless of the underlying JSON value's
+	// type, while Python's _audit_changes_match compares typed values from
+	// json.loads (a stored JSON number would be an int/float there, never
+	// equal to a string). _base_url_hash always writes a hex string, so a
+	// numeric changes.base_url_hash should never occur in practice -- this
+	// is a real but purely theoretical divergence, left as-is rather than
+	// adding a jsonb_typeof guard for a case the writer path cannot produce.
 	cutoff := h.store.now().UTC().Add(-byoBaseURLFallbackAlertWindowHours * time.Hour)
 	var createdAt time.Time
 	err := h.store.Pool.QueryRow(ctx, `
@@ -190,6 +198,17 @@ type agentReadinessRecord struct {
 // currency check (CHAOS-6252a scope, see the file doc comment): a malformed
 // or legacy blob is treated as "never checked", matching Python's own
 // except-and-return-None handling in load().
+//
+// Python's load() reads fingerprint/readiness_version/checked_at with plain
+// dict subscripting (`payload["fingerprint"]`), which raises KeyError -- caught
+// and treated as absent -- when the key is MISSING, not just falsy. A round-1
+// review finding (codex, P2) caught this port doing the check the wrong way:
+// unmarshalling straight into the agentReadinessRecord struct, whose string
+// fields zero-value to "" for a missing key exactly the same as for a
+// present-but-empty one, so `{"outcome":"ready"}` alone was wrongly accepted
+// as a complete, current-shaped record. Checking key PRESENCE first (via a
+// map, matching Python's own KeyError semantics) before decoding into the
+// typed struct closes that gap.
 func (h *handlers) loadAgentReadinessRecord(ctx context.Context, orgID string) (*agentReadinessRecord, error) {
 	row, err := settingByKeyOn(ctx, h.store.Pool, orgID, llmCategory, askDevAgentReadinessKey)
 	if err != nil {
@@ -201,6 +220,15 @@ func (h *handlers) loadAgentReadinessRecord(ctx context.Context, orgID string) (
 	}
 	if value == nil || *value == "" {
 		return nil, nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(*value), &raw); err != nil {
+		return nil, nil
+	}
+	for _, key := range []string{"fingerprint", "readiness_version", "checked_at", "outcome"} {
+		if _, present := raw[key]; !present {
+			return nil, nil
+		}
 	}
 	var record agentReadinessRecord
 	if err := json.Unmarshal([]byte(*value), &record); err != nil {

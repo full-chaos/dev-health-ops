@@ -166,3 +166,56 @@ standing rule) and would need its own volume/secret plumbing regardless. `AUTH_U
 bigboy-relevant entry in that list, so it is hand-maintained here with a citing comment rather than
 adding a second full YAML-parsing generator for a single name; re-derive by hand from
 `values.prod.yaml`'s web block if this list ever grows a second bigboy-relevant entry.
+
+## Drift checks added after D2735/D2736 (CHAOS-6987 follow-through)
+
+Every check below fails loud with a named finding; none can pass on an empty or unread input.
+
+- **Names-only container env reader** (`container-env-names.sh`, R462/R463): the only sanctioned way
+  to read a container's environment on bigboy. The name is cut inside docker's own Go template, so a
+  value never leaves the docker CLI; any line that is not an env-var name is withheld and exits 3.
+- **Router host scope** (`tests/tooling/test_bigboy_plane_split_router.py`): every rule the generator
+  can emit (file-provider and label form) and the checked-in example must be exactly
+  `Host(`traefik`)` or `Host(`traefik`) && PathRegexp(...)`. A public hostname, a second Host
+  matcher, or an `||` that lets a rule match without the Host clause fails (the D2735 shape).
+- **Live router current** (`bigboy-cut.sh` STEP `router-current`, needs `DEPLOY_CHECKOUT`): the live
+  `.traefik-dynamic/planes.yml` must be byte-identical to the generator's output for that
+  `values.prod.yaml`. Point `DEPLOY_CHECKOUT` at the values prod is actually running, not deploy main:
+  bigboy follows prod's roll, so deploy main's un-rolled paths (e.g. rev 194's SSO routes) show here
+  as drift until that roll lands.
+- **Web env parity** (`check-web-env-parity.py`, STEP `web-env-parity`): every prod `ops.web.env` /
+  `ops.web.extraEnv` NAME must be classified (overlay vs venue-local base) -- a new prod name fails,
+  named; overlay names (`BACKEND_URL`, `AUTH_URL`) must be in `compose.bigboy.router.yml` with the
+  expected public values; the running web container (names via `container-env-names.sh`) must carry
+  every prod name. `AUTH_URL` stays hand-maintained per the lead's ruling; this check is what makes
+  the hand list loud.
+- **Routing-ledger parity** (`routing-ops.txt` + `check-routing-parity.py`, STEPs `routing-enable` /
+  `routing-parity`): `routing-ops.txt` is the list of GraphQL operations enabled on prod. Each cut
+  enables whatever listed operation bigboy lacks (`dho goapi routing enable`, envelope minted inside
+  `venue-tools`, fixture org), then a fresh `status -json` must match: listed ops reachable, nothing
+  unlisted reachable, every row canary/100/go. `testopsRisk` is `KNOWN-MISSING CHAOS-6993` (the
+  enable proof gate needs a bigboy go-api-prove run; do not bypass it): the STEP exits 3, never 0,
+  and fails once it becomes reachable so the marker is removed.
+- **Web-path smoke, real browser session** (`web-path-smoke.py`): now logs in through Auth.js
+  (csrf + Credentials callback) with the PUBLIC Host header on traefik, so every call takes the
+  browser's path through `web`'s proxy.ts. Checks: unauthenticated public-host request lands on web
+  (303, no plane header); callback-url cookie and sign-out redirect carry the public origin; backend
+  `/health`; Cockpit threads; `filters/options`; `investment/explain`; `work-units`
+  (`include_textual=true`); `drilldown/prs` feeding a real `flame` entity; GraphQL
+  `complexityTimeseries`, `workGraphFlow` (no empty `nodeType`) and `testopsRisk`; the
+  `/testops/risk` page. GraphQL documents are derived from web source through urql's formatDocument
+  transform and must hash to the edge catalog's registered digests at the deployed sha
+  (`DHO_SMOKE_CATALOG_FILE`, or `DHO_SMOKE_OPS_SHA` for a standalone run). Exit 3 = passed except
+  named KNOWN-MISSING checks (read from `routing-ops.txt`).
+
+### Running the web-path smoke
+
+- **Inside a cut:** `bigboy-cut.sh` fetches the edge catalog at the cut's sha into
+  `_records/bigboy-<sha8>.catalog.json` and exports it as `DHO_SMOKE_CATALOG_FILE`. Nothing else to set.
+- **Standalone (no cut):** set `DHO_SMOKE_OPS_SHA` to the ops sha bigboy is running (the last cut's
+  full sha). The script fetches `src/dev_health_ops/api/graphql/go_api_operations.json` at that sha
+  with `gh api`. Without `DHO_SMOKE_CATALOG_FILE` or `DHO_SMOKE_OPS_SHA` it fails with exit 1 and names
+  both variables. Example: `DHO_SMOKE_OPS_SHA=<full sha> bash ci/bigboy/web-path-smoke.sh`.
+- Both need `DHO_SMOKE_ADMIN_EMAIL` and `DHO_SMOKE_ADMIN_PASSWORD_FILE` in `ops/.env`.
+- Exit codes: 0 pass; 1 fail (named); 2 refused target (`DHO_SMOKE_BASE_URL` outside the allowlist);
+  3 passed except named KNOWN-MISSING checks.

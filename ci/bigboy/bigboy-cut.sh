@@ -56,6 +56,19 @@ if [ -n "${DEPLOY_CHECKOUT:-}" ] && [ -f "$DEPLOY_CHECKOUT/values.prod.yaml" ]; 
   else
     st query-api-secret-refs-nonblank 0
   fi
+  # CHAOS-6987 (D2724/D2735): the LIVE router must be exactly what the generator emits from this
+  # values.prod.yaml -- a hand edit, or a values change not yet applied, fails here, named.
+  python3 "$HERE/generate-plane-split-router.py" "$DEPLOY_CHECKOUT/values.prod.yaml" --format dynamic > "$REC.planes.generated" 2>/dev/null
+  if [ -s "$REC.planes.generated" ] && cmp -s "$REC.planes.generated" "$R/.traefik-dynamic/planes.yml"; then
+    st router-current 0
+  else
+    st router-current 1
+    echo "DRIFT: .traefik-dynamic/planes.yml differs from generate-plane-split-router.py output for this values.prod.yaml -- regenerate it (traefik hot-reloads the file) before trusting this cut" >&2
+  fi
+  # CHAOS-6987 (D2736): web env-name parity with prod, NAMES only -- the running web container's
+  # names come from container-env-names.sh (the only sanctioned container env reader, R462).
+  "$HERE/container-env-names.sh" dev-health-web-1 > "$REC.web-env-names" 2>/dev/null
+  python3 "$HERE/check-web-env-parity.py" "$DEPLOY_CHECKOUT/values.prod.yaml" "$HERE/compose.bigboy.router.yml" --live-names "$REC.web-env-names"; st web-env-parity $?
 else
   st query-api-enabled-flags-current 2  # SKIPPED, not a pass: DEPLOY_CHECKOUT not given -- this STEP did not run, it did not pass
   echo "SKIPPED (not checked): set DEPLOY_CHECKOUT=<deploy repo worktree path> to verify the query-api GO_API_*_ENABLED block against the current values.prod.yaml." >&2
@@ -74,6 +87,28 @@ docker compose --env-file ops/.env run --rm --no-deps migrate > $REC/migrate.out
 docker compose --env-file ops/.env up -d --no-deps --no-build api query-api go-api > $REC/up.out 2>&1; st up $?
 docker compose --env-file ops/.env up -d --no-deps --no-build go-worker go-worker-ops go-scheduler go-reconciler go-stream-ingest go-stream-external go-stream-pagerduty > $REC/up-workers.out 2>&1; rcw=$?; st up-workers $rcw; [ $rcw = 0 ] || { echo "ABORT: worker plane not recreated = INCOMPLETE pass (Trap #420)"; exit 1; }   # Trap #420: every plane from the cut's CI digests
 sleep 45; curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8093/ready | grep -q 200; st go-api-ready $?
+# CHAOS-6987 gap 5 (D2731): GraphQL routing-ledger parity with prod. ci/bigboy/routing-ops.txt is the
+# tracked list of operations enabled on prod; every listed operation bigboy's ledger lacks is enabled
+# here (`dho goapi routing enable`, envelope minted INSIDE venue-tools, never leaves the container),
+# then a fresh status read must match the list. KNOWN-MISSING entries (testopsRisk, CHAOS-6993: the
+# enable proof gate needs a bigboy go-api-prove run) make this STEP rc=3 -- a named gap, never rc=0.
+# The catalog is fetched at THIS cut's sha so status/enable classify against the deployed build.
+ROUTING_ORG=${ROUTING_ORG:-67f1add8-9fcb-4272-addb-044b70c442c8}  # the disposable fixture org, never the local org
+gh api "repos/full-chaos/dev-health-ops/contents/src/dev_health_ops/api/graphql/go_api_operations.json?ref=$NEW" -H 'Accept: application/vnd.github.raw' > "$REC.catalog.json" 2>/dev/null && chmod 644 "$REC.catalog.json"
+vt() { docker compose --env-file ops/.env --profile venue run --rm --no-deps -T -v "$REC.catalog.json:/catalog.json:ro" venue-tools "$1"; }
+ROUTING_ARGS='-catalog /catalog.json -registry-url http://query-api:8090/registry'
+vt "dho goapi routing status -json $ROUTING_ARGS" > "$REC.routing-status-pre.json" 2>/dev/null
+TO_ENABLE=$(python3 "$HERE/check-routing-parity.py" "$HERE/routing-ops.txt" "$REC.routing-status-pre.json" --to-enable 2>>"$REC.routing.err"); rc_te=$?
+if [ $rc_te -ne 0 ]; then
+  st routing-enable 1; echo "FAIL: routing status read is incomplete, see $REC.routing.err" >&2
+elif [ -n "$TO_ENABLE" ]; then
+  vt "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing enable $ROUTING_ARGS -buildinfo-url http://query-api:8090/buildinfo -expect-build $NEW -operations $TO_ENABLE -mode canary -recorded-by bigboy-cut -review-evidence 'CHAOS-6987 gap 5: prod parity from ci/bigboy/routing-ops.txt'" > "$REC.routing-enable.out" 2>&1
+  st routing-enable $?; echo "enabled: $TO_ENABLE"
+else
+  st routing-enable 0; echo "enabled: none needed"
+fi
+vt "dho goapi routing status -json $ROUTING_ARGS" > "$REC.routing-status.json" 2>/dev/null
+python3 "$HERE/check-routing-parity.py" "$HERE/routing-ops.txt" "$REC.routing-status.json"; st routing-parity $?
 # proof tokens are 12 h: RE-MINT at every cut (rev 188: an expired token silently refused 65 REST entries, runbook step 9)
 for b in bootstrap-admin-proof.sh bootstrap-superadmin-proof.sh; do bash $R/_records/bigboy-1152962/$b > $REC/$b.out 2>&1; st $b $?; done
 $HERE/bigboy-log-checks.sh $REC > $REC/log-checks.out 2>&1; st log-checks $?; tail -6 $REC/log-checks.out
@@ -94,6 +129,7 @@ cd $R
 # is a NAMED gap, not silently skipped, because the pass this STEP checks is the one
 # chris actually hit as a P1 (R460: "plane-only passes missed 2 structural breaks").
 export DHO_SMOKE_RECEIPT_PATH="/receipts/bigboy-$N8/web-path-smoke-receipt.json"
+export DHO_SMOKE_CATALOG_FILE="$REC.catalog.json"
 mkdir -p $REC
 bash $HERE/web-path-smoke.sh > $REC/web-path-smoke.out 2>&1; st web-path-smoke $?; tail -6 $REC/web-path-smoke.out
 echo "cut done $(date -u +%T)"

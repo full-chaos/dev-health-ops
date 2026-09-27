@@ -60,6 +60,24 @@ them.
 HANDED TO prod-ops to run at the rev 193 pre-cut; the author does not run it against bigboy (same convention
 as pass-bigboy-admin2.sh). Output: <out>/table.txt (one row per request, admin2's own table shape).
 
+First live run (prod-ops, post rev192, ba222c858/ops 5ecfcf84) found and this version fixes two harness bugs,
+neither a product defect -- every throwaway user's password_hash/membership rows were inserted correctly and
+the harness itself did not crash (rc=0, clean teardown both times):
+- Every email used @venue.invalid (RFC 2606 reserved), and unlike bootstrap-admin-proof.sh's identities
+  (minted directly via AuthService, no request validation ever runs) this script's users go through the REAL
+  POST /api/v1/auth/login and /register bodies, whose `email: EmailStr` field refuses reserved/special-use
+  domains by design (internal/testsupport/sessionscenario/sessionscenario.go:522 pins exactly this refusal
+  for another special-use domain). No token was ever minted, so every downstream row failed the same way.
+  Fixed: @example.com, the domain the app's own real venue oracle already uses for hundreds of real
+  login/register calls.
+- POST /api/v1/auth/register is behind OriginValidationMiddleware
+  (src/dev_health_ops/api/middleware/csrf.py, default `protected_paths={"/api/v1/auth/register"}` -- no
+  other route here needs it) and this script's `http()` had no Origin option at all, unlike
+  pass-bigboy-admin2.sh's own `origin=` flag. Fixed: an `origin` parameter on `http()`, sent only on the
+  register calls, matching `_parse_cors_origins`'s documented default (`http://localhost:3000`, unset
+  CORS_ALLOWED_ORIGINS on bigboy) -- the SAME value admin2.sh's ORIGIN constant already uses for its own
+  origin-aware reads.
+
 Usage: pass-bigboy-auth.py [out_dir]
 """
 
@@ -78,6 +96,11 @@ PG_CONTAINER = "dev-health-postgres-1"
 ADMIN_TOKEN_FILE = "/home/ubuntu/devhealth/.go-api-dev/bigboy-admin-proof.token"
 ORG = "67f1add8-9fcb-4272-addb-044b70c442c8"
 PLANES = ("go", "python")
+# OriginValidationMiddleware (src/dev_health_ops/api/middleware/csrf.py) protects
+# POST /api/v1/auth/register by default; CORS_ALLOWED_ORIGINS is unset on bigboy, so
+# _parse_cors_origins' documented default applies -- same value pass-bigboy-admin2.sh's
+# own ORIGIN constant already uses.
+REGISTER_ORIGIN = "http://localhost:3000"
 
 RUN = uuid.uuid4().hex[:8]
 
@@ -118,6 +141,8 @@ host, port = PLANES[req["plane"]]
 h = {}
 if req.get("bearer"):
     h["Authorization"] = "Bearer " + req["bearer"]
+if req.get("origin"):
+    h["Origin"] = req["origin"]
 body = req.get("body")
 if body is not None:
     h["Content-Type"] = "application/json"
@@ -137,9 +162,20 @@ except Exception as e:
 
 
 def http(
-    plane: str, method: str, path: str, body=None, bearer: str | None = None
+    plane: str,
+    method: str,
+    path: str,
+    body=None,
+    bearer: str | None = None,
+    origin: str | None = None,
 ) -> dict:
-    req = {"plane": plane, "method": method, "path": path, "bearer": bearer}
+    req = {
+        "plane": plane,
+        "method": method,
+        "path": path,
+        "bearer": bearer,
+        "origin": origin,
+    }
     if body is not None:
         req["body"] = json.dumps(body)
     p = subprocess.run(
@@ -244,14 +280,14 @@ def main() -> int:
             )
 
     all_emails = [
-        f"venue-auth-session-go-{RUN}@venue.invalid",
-        f"venue-auth-session-python-{RUN}@venue.invalid",
-        f"venue-auth-register-go-{RUN}@venue.invalid",
-        f"venue-auth-register-python-{RUN}@venue.invalid",
-        f"venue-auth-invite-go-{RUN}@venue.invalid",
-        f"venue-auth-invite-python-{RUN}@venue.invalid",
-        f"venue-auth-orgtel-{RUN}@venue.invalid",
-        f"venue-auth-crossplane-{RUN}@venue.invalid",
+        f"venue-auth-session-go-{RUN}@example.com",
+        f"venue-auth-session-python-{RUN}@example.com",
+        f"venue-auth-register-go-{RUN}@example.com",
+        f"venue-auth-register-python-{RUN}@example.com",
+        f"venue-auth-invite-go-{RUN}@example.com",
+        f"venue-auth-invite-python-{RUN}@example.com",
+        f"venue-auth-orgtel-{RUN}@example.com",
+        f"venue-auth-crossplane-{RUN}@example.com",
     ]
     existing = sql(
         "SELECT email FROM users WHERE email IN ({});".format(
@@ -265,7 +301,7 @@ def main() -> int:
     try:
         # ============= Part B: session lifecycle, one throwaway user per plane =============
         for plane in PLANES:
-            email = f"venue-auth-session-{plane}-{RUN}@venue.invalid"
+            email = f"venue-auth-session-{plane}-{RUN}@example.com"
             pw = f"VenueProbe-{RUN}-1!"
             h = bcrypt_hash(pw)
             uid = sql(f"""INSERT INTO users (id, email, password_hash, is_active, is_verified, is_superuser)
@@ -343,7 +379,7 @@ def main() -> int:
 
         # ============= Part B: registration lifecycle, one throwaway user per plane =============
         for plane in PLANES:
-            email = f"venue-auth-register-{plane}-{RUN}@venue.invalid"
+            email = f"venue-auth-register-{plane}-{RUN}@example.com"
             pw = f"VenueProbe-{RUN}-2!"
             r = record(
                 "r-register",
@@ -353,6 +389,7 @@ def main() -> int:
                     "POST",
                     "/api/v1/auth/register",
                     {"email": email, "password": pw, "full_name": "Venue Probe"},
+                    origin=REGISTER_ORIGIN,
                 ),
             )
             new_user_id = (r.get("json") or {}).get("user_id")
@@ -454,7 +491,7 @@ def main() -> int:
         #               get_current_user on the Python side -- an invite is single-use, so each plane needs
         #               its own invite/invitee or only the first plane ever sees the happy path) =============
         for plane in PLANES:
-            invite_email = f"venue-auth-invite-{plane}-{RUN}@venue.invalid"
+            invite_email = f"venue-auth-invite-{plane}-{RUN}@example.com"
             created_invite_emails.append(invite_email)
             pw = f"VenueProbe-{RUN}-6!"
             h = bcrypt_hash(pw)
@@ -542,7 +579,7 @@ def main() -> int:
         name_part, desc_part = raw.split("|", 1)
         org_backup = (name_part, None if desc_part == NULLSENTINEL else desc_part)
 
-        email = f"venue-auth-orgtel-{RUN}@venue.invalid"
+        email = f"venue-auth-orgtel-{RUN}@example.com"
         pw = f"VenueProbe-{RUN}-4!"
         h = bcrypt_hash(pw)
         uid = sql(f"""INSERT INTO users (id, email, password_hash, is_active, is_verified, is_superuser)
@@ -636,7 +673,7 @@ def main() -> int:
 
         # ============= cross-plane acceptance: one throwaway user, login on ONE plane, use the token on the
         #               OTHER =============
-        email = f"venue-auth-crossplane-{RUN}@venue.invalid"
+        email = f"venue-auth-crossplane-{RUN}@example.com"
         pw = f"VenueProbe-{RUN}-5!"
         h = bcrypt_hash(pw)
         uid = sql(f"""INSERT INTO users (id, email, password_hash, is_active, is_verified, is_superuser)

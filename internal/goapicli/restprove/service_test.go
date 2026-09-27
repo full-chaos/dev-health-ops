@@ -139,18 +139,53 @@ func TestParseFlags_DHOAPIRequiresEdgeTokenBearers(t *testing.T) {
 
 func TestFinalRunReportFailsADHOAPIRunThatAdmittedNothing(t *testing.T) {
 	refused := []outcome{{Operation: "REST:GET:/x", Request: "r", Refusal: goapiproof.RESTRefusalIDBindingUnresolved}}
-	admitted := []outcome{{Operation: "REST:GET:/x", Request: "r", Admitted: true}}
+	admitted := []outcome{{Operation: "REST:GET:/x", Request: "r", Admitted: true, TerminalState: goapiproof.TerminalStateMatch}}
 
 	dho := flags{service: goapiproof.RESTServiceDHOAPI}
 	if report, err := finalRunReport(dho, refused, nil, nil, nil, nil, nil); err == nil || report.ExitCause != exitCompletedWithNothingMeasured {
 		t.Fatalf("all-refused dho-api run: exit_cause=%q err=%v, want a failure naming nothing measured", report.ExitCause, err)
 	}
 	if report, err := finalRunReport(dho, admitted, nil, nil, nil, nil, nil); err != nil || report.ExitCause != exitCompleted {
-		t.Fatalf("a dho-api run with an admitted request must complete: %q %v", report.ExitCause, err)
+		t.Fatalf("a dho-api run with an admitted, compared request must complete: %q %v", report.ExitCause, err)
 	}
 	// query-api keeps its per-case refusal semantics.
 	if report, err := finalRunReport(flags{}, refused, nil, nil, nil, nil, nil); err != nil || report.ExitCause != exitCompleted {
 		t.Fatalf("query-api run changed behaviour: %q %v", report.ExitCause, err)
+	}
+}
+
+// TestFinalRunReportFailsARunThatAdmittedOnlyUncomparableOutcomes reproduces
+// bigboy's CHAOS-6967 shape: a run whose every admitted case landed in a
+// terminal state that is not match/mismatch (here: unsupported, the declared
+// negative-test bucket, and edge_credential_admitted, the "credential accepted,
+// body never diffed" bucket) measured nothing, and must fail loud -- for
+// EITHER service, unlike exitCompletedWithNothingMeasured above.
+func TestFinalRunReportFailsARunThatAdmittedOnlyUncomparableOutcomes(t *testing.T) {
+	uncompared := []outcome{
+		{Operation: "REST:GET:/x", Request: "r1", Admitted: true, TerminalState: goapiproof.TerminalStateUnsupported},
+		{Operation: "REST:GET:/x", Request: "r1 (edge-credential-on-candidate)", Admitted: true, TerminalState: "edge_credential_admitted"},
+		{Operation: "REST:GET:/y", Request: "r2", Refusal: goapiproof.RESTRefusalUnexpectedStatus},
+	}
+	for _, svc := range []goapiproof.RESTService{goapiproof.RESTServiceQueryAPI, goapiproof.RESTServiceDHOAPI} {
+		report, err := finalRunReport(flags{service: svc}, uncompared, nil, nil, nil, nil, nil)
+		if err == nil || report.ExitCause != exitCompletedWithNoComparison {
+			t.Fatalf("service=%s: exit_cause=%q err=%v, want completed_with_no_comparison (bigboy leg1's shape: admitted>0, match=0, mismatch=0)", svc, report.ExitCause, err)
+		}
+		if !strings.Contains(err.Error(), "NO MEASUREMENT") {
+			t.Fatalf("service=%s: error %q does not name NO MEASUREMENT", svc, err)
+		}
+		if !strings.Contains(err.Error(), "unsupported=1") || !strings.Contains(err.Error(), "edge_credential_admitted=1") {
+			t.Fatalf("service=%s: error %q does not report the uncompared terminal states by name and count", svc, err)
+		}
+	}
+	// A single real comparison beside the uncomparable ones is enough to pass:
+	// this guard fires only when NOTHING was ever compared, never as a
+	// threshold on the ratio of admitted-but-uncompared cases.
+	withOneMatch := append(append([]outcome(nil), uncompared...), outcome{
+		Operation: "REST:GET:/z", Request: "r3", Admitted: true, TerminalState: goapiproof.TerminalStateMatch,
+	})
+	if report, err := finalRunReport(flags{}, withOneMatch, nil, nil, nil, nil, nil); err != nil || report.ExitCause != exitCompleted {
+		t.Fatalf("a run with one real match beside uncomparable outcomes must complete: %q %v", report.ExitCause, err)
 	}
 }
 

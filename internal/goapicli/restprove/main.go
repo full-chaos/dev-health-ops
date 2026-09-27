@@ -1972,8 +1972,19 @@ requestLoop:
 	if len(notRun) > 0 {
 		fmt.Printf("partial run: %d request(s) never attempted: %v\n", len(notRun), notRun)
 	}
+	uncomparedByState := uncomparedByTerminalState(outcomes)
 	fmt.Printf("attempted=%d admitted=%d match=%d mismatch=%d refused=%d\n",
 		attempted, admitted, matched, mismatched, attempted-admitted)
+	// CHAOS-6967: admitted is not "compared" -- an admitted case whose
+	// TerminalState is not match/mismatch (unsupported, edge_credential_admitted,
+	// or any future third bucket) measured nothing by design, and folding it into
+	// "admitted" with no further line let a run of 11 admitted, 0 match, 0
+	// mismatch read as having compared something. Printed unconditionally
+	// (uncomparedByState is nil, and the loop below prints nothing, when every
+	// admitted case really compared) so the shape is always the same to grep.
+	for _, state := range sortedStringKeys(uncomparedByState) {
+		fmt.Printf("uncompared %s=%d\n", state, uncomparedByState[state])
+	}
 	// Every skew-admitted case is named on its own line; this count per
 	// route (operation) makes a route admitted by skew run after run a
 	// visible pattern rather than a clean run.
@@ -2062,6 +2073,26 @@ func finalRunReport(f flags, outcomes []outcome, notRun []string, runEnded, runE
 		exitCause = exitCompletedWithNothingMeasured
 		finalErr = fmt.Errorf("this -service=%s run admitted no request, so it measured nothing (read the REFUSED lines above; an unresolved -bind is the usual cause)", f.service)
 	}
+	if finalErr == nil && anyAdmitted(outcomes) && !anyCompared(outcomes) {
+		// CHAOS-6967: "admitted" is not "compared". A run whose every admitted
+		// case landed in a terminal state other than match/mismatch
+		// (unsupported -- a declared negative-test variant whose body is
+		// expected to differ by design; edge_credential_admitted -- proves the
+		// credential is accepted, never diffs a body; or any future third
+		// bucket) produced zero match/mismatch outcomes despite exiting as
+		// though it had measured something. Service-independent, unlike the
+		// guard above: a query-api run that only ever admits uncomparable
+		// cases is exactly as vacuous as a dho-api run that admitted nothing
+		// at all -- bigboy leg1 (11 admitted, 0 match, 0 mismatch,
+		// exit_cause=completed) is the reproduced case this closes.
+		exitCause = exitCompletedWithNoComparison
+		byState := uncomparedByTerminalState(outcomes)
+		var detail []string
+		for _, state := range sortedStringKeys(byState) {
+			detail = append(detail, fmt.Sprintf("%s=%d", state, byState[state]))
+		}
+		finalErr = fmt.Errorf("this -service=%s run admitted %d request(s) but produced 0 match and 0 mismatch -- NO MEASUREMENT (every admitted case landed in a non-comparable terminal state: %s)", f.service, admittedCount(outcomes), strings.Join(detail, ", "))
+	}
 	report := jsonReport{Outcomes: outcomes, NotRun: notRun, PartialCause: partialCause, PartialError: partialError(f, runErr), ExitCause: exitCause, RunDeadline: f.runDeadline.String(), SkippedCredentialKinds: skippedKindNames(f.skipCredentialKinds), SkewAdmittedByOperation: skewAdmittedByOperation(outcomes), GapAdmittedByOperation: gapAdmittedByOperation(outcomes)}
 	return report, finalErr
 }
@@ -2074,6 +2105,53 @@ func anyAdmitted(outcomes []outcome) bool {
 		}
 	}
 	return false
+}
+
+// admittedCount counts admitted outcomes.
+func admittedCount(outcomes []outcome) int {
+	count := 0
+	for _, out := range outcomes {
+		if out.Admitted {
+			count++
+		}
+	}
+	return count
+}
+
+// anyCompared says whether at least one outcome is a REAL comparison: admitted
+// and its TerminalState is match or mismatch. An admitted outcome in any other
+// terminal state (unsupported, edge_credential_admitted, ...) measured nothing
+// comparable, by design (CHAOS-6967) -- it must never make a caller think a
+// comparison happened.
+func anyCompared(outcomes []outcome) bool {
+	for _, out := range outcomes {
+		if out.Admitted && (out.TerminalState == goapiproof.TerminalStateMatch || out.TerminalState == goapiproof.TerminalStateMismatch) {
+			return true
+		}
+	}
+	return false
+}
+
+// uncomparedByTerminalState counts, by TerminalState, every admitted outcome
+// that is NOT a match or a mismatch -- the buckets "admitted" silently folds
+// in with no further line (CHAOS-6967). Nil when every admitted outcome
+// compared.
+func uncomparedByTerminalState(outcomes []outcome) map[string]int {
+	var counts map[string]int
+	for _, out := range outcomes {
+		if !out.Admitted || out.TerminalState == goapiproof.TerminalStateMatch || out.TerminalState == goapiproof.TerminalStateMismatch {
+			continue
+		}
+		if counts == nil {
+			counts = map[string]int{}
+		}
+		state := out.TerminalState
+		if state == "" {
+			state = "(empty)"
+		}
+		counts[state]++
+	}
+	return counts
 }
 
 // writeFinalReport prints the run's causes on stdout and writes the
@@ -2178,10 +2256,15 @@ const (
 	exitCompletedWithLegsThatNeverAnswered = "completed_with_legs_that_never_answered"
 	exitCompletedWithVacuousDeclarations   = "completed_with_declarations_that_excuse_nothing"
 	exitCompletedWithNothingMeasured       = "completed_with_nothing_measured"
-	exitStoppedBySignal                    = "stopped_by_signal"
-	exitStoppedByRunDeadline               = "stopped_by_run_deadline"
-	exitAbortedByToolError                 = "aborted_by_tool_error"
-	exitRefusedBeforeMeasuring             = "refused_before_measuring"
+	// exitCompletedWithNoComparison: something was admitted, but every admitted
+	// case landed in a non-comparable terminal state (CHAOS-6967) -- 0 match
+	// and 0 mismatch. Distinct from exitCompletedWithNothingMeasured (nothing
+	// admitted at all) and service-independent.
+	exitCompletedWithNoComparison = "completed_with_no_comparison"
+	exitStoppedBySignal           = "stopped_by_signal"
+	exitStoppedByRunDeadline      = "stopped_by_run_deadline"
+	exitAbortedByToolError        = "aborted_by_tool_error"
+	exitRefusedBeforeMeasuring    = "refused_before_measuring"
 )
 
 // Partial causes, read from the run's own context first.

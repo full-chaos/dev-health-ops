@@ -81,13 +81,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/oauth2"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/externalurl"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -230,37 +228,6 @@ func decodeOIDCConfig(raw *string) (oidcConfigValues, error) {
 		JWKSURI:               objString(object, "jwks_uri"),
 		Scopes:                scopes, ClaimMapping: mapping,
 	}, nil
-}
-
-// oidcProcessing is OIDCProcessingError: a 400, its message recorded onto
-// the provider (record_error) and into an audit row, never surfaced
-// verbatim to the caller (the router always answers its own fixed
-// message).
-type oidcProcessing struct{ msg string }
-
-func (e oidcProcessing) Error() string { return e.msg }
-
-func oidcErr(msg string) error { return oidcProcessing{msg: msg} }
-
-// oidcUnauthenticated is D2738 (r1 P1: an unauthenticated invalid callback
-// disabling a provider org-wide). It marks a failure that occurred BEFORE
-// the caller proved possession of a state token this package minted for
-// this exact provider/org (state.go's AEAD tag + provider AAD + org check,
-// not yet expired) -- distinct from oidcProcessing, whose failures all
-// occur AFTER that proof and legitimately indicate a broken IdP
-// configuration worth surfacing to an admin. See oidcCallbackUnauthenticated.
-type oidcUnauthenticated struct{ msg string }
-
-func (e oidcUnauthenticated) Error() string { return e.msg }
-
-func oidcAuthErr(msg string) error { return oidcUnauthenticated{msg: msg} }
-
-func asOIDCUnauthenticated(err error, target *oidcUnauthenticated) bool {
-	unauth, ok := err.(oidcUnauthenticated)
-	if ok {
-		*target = unauth
-	}
-	return ok
 }
 
 // decryptProviderSecret is _decrypt_secret(encrypted_secrets, key): decrypt
@@ -436,18 +403,19 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 
 	claims, err := h.exchangeAndValidate(ctx, row, providerID, stateToken, code, codeVerifierField, codeVerifierSet)
 	if err != nil {
-		var unauth oidcUnauthenticated
-		if asOIDCUnauthenticated(err, &unauth) {
-			h.oidcCallbackUnauthenticated(ctx, w, r, row.OrgID, providerID, unauth.msg)
+		var unauth ssoUnauthenticated
+		if asSSOUnauthenticated(err, &unauth) {
+			h.recordSSOUnauthenticated(ctx, w, r, row.OrgID, providerID, unauth.msg, http.StatusBadRequest,
+				"OIDC authentication failed", "oidc", "state_auth")
 			return
 		}
-		var processing oidcProcessing
-		if !asOIDCProcessing(err, &processing) {
+		var processing ssoProcessing
+		if !asSSOProcessing(err, &processing) {
 			h.fail(w, r, "oidc callback", err)
 			return
 		}
-		h.oidcCallbackFailure(ctx, w, r, row.OrgID, providerID, processing.msg, http.StatusBadRequest,
-			"OIDC authentication failed", "")
+		h.recordSSOFailure(ctx, w, r, row.OrgID, providerID, processing.msg, http.StatusBadRequest,
+			"OIDC authentication failed", "oidc", "")
 		return
 	}
 
@@ -476,205 +444,17 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 
 	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID)
 	if err != nil {
-		var processing oidcProcessing
-		if !asOIDCProcessing(err, &processing) {
+		var processing ssoProcessing
+		if !asSSOProcessing(err, &processing) {
 			h.fail(w, r, "oidc provisioning", err)
 			return
 		}
-		h.oidcCallbackFailure(ctx, w, r, row.OrgID, providerID, processing.msg, http.StatusBadRequest,
-			"OIDC user provisioning failed", "provisioning")
+		h.recordSSOFailure(ctx, w, r, row.OrgID, providerID, processing.msg, http.StatusBadRequest,
+			"OIDC user provisioning failed", "oidc", "provisioning")
 		return
 	}
 
-	role := "member"
-	orgID := ""
-	var orgUUID *uuid.UUID
-	if membership != nil {
-		role = membership.role
-		orgID = membership.orgID.String()
-		id := membership.orgID
-		orgUUID = &id
-	}
-	now := h.Now()
-	jti, err := newJTI()
-	if err != nil {
-		h.fail(w, r, "mint token", err)
-		return
-	}
-	access, err := h.Signer.Access(edgetoken.AccessClaims{
-		UserID: user.id.String(), Email: user.email, OrgID: orgID, Role: role, IsSuperuser: user.isSuperuser,
-		Username: user.username, FullName: user.fullName, TokenVersion: user.tokenVersion,
-	}, now, jti)
-	if err != nil {
-		h.fail(w, r, "mint access token", err)
-		return
-	}
-	// r1 review (CHAOS-6658, P1): the earlier version of this function
-	// minted a stateless refresh JWT and never inserted a refresh_tokens
-	// row, faithfully matching SSOService's own AuthService.
-	// create_token_pair (services/auth.py:282-283) -- but /auth/refresh
-	// (api/auth/routers/refresh.py:158, ported here as refreshByHash)
-	// does a real DB lookup by the token's own jti on BOTH planes, and
-	// 401s when no row exists. Python's version of this route was never
-	// actually reachable (the pre-CHAOS-6658 dead-state finding), so this
-	// Python bug never had a live consequence; once this Go port fixed
-	// the state bug and made the route real, the SAME stateless mint
-	// would have shipped a login whose OWN refresh_token 401s on first
-	// use -- a real, executed, reproduced defect (r1's second P1), not a
-	// parity target worth preserving. Fixed here by storing the refresh
-	// token the same way the password-login route does (session/tokens.go
-	// storeRefresh), inside the same transaction as the audit/login-time
-	// writes.
-	family := uuid.New()
-	refreshJTI, err := newJTI()
-	if err != nil {
-		h.fail(w, r, "mint token", err)
-		return
-	}
-	refreshExpiresAt := now.Add(7 * 24 * time.Hour)
-	refresh, err := h.Signer.RefreshUntil(edgetoken.RefreshClaims{UserID: user.id.String(), OrgID: orgID, FamilyID: family.String()},
-		now, refreshExpiresAt, refreshJTI)
-	if err != nil {
-		h.fail(w, r, "mint refresh token", err)
-		return
-	}
-
-	tx, err := h.Pool.Begin(ctx)
-	if err != nil {
-		h.fail(w, r, "begin", err)
-		return
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	if _, err := tx.Exec(ctx, `UPDATE sso_providers SET last_login_at = $2, updated_at = $2 WHERE id = $1::uuid`,
-		providerID, now.UTC()); err != nil {
-		h.fail(w, r, "record login", err)
-		return
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO refresh_tokens
-	(id, user_id, org_id, token_hash, family_id, expires_at, revoked_at, replaced_by_hash, successor_jti,
-	 ip_address, user_agent, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, $8, $9)`,
-		uuid.New(), user.id, orgUUID, hashRefreshJTI(refreshJTI), family, refreshExpiresAt.UTC(),
-		clientHost(r), userAgentHeader(r), now.UTC()); err != nil {
-		h.fail(w, r, "store refresh token", err)
-		return
-	}
-	meta := pyjson.NewObject()
-	meta.Set("provider_id", providerID.String())
-	meta.Set("protocol", "oidc")
-	metaJSON, err := pyjson.Dumps(meta)
-	if err != nil {
-		h.fail(w, r, "encode audit metadata", err)
-		return
-	}
-	if _, err := (audit.PGWriter{Now: h.Now}).Write(ctx, tx, audit.Entry{
-		OrgID: mustParseUUID(row.OrgID), UserID: uuidPtr(user.id), Action: audit.ActionSSOLogin,
-		ResourceType: audit.ResourceSession, ResourceID: user.id.String(), RequestMetadata: []byte(metaJSON),
-	}); err != nil {
-		h.fail(w, r, "write audit log", err)
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		h.fail(w, r, "commit", err)
-		return
-	}
-
-	out := pyjson.NewObject()
-	out.Set("access_token", access)
-	out.Set("refresh_token", refresh)
-	out.Set("token_type", "bearer")
-	out.Set("expires_in", pyjson.IntOf(int64(edgetoken.AccessLifetime/time.Second)))
-	out.Set("user_id", user.id.String())
-	out.Set("email", user.email)
-	out.Set("org_id", orgID)
-	out.Set("role", role)
-	policy.WriteModel(w, http.StatusOK, out, nil)
-}
-
-// oidcCallbackFailure is process_oidc_callback's / provision_or_get_user's
-// except SSOProcessingError block: record_error onto the provider, an
-// SSO_LOGIN audit row (status failure), commit, then the response.
-func (h handlers) oidcCallbackFailure(ctx context.Context, w http.ResponseWriter, r *http.Request,
-	orgID string, providerID uuid.UUID, errMsg string, status int, detail, stage string) {
-	tx, err := h.Pool.Begin(ctx)
-	if err != nil {
-		h.fail(w, r, "begin failure record", err)
-		return
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	sanitized := pythonparity.SanitizeErrorText(errMsg, 4000)
-	now := h.Now()
-	if _, err := tx.Exec(ctx, `UPDATE sso_providers SET last_error = $2, last_error_at = $3, status = 'error', updated_at = $3
-WHERE id = $1::uuid`, providerID, sanitized, now.UTC()); err != nil {
-		h.fail(w, r, "record provider error", err)
-		return
-	}
-	meta := pyjson.NewObject()
-	meta.Set("protocol", "oidc")
-	if stage != "" {
-		meta.Set("stage", stage)
-	}
-	metaJSON, err := pyjson.Dumps(meta)
-	if err != nil {
-		h.fail(w, r, "encode audit metadata", err)
-		return
-	}
-	if _, err := (audit.PGWriter{Now: h.Now}).Write(ctx, tx, audit.Entry{
-		OrgID: mustParseUUID(orgID), Action: audit.ActionSSOLogin, ResourceType: audit.ResourceSSOProvider,
-		ResourceID: providerID.String(), Status: "failure", ErrorMessage: &sanitized, RequestMetadata: []byte(metaJSON),
-	}); err != nil {
-		h.fail(w, r, "write audit log", err)
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		h.fail(w, r, "commit", err)
-		return
-	}
-	policy.WriteDetail(w, status, detail, nil)
-}
-
-// oidcCallbackUnauthenticated is D2738's ruling on the r1 P1 (an
-// unauthenticated invalid callback disabling the provider org-wide): a
-// caller who has NOT proven possession of a state token this package
-// minted for this exact provider/org writes nothing to sso_providers -- no
-// status flip, no last_error -- because at this point the only fact in
-// evidence is "some request arrived with a state value that doesn't
-// verify," which anyone can produce with zero credentials by hitting this
-// public route with garbage. A single such request must never be able to
-// take the whole org's SSO login offline.
-//
-// An audit row is still written (so a defender investigating repeated
-// probing has a trail) and a log line is emitted; the HTTP response is the
-// identical generic detail an authenticated-but-later-failed exchange
-// gets, so a probe cannot distinguish the two cases by response shape.
-//
-// Deferred, not in this change (team-lead's D2738 ruling, RISK-NOTES): real
-// rate limiting of this route, and a dedicated metrics counter for this
-// event. Neither has an existing primitive in this codebase to build on;
-// adding one here would be new infrastructure beyond the ruling's actual
-// ask, which is the persistence behavior, not the route's throughput
-// controls.
-func (h handlers) oidcCallbackUnauthenticated(ctx context.Context, w http.ResponseWriter, r *http.Request,
-	orgID string, providerID uuid.UUID, reason string) {
-	sanitized := pythonparity.SanitizeErrorText(reason, 4000)
-	h.Logger.WarnContext(ctx, "api sso: oidc callback presented an unauthenticated state value; provider status left unchanged",
-		"provider_id", providerID.String(), "reason", sanitized)
-	meta := pyjson.NewObject()
-	meta.Set("protocol", "oidc")
-	meta.Set("stage", "state_auth")
-	metaJSON, err := pyjson.Dumps(meta)
-	if err != nil {
-		h.fail(w, r, "encode audit metadata", err)
-		return
-	}
-	if _, err := (audit.PGWriter{Now: h.Now}).Write(ctx, h.Pool, audit.Entry{
-		OrgID: mustParseUUID(orgID), Action: audit.ActionSSOLogin, ResourceType: audit.ResourceSSOProvider,
-		ResourceID: providerID.String(), Status: "failure", ErrorMessage: &sanitized, RequestMetadata: []byte(metaJSON),
-	}); err != nil {
-		h.fail(w, r, "write audit log", err)
-		return
-	}
-	policy.WriteDetail(w, http.StatusBadRequest, "OIDC authentication failed", nil)
+	h.finishSSOLogin(ctx, w, r, providerID, row.OrgID, user, membership, "oidc")
 }
 
 // oidcClaims is process_oidc_callback's returned dict, the fields the
@@ -695,16 +475,16 @@ func (h handlers) exchangeAndValidate(ctx context.Context, row *providerRow, pro
 	state, err := verifyOIDCState(h.StateSecret, stateToken, providerID.String(), now)
 	if err != nil {
 		if errors.Is(err, errOIDCStateExpired) {
-			return oidcClaims{}, oidcAuthErr("OIDC state expired")
+			return oidcClaims{}, ssoAuthErr("OIDC state expired")
 		}
-		return oidcClaims{}, oidcAuthErr("OIDC state mismatch")
+		return oidcClaims{}, ssoAuthErr("OIDC state mismatch")
 	}
 	if state.OrgID != row.OrgID {
 		// The AEAD tag verified (this state really was minted by this
 		// package for this provider), but for a different org -- still
 		// unauthenticated FOR this org: nothing proves the caller is
 		// entitled to see or affect this org's provider.
-		return oidcClaims{}, oidcAuthErr("OIDC state mismatch")
+		return oidcClaims{}, ssoAuthErr("OIDC state mismatch")
 	}
 	config, err := decodeOIDCConfig(row.Config)
 	if err != nil {
@@ -737,17 +517,17 @@ func (h handlers) exchangeAndValidate(ctx context.Context, row *providerRow, pro
 	}
 	token, err := oauthCfg.Exchange(exchangeCtx, code, opts...)
 	if err != nil {
-		return oidcClaims{}, oidcErr("OIDC token exchange failed")
+		return oidcClaims{}, ssoErr("OIDC token exchange failed")
 	}
 	if token.AccessToken == "" {
-		return oidcClaims{}, oidcErr("OIDC token response missing access_token")
+		return oidcClaims{}, ssoErr("OIDC token response missing access_token")
 	}
 	rawIDToken, _ := token.Extra("id_token").(string)
 	if rawIDToken == "" {
-		return oidcClaims{}, oidcErr("OIDC token response missing id_token")
+		return oidcClaims{}, ssoErr("OIDC token response missing id_token")
 	}
 	if metadata.Issuer == "" || config.ClientID == "" || metadata.JWKSURI == "" {
-		return oidcClaims{}, oidcErr("OIDC configuration missing issuer/client_id/jwks")
+		return oidcClaims{}, ssoErr("OIDC configuration missing issuer/client_id/jwks")
 	}
 	verifyCtx := oidc.ClientContext(ctx, h.HTTPClient)
 	keySet := oidc.NewRemoteKeySet(verifyCtx, metadata.JWKSURI)
@@ -758,20 +538,20 @@ func (h handlers) exchangeAndValidate(ctx context.Context, row *providerRow, pro
 	})
 	idToken, err := idVerifier.Verify(verifyCtx, rawIDToken)
 	if err != nil {
-		return oidcClaims{}, oidcErr("OIDC id_token validation failed")
+		return oidcClaims{}, ssoErr("OIDC id_token validation failed")
 	}
 	if idToken.IssuedAt.IsZero() {
-		return oidcClaims{}, oidcErr("OIDC id_token validation failed")
+		return oidcClaims{}, ssoErr("OIDC id_token validation failed")
 	}
 	// state.Nonce is always present (this package always generates one);
 	// Python's own check is a no-op (state.go's constantTimeEqual doc
 	// comment), so this is a real check where Python's is dead.
 	if !constantTimeEqual(idToken.Nonce, state.Nonce) {
-		return oidcClaims{}, oidcErr("OIDC nonce mismatch")
+		return oidcClaims{}, ssoErr("OIDC nonce mismatch")
 	}
 	var idClaims map[string]any
 	if err := idToken.Claims(&idClaims); err != nil {
-		return oidcClaims{}, oidcErr("OIDC id_token validation failed")
+		return oidcClaims{}, ssoErr("OIDC id_token validation failed")
 	}
 
 	merged := map[string]any{}
@@ -795,7 +575,7 @@ func (h handlers) exchangeAndValidate(ctx context.Context, row *providerRow, pro
 		}
 	}
 	if email == "" {
-		return oidcClaims{}, oidcErr("OIDC claims missing email")
+		return oidcClaims{}, ssoErr("OIDC claims missing email")
 	}
 	fullName := mapped["full_name"]
 	if fullName == "" {
@@ -820,20 +600,20 @@ func mapAttributes(attrs map[string]any, mapping map[string]string) map[string]s
 func (h handlers) fetchUserinfo(ctx context.Context, endpoint, accessToken string) (map[string]any, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, oidcErr("OIDC userinfo request failed")
+		return nil, ssoErr("OIDC userinfo request failed")
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := h.HTTPClient.Do(req)
 	if err != nil {
-		return nil, oidcErr("OIDC userinfo request failed")
+		return nil, ssoErr("OIDC userinfo request failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, oidcErr("OIDC userinfo request failed")
+		return nil, ssoErr("OIDC userinfo request failed")
 	}
 	var out map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, oidcErr("OIDC userinfo request failed")
+		return nil, ssoErr("OIDC userinfo request failed")
 	}
 	return out, nil
 }
@@ -853,30 +633,30 @@ func (h handlers) resolveOIDCMetadata(ctx context.Context, config oidcConfigValu
 			UserinfoEndpoint: config.UserinfoEndpoint, JWKSURI: config.JWKSURI}, nil
 	}
 	if config.Issuer == "" {
-		return oidcMetadataValues{}, oidcErr("OIDC issuer is required")
+		return oidcMetadataValues{}, ssoErr("OIDC issuer is required")
 	}
 	parsed, err := url.Parse(config.Issuer)
 	if err != nil {
-		return oidcMetadataValues{}, oidcErr("Invalid OIDC issuer URL")
+		return oidcMetadataValues{}, ssoErr("Invalid OIDC issuer URL")
 	}
 	if parsed.Scheme != "https" {
-		return oidcMetadataValues{}, oidcErr("OIDC issuer must use HTTPS")
+		return oidcMetadataValues{}, ssoErr("OIDC issuer must use HTTPS")
 	}
 	if parsed.Host == "" {
-		return oidcMetadataValues{}, oidcErr("OIDC issuer must be a valid URL")
+		return oidcMetadataValues{}, ssoErr("OIDC issuer must be a valid URL")
 	}
 	discoveryURL := strings.TrimRight(config.Issuer, "/") + "/.well-known/openid-configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
 	if err != nil {
-		return oidcMetadataValues{}, oidcErr("Failed to fetch OIDC discovery document")
+		return oidcMetadataValues{}, ssoErr("Failed to fetch OIDC discovery document")
 	}
 	resp, err := h.HTTPClient.Do(req)
 	if err != nil {
-		return oidcMetadataValues{}, oidcErr("Failed to fetch OIDC discovery document")
+		return oidcMetadataValues{}, ssoErr("Failed to fetch OIDC discovery document")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return oidcMetadataValues{}, oidcErr("Failed to fetch OIDC discovery document")
+		return oidcMetadataValues{}, ssoErr("Failed to fetch OIDC discovery document")
 	}
 	var doc map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
@@ -890,7 +670,7 @@ func (h handlers) resolveOIDCMetadata(ctx context.Context, config oidcConfigValu
 	userinfoEndpoint, _ := doc["userinfo_endpoint"].(string)
 	jwksURI, _ := doc["jwks_uri"].(string)
 	if tokenEndpoint == "" || jwksURI == "" {
-		return oidcMetadataValues{}, oidcErr("OIDC discovery missing required endpoints")
+		return oidcMetadataValues{}, ssoErr("OIDC discovery missing required endpoints")
 	}
 	return oidcMetadataValues{Issuer: resolvedIssuer, TokenEndpoint: tokenEndpoint, UserinfoEndpoint: userinfoEndpoint, JWKSURI: jwksURI}, nil
 }
@@ -950,8 +730,9 @@ func uuidPtr(id uuid.UUID) *uuid.UUID { return &id }
 
 // hashRefreshJTI is refresh_tokens._hash_token: sha256 of the jti's UTF-8
 // bytes, the same hash refreshByHash (internal/api/session/store.go) looks
-// up by. Duplicated rather than exported: one call site here, and the
-// session package's own copy is unexported for the same reason.
+// up by. Duplicated rather than exported: one call site (login.go's
+// finishSSOLogin), and the session package's own copy is unexported for
+// the same reason.
 func hashRefreshJTI(jti string) string {
 	sum := sha256.Sum256([]byte(jti))
 	return hex.EncodeToString(sum[:])
@@ -978,12 +759,4 @@ func userAgentHeader(r *http.Request) *string {
 	}
 	value := policy.Latin1(values[0])
 	return &value
-}
-
-func asOIDCProcessing(err error, target *oidcProcessing) bool {
-	if processing, ok := err.(oidcProcessing); ok {
-		*target = processing
-		return true
-	}
-	return false
 }

@@ -577,6 +577,21 @@ func assertProviderRowUnchanged(t *testing.T, ctx context.Context, pool *pgxpool
 	}
 }
 
+// assertSSOAuditStage confirms the most recent failure-status sso_login
+// audit row for this org carries the given stage tag -- shared by both
+// OIDC's state_auth and SAML's signature_auth D2738 tests.
+func assertSSOAuditStage(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, stage string) {
+	t.Helper()
+	var meta []byte
+	if err := pool.QueryRow(ctx, `SELECT request_metadata::text FROM audit_logs
+WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY created_at DESC LIMIT 1`, orgID).Scan(&meta); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(meta), `"stage":"`+stage+`"`) && !strings.Contains(string(meta), `"stage": "`+stage+`"`) {
+		t.Fatalf("audit request_metadata = %s, want a %s stage", meta, stage)
+	}
+}
+
 // flipMiddleByte tampers a base64url-encoded AEAD token reliably: it
 // decodes to raw bytes, flips every bit of the MIDDLE byte, and
 // re-encodes. The earlier approach here (flipping the state string's LAST

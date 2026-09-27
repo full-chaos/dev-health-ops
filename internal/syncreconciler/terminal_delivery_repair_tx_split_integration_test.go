@@ -13,24 +13,27 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 )
 
-// CHAOS-6957. terminal_delivery_repair.go's Step opens ONE transaction, runs the three
-// River-terminal recovery branches (repairTerminalRiverDeliverySQL, UPDATE ... RETURNING) in it,
-// then runs repairReadyFinalizers in the SAME transaction, then issues ONE tx.Commit covering both.
-// CHAOS-6932's classification (Linear comment 90f7c28d, rev 191, executed) showed the ready-finalizer
-// loop alone spending the whole 750ms StageTerminalDeliveryRepair budget (DefaultStageBudgets) in
-// serial per-candidate statements, so Commit ran into the expired context and rolled back. CHAOS-6956
-// fixed the specific N+1 readiness read that consumed the budget in that sample, but the STRUCTURAL
-// exposure named in the same comment is untouched by that fix: whatever else makes the ready-finalizer
-// loop slow (many candidates whose write path -- lockFinalizeJobSQL + rearmReadyFinalizeSQL, still one
-// round trip each per READY candidate -- or per-statement latency under load, the same order of
-// magnitude the classification measured, 2-100ms) can still exhaust the same fixed budget and roll
-// back a River-terminal recovery that had already succeeded earlier in the SAME transaction, moments
-// before the commit that discards it.
+// CHAOS-6957. Before this ticket, terminal_delivery_repair.go's Step opened ONE transaction, ran the
+// three River-terminal recovery branches (repairTerminalRiverDeliverySQL, UPDATE ... RETURNING) in
+// it, then ran repairReadyFinalizers in the SAME transaction, then issued ONE tx.Commit covering
+// both. CHAOS-6932's classification (Linear comment 90f7c28d, rev 191, executed) showed the
+// ready-finalizer loop alone spending the whole 750ms StageTerminalDeliveryRepair budget
+// (DefaultStageBudgets) in serial per-candidate statements, so Commit ran into the expired context
+// and rolled back. CHAOS-6956 fixed the specific N+1 readiness read that consumed the budget in that
+// sample, but the STRUCTURAL exposure named in the same comment survived that fix: whatever else
+// makes the ready-finalizer loop slow (many candidates whose write path -- lockFinalizeJobSQL +
+// rearmReadyFinalizeSQL, still one round trip each per READY candidate -- or per-statement latency
+// under load, the same order of magnitude the classification measured, 2-100ms) could still exhaust
+// the same fixed budget and roll back a River-terminal recovery that had already succeeded earlier in
+// the SAME transaction, moments before the commit that discarded it.
 //
-// This is the executed, red-first repro CHAOS-6957 requires before any fix: it reproduces the exact
-// prod shape (a slow, serial, per-candidate ready-finalizer write path; the real 750ms
-// StageTerminalDeliveryRepair budget) and shows a real, otherwise-valid exhausted-delivery recovery
-// discarded by an unrelated stage's slowness sharing its transaction and commit.
+// This file is the executed, red-first repro CHAOS-6957 required before any fix, and now pins the
+// fix as a regression test: it reproduces the exact prod shape (a slow, serial, per-candidate
+// ready-finalizer write path; the real 750ms StageTerminalDeliveryRepair budget) and asserts a real,
+// otherwise-valid exhausted-delivery recovery survives an unrelated stage's slowness. RED on baseline
+// origin/main d8001da14f655090839a25ffb23919b050b6e817 (executed: the outbox row stayed 'dispatched'
+// after Step's error, proving the discard); GREEN once Step split into stepRiverTerminalBranches and
+// stepReadyFinalizers, each with its own transaction and commit.
 //
 // slowFinalizeRearmTriggerSQL installs a per-statement delay on exactly the write repairReadyFinalizers
 // issues for a READY candidate (the UPDATE that rearms a finalize_sync_run outbox row to 'pending').
@@ -98,7 +101,7 @@ func postSyncRouteGeneration(t *testing.T, ctx context.Context, h *finalizeBacks
 	return generation
 }
 
-func TestTerminalDeliveryRepairSharedTransactionRollsBackARealRecoveryWhenTheReadyFinalizerLoopIsSlow(t *testing.T) {
+func TestTerminalDeliveryRepairRecoverySurvivesASlowReadyFinalizerLoop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	h := startFinalizeBackstopHarness(t, ctx)
@@ -168,17 +171,19 @@ func TestTerminalDeliveryRepairSharedTransactionRollsBackARealRecoveryWhenTheRea
 		exhaustedOutboxID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
-	// This is the invariant CHAOS-6957 exists to guarantee: a River-terminal recovery that the
-	// candidates CTE already matched and the UPDATE already applied, inside this transaction, must
-	// survive regardless of what an unrelated, later stage of the SAME Step call does. Today it does
-	// not: the ready-finalizer loop's own slowness (from candidates it selected AFTER the exhausted
-	// delivery's UPDATE already ran) shares the same commit, so exhausting the budget there discards
-	// a recovery that had nothing to do with the loop's own candidates.
+	// This is the invariant CHAOS-6957 guarantees: a River-terminal recovery that the candidates CTE
+	// already matched and the UPDATE already applied must survive regardless of what an unrelated,
+	// later stage of the same Step call does. Before the fix (baseline origin/main
+	// d8001da14f655090839a25ffb23919b050b6e817, executed) it did not: the ready-finalizer loop's own
+	// slowness (from candidates it selected AFTER the exhausted delivery's UPDATE already ran, and had
+	// nothing to do with it) shared the same transaction and commit, so exhausting the budget there
+	// discarded an already-successful recovery. stepRiverTerminalBranches now commits before
+	// stepReadyFinalizers ever begins, so the two can no longer take each other down.
 	if status != "pending" {
-		t.Fatalf("FAIL (CHAOS-6957, repro confirmed): exhausted-delivery outbox %s status = %q, want "+
-			"pending -- the recovery this transaction's own UPDATE already applied was rolled back by "+
-			"the SAME commit that the SLOW, UNRELATED ready-finalizer loop (result=%+v err=%v) also "+
-			"shares, purely because both share one transaction and one commit", exhaustedOutboxID, status, result, err)
+		t.Fatalf("exhausted-delivery outbox %s status = %q, want pending -- CHAOS-6957 regression: "+
+			"the recovery this transaction's own UPDATE already applied was rolled back by the SAME "+
+			"commit that the SLOW, UNRELATED ready-finalizer loop (result=%+v err=%v) also shares",
+			exhaustedOutboxID, status, result, err)
 	}
 }
 

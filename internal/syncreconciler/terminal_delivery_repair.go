@@ -170,6 +170,21 @@ func NewTerminalDeliveryRepair(
 	}, nil
 }
 
+// Step runs the three River-terminal recovery branches and the CHAOS-5456 ready-finalizer backstop
+// as TWO SEPARATE transactions, each with its own commit (CHAOS-6957).
+//
+// Before this change they shared one transaction and one commit: CHAOS-6932's classification (an
+// executed, prod-sampled repro) showed the ready-finalizer loop alone spending the whole
+// StageTerminalDeliveryRepair budget in serial per-candidate statements, so the transaction's own
+// Commit ran into the expired context and rolled back -- discarding a River-terminal recovery that
+// had already succeeded earlier in that SAME transaction and had nothing to do with the finalizer
+// loop's own candidates. pipeline.go's own comment on this stage already assumes the fixed
+// contract ("The repair commits its own transaction before anything below runs, so its recoveries
+// are already durable no matter how this step ends") -- this change makes that assumption true.
+//
+// The external contract is unchanged: any error still returns a zero-value
+// TerminalDeliveryRepairResult, exactly as before. What changes is durability: once the first
+// transaction commits, its recoveries can never be rolled back by a later failure in the second.
 func (repair *TerminalDeliveryRepair) Step(
 	ctx context.Context,
 	now time.Time,
@@ -182,6 +197,27 @@ func (repair *TerminalDeliveryRepair) Step(
 	if err := ctx.Err(); err != nil {
 		return TerminalDeliveryRepairResult{}, err
 	}
+	result, err := repair.stepRiverTerminalBranches(ctx, now, limit)
+	if err != nil {
+		return TerminalDeliveryRepairResult{}, err
+	}
+	readyOutcome, err := repair.stepReadyFinalizers(ctx, now, limit-result.Recovered)
+	if err != nil {
+		return TerminalDeliveryRepairResult{}, err
+	}
+	result.ReadyFinalizersRecovered = readyOutcome.Recovered
+	result.Recovered += readyOutcome.Recovered
+	repair.logReadyFinalizeOutcome(ctx, now.UTC(), readyOutcome)
+	return result, nil
+}
+
+// stepRiverTerminalBranches runs the three River-terminal recovery branches
+// (repairTerminalRiverDeliverySQL) in their own transaction and commits it before returning. Its
+// recoveries are durable the moment this call returns nil, regardless of what the ready-finalizer
+// pass that runs after it does.
+func (repair *TerminalDeliveryRepair) stepRiverTerminalBranches(
+	ctx context.Context, now time.Time, limit int,
+) (TerminalDeliveryRepairResult, error) {
 	tx, err := repair.begin(ctx)
 	if err != nil || tx == nil {
 		return TerminalDeliveryRepairResult{}, ErrUnavailable
@@ -227,27 +263,44 @@ func (repair *TerminalDeliveryRepair) Step(
 		return TerminalDeliveryRepairResult{}, ErrUnavailable
 	}
 	rows.Close()
-	readyOutcome, err := repair.repairReadyFinalizers(ctx, tx, now.UTC(), limit-result.Recovered)
-	if err != nil {
-		return TerminalDeliveryRepairResult{}, err
+	if err := tx.Commit(ctx); err != nil {
+		return TerminalDeliveryRepairResult{}, ErrUnavailable
 	}
-	result.ReadyFinalizersRecovered = readyOutcome.Recovered
-	result.Recovered += readyOutcome.Recovered
+	return result, nil
+}
+
+// stepReadyFinalizers runs the CHAOS-5456 ready-finalizer backstop in its own transaction, separate
+// from stepRiverTerminalBranches's, and commits it before returning. A failure here (including a
+// commit that runs into the remaining stage budget, CHAOS-6932's shape) never touches the other
+// transaction's already-committed recoveries.
+func (repair *TerminalDeliveryRepair) stepReadyFinalizers(
+	ctx context.Context, now time.Time, limit int,
+) (readyFinalizeOutcome, error) {
+	tx, err := repair.begin(ctx)
+	if err != nil || tx == nil {
+		return readyFinalizeOutcome{}, ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	readyOutcome, err := repair.repairReadyFinalizers(ctx, tx, now.UTC(), limit)
+	if err != nil {
+		return readyFinalizeOutcome{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		// The ready-finalizer pass line is emitted ONLY on the committed
 		// path. A rollback gets its own distinct event carrying the counts
 		// that were ABANDONED, so a lost recovery is visible as a loss
 		// rather than silently indistinguishable from a pass that found
-		// nothing (CHAOS-5456 review R2).
+		// nothing (CHAOS-5456 review R2). This can no longer take the
+		// River-terminal branches' already-committed recoveries down with it
+		// (CHAOS-6957): only this transaction's own candidates are at risk.
 		slog.ErrorContext(ctx, "syncreconciler.ready_finalize_uncommitted",
 			"abandoned_recovered", readyOutcome.Recovered,
 			"abandoned_candidates", readyOutcome.Candidates,
 			"error", err.Error(),
 		)
-		return TerminalDeliveryRepairResult{}, ErrUnavailable
+		return readyFinalizeOutcome{}, ErrUnavailable
 	}
-	repair.logReadyFinalizeOutcome(ctx, now.UTC(), readyOutcome)
-	return result, nil
+	return readyOutcome, nil
 }
 
 // The queue role owns the River schema and UPDATE on sync_dispatch_outbox.

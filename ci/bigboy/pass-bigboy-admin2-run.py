@@ -195,8 +195,30 @@ PK = "zz-venue-probe"
 CATW = "general"
 
 
+# CHAOS-6688 follow-up (gwc-corpus, credited -- prod-ops carried this fix from their untracked
+# _records/bigboy-a2b9bf79/pass-bigboy-admin2.sh into the tracked copy): once
+# /api/v1/admin/settings/{category}/{key} is fully cut over to Go-only (ingress routes it there
+# and Python no longer registers it), Python answers EVERY request on this path with a 500
+# "... is served by go-api and has no Python implementation. ingress routing did not intercept
+# this request ..." -- including the missing-key case a 404 used to mean. A plain 404-only check
+# then reads that retired-route 500 as "dirty state" and can never pass again, regardless of real
+# Fixture Org state. "Clean" on a plane now means: the key is absent (404), OR the plane no longer
+# serves this route at all (the NAMED retired-route 500 shape, not any 500 -- a real
+# object-does-not-exist bug on that path must still abort/restore).
+RETIRED_ROUTE_MARKER = "is served by go-api and has no Python implementation"
+
+
+def clean_on(plane):
+    status, _, data = call(plane, "GET", A + f"settings/{CATW}/{PK}")
+    if status == 404:
+        return True
+    if status == 500 and RETIRED_ROUTE_MARKER in data.decode(errors="replace"):
+        return True
+    return False
+
+
 def state_clean():
-    return all(call(pl, "GET", A + f"settings/{CATW}/{PK}")[0] == 404 for pl in PLANES)
+    return all(clean_on(pl) for pl in PLANES)
 
 
 if not state_clean():
@@ -281,9 +303,12 @@ def writes(plane):
 
 for plane in ("go", "python"):
     writes(plane)
-    # restore check: the probe setting is gone on both planes (w04 deleted it); force-delete if a step failed midway
+    # restore check: the probe setting is gone on both planes (w04 deleted it); force-delete if a
+    # step failed midway. Uses clean_on(), not a raw 404 check -- the same post-cutover stub shape
+    # applies here too (a bare 404-only check would spuriously force-DELETE against the python
+    # plane on every run once that plane no longer implements the route at all).
     for pl in PLANES:
-        if call(pl, "GET", A + f"settings/{CATW}/{PK}")[0] != 404:
+        if not clean_on(pl):
             call(pl, "DELETE", A + f"settings/{CATW}/{PK}")
             print("RESTORE forced on", pl, flush=True)
 print(f"PART B done; clean={state_clean()}", flush=True)

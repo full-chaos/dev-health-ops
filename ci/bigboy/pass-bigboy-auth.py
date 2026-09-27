@@ -209,9 +209,14 @@ def rebuild_token(secret: str, token_id: str) -> str:
     """internal/auth/signedtoken.Build / services/email_verification.py:_build_token --
     id.hex + '.' + hmac_sha256(secret, id.hex).hexdigest(). Same construction for
     email_verification_tokens, password_reset_tokens and org_invites (all three call the identical
-    shape, just against different tables)."""
+    shape, just against different tables).
+
+    The HMAC message is the ASCII BYTES of the 32-char hex STRING, not the 16 raw bytes that
+    string decodes to (vendor/dev-health-ops/internal/auth/signedtoken/signedtoken.go's sign():
+    `mac.Write([]byte(idHex(id)))`, and the package doc: "hex HMAC-SHA256 of the uuid hex" --
+    the uuid hex, not its bytes.fromhex()). tid.encode(), never bytes.fromhex(tid)."""
     tid = token_id.replace("-", "")
-    sig = hmac.new(secret.encode(), bytes.fromhex(tid), hashlib.sha256).hexdigest()
+    sig = hmac.new(secret.encode(), tid.encode(), hashlib.sha256).hexdigest()
     return f"{tid}.{sig}"
 
 

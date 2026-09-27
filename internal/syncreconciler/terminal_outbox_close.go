@@ -326,7 +326,7 @@ WITH candidates AS (
 		AND outbox.status = 'dispatched'
 		AND run.status IN ('success', 'partial_failed', 'failed')
 		AND (outbox.claim_expires_at IS NULL OR outbox.claim_expires_at <= $1)
-	ORDER BY outbox.id
+	ORDER BY outbox.available_at, outbox.id
 	FOR UPDATE OF outbox SKIP LOCKED
 	LIMIT $2
 )
@@ -354,7 +354,7 @@ WITH candidates AS (
 		AND outbox.status = 'dispatched'
 		AND run.status IN ('success', 'partial_failed', 'failed')
 		AND (outbox.claim_expires_at IS NULL OR outbox.claim_expires_at <= $1)
-	ORDER BY outbox.id
+	ORDER BY outbox.available_at, outbox.id
 	FOR UPDATE OF outbox SKIP LOCKED
 	LIMIT $2
 )
@@ -388,7 +388,7 @@ WITH candidates AS (
 		AND outbox.status = 'dispatched'
 		AND discovery.status IN ('success', 'failed')
 		AND (outbox.claim_expires_at IS NULL OR outbox.claim_expires_at <= $1)
-	ORDER BY outbox.id
+	ORDER BY outbox.available_at, outbox.id
 	FOR UPDATE OF outbox SKIP LOCKED
 	LIMIT $2
 )

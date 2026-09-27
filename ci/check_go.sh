@@ -842,7 +842,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  printf 'go test -count=1: internal/api/licensing (tier feature registry and limits vs live Python)\n'
+  printf 'go test -count=1: internal/api/licensing (tier feature registry, limits, signing and process-license verification vs live Python)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -851,8 +851,8 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestTierFeaturesMatchLivePython|TestSignLicenseMatchesLivePython|TestPythonB64DecodeMatchesLivePython|TestBigDurationLicensesVerifyIdenticallyGoSignedAndPythonSigned)$' \
-        ./internal/api/licensing
+        -run '^(TestTierFeaturesMatchLivePython|TestSignLicenseMatchesLivePython|TestPythonB64DecodeMatchesLivePython|TestBigDurationLicensesVerifyIdenticallyGoSignedAndPythonSigned|TestVerifierMatchesLivePythonLicenseValidator)$' \
+        ./internal/api/licensing ./internal/api/licensing/processlicense
   ); then
     rm -rf -- "${proof_dir}"
     return 1
@@ -872,7 +872,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr pythonparity-pyunicodedata pythonparity-pyunicodedata-nfc pythonparity-pyidna-tables pythonparity-pyidna-behaviour pythonparity-emailvalidator pythonparity-strrepr pythonparity-utf8-replace pythonparity-seqratio pythonparity-sanitize pythonparity-urlsplit pythonparity-isoformat pythonparity-fnmatch pythonparity-idna llmorgsettings-validate-base-url httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-legacyingest api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry api-licensing-sign api-licensing-b64decode api-billing-webhook-signature httpapi-limit-string auth-signedtoken atlassianteams-python-client; do
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr pythonparity-pyunicodedata pythonparity-pyunicodedata-nfc pythonparity-pyidna-tables pythonparity-pyidna-behaviour pythonparity-emailvalidator pythonparity-strrepr pythonparity-utf8-replace pythonparity-seqratio pythonparity-sanitize pythonparity-urlsplit pythonparity-isoformat pythonparity-fnmatch pythonparity-idna llmorgsettings-validate-base-url httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-legacyingest api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry api-licensing-sign api-licensing-b64decode api-licensing-verify api-billing-webhook-signature httpapi-limit-string auth-signedtoken atlassianteams-python-client; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2

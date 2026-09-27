@@ -273,8 +273,9 @@ print(json.dumps(out))
 // TestBigDurationLicensesVerifyIdenticallyGoSignedAndPythonSigned: a license
 // whose expiry is beyond 64 bits is a capability only if the verifier accepts
 // it. The Go-signed and the Python-signed license text is byte-identical, and the
-// real Python LicenseValidator (the only license verifier: the Go api refuses
-// LICENSE_KEY) gives the same verdict, payload and grace flag for both.
+// real Python LicenseValidator gives the same verdict, payload and grace flag
+// for both. (The Go verifier, processlicense, is held to that validator by
+// TestVerifierMatchesLivePythonLicenseValidator.)
 func TestBigDurationLicensesVerifyIdenticallyGoSignedAndPythonSigned(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")

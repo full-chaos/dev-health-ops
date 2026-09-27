@@ -26,10 +26,25 @@ done
 # value (an empty GO_API_EDGE_JWT_SECRET/etc must never pass silently -- D2728's own first apply
 # went out blank because compose's default .env auto-load doesn't reach ops/.env; --env-file
 # ops/.env is mandatory on every invocation below and this STEP asserts it actually took effect).
-# DEPLOY_CHECKOUT must point at a deploy repo working tree (e.g. the prod roll's own worktree)
-# with a current values.prod.yaml.
-if [ -n "${DEPLOY_CHECKOUT:-}" ] && [ -f "$DEPLOY_CHECKOUT/values.prod.yaml" ]; then
-  python3 "$HERE/generate-query-api-enabled-flags.py" "$DEPLOY_CHECKOUT/values.prod.yaml" --out "$REC.query-api-enabled-flags.generated" 2>"$REC.query-api-enabled-flags.err"
+# R467: the deploy values are a PINNED input per cut -- DEPLOY_SHA (recorded in round.env and in
+# $REC.deploy-sha.txt), read from DEPLOY_REPO (default $R/deploy) with `git show`, never a working
+# tree and never "deploy main". generate-plane-split-router.py --deploy-sha REFUSES (rc=3) when that
+# deploy commit's ops vendor pin is not $NEW, the build this cut runs; every values-driven STEP
+# below reads the file it wrote ($REC.values.prod.yaml).
+DEPLOY_REPO=${DEPLOY_REPO:-$R/deploy}
+VALUES=""
+if [ -n "${DEPLOY_SHA:-}" ]; then
+  if python3 "$HERE/generate-plane-split-router.py" --deploy-repo "$DEPLOY_REPO" --deploy-sha "$DEPLOY_SHA" \
+       --expect-ops-sha "$NEW" --values-out "$REC.values.prod.yaml" --format dynamic > "$REC.planes.generated" 2>"$REC.deploy-pin.err"; then
+    VALUES="$REC.values.prod.yaml"; st deploy-pin 0; grep '^# deploy_sha=' "$REC.deploy-pin.err" | tee "$REC.deploy-sha.txt"
+  else
+    st deploy-pin 1; cat "$REC.deploy-pin.err" >&2
+  fi
+else
+  st deploy-pin 2; echo "SKIPPED (not checked): set DEPLOY_SHA=<deploy commit whose vendor pin is $NEW> (R467)" >&2
+fi
+if [ -n "$VALUES" ]; then
+  python3 "$HERE/generate-query-api-enabled-flags.py" "$VALUES" --out "$REC.query-api-enabled-flags.generated" 2>"$REC.query-api-enabled-flags.err"
   GEN_NAMES=$(awk -F: '{print $1}' "$REC.query-api-enabled-flags.generated" | tr -d ' ' | sort)
   LIVE_NAMES=$(awk -F: '/^      [A-Za-z_]+:/{print $1}' $R/compose/compose.bigboy.images.yml | tr -d ' ' | sort -u)
   MISSING=$(comm -23 <(echo "$GEN_NAMES") <(echo "$LIVE_NAMES"))
@@ -58,20 +73,19 @@ if [ -n "${DEPLOY_CHECKOUT:-}" ] && [ -f "$DEPLOY_CHECKOUT/values.prod.yaml" ]; 
   fi
   # CHAOS-6987 (D2724/D2735): the LIVE router must be exactly what the generator emits from this
   # values.prod.yaml -- a hand edit, or a values change not yet applied, fails here, named.
-  python3 "$HERE/generate-plane-split-router.py" "$DEPLOY_CHECKOUT/values.prod.yaml" --format dynamic > "$REC.planes.generated" 2>/dev/null
   if [ -s "$REC.planes.generated" ] && cmp -s "$REC.planes.generated" "$R/.traefik-dynamic/planes.yml"; then
     st router-current 0
   else
     st router-current 1
-    echo "DRIFT: .traefik-dynamic/planes.yml differs from generate-plane-split-router.py output for this values.prod.yaml -- regenerate it (traefik hot-reloads the file) before trusting this cut" >&2
+    echo "DRIFT: .traefik-dynamic/planes.yml differs from generate-plane-split-router.py output for DEPLOY_SHA=$DEPLOY_SHA -- regenerate it from THAT sha (traefik hot-reloads the file) before trusting this cut" >&2
   fi
   # CHAOS-6987 (D2736): web env-name parity with prod, NAMES only -- the running web container's
   # names come from container-env-names.sh (the only sanctioned container env reader, R462).
   "$HERE/container-env-names.sh" dev-health-web-1 > "$REC.web-env-names" 2>/dev/null
-  python3 "$HERE/check-web-env-parity.py" "$DEPLOY_CHECKOUT/values.prod.yaml" "$HERE/compose.bigboy.router.yml" --live-names "$REC.web-env-names"; st web-env-parity $?
+  python3 "$HERE/check-web-env-parity.py" "$VALUES" "$HERE/compose.bigboy.router.yml" --live-names "$REC.web-env-names"; st web-env-parity $?
 else
-  st query-api-enabled-flags-current 2  # SKIPPED, not a pass: DEPLOY_CHECKOUT not given -- this STEP did not run, it did not pass
-  echo "SKIPPED (not checked): set DEPLOY_CHECKOUT=<deploy repo worktree path> to verify the query-api GO_API_*_ENABLED block against the current values.prod.yaml." >&2
+  st query-api-enabled-flags-current 2  # SKIPPED, not a pass: no pinned values (DEPLOY_SHA) -- this STEP did not run, it did not pass
+  echo "SKIPPED (not checked): the values-driven STEPs need DEPLOY_SHA (see deploy-pin above)." >&2
 fi
 export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@$(docker buildx imagetools inspect ghcr.io/full-chaos/dev-health-go-operator:sha-$S7 --format '{{json .Manifest}}' | jq -r .digest); echo "operator=${BIGBOY_OPERATOR_IMAGE##*@}" > $REC.operator.txt
 docker pull -q $BIGBOY_OPERATOR_IMAGE > /dev/null 2>&1; st operator-pull $?   # --no-build never pulls: the digest must be local before the recreate (rev 190 first run: "No such image")
@@ -87,6 +101,9 @@ docker compose --env-file ops/.env run --rm --no-deps migrate > $REC/migrate.out
 docker compose --env-file ops/.env up -d --no-deps --no-build api query-api go-api > $REC/up.out 2>&1; st up $?
 docker compose --env-file ops/.env up -d --no-deps --no-build go-worker go-worker-ops go-scheduler go-reconciler go-stream-ingest go-stream-external go-stream-pagerduty > $REC/up-workers.out 2>&1; rcw=$?; st up-workers $rcw; [ $rcw = 0 ] || { echo "ABORT: worker plane not recreated = INCOMPLETE pass (Trap #420)"; exit 1; }   # Trap #420: every plane from the cut's CI digests
 sleep 45; curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8093/ready | grep -q 200; st go-api-ready $?
+# R467: every path the router sends to a Go plane has a handler in the build just started (405/401 to a
+# ROUTEPROBE request; 404 = values ahead of the build). Runs only with pinned values.
+if [ -n "$VALUES" ]; then python3 "$HERE/check-route-coverage.py" "$VALUES"; st route-coverage $?; else st route-coverage 2; fi
 # CHAOS-6987 gap 5 (D2731): GraphQL routing-ledger parity with prod. ci/bigboy/routing-ops.txt is the
 # tracked list of operations enabled on prod; every listed operation bigboy's ledger lacks is enabled
 # here (`dho goapi routing enable`, envelope minted INSIDE venue-tools, never leaves the container),

@@ -16,14 +16,23 @@ the k8s Ingress controller/chart expands and anchors them); queryApiPaths use pa
 are converted here to one traefik PathRegexp per plane: {param} -> [^/]+, Exact paths escaped and
 used literally, ImplementationSpecific paths used as-is (already regex).
 
-Usage: generate-plane-split-router.py <path to deploy repo's values.prod.yaml> [--format labels|compose]
+Usage:
+  generate-plane-split-router.py <values.prod.yaml> [--format labels|dynamic]
+  generate-plane-split-router.py --deploy-repo <deploy repo> --deploy-sha <sha> --expect-ops-sha <ops sha>
+                                 [--format labels|dynamic]
   labels (default): the docker-compose label lines for go-api's and query-api's services.
-  compose: a full YAML services: fragment (go-api/query-api label blocks) ready to diff/paste.
+  dynamic: the traefik file-provider config (what bigboy loads from .traefik-dynamic/planes.yml).
+
+Pinned mode (R467): the values come from `values.prod.yaml` AT --deploy-sha, never a working tree
+or deploy main, and the run REFUSES (exit 3) unless that deploy commit's vendor/dev-health-ops pin
+equals --expect-ops-sha (the build bigboy is actually running). Deploy main can route paths to Go
+handlers the running build does not have yet; generating from it would send traffic to a 404.
 """
 
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 
 import yaml
@@ -71,9 +80,47 @@ def _queryapi_entry_to_regex(path: str, path_type: str) -> str:
     return "[^/]+".join(_unescape_hyphen(re.escape(p)) for p in parts)
 
 
+class PinError(Exception):
+    """The pinned deploy sha cannot be used for the running build (message names both shas)."""
+
+
+def _git(repo: str, *args: str) -> str:
+    res = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    if res.returncode != 0:
+        raise PinError(
+            f"git {' '.join(args[:2])} failed in {repo}: {res.stderr.strip()[:200]}"
+        )
+    return res.stdout
+
+
+def values_at_sha(
+    repo: str, deploy_sha: str, expect_ops_sha: str
+) -> tuple[str, str, str]:
+    """(full deploy sha, vendored ops sha, values.prod.yaml text) -- refuses a vendor pin mismatch."""
+    full = _git(repo, "rev-parse", "--verify", f"{deploy_sha}^{{commit}}").strip()
+    tree = _git(repo, "ls-tree", full, "vendor/dev-health-ops").split()
+    if len(tree) < 3 or tree[1] != "commit":
+        raise PinError(f"deploy {full[:12]} has no vendor/dev-health-ops gitlink")
+    vendored = tree[2]
+    want = expect_ops_sha.strip().lower()
+    if (
+        len(want) < 7
+        or not re.fullmatch(r"[0-9a-f]+", want)
+        or not vendored.startswith(want)
+    ):
+        raise PinError(
+            f"deploy {full[:12]} vendors ops {vendored[:12]}, but the running build is {want[:12] or '<empty>'}"
+            " -- refusing to route paths the running build may not serve (R467)"
+        )
+    return full, vendored, _git(repo, "show", f"{full}:values.prod.yaml")
+
+
 def load_paths(values_path: str) -> tuple[list[str], list[str]]:
     with open(values_path) as f:
-        doc = yaml.safe_load(f)
+        return paths_from_doc(yaml.safe_load(f))
+
+
+def paths_from_doc(doc: dict) -> tuple[list[str], list[str]]:
     ingress = doc["ingress"]
     go_paths = [_goapi_path_to_regex(e["path"]) for e in ingress["goApiPaths"]]
     query_paths = [
@@ -162,17 +209,48 @@ http:
 """
 
 
-def main() -> int:
-    if len(sys.argv) < 2:
-        print(__doc__)
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("values", nargs="?")
+    ap.add_argument("--format", default="labels", choices=["labels", "dynamic"])
+    ap.add_argument("--deploy-repo")
+    ap.add_argument("--deploy-sha")
+    ap.add_argument("--expect-ops-sha")
+    ap.add_argument(
+        "--values-out",
+        help="pinned mode: also write values.prod.yaml at --deploy-sha here",
+    )
+    a = ap.parse_args(argv)
+    pinned = [a.deploy_repo, a.deploy_sha, a.expect_ops_sha]
+    if a.values and any(pinned):
+        print(
+            "give EITHER a values file OR --deploy-repo/--deploy-sha/--expect-ops-sha",
+            file=sys.stderr,
+        )
         return 2
-    go_paths, query_paths = load_paths(sys.argv[1])
+    if a.values:
+        go_paths, query_paths = load_paths(a.values)
+    elif all(pinned):
+        try:
+            full, vendored, text = values_at_sha(
+                a.deploy_repo, a.deploy_sha, a.expect_ops_sha
+            )
+        except PinError as e:
+            print(f"REFUSED: {e}", file=sys.stderr)
+            return 3
+        go_paths, query_paths = paths_from_doc(yaml.safe_load(text))
+        if a.values_out:
+            with open(a.values_out, "w", encoding="utf-8") as f:
+                f.write(text)
+        print(f"# deploy_sha={full} ops_vendor={vendored}", file=sys.stderr)
+    else:
+        print(__doc__, file=sys.stderr)
+        return 2
     go_regex = combined_regex(go_paths)
     query_regex = combined_regex(query_paths)
-    fmt = "labels"
-    if len(sys.argv) > 3 and sys.argv[2] == "--format":
-        fmt = sys.argv[3]
-    if fmt == "dynamic":
+    if a.format == "dynamic":
         out = emit_dynamic_config(go_regex, query_regex)
     else:
         out = emit_labels(go_regex, query_regex)

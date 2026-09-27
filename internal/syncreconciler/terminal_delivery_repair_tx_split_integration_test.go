@@ -166,6 +166,17 @@ func TestTerminalDeliveryRepairRecoverySurvivesASlowReadyFinalizerLoop(t *testin
 	t.Logf("Step() under a %s budget with %d ready finalizer candidates at 80ms/write: result=%+v err=%v",
 		budget, readyCandidateCount, result, err)
 
+	// r1 P3: this test claims to exercise a shared-budget failure, not merely check that a recovery
+	// happens to survive an untimed pass. Without this assertion, a change that made the injected
+	// delay a no-op (or the budget effectively unlimited) would still pass -- the status assertion
+	// below would hold vacuously, for a reason unrelated to CHAOS-6957 at all. Pin the failure itself:
+	// under this exact budget and load, the ready-finalizer half must actually fail.
+	if err == nil {
+		t.Fatalf("Step() succeeded with no error under a %s budget and %d x 80ms serial ready-finalizer "+
+			"writes (result=%+v) -- this test's premise is a shared-budget failure; without one, the "+
+			"status assertion below proves nothing about CHAOS-6957", budget, readyCandidateCount, result)
+	}
+
 	var status string
 	if err := h.admin.QueryRow(ctx, `SELECT status FROM public.sync_dispatch_outbox WHERE id = $1`,
 		exhaustedOutboxID).Scan(&status); err != nil {

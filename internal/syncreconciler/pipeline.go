@@ -740,7 +740,15 @@ func (pipeline *MutationPipeline) Step(
 		if terminalErr != nil && ctx.Err() != nil {
 			return swept, terminalErr
 		}
-		terminalRan = terminalErr == nil
+		// CHAOS-6957: Step's contract guarantees `terminal` describes exactly what is durably
+		// committed, whether or not it also returns an error -- a stepReadyFinalizers failure after
+		// stepRiverTerminalBranches already committed carries that committed count here alongside a
+		// non-nil terminalErr. Trusting `terminal` unconditionally (rather than only when
+		// terminalErr == nil, as before this fix) is what makes a real, already-durable recovery
+		// reach this metric instead of being silently dropped on the SAME tick it was won.
+		// runStage above already records the stage failure and its own "stage_failed" log
+		// independently of this value, so a genuine failure is never hidden by trusting the count.
+		terminalRan = true
 	}
 
 	// The repair commits its own transaction before anything below runs, so its

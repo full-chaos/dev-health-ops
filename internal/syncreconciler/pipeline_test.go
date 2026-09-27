@@ -658,3 +658,53 @@ func TestMutationPipelineReportsRecoveriesWhenALaterStageFails(t *testing.T) {
 		})
 	}
 }
+
+// TestMutationPipelineCreditsAnAlreadyCommittedTerminalRecoveryDespiteALaterReadyFinalizerFailure
+// pins CHAOS-6957's r1 P1: terminal_delivery_repair.go's Step now returns its
+// stepRiverTerminalBranches result ALONGSIDE a non-nil error when only stepReadyFinalizers (a later,
+// unrelated phase) fails -- that result describes a recovery which is already durably committed. A
+// caller that discarded it on any non-nil error (this pipeline's OLD `terminalRan := terminalErr ==
+// nil` gate) would under-report a real recovery on the exact tick it happened, exactly the failure
+// TestMutationPipelineReportsRecoveriesWhenALaterStageFails already guards for a later pipeline
+// stage failing -- this is the same guard for the terminal-repair stage's OWN two-phase result.
+func TestMutationPipelineCreditsAnAlreadyCommittedTerminalRecoveryDespiteALaterReadyFinalizerFailure(t *testing.T) {
+	sentinel := errors.New("ready-finalizer rearm: sync dispatch observer database unavailable")
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			// Mirrors stepReadyFinalizers failing AFTER stepRiverTerminalBranches already committed:
+			// a non-zero result alongside a non-nil error.
+			return TerminalDeliveryRepairResult{Recovered: 1, ExhaustedRecovered: 1}, sentinel
+		}),
+		pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+			return MaterializerResult{}, nil
+		}),
+		pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
+			return Observation{CandidateDigest: "sha256:result"}, nil
+		}),
+		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+		nil,
+		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := pipeline.Step(context.Background(), time.Now().UTC(), 17)
+	if err != nil {
+		t.Fatalf("err = %v, want nil: terminal-delivery repair is continue-safe, same as any other stage failure", err)
+	}
+	if observation.ExhaustedDeliveriesRecovered != 1 {
+		t.Fatalf("ExhaustedDeliveriesRecovered = %d, want 1: stepRiverTerminalBranches already "+
+			"committed this reclaim before stepReadyFinalizers failed -- discarding it here would "+
+			"under-report a real, durable recovery on the tick it happened",
+			observation.ExhaustedDeliveriesRecovered)
+	}
+}

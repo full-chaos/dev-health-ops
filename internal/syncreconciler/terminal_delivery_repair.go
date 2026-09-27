@@ -182,9 +182,13 @@ func NewTerminalDeliveryRepair(
 // contract ("The repair commits its own transaction before anything below runs, so its recoveries
 // are already durable no matter how this step ends") -- this change makes that assumption true.
 //
-// The external contract is unchanged: any error still returns a zero-value
-// TerminalDeliveryRepairResult, exactly as before. What changes is durability: once the first
-// transaction commits, its recoveries can never be rolled back by a later failure in the second.
+// The result returned alongside a non-nil error always describes exactly what is durably
+// committed, never more: a config/context failure or a stepRiverTerminalBranches failure (nothing
+// committed) returns the zero value, exactly as before this ticket. A stepReadyFinalizers failure
+// returns stepRiverTerminalBranches's ALREADY-COMMITTED result (r1 P1 on this ticket's PR: the
+// caller must credit this partial result on error, never discard it the way it discarded the old,
+// always-zero error return -- doing so would under-report a real, durable recovery whenever the
+// unrelated ready-finalizer half failed after it).
 func (repair *TerminalDeliveryRepair) Step(
 	ctx context.Context,
 	now time.Time,
@@ -203,7 +207,9 @@ func (repair *TerminalDeliveryRepair) Step(
 	}
 	readyOutcome, err := repair.stepReadyFinalizers(ctx, now, limit-result.Recovered)
 	if err != nil {
-		return TerminalDeliveryRepairResult{}, err
+		// result already carries stepRiverTerminalBranches's committed counts -- return it, not the
+		// zero value, so the caller can credit a real recovery it cannot otherwise see (r1 P1).
+		return result, err
 	}
 	result.ReadyFinalizersRecovered = readyOutcome.Recovered
 	result.Recovered += readyOutcome.Recovered

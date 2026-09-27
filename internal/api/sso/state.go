@@ -11,82 +11,21 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net/http"
-	"net/url"
 	"time"
 
 	"golang.org/x/crypto/hkdf"
 )
 
-// isLoopbackHTTPURL mirrors OAuth's own copy of this check (D2752,
-// oauth.go, not yet merged onto main as of this PR -- each provider's
-// worktree defines it independently until the branches converge): true
-// for an http:// URL whose host is a loopback address (RFC 8252 shape).
-// D2749-follow-up (team-lead, "all three providers share one rule"):
-// https required except a loopback host, checked unconditionally, no
-// env var / build tag / knob of any kind.
-func isLoopbackHTTPURL(raw string) bool {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "http" {
-		return false
-	}
-	switch parsed.Hostname() {
-	case "localhost", "127.0.0.1", "::1":
-		return true
-	}
-	return false
-}
-
-// oidcLoginNonceCookieName is the HttpOnly, SameSite=Lax cookie
-// initiateOIDCAuth sets alongside the AEAD state -- see
-// hashOIDCLoginNonce's doc comment below for what it defends against
-// (D2745's browser-binding class ruling, applied here from CHAOS-6659/
-// CHAOS-6986's already-landed identical treatment on SAML's RelayState
-// and OAuth's own state).
-const oidcLoginNonceCookieName = "dho_oidc_login_nonce"
-
-// oidcLoginNonceCookie builds the cookie set at /authorize (value=nonce,
-// non-empty maxAge) and the one used to clear it at /callback (value="",
-// maxAge=-1). Secure is a literal true -- team-lead's D2749-follow-up
-// ruling ("apply the same host-only shape to the OIDC PR's login-nonce
-// cookie Secure literal so all three providers share one rule"):
-// initiateOIDCAuth now refuses a caller-supplied redirect_uri naming the
-// insecure http:// scheme unless its host is loopback
-// (isLoopbackHTTPURL), the same rule D2748 (SAML)/D2752 (OAuth) apply to
-// their own admin-stored config -- mirroring their reasoning exactly,
-// just checked at request time rather than config-load time, since this
-// route's redirect_uri is caller-supplied, not admin-configured.
-func oidcLoginNonceCookie(value string, maxAge int) *http.Cookie {
-	return &http.Cookie{
-		Name:     oidcLoginNonceCookieName,
-		Value:    value,
-		Path:     "/",
-		MaxAge:   maxAge,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-	}
-}
-
-// hashOIDCLoginNonce mirrors pkceChallenge's shape below: SHA-256,
-// base64url, unpadded. D2745 (team-lead, browser-binding class ruling,
-// applied here from CHAOS-6986's P1-3 after landing on SAML/OAuth
-// first): a genuine, unexpired OIDC state only proves this package
-// minted it, not which browser is presenting it back at /callback. A
-// login-CSRF works without this: an attacker starts their OWN OIDC
-// login, captures the resulting code+state pair (both travel through
-// the attacker's own browser), and gets a victim to submit that pair to
-// the victim's own browser's /callback -- the state verifies fine (a
-// real, unexpired token this package minted), silently logging the
-// victim into the attacker's identity. Binding it to a same-origin
-// HttpOnly SameSite=Lax cookie closes this: SameSite=Lax cookies are not
-// sent on a cross-site submission, so a cross-site-replayed state
-// arrives with no matching cookie and is refused in exchangeAndValidate
-// before the token exchange ever runs.
-func hashOIDCLoginNonce(nonce string) string {
-	sum := sha256.Sum256([]byte(nonce))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
-}
+// D2759 (team-lead): this file used to carry its own copies of
+// isLoopbackHTTPURL, oidcLoginNonceCookieName/oidcLoginNonceCookie and
+// hashOIDCLoginNonce -- independently built (this PR predates D2759),
+// byte-for-byte the same class of two defects r1 caught reviewing this
+// PR's tip (case-sensitive http:// gate; one fixed cookie name per
+// protocol, colliding across two concurrent flows). Restacked onto
+// #3350/#3352 for the shared fix instead: loginnonce.go's
+// validateHTTPSOrLoopback, loginNonceCookieName/issueLoginNonceCookie/
+// clearLoginNonceCookie/verifyAndClearLoginNonceCookie, and
+// hashLoginNonce now do this file's old job for all three protocols.
 
 // oidcStateTTL bounds how long a caller has between fetching
 // authorization_url and completing the round trip at the IdP. Google's own
@@ -152,12 +91,18 @@ type oidcState struct {
 	Nonce        string `json:"nonce"`                   // the OIDC PROTOCOL nonce (id_token replay check) -- NOT the browser-binding login nonce below.
 	CodeVerifier string `json:"code_verifier,omitempty"` // "" when PKCE was not requested.
 	RedirectURI  string `json:"redirect_uri,omitempty"`
-	// NonceHash is hashOIDCLoginNonce of the random value initiateOIDCAuth
-	// also placed in oidcLoginNonceCookieName -- D2745's browser-binding
-	// class ruling. Distinct from Nonce above: this one binds the state to
+	// NonceHash is hashLoginNonce (loginnonce.go) of the random value
+	// initiateOIDCAuth also places in the per-flow login-nonce cookie
+	// (D2745's browser-binding class ruling; D2759's shared per-flow
+	// mechanism). Distinct from Nonce above: this one binds the state to
 	// the browser presenting it, not to the id_token the IdP returns.
 	NonceHash string `json:"nonce_hash"`
-	ID        string `json:"id"` // a random value, no comparison meaning of its own; see the doc comment above.
+	// ID is random; ALSO this flow's login-nonce cookie name suffix
+	// (D2759) -- no longer "no comparison meaning of its own". mintOIDCState
+	// returns it to the caller as flowID so it can be threaded through as
+	// the cookie name, and it is what makes two concurrent /authorize
+	// flows (two tabs, two providers) never collide.
+	ID        string `json:"id"`
 	IssuedAt  int64  `json:"issued_at"`
 	ExpiresAt int64  `json:"expires_at"`
 }
@@ -211,29 +156,31 @@ func newGCM(secret, info string) (cipher.AEAD, error) {
 
 // mintOIDCState seals state (stamping ID/IssuedAt/ExpiresAt) into the
 // opaque `state` value initiateOIDCAuth returns, AAD-bound to
-// state.ProviderID.
-func mintOIDCState(secret string, state oidcState, now time.Time) (string, error) {
+// state.ProviderID. Also returns the state's own random ID as flowID
+// (D2759): the caller uses it to name this flow's per-flow login-nonce
+// cookie, so two concurrent /authorize calls never collide.
+func mintOIDCState(secret string, state oidcState, now time.Time) (token, flowID string, err error) {
 	gcm, err := newGCM(secret, oidcStateHKDFInfo)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	id, err := randomURLSafe(16)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	state.ID = id
 	state.IssuedAt = now.Unix()
 	state.ExpiresAt = now.Add(oidcStateTTL).Unix()
 	plaintext, err := json.Marshal(state)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
-		return "", err
+		return "", "", err
 	}
 	sealed := gcm.Seal(nonce, nonce, plaintext, []byte(state.ProviderID))
-	return base64.RawURLEncoding.EncodeToString(sealed), nil
+	return base64.RawURLEncoding.EncodeToString(sealed), id, nil
 }
 
 // verifyOIDCState is the callback's read of a state value: the GCM tag,

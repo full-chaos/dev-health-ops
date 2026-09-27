@@ -30,7 +30,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -314,39 +313,11 @@ func postJSON(t *testing.T, server *httptest.Server, path string, body map[strin
 	return postJSONWithClient(t, http.DefaultClient, server, path, body)
 }
 
-// postJSONWithClient is postJSON but through a caller-supplied client, so
-// tests that need /authorize's Set-Cookie (the D2745 browser-binding
-// login nonce) to actually reach the following /callback POST -- or need
-// to control whether it does -- can use a cookiejar-backed http.Client
-// instead of postJSON's bare http.DefaultClient, which carries no cookie
-// jar at all.
-func postJSONWithClient(t *testing.T, client *http.Client, server *httptest.Server, path string, body map[string]any) (int, map[string]any) {
-	t.Helper()
-	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := client.Post(server.URL+path, "application/json", strings.NewReader(string(raw)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var out map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&out)
-	return resp.StatusCode, out
-}
-
-// newCookieClient is a *http.Client whose jar carries the D2745 P1-3
-// login-nonce cookie /authorize sets to the following /callback POST --
-// the same technique already landed on SAML/OAuth (D2744/D2745).
-func newCookieClient(t *testing.T) *http.Client {
-	t.Helper()
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &http.Client{Jar: jar}
-}
+// postJSONWithClient and newCookieClient are now-stacked-onto SAML's
+// (saml_integration_test.go) and OAuth's (oauth_integration_test.go) own
+// copies -- this branch restacked onto both (D2759), so its own
+// previously-independent duplicates are deleted here rather than
+// redeclared in the same test package.
 
 // TestOIDCAuthorizeAndCallbackFullRoundTrip is the happy path: an
 // enterprise-entitled org, an active OIDC provider pointed at the fake
@@ -509,8 +480,9 @@ func TestOIDCAuthorizeRefusesAnInsecureHTTPRedirectURI(t *testing.T) {
 
 	status, body := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize",
 		map[string]any{"redirect_uri": "http://not-a-loopback.example.test/callback"})
-	if status != http.StatusBadRequest || body["detail"] != "redirect_uri must not use the insecure http:// scheme" {
-		t.Fatalf("status=%d body=%v, want 400 redirect_uri must not use the insecure http:// scheme", status, body)
+	const wantDetail = "redirect_uri must use the https:// scheme (or an http:// loopback address)"
+	if status != http.StatusBadRequest || body["detail"] != wantDetail {
+		t.Fatalf("status=%d body=%v, want 400 %s", status, body, wantDetail)
 	}
 	if _, ok := body["state"]; ok {
 		t.Fatalf("got a state for a redirect_uri this package should have refused: %v", body)
@@ -669,23 +641,32 @@ func TestOIDCCallbackRefusesATamperedLoginNonceCookie(t *testing.T) {
 	// Tamper with the jar's own cookie value in place -- the state itself
 	// stays genuine and unexpired; only the browser-side half of the
 	// binding is wrong, which is exactly the case this check exists to
-	// catch (a genuine state presented by the wrong browser).
-	serverURL, err := url.Parse(st.server.URL)
+	// catch (a genuine state presented by the wrong browser). D2759: the
+	// cookie is now per-flow (name suffixed by the state's own ID) and
+	// Path-scoped to the real callback path, not "/" -- query it there,
+	// match by prefix, and restore c.Path before the second SetCookies
+	// (jar.Cookies() never reports a cookie's own Path -- Path is not part
+	// of a Cookie: request header -- so re-SetCookies-ing an exported
+	// cookie back with Path="" silently ADDS a second, untampered cookie
+	// of the same name at the same jar instead of replacing the original;
+	// found and fixed identically in SAML's/OAuth's own equivalent test).
+	callbackURL, err := url.Parse(st.server.URL + "/api/v1/auth/oidc/" + providerID.String() + "/callback")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cookies := client.Jar.Cookies(serverURL)
+	cookies := client.Jar.Cookies(callbackURL)
 	found := false
 	for _, c := range cookies {
-		if c.Name == "dho_oidc_login_nonce" {
+		if strings.HasPrefix(c.Name, "dho_oidc_login_nonce_") {
 			c.Value = flipMiddleByte(c.Value)
+			c.Path = callbackURL.Path
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("authorize: expected a dho_oidc_login_nonce cookie")
+		t.Fatal("authorize: expected a dho_oidc_login_nonce_* cookie")
 	}
-	client.Jar.SetCookies(serverURL, cookies)
+	client.Jar.SetCookies(callbackURL, cookies)
 
 	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
@@ -701,6 +682,79 @@ WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY creat
 	if !strings.Contains(string(meta), `"stage":"state_auth"`) && !strings.Contains(string(meta), `"stage": "state_auth"`) {
 		t.Fatalf("audit request_metadata = %s, want a state_auth stage", meta)
 	}
+}
+
+// TestOIDCTwoConcurrentAuthorizeFlowsBothComplete pins D2759's P1-B fix
+// directly, mirroring SAML's TestSAMLTwoConcurrentInitiateFlowsBothComplete
+// and OAuth's TestOAuthTwoConcurrentAuthorizeFlowsBothComplete: two
+// /authorize calls in the SAME browser (one cookie jar -- two tabs, or a
+// retry) must not collide. Before the fix, both flows set the identical
+// fixed cookie name, so the second silently overwrote the first in the
+// jar and the first flow's later /callback failed with a false "state
+// mismatch" even though its own state was perfectly valid. Both flows
+// use the SAME identity/email (the realistic "two tabs, same account"
+// scenario) -- a DIFFERENT identity per flow would exercise the fake
+// IdP/provisioning path's own uniqueness constraints instead of the
+// cookie mechanism this test exists to prove, exactly the test-design
+// pitfall OAuth's own equivalent test hit and was fixed for.
+func TestOIDCTwoConcurrentAuthorizeFlowsBothComplete(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	idp := startFakeIdP(t)
+
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	config := fmt.Sprintf(`{"client_id":"test-client","issuer":%q,"token_endpoint":%q,"jwks_uri":%q,"userinfo_endpoint":%q,"scopes":["openid","email"]}`,
+		idp.server.URL, idp.server.URL+"/token", idp.server.URL+"/jwks", idp.server.URL+"/userinfo")
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "oidc", status: "active", config: config, autoProvision: true,
+		clientSecretEncryptedFallback: "test-client-secret",
+	})
+
+	client := newCookieClient(t)
+
+	authorize := func() (state, nonce string) {
+		status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+		if status != http.StatusOK {
+			t.Fatalf("authorize: status=%d body=%v", status, authResp)
+		}
+		authURL, _ := authResp["authorization_url"].(string)
+		state, _ = authResp["state"].(string)
+		parsed, err := url.Parse(authURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state, parsed.Query().Get("nonce")
+	}
+
+	// Both /authorize calls happen BEFORE either /callback -- exactly the
+	// two-tab shape: flow A's cookie must still be there, unclobbered,
+	// when flow A finally completes, even though flow B's /authorize ran
+	// in between.
+	stateA, nonceA := authorize()
+	stateB, nonceB := authorize()
+	if stateA == stateB {
+		t.Fatal("expected two distinct state tokens for two distinct /authorize calls")
+	}
+
+	const sharedEmail = "concurrent-flows@allowed.example"
+	complete := func(state, nonce, code string) {
+		t.Helper()
+		idp.set(nonce, sharedEmail, "Shared User", "idp-subject-shared")
+		status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+			map[string]any{"code": code, "state": state})
+		if status != http.StatusOK {
+			t.Fatalf("callback (%s): status=%d body=%v -- the two flows' login-nonce cookies collided", code, status, body)
+		}
+		if body["email"] != sharedEmail {
+			t.Fatalf("callback (%s): email=%v, want %s", code, body["email"], sharedEmail)
+		}
+	}
+
+	// Flow A completes LAST, after flow B's /authorize already ran -- the
+	// case the shared fixed cookie name used to break.
+	complete(stateB, nonceB, "code-b")
+	complete(stateA, nonceA, "code-a")
 }
 
 // assertProviderRowUnchanged is D2738's core invariant: an unauthenticated

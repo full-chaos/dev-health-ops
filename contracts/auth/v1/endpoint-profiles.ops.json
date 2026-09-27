@@ -3978,7 +3978,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/ip_allowlist.py",
-        "line": 45,
+        "line": 22,
         "router_local_path": "/ip-allowlist"
       },
       "gaps": [],
@@ -4043,7 +4043,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/ip_allowlist.py",
-        "line": 69,
+        "line": 33,
         "router_local_path": "/ip-allowlist"
       },
       "gaps": [],
@@ -4108,7 +4108,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/ip_allowlist.py",
-        "line": 91,
+        "line": 43,
         "router_local_path": "/ip-allowlist/{entry_id}"
       },
       "gaps": [],
@@ -4173,7 +4173,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/ip_allowlist.py",
-        "line": 108,
+        "line": 52,
         "router_local_path": "/ip-allowlist/{entry_id}"
       },
       "gaps": [],
@@ -4238,7 +4238,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/ip_allowlist.py",
-        "line": 133,
+        "line": 62,
         "router_local_path": "/ip-allowlist/{entry_id}"
       },
       "gaps": [],
@@ -4303,7 +4303,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/ip_allowlist.py",
-        "line": 150,
+        "line": 71,
         "router_local_path": "/ip-allowlist/check"
       },
       "gaps": [],
@@ -6123,7 +6123,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/retention.py",
-        "line": 48,
+        "line": 22,
         "router_local_path": "/retention-policies"
       },
       "gaps": [],
@@ -6188,7 +6188,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/retention.py",
-        "line": 72,
+        "line": 33,
         "router_local_path": "/retention-policies/resource-types"
       },
       "gaps": [],
@@ -6253,7 +6253,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/retention.py",
-        "line": 78,
+        "line": 39,
         "router_local_path": "/retention-policies"
       },
       "gaps": [],
@@ -6318,7 +6318,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/retention.py",
-        "line": 102,
+        "line": 51,
         "router_local_path": "/retention-policies/{policy_id}"
       },
       "gaps": [],
@@ -6383,7 +6383,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/retention.py",
-        "line": 119,
+        "line": 60,
         "router_local_path": "/retention-policies/{policy_id}"
       },
       "gaps": [],
@@ -6448,7 +6448,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/retention.py",
-        "line": 143,
+        "line": 70,
         "router_local_path": "/retention-policies/{policy_id}"
       },
       "gaps": [],
@@ -6513,7 +6513,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/retention.py",
-        "line": 160,
+        "line": 79,
         "router_local_path": "/retention-policies/{policy_id}/execute"
       },
       "gaps": [],
@@ -6578,7 +6578,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 132,
+        "line": 90,
         "router_local_path": "/settings/categories"
       },
       "gaps": [],
@@ -6643,7 +6643,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 137,
+        "line": 95,
         "router_local_path": "/settings/{category}"
       },
       "gaps": [],
@@ -6708,7 +6708,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 152,
+        "line": 103,
         "router_local_path": "/llm-settings"
       },
       "gaps": [],
@@ -6773,7 +6773,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 265,
+        "line": 213,
         "router_local_path": "/llm-settings/status"
       },
       "gaps": [],
@@ -6838,7 +6838,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 277,
+        "line": 225,
         "router_local_path": "/llm-settings/readiness"
       },
       "gaps": [],
@@ -6903,7 +6903,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 394,
+        "line": 342,
         "router_local_path": "/llm-settings/budget"
       },
       "gaps": [],
@@ -6968,7 +6968,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 418,
+        "line": 352,
         "router_local_path": "/llm-settings/spend"
       },
       "gaps": [],
@@ -7033,7 +7033,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 442,
+        "line": 365,
         "router_local_path": "/llm-settings"
       },
       "gaps": [],
@@ -7098,7 +7098,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 470,
+        "line": 378,
         "router_local_path": "/llm-settings"
       },
       "gaps": [],
@@ -7163,7 +7163,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 486,
+        "line": 388,
         "router_local_path": "/settings/{category}/{key}"
       },
       "gaps": [],
@@ -7228,7 +7228,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 512,
+        "line": 397,
         "router_local_path": "/settings/{category}/{key}"
       },
       "gaps": [],
@@ -7293,7 +7293,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 532,
+        "line": 407,
         "router_local_path": "/settings"
       },
       "gaps": [],
@@ -7358,7 +7358,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 550,
+        "line": 415,
         "router_local_path": "/settings/{category}/{key}"
       },
       "gaps": [],

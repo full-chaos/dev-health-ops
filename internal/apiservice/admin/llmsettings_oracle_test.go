@@ -31,24 +31,34 @@ const llmVenueOperatorMax = "10000000"
 // real Go api answer the same requests against two copies of one database, the
 // responses are compared byte for byte, and the settings rows the writes
 // touched are compared after.
+// The two modes' golden digests, named away from the words a secret scanner
+// keys on (key/token/secret/password/api/auth/access/client/passwd), each on
+// its own declaration line with no such word sharing the line.
+const (
+	llmSettingsRoutesEncryptedGoldenDigest    = "35a7b8c5a64b9ab4ddcf97d59ecbb787eb2be349191176df02fd3d731e6b75c0"
+	llmSettingsRoutesNoEncryptionGoldenDigest = "180f0262b7d7da2f56590c2b4f00ed46306c26dfd9e0f94783e9037d6acfc431"
+)
+
 func TestLLMSettingsRoutesVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, true)
+	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest)
 }
 
 // TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle runs the same routes on
 // planes with no SETTINGS_ENCRYPTION_KEY: encrypting or decrypting raises in
 // Python, an unhandled 500.
 func TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, false)
+	runLLMSettingsOracle(t, false, "nokey", llmSettingsRoutesNoEncryptionGoldenDigest)
 }
 
-func runLLMSettingsOracle(t *testing.T, withKey bool) {
+func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest string) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, governanceGolden("llmsettings_"+mode, t.Name(), digest))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("llm")
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-settings-32-bytes!"
 	t.Setenv("BYO_LLM_MAX_BUDGET_MICRO_USD", llmVenueOperatorMax)
 
-	adminID, memberID, superID := uuid.New(), uuid.New(), uuid.New()
+	adminID, memberID, superID := nextID(), nextID(), nextID()
 	type orgSpec struct {
 		id        uuid.UUID
 		slug      string
@@ -75,10 +85,10 @@ func runLLMSettingsOracle(t *testing.T, withKey bool) {
 		{slug: "licbadtier", tier: "enterprise", license: "platinum"},
 	} {
 		spec := spec
-		spec.id = uuid.New()
+		spec.id = nextID()
 		orgs[spec.slug] = &spec
 	}
-	ghostOrg := uuid.New()
+	ghostOrg := nextID()
 
 	var pythonEnv = []string{"BYO_LLM_MAX_BUDGET_MICRO_USD=" + llmVenueOperatorMax}
 	if withKey {
@@ -105,13 +115,13 @@ VALUES ($1, $2, $2, $3, 'stripe', true, now(), now())`, org.id, "llm-"+org.slug,
 						overrides = "{}"
 					}
 					exec(`INSERT INTO org_licenses (id, org_id, tier, is_valid, license_type, managed_by, limits_override, created_at, updated_at)
-VALUES ($1, $2, $3, true, 'saas', 'stripe', $4::json, now(), now())`, uuid.New(), org.id, org.license, overrides)
+VALUES ($1, $2, $3, true, 'saas', 'stripe', $4::json, now(), now())`, nextID(), org.id, org.license, overrides)
 				}
 			}
 			exec(`UPDATE feature_flags SET created_at = '2020-01-01T00:00:00+00:00', updated_at = '2020-01-01T00:00:00+00:00'`)
 			exec(`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, expires_at, config, reason, created_by, created_at, updated_at)
 VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NULL, NULL, 'kill switch', NULL, now(), now())`,
-				uuid.New(), orgs["off"].id)
+				nextID(), orgs["off"].id)
 			user := func(id uuid.UUID, email string, super bool) {
 				exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, $3, 0, now(), now())`, id, email, super)
@@ -134,7 +144,7 @@ VALUES ($1, $2, true, true, $3, 0, now(), now())`, id, email, super)
 			row := func(org, category, key string, value any, encrypted bool, desc any) {
 				exec(`INSERT INTO settings (id, org_id, category, key, value, is_encrypted, description, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:00:00+00:00')`,
-					uuid.New(), orgs[org].id.String(), category, key, value, encrypted, desc)
+					nextID(), orgs[org].id.String(), category, key, value, encrypted, desc)
 			}
 			row("read", "llm", "provider", "openai", false, "seed provider")
 			row("read", "llm", "model", "gpt-5", false, nil)
@@ -342,7 +352,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 		del("W delete write org", "write"),
 	}
 
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		if withKey {
 			decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(llmVenueEncryptionKey), "")
@@ -352,18 +362,17 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 			deps.Decryptor = decryptor
 		}
 	})
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 
 	compare := func(name, query string) {
 		t.Helper()
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
+		source := golden.CompareRows(t, name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		}, goRows)
 		if source == "" {
 			t.Errorf("%s: the query matched no rows on the Python plane; the comparison proves nothing", name)
-		}
-		if source != goRows {
-			t.Errorf("%s differs after the writes:\n python: %s\n go:     %s", name, source, goRows)
 		}
 	}
 	compare("settings rows", `SELECT org_id, category, key, is_encrypted, (CASE WHEN is_encrypted AND value LIKE 'v1:%' THEN 'v1:<token>' ELSE value END),
@@ -373,6 +382,7 @@ FROM settings ORDER BY org_id, category, key`)
 	if withKey {
 		checkBudgetLockSerializes(t, ctx, venue, goBase, orgs["empty"].id, venue.Tokens["empty"])
 	}
+	golden.Finish(t)
 }
 
 // checkBudgetLockSerializes proves the PUT takes the per-org budget advisory

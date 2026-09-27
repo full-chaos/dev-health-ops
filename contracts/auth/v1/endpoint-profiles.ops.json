@@ -4368,7 +4368,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/orgs.py",
-        "line": 100,
+        "line": 99,
         "router_local_path": "/orgs"
       },
       "gaps": [],
@@ -4433,7 +4433,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/orgs.py",
-        "line": 113,
+        "line": 112,
         "router_local_path": "/orgs/{org_id}"
       },
       "gaps": [],
@@ -4498,7 +4498,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/orgs.py",
-        "line": 126,
+        "line": 125,
         "router_local_path": "/orgs"
       },
       "gaps": [],
@@ -4563,7 +4563,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/orgs.py",
-        "line": 150,
+        "line": 149,
         "router_local_path": "/orgs/{org_id}"
       },
       "gaps": [],
@@ -4628,7 +4628,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/orgs.py",
-        "line": 171,
+        "line": 170,
         "router_local_path": "/orgs/{org_id}"
       },
       "gaps": [],
@@ -4693,7 +4693,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/orgs.py",
-        "line": 187,
+        "line": 186,
         "router_local_path": "/orgs/{org_id}/members"
       },
       "gaps": [],
@@ -4758,7 +4758,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/orgs.py",
-        "line": 200,
+        "line": 199,
         "router_local_path": "/orgs/{org_id}/members"
       },
       "gaps": [],
@@ -4823,7 +4823,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/orgs.py",
-        "line": 228,
+        "line": 227,
         "router_local_path": "/orgs/{org_id}/invites"
       },
       "gaps": [],
@@ -4888,7 +4888,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/orgs.py",
-        "line": 311,
+        "line": 310,
         "router_local_path": "/orgs/{org_id}/members/{user_id}"
       },
       "gaps": [],
@@ -4953,73 +4953,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/orgs.py",
-        "line": 330,
+        "line": 329,
         "router_local_path": "/orgs/{org_id}/members/{user_id}"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "require_admin (router-level dependency on admin.router:39-43, applies to every nested sub-router included after it) requires current_user.is_admin via get_current_user.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/admin/middleware.py",
-          "line": 9,
-          "line_end": 14,
-          "note": "require_admin(current_user=Depends(get_current_user))"
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": "org_id from JWT / X-Org-Id (superuser may cross-org)",
-      "tenant_requirement": "cross_org_superuser_only",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "403 for a non-admin authenticated user; 401 for no/invalid token (OrgIdMiddleware degrades an invalid JWT to anonymous, so get_current_user's own 401 is what actually fires)."
-    },
-    {
-      "id": "POST /api/v1/admin/orgs/{org_id}/transfer-ownership/{from_user_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/admin/orgs/{org_id}/transfer-ownership/{from_user_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/admin/routers/orgs.py",
-        "line": 348,
-        "router_local_path": "/orgs/{org_id}/transfer-ownership/{from_user_id}"
       },
       "gaps": [],
       "classification": "protected",

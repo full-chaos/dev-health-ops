@@ -12,7 +12,8 @@ import sys
 
 old, new, o7, s7, oa, na, oo, no, od, nd, arm = sys.argv[1:]
 p = "values.prod.yaml"
-s = open(p).read()
+with open(p) as f:
+    s = f.read()
 for a, b in ((old, new), (o7, s7), (oa, na), (oo, no), (od, nd)):
     assert a in s, a
     s = s.replace(a, b)
@@ -23,8 +24,11 @@ s, n = re.subn(
     s,
 )
 assert n == 1, "arm64 child comment not found"
-open(p, "w").write(s)
+with open(p, "w") as f:
+    f.write(s)
 q = "values.local.yaml"
-t = open(q).read()
+with open(q) as f:
+    t = f.read()
 assert old[:12] in t and od in t
-open(q, "w").write(t.replace(old[:12], new[:12]).replace(od, nd))
+with open(q, "w") as f:
+    f.write(t.replace(old[:12], new[:12]).replace(od, nd))

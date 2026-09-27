@@ -29,12 +29,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 )
+
+// newCookieClient is a *http.Client whose jar carries the D2745 P1-3
+// login-nonce cookie /authorize sets to the following /callback POST --
+// the same technique saml_integration_test.go's TestSAMLACSHonoursAllowIdpInitiatedFalse
+// (D2744/D2745, already landed) uses for SAML's own login-nonce cookie.
+func newCookieClient(t *testing.T) *http.Client {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Client{Jar: jar}
+}
 
 // fakeGitLab is a minimal fake self-hosted GitLab: a token endpoint that
 // exchanges any code for a fixed access token (recording what it
@@ -125,7 +139,8 @@ func TestOAuthGitLabFullRoundTrip(t *testing.T) {
 		clientSecretEncryptedFallback: "gitlab-secret",
 	})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
@@ -140,7 +155,7 @@ func TestOAuthGitLabFullRoundTrip(t *testing.T) {
 		t.Fatalf("authorization_url scope=%q, want %q", got, "read_user email")
 	}
 
-	status, body := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusOK {
 		t.Fatalf("callback: status=%d body=%v", status, body)
@@ -197,15 +212,95 @@ func TestOAuthCallbackRefusesATamperedState(t *testing.T) {
 		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
 	})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
 	state, _ := authResp["state"].(string)
 	tampered := flipMiddleByte(state)
 
-	status, body := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": tampered})
+	if status != http.StatusBadRequest || body["detail"] != "OAuth authentication failed" {
+		t.Fatalf("status=%d body=%v, want 400 OAuth authentication failed", status, body)
+	}
+	assertProviderRowUnchanged(t, ctx, st.pool, providerID, "active")
+	assertSSOAuditStage(t, ctx, st.pool, orgID, "state_auth")
+}
+
+// TestOAuthCallbackRefusesAMissingLoginNonceCookie and
+// TestOAuthCallbackRefusesATamperedLoginNonceCookie pin D2745's P1-3
+// browser-binding class ruling: a genuine, unexpired state alone is not
+// enough -- the login nonce cookie set at /authorize must also be
+// present and match (hashOAuthLoginNonce's doc comment, oauthstate.go).
+// A missing cookie is exactly what a cross-site (login-CSRF) submission
+// looks like: SameSite=Lax withholds the cookie on a cross-site POST.
+func TestOAuthCallbackRefusesAMissingLoginNonceCookie(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	gitlab := startFakeGitLab(t)
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
+	})
+
+	// A real /authorize call, but WITHOUT a cookie jar: the Set-Cookie is
+	// dropped on the floor, exactly as if the following /callback POST
+	// arrived from a different browser.
+	status, authResp := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	if status != http.StatusOK {
+		t.Fatalf("authorize: %d %v", status, authResp)
+	}
+	status, body := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+		map[string]any{"code": "c", "state": authResp["state"]})
+	if status != http.StatusBadRequest || body["detail"] != "OAuth authentication failed" {
+		t.Fatalf("status=%d body=%v, want 400 OAuth authentication failed", status, body)
+	}
+	assertProviderRowUnchanged(t, ctx, st.pool, providerID, "active")
+	assertSSOAuditStage(t, ctx, st.pool, orgID, "state_auth")
+}
+
+func TestOAuthCallbackRefusesATamperedLoginNonceCookie(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	gitlab := startFakeGitLab(t)
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
+	})
+
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	if status != http.StatusOK {
+		t.Fatalf("authorize: %d %v", status, authResp)
+	}
+
+	// Tamper with the jar's own cookie value in place -- the state itself
+	// stays genuine and unexpired; only the browser-side half of the
+	// binding is wrong, which is exactly the case this check exists to
+	// catch (a genuine state presented by the wrong browser).
+	serverURL, err := url.Parse(st.server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookies := client.Jar.Cookies(serverURL)
+	found := false
+	for _, c := range cookies {
+		if c.Name == "dho_oauth_login_nonce" {
+			c.Value = flipMiddleByte(c.Value)
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("authorize: expected a dho_oauth_login_nonce cookie")
+	}
+	client.Jar.SetCookies(serverURL, cookies)
+
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusBadRequest || body["detail"] != "OAuth authentication failed" {
 		t.Fatalf("status=%d body=%v, want 400 OAuth authentication failed", status, body)
 	}
@@ -227,15 +322,16 @@ func TestOAuthCallbackRefusesAnExpiredState(t *testing.T) {
 		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
 	})
 
+	client := newCookieClient(t)
 	st.clock.freeze(time.Now())
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
 	// oauthStateTTL (oauthstate.go) is 10 minutes.
 	st.clock.advance(11 * time.Minute)
 
-	status, body := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusBadRequest || body["detail"] != "OAuth authentication failed" {
 		t.Fatalf("status=%d body=%v, want 400 OAuth authentication failed", status, body)
@@ -257,25 +353,45 @@ func TestOAuthCallbackRefusesADomainNotOnTheAllowlist(t *testing.T) {
 		allowedDomains: &domains,
 	})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
-	status, body := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusForbidden {
 		t.Fatalf("status=%d body=%v, want 403", status, body)
 	}
-	// router.py's domain check is a bare HTTPException, outside the
-	// try/except OAuthProviderError block, matching OIDC/SAML's identical
-	// shape: no audit row, no provider mutation.
+	// D2745 P2-6 (team-lead, D2742 strict): escalated from the prior bare-
+	// HTTPException/no-audit shape (still matching OIDC/SAML's own
+	// identical, still-unaudited domain check -- unchanged there) to
+	// D2742's third bucket: audited, fixed message + reason code, the
+	// domain itself never in the client-visible response.
+	detail, ok := body["detail"].(map[string]any)
+	if !ok {
+		t.Fatalf("detail=%v (%T), want a structured {message, reason} object", body["detail"], body["detail"])
+	}
+	if detail["message"] != "Email domain is not allowed for this provider" {
+		t.Fatalf("detail.message=%v, want the fixed message (never the domain itself -- D2745 P2-6)", detail["message"])
+	}
+	if detail["reason"] != "oauth_domain_not_allowed" {
+		t.Fatalf("detail.reason=%v, want oauth_domain_not_allowed", detail["reason"])
+	}
+	for _, key := range []string{"message", "reason"} {
+		if strings.Contains(fmt.Sprint(detail[key]), "not-allowed.example") {
+			t.Fatalf("detail.%s=%v leaks the denied domain", key, detail[key])
+		}
+	}
 	assertProviderRowUnchanged(t, ctx, st.pool, providerID, "active")
-	var auditCount int
-	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE org_id = $1 AND action = 'sso_login'`, orgID).Scan(&auditCount); err != nil {
+	assertSSOAuditStage(t, ctx, st.pool, orgID, "domain_check")
+	var errMsg *string
+	if err := st.pool.QueryRow(ctx, `SELECT error_message FROM audit_logs WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure'
+ORDER BY created_at DESC LIMIT 1`, orgID).Scan(&errMsg); err != nil {
 		t.Fatal(err)
 	}
-	if auditCount != 0 {
-		t.Fatalf("audit_logs: got %d sso_login rows, want 0 (a bare HTTPException, no audit call)", auditCount)
+	if errMsg == nil || !strings.Contains(*errMsg, "not-allowed.example") {
+		t.Fatalf("audit_logs.error_message = %v, want the actual domain recorded there (D2745 P2-6: audit row only)", errMsg)
 	}
 }
 
@@ -296,11 +412,12 @@ func TestOAuthCallbackRefusesAnUnknownUserWithoutAutoProvision(t *testing.T) {
 		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: false,
 	})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
-	status, body := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusForbidden || body["detail"] != "User not found and auto-provisioning is disabled" {
 		t.Fatalf("status=%d body=%v, want 403 User not found and auto-provisioning is disabled", status, body)
@@ -325,11 +442,12 @@ func TestOAuthCallbackRefusesAnUnverifiedEmail(t *testing.T) {
 		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
 	})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
-	status, body := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusForbidden || body["detail"] != "No verified email address is available from this OAuth provider" {
 		t.Fatalf("status=%d body=%v, want 403 No verified email address is available from this OAuth provider", status, body)
@@ -362,11 +480,12 @@ func TestOAuthCallbackRefusesATokenExchangeFailure(t *testing.T) {
 		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
 	})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
-	status, body := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%v, want 400", status, body)
@@ -409,11 +528,12 @@ func TestOAuthCallbackRefusesAUserinfoFetchFailure(t *testing.T) {
 		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
 	})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
-	status, body := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%v, want 400", status, body)

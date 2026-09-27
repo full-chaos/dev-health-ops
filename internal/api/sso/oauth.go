@@ -61,6 +61,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -412,7 +413,7 @@ func (h handlers) initiateOAuthAuth(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "OAuth provider is not active", nil)
 		return
 	}
-	out, err := h.buildOAuthAuthorization(row, providerID, providerType)
+	out, err := h.buildOAuthAuthorization(w, row, providerID, providerType)
 	if err != nil {
 		h.fail(w, r, "build oauth authorization", err)
 		return
@@ -422,8 +423,10 @@ func (h handlers) initiateOAuthAuth(w http.ResponseWriter, r *http.Request) {
 
 // buildOAuthAuthorization is generate_authorization_request, shared by
 // initiateOAuthAuth and initiateOAuthByType (both build the identical
-// response from a resolved provider row).
-func (h handlers) buildOAuthAuthorization(row *providerRow, providerID uuid.UUID, providerType string) (*pyjson.Object, error) {
+// response from a resolved provider row). w receives the D2745 P1-3
+// login-nonce cookie -- see hashOAuthLoginNonce's doc comment
+// (oauthstate.go) for what it defends against.
+func (h handlers) buildOAuthAuthorization(w http.ResponseWriter, row *providerRow, providerID uuid.UUID, providerType string) (*pyjson.Object, error) {
 	config, err := decodeOAuthConfig(row.Config)
 	if err != nil {
 		return nil, err
@@ -438,12 +441,18 @@ func (h handlers) buildOAuthAuthorization(row *providerRow, providerID uuid.UUID
 	}
 	authorizationURL, _ := oauthDefaultEndpoints(providerType, config.BaseURL)
 	now := h.Now()
+	loginNonce, err := randomURLSafe(32)
+	if err != nil {
+		return nil, err
+	}
 	encrypted, err := mintOAuthState(h.StateSecret, oauthState{
 		ProviderID: row.ID, OrgID: row.OrgID, RedirectURI: redirectURI,
+		NonceHash: hashOAuthLoginNonce(loginNonce),
 	}, now)
 	if err != nil {
 		return nil, err
 	}
+	http.SetCookie(w, oauthLoginNonceCookie(loginNonce, int(oauthStateTTL/time.Second)))
 	out := pyjson.NewObject()
 	out.Set("authorization_url", oauthAuthorizationURL(authorizationURL, providerType, config.ClientID, redirectURI, encrypted, scopes))
 	out.Set("state", encrypted)
@@ -494,7 +503,16 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := h.oauthExchangeAndFetch(ctx, row, providerID, providerType, stateToken, code)
+	var cookieNonce string
+	if cookie, err := r.Cookie(oauthLoginNonceCookieName); err == nil {
+		cookieNonce = cookie.Value
+	}
+	// One-shot: clear it immediately, same reasoning as SAML's ACS
+	// callback (saml.go, D2744/D2745) -- defense in depth alongside the
+	// state's own single-use-in-practice lifetime.
+	http.SetCookie(w, oauthLoginNonceCookie("", -1))
+
+	claims, err := h.oauthExchangeAndFetch(ctx, row, providerID, providerType, stateToken, code, cookieNonce)
 	if err != nil {
 		if errors.Is(err, errOAuthNoVerifiedEmail) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
@@ -536,7 +554,23 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 			domain = claims.email[at+1:]
 		}
 		if !containsFold(allowedDomains, domain) {
-			policy.WriteDetail(w, http.StatusForbidden, fmt.Sprintf("Email domain '%s' is not allowed for this provider", domain), nil)
+			// D2745 P2-6 (team-lead, D2742 strict): the client-visible
+			// detail is now a fixed message + reason code -- the actual
+			// domain never reaches the response (a probing surface:
+			// iterating domain guesses and reading them back verbatim in
+			// a 403 body). It goes to the audit row's error_message only.
+			// This also escalates the check from Python's/this file's own
+			// prior bare-HTTPException shape (no audit, matching OIDC/
+			// SAML's identical unaudited domain check) to D2742's third
+			// bucket: the caller HAS authenticated by this point (state,
+			// login-nonce cookie, token exchange, userinfo fetch all
+			// already succeeded) -- a disallowed domain is a per-account
+			// access decision, not IdP-provider health, the same shape as
+			// auto-provisioning-disabled/the unverified-email denial just
+			// above in this file.
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID,
+				fmt.Sprintf("Email domain '%s' is not allowed for this provider", domain), http.StatusForbidden,
+				oauthDomainDeniedDetail(), "oauth", "domain_check")
 			return
 		}
 	}
@@ -581,11 +615,21 @@ func oauthFailureDetail(reason string) *pyjson.Object {
 	return detail
 }
 
+// oauthDomainDeniedDetail is D2745 P2-6's client-facing body for a
+// disallowed-domain denial: a fixed message + a stable reason code, never
+// the domain itself -- see the call site's own doc comment.
+func oauthDomainDeniedDetail() *pyjson.Object {
+	detail := pyjson.NewObject()
+	detail.Set("message", "Email domain is not allowed for this provider")
+	detail.Set("reason", "oauth_domain_not_allowed")
+	return detail
+}
+
 // oauthExchangeAndFetch is the callback's own inline body up to (not
 // including) the domain-allowlist check: verify state, exchange the code,
 // fetch user info.
 func (h handlers) oauthExchangeAndFetch(ctx context.Context, row *providerRow, providerID uuid.UUID,
-	providerType, stateToken, code string) (oauthClaims, error) {
+	providerType, stateToken, code, cookieNonce string) (oauthClaims, error) {
 	now := h.Now()
 	state, err := verifyOAuthState(h.StateSecret, stateToken, providerID.String(), now)
 	if err != nil {
@@ -595,6 +639,17 @@ func (h handlers) oauthExchangeAndFetch(ctx context.Context, row *providerRow, p
 		return oauthClaims{}, ssoAuthErr("OAuth state mismatch")
 	}
 	if state.OrgID != row.OrgID {
+		return oauthClaims{}, ssoAuthErr("OAuth state mismatch")
+	}
+	// D2745 P1-3 browser-binding class ruling: the state alone only proves
+	// this package minted it, not which browser is presenting it back
+	// (hashOAuthLoginNonce's doc comment, oauthstate.go, has the login-CSRF
+	// this closes). A missing cookie (withheld by SameSite=Lax on a
+	// cross-site submission, or simply never set) or one that hashes to a
+	// different value than the state sealed is refused here, before the
+	// token exchange ever runs -- unauthenticated (D2738): the caller has
+	// proven nothing about the browser binding.
+	if cookieNonce == "" || !constantTimeEqual(hashOAuthLoginNonce(cookieNonce), state.NonceHash) {
 		return oauthClaims{}, ssoAuthErr("OAuth state mismatch")
 	}
 	config, err := decodeOAuthConfig(row.Config)
@@ -790,7 +845,7 @@ WHERE org_id = $1::uuid AND protocol = $2 AND status = 'active'`, orgID, protoco
 		h.fail(w, r, "load provider", err)
 		return
 	}
-	out, err := h.buildOAuthAuthorization(row, mustParseProviderUUID(row.ID), providerType)
+	out, err := h.buildOAuthAuthorization(w, row, mustParseProviderUUID(row.ID), providerType)
 	if err != nil {
 		h.fail(w, r, "build oauth authorization", err)
 		return

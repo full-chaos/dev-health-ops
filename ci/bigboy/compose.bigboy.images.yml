@@ -1,10 +1,3 @@
-# CHAOS-6977 (D2683/D2709, 2026-09-27): tracked receipt copy. The LIVE operational file bigboy's
-# docker compose reads is compose/compose.bigboy.images.yml on the bigboy host (outside this repo,
-# in COMPOSE_FILE -- docker compose needs it at that path). This copy is the source-of-record for
-# review/history; keep it byte-identical to the live file at every cut (bigboy-cut.sh's
-# query-api-enabled-flags-current STEP already diffs the live file's GO_API_*_ENABLED block against
-# generate-query-api-enabled-flags.py's output -- this copy is not yet part of that automated check).
-#
 # gwc-venue-bigboy (2026-09-20, chris: "just go ahead and deploy bigboy images"); re-pinned 2026-09-24 by prod-ops
 # (R427 pre-prod venue, D2288) to ops main a97b97ed (CHAOS-6512+6259 group; previous overlay kept as .bak-1152962c): bigboy runs PROD's build
 # (was rev 156, ops 3689edec) so a venue receipt admits at the same build production runs.
@@ -12,7 +5,7 @@
 # recreate does not drop the running project's overrides. migrate runs prod's own api image (migrations 0135).
 services:
   api:
-    image: ghcr.io/full-chaos/dev-hops-api@sha256:794c5392a20cf4c5e669669a21192492f9301f2005d7f7e688f1b1a94fb561e3
+    image: ghcr.io/full-chaos/dev-hops-api@sha256:ab18700f0ef7c29e5833525833c8726752970177c03f3d3bda87188c3bf09295
     ulimits:
       nofile:
         soft: 65536
@@ -22,12 +15,22 @@ services:
     volumes: !override
       - ./.go-api-dev/envelope-private-key.pem:/secrets/go-api-envelope-private-key.pem:ro
     entrypoint: !override ["sh", "-c", 'export GO_API_ENVELOPE_PRIVATE_KEY="$$(cat /secrets/go-api-envelope-private-key.pem)" && exec python -m dev_health_ops.cli --log-level info api --host 0.0.0.0 --port 8000']
+    # D2726 (2026-09-27, CHAOS-6987): base compose.yml's own default for this var is
+    # ${GO_API_ENVELOPE_KEY_ID:-go-api-envelope-2026-08} -- a kid the bigboy JWKS file
+    # (.go-api-dev/envelope-jwks.json) does NOT contain (it only has "local-dev-20260906",
+    # 3 weeks stale, matching venue-tools/venue-prove's own override below). api was signing
+    # its internal envelope-to-query-api dispatch with the unmatched default kid, so query-api
+    # rejected every dispatched call as query_api.envelope.rejected/unknown_kid. Override to
+    # the SAME kid venue-tools/venue-prove already use, so api's signature matches what the
+    # JWKS actually verifies against.
+    environment:
+      GO_API_ENVELOPE_KEY_ID: local-dev-20260906
   # CHAOS-6434 (ops main a97b97ed and after): dev-health-query-api is RETIRED. query-api is now the
   # `dho query-api` verb of the dho image; the root compose.yml's own query-api service (docker/query-api.Dockerfile)
   # can no longer build against this ops sha, so this overlay replaces its image/command/entrypoint entirely
   # rather than layering a digest onto it.
   query-api:
-    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:319da9ad125f51046708060620b342597add356cd747c30f265aeb14b7ec30de
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:d5bd451bf33e83608f094c8017b7189dffb312f996e7f4974afafa16754afc73
     build: !reset null
     entrypoint: !override ["/usr/local/bin/dho"]
     command: !override ["query-api"]
@@ -70,13 +73,30 @@ services:
       GO_API_WORK_UNITS_ENABLED: "true"
       GO_API_WORK_UNIT_EXPLAIN_ENABLED: "true"
       GO_API_INVESTMENT_EXPLAIN_ENABLED: "true"
+      # D2728 (2026-09-27, CHAOS-6987): prod's own chart sets query-api's end-user edge-JWT
+      # verification key from the SAME Secret's JWT_SECRET_KEY (deploy/values.prod.yaml:552-556,
+      # queryApi.extraEnv -- GO_API_EDGE_JWT_SECRET, a secretKeyRef, separate from the
+      # GO_API_ENVELOPE_* internal service-to-service scheme above). This overlay never set it,
+      # so a real, valid, api-issued end-user JWT was rejected by query-api as "Invalid or
+      # expired token" -- query-api had no key to verify it against at all. ${JWT_SECRET_KEY}
+      # is the same compose-substitution variable api/go-worker already use; the value is never
+      # written here, only referenced.
+      GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY}
+      # CHAOS-6987 (D2728 follow-up, generator-caught drift): query-api's chart definition
+      # (deploy/values.prod.yaml ops.queryApi.extraEnv) also carries these four secretKeyRefs;
+      # this overlay had never set them either (same class as GO_API_EDGE_JWT_SECRET -- caught
+      # by ci/bigboy/generate-query-api-enabled-flags.py's own drift check, not by hand-audit).
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY}
   migrate:
-    image: ghcr.io/full-chaos/dev-hops-api@sha256:794c5392a20cf4c5e669669a21192492f9301f2005d7f7e688f1b1a94fb561e3
+    image: ghcr.io/full-chaos/dev-hops-api@sha256:ab18700f0ef7c29e5833525833c8726752970177c03f3d3bda87188c3bf09295
     volumes: !override []
   # one-off prover shell, never started by 'up' (profile venue). POSTGRES_URI is interpolated by compose from
   # the same defaults the stack uses, so no credential passes through a file or argv of this lane.
   venue-tools:
-    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:507ee0e53eddc47424174ffd84269535003c62e1e18aa2459cc3a4668aecc41a
+    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:a9421becdcb98188bd1fe6ae2679d40ffdd132b51f19dc572a70f781bd6bb506
     profiles: ["venue"]
     user: "1001:1001"
     entrypoint: ["sh", "-c"]
@@ -96,7 +116,7 @@ services:
       - /var/lib/oci-cache/lane-scratch/gwc-venue-bigboy:/work
   # venue prover: shares api's network namespace so the edge host is localhost (the CheckVenue host allowlist).
   venue-prove:
-    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:507ee0e53eddc47424174ffd84269535003c62e1e18aa2459cc3a4668aecc41a
+    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:a9421becdcb98188bd1fe6ae2679d40ffdd132b51f19dc572a70f781bd6bb506
     profiles: ["venue"]
     user: "1001:1001"
     entrypoint: ["sh", "-c"]
@@ -115,7 +135,7 @@ services:
   # R427 pre-prod venue (prod-ops, 2026-09-24): the dho api (Go plane) at prod's build. Its Postgres and ClickHouse
   # logins and this env file are provisioned by _records/bigboy-1152962/setup-goapi-logins.sh (0600, never printed).
   go-api:
-    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:319da9ad125f51046708060620b342597add356cd747c30f265aeb14b7ec30de
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:d5bd451bf33e83608f094c8017b7189dffb312f996e7f4974afafa16754afc73
     entrypoint: ["/usr/local/bin/dho"]
     command: ["api"]
     env_file:

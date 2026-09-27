@@ -14,23 +14,47 @@ for i in $(seq 1 240); do
   [ $ok = 1 ] && break; sleep 30
 done
 [ "${ok:-0}" = 1 ] || { st images-wait 1; exit 1; }; st images-ready 0
-# CHAOS-6967(b) staging (Trap #421 sibling): bigboy's query-api needs the same ~23
-# GO_API_*_ENABLED env vars prod's deploy chart sets, or a fresh cut's REST proof leg 404s
-# on every correctly-pathed, correctly-bearer'd request (this switch is a plain in-memory
-# flag flipped once at query-api boot, never Postgres, never the routeswitch ledger). The
-# values are GENERATED from a deploy checkout's own values.prod.yaml (never hand-copied --
-# a hand-copy is exactly what let this drift silent for at least two cuts), diffed against
-# the checked-in overlay so a real values change fails this STEP loudly instead of silently
-# re-breaking leg1. DEPLOY_CHECKOUT must point at a deploy repo working tree (e.g. the prod
-# roll's own worktree) with a current values.prod.yaml.
+# CHAOS-6967(b)/CHAOS-6987 (D2728) staging (Trap #421 sibling): bigboy's query-api needs the
+# same ~23 GO_API_*_ENABLED env vars prod's deploy chart sets (this switch is a plain in-memory
+# flag flipped once at query-api boot, never Postgres, never the routeswitch ledger), PLUS the
+# same secretKeyRef-backed names (GO_API_EDGE_JWT_SECRET, LLM_PROVIDER, OPENAI_API_KEY, LLM_MODEL,
+# SETTINGS_ENCRYPTION_KEY) -- D2728 found the SAME class of drift silently left GO_API_EDGE_JWT_SECRET
+# unset entirely, so a real user's JWT was rejected outright. Both classes are GENERATED from a
+# deploy checkout's own values.prod.yaml (never hand-copied) and diffed by NAME against the
+# checked-in overlay so a real values change fails this STEP loudly instead of silently
+# re-breaking a cut. A second check confirms the LIVE, substituted config has no blank secret-ref
+# value (an empty GO_API_EDGE_JWT_SECRET/etc must never pass silently -- D2728's own first apply
+# went out blank because compose's default .env auto-load doesn't reach ops/.env; --env-file
+# ops/.env is mandatory on every invocation below and this STEP asserts it actually took effect).
+# DEPLOY_CHECKOUT must point at a deploy repo working tree (e.g. the prod roll's own worktree)
+# with a current values.prod.yaml.
 if [ -n "${DEPLOY_CHECKOUT:-}" ] && [ -f "$DEPLOY_CHECKOUT/values.prod.yaml" ]; then
-  python3 "$HERE/generate-query-api-enabled-flags.py" "$DEPLOY_CHECKOUT/values.prod.yaml" > "$REC.query-api-enabled-flags.generated" 2>"$REC.query-api-enabled-flags.err"
-  grep "_ENABLED:" $R/compose/compose.bigboy.images.yml | sort > "$REC.query-api-enabled-flags.live"
-  if diff -q <(sort "$REC.query-api-enabled-flags.generated") "$REC.query-api-enabled-flags.live" >/dev/null 2>&1; then
+  python3 "$HERE/generate-query-api-enabled-flags.py" "$DEPLOY_CHECKOUT/values.prod.yaml" --out "$REC.query-api-enabled-flags.generated" 2>"$REC.query-api-enabled-flags.err"
+  GEN_NAMES=$(awk -F: '{print $1}' "$REC.query-api-enabled-flags.generated" | tr -d ' ' | sort)
+  LIVE_NAMES=$(awk -F: '/^      [A-Za-z_]+:/{print $1}' $R/compose/compose.bigboy.images.yml | tr -d ' ' | sort -u)
+  MISSING=$(comm -23 <(echo "$GEN_NAMES") <(echo "$LIVE_NAMES"))
+  if [ -z "$MISSING" ]; then
     st query-api-enabled-flags-current 0
   else
     st query-api-enabled-flags-current 1
-    echo "DRIFT: compose/compose.bigboy.images.yml's query-api GO_API_*_ENABLED block no longer matches deploy/values.prod.yaml -- regenerate it (see $HERE/generate-query-api-enabled-flags.py) before trusting leg1's REST proof this cut." >&2
+    echo "DRIFT: compose/compose.bigboy.images.yml's query-api block is missing name(s) values.prod.yaml's ops.queryApi.extraEnv now has -- regenerate it (see $HERE/generate-query-api-enabled-flags.py) before trusting this cut: $MISSING" >&2
+  fi
+  # Fail loud on any blank substitution (D2728 class): every secret-ref name from the generated
+  # list must resolve to a non-empty value in the LIVE, --env-file-substituted config.
+  # CHAOS-6987 (team-lead, hard rule): `docker compose config` output never reaches a pipe, a
+  # file, or a screen except through ONE redacting filter (compose-config-redacted.sh) -- it
+  # emits NAME=<length> only, never a resolved value, even for a length-only check like this one.
+  REDACTED=$($HERE/compose-config-redacted.sh --env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml -f compose/compose.metrics-api.local.yml -f .remember/lanes/team-lead/reconciler-sweep-override.yml -f compose/compose.bigboy.images.yml -f compose/compose.bigboy.workers.yml)
+  BLANK=""
+  for entry in $(awk -F': \\$\\{' '/\$\{[A-Z_]+\}$/{print $1}' "$REC.query-api-enabled-flags.generated" | tr -d ' '); do
+    LEN=$(echo "$REDACTED" | awk -F= -v n="$entry" '$1==n{print $2}')
+    [ -n "$LEN" ] && [ "$LEN" -gt 2 ] || BLANK="$BLANK $entry"
+  done
+  if [ -n "$BLANK" ]; then
+    st query-api-secret-refs-nonblank 1
+    echo "DRIFT: these query-api secret-ref var(s) resolve BLANK through --env-file ops/.env -- an empty verification/signing key must never go live:$BLANK" >&2
+  else
+    st query-api-secret-refs-nonblank 0
   fi
 else
   st query-api-enabled-flags-current 2  # SKIPPED, not a pass: DEPLOY_CHECKOUT not given -- this STEP did not run, it did not pass
@@ -41,9 +65,14 @@ docker pull -q $BIGBOY_OPERATOR_IMAGE > /dev/null 2>&1; st operator-pull $?   # 
 $HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; st repin $?
 [ -d $REC ] || { echo "no record dir"; exit 1; }
 for f in $R/_records/bigboy-$OLD8/pass-bigboy-corpus-admin7.sh; do [ -f $f ] && cp -n $f $REC/; done
-docker compose run --rm --no-deps migrate > $REC/migrate.out 2>&1; st migrate $?
-docker compose up -d --no-deps --no-build api query-api go-api > $REC/up.out 2>&1; st up $?
-docker compose up -d --no-deps --no-build go-worker go-worker-ops go-scheduler go-reconciler go-stream-ingest go-stream-external go-stream-pagerduty > $REC/up-workers.out 2>&1; rcw=$?; st up-workers $rcw; [ $rcw = 0 ] || { echo "ABORT: worker plane not recreated = INCOMPLETE pass (Trap #420)"; exit 1; }   # Trap #420: every plane from the cut's CI digests
+# CHAOS-6987 (D2728): --env-file is required from here on -- docker compose's default .env
+# auto-load only reads the PROJECT ROOT .env, never ops/.env, so a compose-level ${VAR}
+# substitution referencing a var that ONLY lives in ops/.env (e.g. query-api's
+# GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY}) silently resolves to a blank string with no
+# error -- caught live tonight when a first apply went out with an empty edge-JWT secret.
+docker compose --env-file ops/.env run --rm --no-deps migrate > $REC/migrate.out 2>&1; st migrate $?
+docker compose --env-file ops/.env up -d --no-deps --no-build api query-api go-api > $REC/up.out 2>&1; st up $?
+docker compose --env-file ops/.env up -d --no-deps --no-build go-worker go-worker-ops go-scheduler go-reconciler go-stream-ingest go-stream-external go-stream-pagerduty > $REC/up-workers.out 2>&1; rcw=$?; st up-workers $rcw; [ $rcw = 0 ] || { echo "ABORT: worker plane not recreated = INCOMPLETE pass (Trap #420)"; exit 1; }   # Trap #420: every plane from the cut's CI digests
 sleep 45; curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8093/ready | grep -q 200; st go-api-ready $?
 # proof tokens are 12 h: RE-MINT at every cut (rev 188: an expired token silently refused 65 REST entries, runbook step 9)
 for b in bootstrap-admin-proof.sh bootstrap-superadmin-proof.sh; do bash $R/_records/bigboy-1152962/$b > $REC/$b.out 2>&1; st $b $?; done
@@ -58,4 +87,13 @@ cd $REC
 for s in pass-bigboy.sh pass-bigboy-admin.sh pass-bigboy-superadmin.sh pass-bigboy-corpus-admin7.sh pass-bigboy-admin2.sh pass-bigboy-superadmin2.sh pass-bigboy-corpus-admin8.sh pass-bigboy-corpus-admin9.sh; do [ -f $s ] || continue; timeout 300 bash $s > out-${s%.sh}.txt 2>&1; st ${s%.sh} $?; done
 timeout 900 bash run-rest-bigboy.sh > out-rest.txt 2>&1; st rest $?; grep -E "attempted=|exit_cause" out-rest.txt | head -4
 for f in out-pass-bigboy.txt out-pass-bigboy-admin.txt out-pass-bigboy-superadmin.txt out-pass-bigboy-corpus-admin7.txt; do [ -f $f ] && echo "$f rows=$(awk -F' [|] ' 'NR>1' $f | wc -l) notidentical=$(awk -F' [|] ' 'NR>1 && ($4!~/True/||$5!~/True/)' $f | wc -l)"; done
+cd $R
+# CHAOS-6987/R460: the web-path smoke -- the only proof this cut serves the real org
+# through a real browser session, not a hand-minted token. Fails loud (rc=1) while
+# DHO_SMOKE_ADMIN_EMAIL/DHO_SMOKE_ADMIN_PASSWORD_FILE are absent from ops/.env; that
+# is a NAMED gap, not silently skipped, because the pass this STEP checks is the one
+# chris actually hit as a P1 (R460: "plane-only passes missed 2 structural breaks").
+export DHO_SMOKE_RECEIPT_PATH="/receipts/bigboy-$N8/web-path-smoke-receipt.json"
+mkdir -p $REC
+bash $HERE/web-path-smoke.sh > $REC/web-path-smoke.out 2>&1; st web-path-smoke $?; tail -6 $REC/web-path-smoke.out
 echo "cut done $(date -u +%T)"

@@ -71,7 +71,7 @@ FROM users WHERE email = $1::text`, email).Scan(&id, &existingEmail, &username, 
 	now := h.Now().UTC()
 	if errors.Is(err, pgx.ErrNoRows) {
 		if !row.AutoProvision {
-			return nil, nil, oidcErr("User not found and auto-provisioning disabled")
+			return nil, nil, ssoErr("User not found and auto-provisioning disabled")
 		}
 		newID := uuid.New()
 		var fullNamePtr, externalIDPtr *string

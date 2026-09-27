@@ -278,6 +278,11 @@ type providerOpts struct {
 	allowedDomains                *string
 	autoProvision                 bool
 	clientSecretEncryptedFallback string // stored as-is (no cipher configured in this test), simulating legacy plaintext.
+	// disallowIdpInitiated is D2744's coverage: the zero value (false)
+	// keeps every EXISTING test's behavior (allow_idp_initiated=true,
+	// unchanged); set true only for the new tests that specifically
+	// exercise the false branch (a real AEAD RelayState required).
+	disallowIdpInitiated bool
 }
 
 func seedProvider(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, opts providerOpts) uuid.UUID {
@@ -294,9 +299,9 @@ func seedProvider(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID u
 	if _, err := pool.Exec(ctx, `INSERT INTO sso_providers
 	(id, org_id, name, protocol, status, is_default, allow_idp_initiated, auto_provision_users, default_role,
 	 config, encrypted_secrets, allowed_domains, created_at, updated_at)
-VALUES ($1, $2, $9, $3, $4, false, true, $5, 'member', $6::json, $7::json, $8::json, now(), now())`,
+VALUES ($1, $2, $9, $3, $4, false, $10, $5, 'member', $6::json, $7::json, $8::json, now(), now())`,
 		id, orgID, opts.protocol, opts.status, opts.autoProvision, opts.config, secrets, opts.allowedDomains,
-		"Test Provider "+id.String()[:8]); err != nil {
+		"Test Provider "+id.String()[:8], !opts.disallowIdpInitiated); err != nil {
 		t.Fatalf("seed provider: %v", err)
 	}
 	return id
@@ -574,6 +579,21 @@ func assertProviderRowUnchanged(t *testing.T, ctx context.Context, pool *pgxpool
 	}
 	if providerStatus != wantStatus {
 		t.Fatalf("provider status = %q, want unchanged %q (D2738: an unauthenticated state failure must never flip it)", providerStatus, wantStatus)
+	}
+}
+
+// assertSSOAuditStage confirms the most recent failure-status sso_login
+// audit row for this org carries the given stage tag -- shared by both
+// OIDC's state_auth and SAML's signature_auth D2738 tests.
+func assertSSOAuditStage(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, stage string) {
+	t.Helper()
+	var meta []byte
+	if err := pool.QueryRow(ctx, `SELECT request_metadata::text FROM audit_logs
+WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY created_at DESC LIMIT 1`, orgID).Scan(&meta); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(meta), `"stage":"`+stage+`"`) && !strings.Contains(string(meta), `"stage": "`+stage+`"`) {
+		t.Fatalf("audit request_metadata = %s, want a %s stage", meta, stage)
 	}
 }
 

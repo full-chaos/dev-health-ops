@@ -49,7 +49,7 @@ const historyGolden = "testdata/history_golden.json"
 // producer is deleted with the Python CLI, so this is a rot guard: the file is only
 // rewritten by TestHistoryVenueOracleMatchesAlembic with DHO_HISTORY_GOLDEN_UPDATE=1,
 // then this digest is updated.
-const historyGoldenSHA256 = "1586f278805ab14f322278b1cf06d3f9d7f81ccf5d53ea396292d4fa9a1191d9"
+const historyGoldenSHA256 = "d739aead0577947dd9bd4df86cd5d2f9f361cf65d4764923c439b6fa0e8e2178"
 
 type historyGoldenFile struct {
 	History   map[string]string `json:"history"`

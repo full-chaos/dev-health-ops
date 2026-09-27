@@ -88,7 +88,7 @@ def test_migration_0136_allows_the_operator_principal_and_is_reversible():
     )
     assert migration.revision == "0136"
     assert migration.down_revision == "0135"
-    # 0143 (write-proof receipt kind) supersedes the head check: derived, not
+    # 0144 (saml_assertion_replays) supersedes the head check: derived, not
     # typed (tests/_alembic_heads.py); the next migration author moves it.
     action_check = importlib.import_module(
         "dev_health_ops.alembic.versions.0137_worker_operator_audits_action_check"
@@ -118,7 +118,11 @@ def test_migration_0136_allows_the_operator_principal_and_is_reversible():
         "dev_health_ops.alembic.versions.0143_go_api_proof_run_write_executed"
     )
     assert write_executed.down_revision == webhook_sync_requests.revision
-    assert write_executed.revision == application_schema_head()
+    saml_assertion_replays = importlib.import_module(
+        "dev_health_ops.alembic.versions.0144_add_saml_assertion_replays"
+    )
+    assert saml_assertion_replays.down_revision == write_executed.revision
+    assert saml_assertion_replays.revision == application_schema_head()
 
     engine = sa.create_engine("sqlite:///:memory:")
     metadata = sa.MetaData()

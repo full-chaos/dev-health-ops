@@ -123,6 +123,22 @@ func Routes(deps Deps) []httpapi.Route {
 		oidcAuthorize = http.HandlerFunc(h.initiateOIDCAuth)
 		oidcCallbackHandler = http.HandlerFunc(h.oidcCallback)
 	}
+	// D2744: the three SAML routes now DO need StateSecret -- a provider
+	// with allow_idp_initiated=false mints/verifies an AEAD RelayState the
+	// same way OIDC's/OAuth's state works (samlstate.go). An earlier
+	// version of this comment said StateSecret was irrelevant here; that
+	// was true only before D2744's fix. Without it, a provider with
+	// allow_idp_initiated=false would 500 on every initiate/callback
+	// instead of running for real, so both are required to mount the real
+	// handlers, matching OIDC's/OAuth's own gate shape.
+	samlMetadataHandler := h.gated(noInput)
+	samlInitiate := h.gated(body(samlAuthRequest))
+	samlACS := h.gated(body(samlCallbackRequest))
+	if deps.StateSecret != "" && deps.Signer != nil {
+		samlMetadataHandler = http.HandlerFunc(h.samlMetadata)
+		samlInitiate = http.HandlerFunc(h.initiateSAMLAuth)
+		samlACS = http.HandlerFunc(h.samlACSCallback)
+	}
 	routes := []httpapi.Route{
 		route(http.MethodGet, "/sso/providers", g.Wrap(policy.Authenticated, h.gated(listQuery))),
 		route(http.MethodPost, "/sso/providers", g.BodyFirst(policy.Authenticated, h.gated(body(ssoProviderCreate)))),
@@ -131,9 +147,9 @@ func Routes(deps Deps) []httpapi.Route {
 		route(http.MethodDelete, "/sso/providers/{provider_id}", g.Wrap(policy.Authenticated, h.gated(noInput))),
 		route(http.MethodPost, "/sso/providers/{provider_id}/activate", g.Wrap(policy.Authenticated, h.setStatus("active"))),
 		route(http.MethodPost, "/sso/providers/{provider_id}/deactivate", g.Wrap(policy.Authenticated, h.setStatus("inactive"))),
-		route(http.MethodGet, "/saml/{provider_id}/metadata", g.Wrap(policy.Public, h.gated(noInput))),
-		route(http.MethodPost, "/saml/{provider_id}/initiate", g.BodyFirst(policy.Public, h.gated(body(samlAuthRequest)))),
-		route(http.MethodPost, "/saml/{provider_id}/acs", g.BodyFirst(policy.Public, h.gated(body(samlCallbackRequest)))),
+		route(http.MethodGet, "/saml/{provider_id}/metadata", g.Wrap(policy.Public, samlMetadataHandler)),
+		route(http.MethodPost, "/saml/{provider_id}/initiate", g.BodyFirst(policy.Public, samlInitiate)),
+		route(http.MethodPost, "/saml/{provider_id}/acs", g.BodyFirst(policy.Public, samlACS)),
 		route(http.MethodPost, "/oidc/{provider_id}/authorize", g.BodyFirst(policy.Public, oidcAuthorize)),
 		route(http.MethodPost, "/oidc/{provider_id}/callback", g.BodyFirst(policy.Public, oidcCallbackHandler)),
 		route(http.MethodPost, "/oauth/providers", g.BodyFirst(policy.Authenticated, h.gated(body(oauthProviderCreate)))),

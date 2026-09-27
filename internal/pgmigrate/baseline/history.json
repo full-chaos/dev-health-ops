@@ -8,11 +8,17 @@
   "doc": "Move the checked-in worker job kinds to the River transport."
  },
  {
-  "revision": "0143",
-  "down": "0142",
+  "revision": "0144",
+  "down": "0143",
   "labels": "application_schema",
   "realHead": true,
   "head": true,
+  "doc": "Add saml_assertion_replays (CHAOS-6659, D2744)."
+ },
+ {
+  "revision": "0143",
+  "down": "0142",
+  "labels": "application_schema",
   "doc": "Add the single-plane write-proof receipt kind to ``go_api_proof_run``."
  },
  {

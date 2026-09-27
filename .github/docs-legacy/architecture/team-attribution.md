@@ -121,23 +121,36 @@ at `unassigned` usually means the ClickHouse `teams` dimension is empty.
 | 6 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 7 only | 0–5 | `scope_type, scope_id, reason` |
 | 7 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
 
-### 0.2a Atlassian Teams (Jira) — real teams beside the project-as-team fallback
+### 0.2a Atlassian Teams (Jira) — two independent legs, ranked at read time
 
-Jira has two team models and both live in ClickHouse under `provider = 'jira'`:
+Jira has two team models, and both are INDEPENDENT legs -- each always runs when configured, neither gates the
+other at write time (D2778, correcting an earlier draft of this section that framed the second leg as a
+write-time fallback; chris's design of record is CHAOS-107/CHAOS-2263: "real Atlassian Teams; project-as-team
+stays a separate option"). Both live in ClickHouse under `provider = 'jira'`:
 
-| | Project-as-team (fallback) | Atlassian Teams (real teams) |
+| | Leg 1: Project-as-team | Leg 2: Atlassian Teams (real teams) |
 |---|---|---|
-| Written by | the Jira team catalog / auto-import | `internal/atlassianteams`, run automatically as an additional step of the same jira team-catalog auto-import (org-opt-in on the jira integration's `atlassian_organization_id` config; CHAOS-7002/D2770) -- also reachable standalone via `dho sync teams --provider jira` |
+| Written by | the Jira team catalog / auto-import -- always runs | `internal/atlassianteams`, run automatically as an additional step of the SAME jira team-catalog auto-import whenever the jira integration's `auto_import_teams` is on and its credential config carries `atlassian_organization_id` (org-opt-in; CHAOS-7002/D2770/D2778) -- also reachable standalone via `dho sync teams --provider jira` |
 | `teams.id` | the Jira project key (`PLAT`) | the uuid of the team's ARI (`ari:cloud:identity::team/<uuid>`), `native_team_key` = the full ARI |
 | Members (`team_memberships`, `source = 'native'`) | the project lead only, 100/10 | every `TEAM_MEMBER` of the team from the Teamwork Graph (`member_id = jira:<lower(accountId)>`, the same id the auto-import uses), 100/10 |
 | Project ownership (`team_project_ownership`, `source = 'native'`) | the project itself, specificity 100, priority 10 | the team's active projects, **specificity 110, priority 10** |
 
-`project_ownership` candidates rank by `is_primary`, then `specificity` (higher first), then `priority` (lower
-first) (`RankDerivationCandidates`). An Atlassian team that works on a project therefore **outranks** the project
-standing in for a team (110 over 100); the project-as-team row stays as the fallback for projects no Atlassian team
-claims. The two id spaces cannot collide (a project key is not a uuid), and the sync never writes the project-as-team
-rows. The source is the existing `native` enum value: `team_*.source` has no room for another value without a
-ClickHouse migration (rule 4.1 above). Asserted by `TestAnAtlassianTeamOutranksTheProjectAsTeamOwnerInTheCascade`.
+**Precedence is resolved entirely at READ time**, never by gating which leg writes: `project_ownership`
+candidates rank by `is_primary`, then `specificity` (higher first), then `priority` (lower first)
+(`RankDerivationCandidates`). Where the two legs both produce a candidate for the SAME project (an Atlassian team
+that works on a project the project-as-team leg also owns), the Atlassian row **outranks** it (110 over 100) and
+becomes the resolver's sole primary owner for that scope -- exactly one candidate wins, never both (no
+double-attribution). A project no Atlassian team claims keeps only its project-as-team row, unaffected. The two
+id spaces cannot collide (a project key is not a uuid). The source is the existing `native` enum value:
+`team_*.source` has no room for another value without a ClickHouse migration (rule 4.1 above). The overlap case is
+asserted end to end by `TestAnAtlassianTeamOutranksTheProjectAsTeamOwnerInTheCascade`
+(`internal/atlassianteams/collect_test.go`): both legs' real candidate shapes (100/10 vs 110/10) are fed into the
+production `RankDerivationCandidates` in both input orders, and the Atlassian candidate is the ranked winner
+either way.
+
+A future write-time toggle (skip the project-as-team leg entirely once an integration has Atlassian Teams
+configured) is a possible follow-up, not implemented -- D2778 records it as an option for chris to decide, not a
+default.
 
 ### 0.3 Off-the-rails matrix (symptom → diagnosis → fix)
 

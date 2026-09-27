@@ -42,6 +42,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -242,8 +243,16 @@ func startStack(t *testing.T, ctx context.Context) stack {
 		// reachable, not to weaken what a real deployment dials.
 		HTTPClient: &http.Client{Timeout: 10 * time.Second},
 	})
+	// session.Routes mounts /api/v1/auth/refresh -- needed so a test can
+	// prove an OIDC-issued refresh_token is actually usable there (r1
+	// review, CHAOS-6658 P1: it wasn't, before oidc.go started storing a
+	// refresh_tokens row for it).
+	sessionRoutes := session.Routes(session.Deps{Pool: pool, Guard: guard, Auth: auth, Verifier: verifier, Signer: signer, Logger: logger, Now: clock.now})
 	mux := http.NewServeMux()
 	for _, route := range routes {
+		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+	}
+	for _, route := range sessionRoutes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	server := httptest.NewServer(mux)
@@ -528,6 +537,17 @@ func TestOIDCCallbackRefusesATamperedState(t *testing.T) {
 	if status != http.StatusBadRequest || body["detail"] != "OIDC authentication failed" {
 		t.Fatalf("status=%d body=%v, want 400 OIDC authentication failed", status, body)
 	}
+	// r1 review (CHAOS-6658, P3): config is "{}", so metadata resolution
+	// (empty issuer) would ALSO fail with the same 400 -- assert the
+	// RECORDED reason is specifically the state check, not that later
+	// stage, or this test could pass with state validation deleted.
+	var lastError *string
+	if err := st.pool.QueryRow(ctx, `SELECT last_error FROM sso_providers WHERE id = $1`, providerID).Scan(&lastError); err != nil {
+		t.Fatal(err)
+	}
+	if lastError == nil || !strings.Contains(*lastError, "state mismatch") {
+		t.Fatalf("last_error = %v, want a recorded state-mismatch reason (not a later-stage failure)", lastError)
+	}
 }
 
 func flipLastRune(s string) string {
@@ -677,5 +697,52 @@ func TestOIDCCallbackRefusesAWrongNonce(t *testing.T) {
 	}
 	if lastError == nil || !strings.Contains(*lastError, "nonce") {
 		t.Fatalf("last_error = %v, want a recorded nonce-mismatch reason", lastError)
+	}
+}
+
+// TestOIDCLoginRefreshTokenIsUsable pins the r1 review's second P1
+// (CHAOS-6658): an OIDC-issued refresh_token must actually work at
+// /api/v1/auth/refresh, the same DB-backed route password login uses --
+// not merely be a validly-signed JWT no refresh_tokens row backs.
+func TestOIDCLoginRefreshTokenIsUsable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	idp := startFakeIdP(t)
+
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	config := fmt.Sprintf(`{"client_id":"test-client","issuer":%q,"token_endpoint":%q,"jwks_uri":%q,"userinfo_endpoint":%q,"scopes":["openid","email"]}`,
+		idp.server.URL, idp.server.URL+"/token", idp.server.URL+"/jwks", idp.server.URL+"/userinfo")
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "oidc", status: "active", config: config, autoProvision: true,
+		clientSecretEncryptedFallback: "test-client-secret",
+	})
+
+	status, authResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+	if status != http.StatusOK {
+		t.Fatalf("authorize: status=%d body=%v", status, authResp)
+	}
+	parsed, err := url.Parse(authResp["authorization_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idp.set(parsed.Query().Get("nonce"), "refresh.user@allowed.example", "Refresh User", "idp-subject-refresh")
+
+	status, cbResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+		map[string]any{"code": "test-auth-code", "state": authResp["state"]})
+	if status != http.StatusOK {
+		t.Fatalf("callback: status=%d body=%v", status, cbResp)
+	}
+	refreshToken, _ := cbResp["refresh_token"].(string)
+	if refreshToken == "" {
+		t.Fatalf("callback: missing refresh_token in %v", cbResp)
+	}
+
+	status, refreshResp := postJSON(t, st.server, "/api/v1/auth/refresh", map[string]any{"refresh_token": refreshToken})
+	if status != http.StatusOK {
+		t.Fatalf("refresh: status=%d body=%v, want 200 (the refresh_token an OIDC login just issued must actually work)", status, refreshResp)
+	}
+	if refreshResp["access_token"] == "" || refreshResp["refresh_token"] == "" {
+		t.Fatalf("refresh: expected a fresh token pair, got %v", refreshResp)
 	}
 }

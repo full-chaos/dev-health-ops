@@ -64,9 +64,12 @@ package sso
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -457,16 +460,77 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	role := "member"
+	orgID := ""
+	var orgUUID *uuid.UUID
+	if membership != nil {
+		role = membership.role
+		orgID = membership.orgID.String()
+		id := membership.orgID
+		orgUUID = &id
+	}
+	now := h.Now()
+	jti, err := newJTI()
+	if err != nil {
+		h.fail(w, r, "mint token", err)
+		return
+	}
+	access, err := h.Signer.Access(edgetoken.AccessClaims{
+		UserID: user.id.String(), Email: user.email, OrgID: orgID, Role: role, IsSuperuser: user.isSuperuser,
+		Username: user.username, FullName: user.fullName, TokenVersion: user.tokenVersion,
+	}, now, jti)
+	if err != nil {
+		h.fail(w, r, "mint access token", err)
+		return
+	}
+	// r1 review (CHAOS-6658, P1): the earlier version of this function
+	// minted a stateless refresh JWT and never inserted a refresh_tokens
+	// row, faithfully matching SSOService's own AuthService.
+	// create_token_pair (services/auth.py:282-283) -- but /auth/refresh
+	// (api/auth/routers/refresh.py:158, ported here as refreshByHash)
+	// does a real DB lookup by the token's own jti on BOTH planes, and
+	// 401s when no row exists. Python's version of this route was never
+	// actually reachable (the pre-CHAOS-6658 dead-state finding), so this
+	// Python bug never had a live consequence; once this Go port fixed
+	// the state bug and made the route real, the SAME stateless mint
+	// would have shipped a login whose OWN refresh_token 401s on first
+	// use -- a real, executed, reproduced defect (r1's second P1), not a
+	// parity target worth preserving. Fixed here by storing the refresh
+	// token the same way the password-login route does (session/tokens.go
+	// storeRefresh), inside the same transaction as the audit/login-time
+	// writes.
+	family := uuid.New()
+	refreshJTI, err := newJTI()
+	if err != nil {
+		h.fail(w, r, "mint token", err)
+		return
+	}
+	refreshExpiresAt := now.Add(7 * 24 * time.Hour)
+	refresh, err := h.Signer.RefreshUntil(edgetoken.RefreshClaims{UserID: user.id.String(), OrgID: orgID, FamilyID: family.String()},
+		now, refreshExpiresAt, refreshJTI)
+	if err != nil {
+		h.fail(w, r, "mint refresh token", err)
+		return
+	}
+
 	tx, err := h.Pool.Begin(ctx)
 	if err != nil {
 		h.fail(w, r, "begin", err)
 		return
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	now := h.Now()
 	if _, err := tx.Exec(ctx, `UPDATE sso_providers SET last_login_at = $2, updated_at = $2 WHERE id = $1::uuid`,
 		providerID, now.UTC()); err != nil {
 		h.fail(w, r, "record login", err)
+		return
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO refresh_tokens
+	(id, user_id, org_id, token_hash, family_id, expires_at, revoked_at, replaced_by_hash, successor_jti,
+	 ip_address, user_agent, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, $8, $9)`,
+		uuid.New(), user.id, orgUUID, hashRefreshJTI(refreshJTI), family, refreshExpiresAt.UTC(),
+		clientHost(r), userAgentHeader(r), now.UTC()); err != nil {
+		h.fail(w, r, "store refresh token", err)
 		return
 	}
 	meta := pyjson.NewObject()
@@ -489,45 +553,6 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role := "member"
-	orgID := ""
-	if membership != nil {
-		role = membership.role
-		orgID = membership.orgID.String()
-	}
-	jti, err := newJTI()
-	if err != nil {
-		h.fail(w, r, "mint token", err)
-		return
-	}
-	access, err := h.Signer.Access(edgetoken.AccessClaims{
-		UserID: user.id.String(), Email: user.email, OrgID: orgID, Role: role, IsSuperuser: user.isSuperuser,
-		Username: user.username, FullName: user.fullName, TokenVersion: user.tokenVersion,
-	}, now, jti)
-	if err != nil {
-		h.fail(w, r, "mint access token", err)
-		return
-	}
-	// SSOService's own AuthService.create_token_pair mints a bare
-	// stateless refresh JWT (services/auth.py:282-283) and never inserts
-	// a refresh_tokens row -- a different, narrower contract than the
-	// password-login route's _issue_membership_tokens (session/tokens.go
-	// mintPair/storeRefresh), which does. Recorded in the PR body: an
-	// SSO-issued refresh token cannot be revoked by the per-family
-	// revocation the rest of the app relies on. This ports Python's
-	// actual behavior; changing it is a data-semantics decision, not an
-	// implementation one, so it is not made here.
-	refreshJTI, err := newJTI()
-	if err != nil {
-		h.fail(w, r, "mint token", err)
-		return
-	}
-	refresh, err := h.Signer.RefreshUntil(edgetoken.RefreshClaims{UserID: user.id.String(), OrgID: orgID, FamilyID: uuid.NewString()},
-		now, now.Add(7*24*time.Hour), refreshJTI)
-	if err != nil {
-		h.fail(w, r, "mint refresh token", err)
-		return
-	}
 	out := pyjson.NewObject()
 	out.Set("access_token", access)
 	out.Set("refresh_token", refresh)
@@ -848,6 +873,38 @@ func mustParseUUID(text string) uuid.UUID {
 }
 
 func uuidPtr(id uuid.UUID) *uuid.UUID { return &id }
+
+// hashRefreshJTI is refresh_tokens._hash_token: sha256 of the jti's UTF-8
+// bytes, the same hash refreshByHash (internal/api/session/store.go) looks
+// up by. Duplicated rather than exported: one call site here, and the
+// session package's own copy is unexported for the same reason.
+func hashRefreshJTI(jti string) string {
+	sum := sha256.Sum256([]byte(jti))
+	return hex.EncodeToString(sum[:])
+}
+
+// clientHost is request.client.host: the peer's host, nil without one.
+func clientHost(r *http.Request) *string {
+	if r.RemoteAddr == "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return &host
+}
+
+// userAgentHeader is request.headers.get("user-agent"): the first value,
+// nil when absent.
+func userAgentHeader(r *http.Request) *string {
+	values := r.Header.Values("User-Agent")
+	if len(values) == 0 {
+		return nil
+	}
+	value := policy.Latin1(values[0])
+	return &value
+}
 
 func asOIDCProcessing(err error, target *oidcProcessing) bool {
 	if processing, ok := err.(oidcProcessing); ok {

@@ -68,23 +68,6 @@ def test_the_new_preflight_states_are_not_terminal() -> None:
     assert RunState.RESOLVING_SUBJECTS not in TERMINAL_STATES
 
 
-def test_router_replay_allowlist_matches_the_terminal_set() -> None:
-    import inspect
-
-    from dev_health_ops.api.dev import router
-
-    source = inspect.getsource(router)
-    marker = "if replay_run.state not in {"
-    assert marker in source, "the replay allow-list moved; re-point this guard"
-    block = source.split(marker, 1)[1].split("}", 1)[0]
-    listed = {
-        line.strip().rstrip(",").removeprefix("RunState.").removesuffix(".value")
-        for line in block.splitlines()
-        if line.strip()
-    }
-    assert listed == {state.name for state in TERMINAL_STATES}
-
-
 def test_run_diagnostic_columns_are_present_and_bounded() -> None:
     columns = DevRun.__table__.columns
     for name, length in (("preflight_outcome", 32), ("legacy_guard_reason", 64)):

@@ -87,46 +87,6 @@ func (r *mutationResolver) TriggerReport(ctx context.Context, orgID string, repo
 	return r.triggerReport(ctx, orgID, reportID)
 }
 
-// DevScopeSearch is the resolver for the devScopeSearch field.
-func (r *queryResolver) DevScopeSearch(ctx context.Context, orgID string, input model.DevScopeSearchInput) (*model.DevScopeSearchResult, error) {
-	panic(fmt.Errorf("not implemented: DevScopeSearch - devScopeSearch"))
-}
-
-// DevMetricCatalog is the resolver for the devMetricCatalog field.
-func (r *queryResolver) DevMetricCatalog(ctx context.Context, orgID string, input *model.DevMetricCatalogInput) (*model.DevMetricCatalog, error) {
-	panic(fmt.Errorf("not implemented: DevMetricCatalog - devMetricCatalog"))
-}
-
-// DevMetric is the resolver for the devMetric field.
-func (r *queryResolver) DevMetric(ctx context.Context, orgID string, input model.DevMetricQueryInput) (*model.DevMetricResult, error) {
-	panic(fmt.Errorf("not implemented: DevMetric - devMetric"))
-}
-
-// DevEvidenceSearch is the resolver for the devEvidenceSearch field.
-func (r *queryResolver) DevEvidenceSearch(ctx context.Context, orgID string, input model.DevEvidenceSearchInput) (*model.DevEvidenceSearchResult, error) {
-	panic(fmt.Errorf("not implemented: DevEvidenceSearch - devEvidenceSearch"))
-}
-
-// DevDataHealth is the resolver for the devDataHealth field.
-func (r *queryResolver) DevDataHealth(ctx context.Context, orgID string, input model.DevDataHealthInput) (*model.DevDataHealthResult, error) {
-	panic(fmt.Errorf("not implemented: DevDataHealth - devDataHealth"))
-}
-
-// DevStatusSnapshot is the resolver for the devStatusSnapshot field.
-func (r *queryResolver) DevStatusSnapshot(ctx context.Context, orgID string, input model.DevStatusSnapshotInput) (*model.DevStatusSnapshot, error) {
-	panic(fmt.Errorf("not implemented: DevStatusSnapshot - devStatusSnapshot"))
-}
-
-// DevChangeSummary is the resolver for the devChangeSummary field.
-func (r *queryResolver) DevChangeSummary(ctx context.Context, orgID string, input model.DevChangeSummaryInput) (*model.DevChangeSummary, error) {
-	panic(fmt.Errorf("not implemented: DevChangeSummary - devChangeSummary"))
-}
-
-// DevWorkGraphNeighbors is the resolver for the devWorkGraphNeighbors field.
-func (r *queryResolver) DevWorkGraphNeighbors(ctx context.Context, orgID string, input model.DevWorkGraphNeighborsInput) (*model.DevWorkGraphNeighborsResult, error) {
-	panic(fmt.Errorf("not implemented: DevWorkGraphNeighbors - devWorkGraphNeighbors"))
-}
-
 // Catalog is the resolver for the catalog field. The values query reads only
 // the authorized org's rows; a differing orgId is denied, the same guard
 // Analytics applies. A values query that fails answers empty values and finishes the span as

@@ -1,4 +1,3 @@
-from .ask_dev import router as ask_dev_router
 from .common import get_clickhouse_store, get_session, get_user_id
 from .credentials import (
     _test_github_connection,
@@ -20,7 +19,6 @@ from .pagerduty import router as pagerduty_router
 from .pagerduty_bindings import router as pagerduty_bindings_router
 from .pagerduty_services import router as pagerduty_services_router
 from .platform import router as platform_router
-from .platform_ask_dev import router as platform_ask_dev_router
 from .settings import router as settings_router
 from .setup import router as setup_router
 from .sync import router as sync_router
@@ -29,7 +27,6 @@ from .users import router as users_router
 
 __all__ = [
     "credentials_router",
-    "ask_dev_router",
     "customer_push_router",
     "features_router",
     "get_clickhouse_store",
@@ -43,7 +40,6 @@ __all__ = [
     "pagerduty_router",
     "pagerduty_bindings_router",
     "pagerduty_services_router",
-    "platform_ask_dev_router",
     "platform_router",
     "settings_router",
     "setup_router",

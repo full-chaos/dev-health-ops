@@ -23,7 +23,6 @@ nothing about what actually lands in the tables the corpus runner reads.
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -36,10 +35,8 @@ from sqlalchemy import event, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from dev_health_ops.api.dev import router as dev_router_module
 from dev_health_ops.api.dev import terminal_frames as dev_terminal_frames
 from dev_health_ops.api.dev.contracts import DevError
-from dev_health_ops.api.dev.export_contracts import ARTIFACT_ROOT
 from dev_health_ops.api.dev.orchestrator_persistence import PersistenceRunRecorder
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.persistence import (
@@ -54,7 +51,6 @@ from dev_health_ops.api.dev.scope_service import (
     ScopeRequestCache,
     ScopeResolutionService,
 )
-from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.llm.agent.contracts import AgentFinalAnswer
 from dev_health_ops.llm.agent.scripted import ScriptedStep
 from dev_health_ops.metrics.prometheus import ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL
@@ -513,17 +509,20 @@ async def test_chaos_3423_new_row_shape_is_readable_by_prompt_history_and_transc
     diverge deliberately (Codex adversarial review round 2, confirmed with
     direct evidence from the sibling ``dev-health-web`` checkout):
 
-    * ``router._bounded_prompt_history`` (internal-only -- feeds the next
-      turn's model prompt, never reaches a client) parses the row and
-      includes its ``safe_message``, so the model keeps continuity with a
-      prior clarification/error turn.
-    * ``router.get_conversation_transcript`` (client-facing wire response)
-      OMITS the row instead -- the checked-in web client's own
-      ``AskDevProvider.toTranscriptEntry`` throws for any assistant entry
-      without ``answer``, and the wire contract deliberately gained no new
-      field here, so an old or new client sees byte-identical transcript
-      responses either way (the turn simply has no answer bubble, exactly
-      the pre-CHAOS-3423 behavior) until a coordinated client update ships.
+    * the internal prompt-history reader (feeds the next turn's model
+      prompt, never reaches a client) must be able to parse the row and
+      recover its ``safe_message``, so the model keeps continuity with a
+      prior clarification/error turn -- asserted here directly against the
+      persisted row's ``answer_payload`` (CHAOS-6262 deleted ``router.py``'s
+      ``_bounded_prompt_history`` wrapper along with it).
+    * ``DevPersistenceService.list_transcript_records`` (the wire-facing v1
+      transcript read; CHAOS-6262 deleted its only caller,
+      ``router.get_conversation_transcript``, but the persistence method
+      itself is retained engine surface) OMITS the row instead -- the
+      checked-in web client's own ``AskDevProvider.toTranscriptEntry``
+      throws for any assistant entry without ``answer``, so the turn simply
+      has no answer bubble, exactly the pre-CHAOS-3423 behavior, until a
+      coordinated client update ships (CHAOS-3440).
     """
 
     maker, org_id, user_id = seeded
@@ -580,25 +579,22 @@ async def test_chaos_3423_new_row_shape_is_readable_by_prompt_history_and_transc
             exclude_message_id=uuid.uuid4(),
             limit=10,
         )
-        turns = dev_router_module._bounded_prompt_history(history)
-        assert [t.role for t in turns] == ["user", "assistant"]
-        assert turns[1].content == output.result.error.safe_message
+        assert [m.role for m in history] == ["user", "assistant"]
+        assert (
+            DevError.model_validate(history[1].answer_payload).safe_message
+            == output.result.error.safe_message
+        )
 
-        user = AuthenticatedUser(
-            user_id=str(user_id),
-            email="ask-dev@example.com",
-            org_id=str(org_id),
-            role="member",
+        transcript = await service.list_transcript_records(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
         )
-        transcript = await dev_router_module.get_conversation_transcript(
-            conversation_id,
-            (user, service, "request-chaos-3423"),
-        )
-        # CHAOS-3423 Codex round 2 pivot: the client-facing transcript
-        # endpoint omits the no-answer row entirely (never crashes, never
-        # exposes a new field the current web client cannot handle) -- the
-        # transcript looks exactly like it did before this change shipped.
-        assert [item.role for item in transcript.items] == ["user"]
+        # CHAOS-3423 Codex round 2 pivot: the client-facing transcript read
+        # omits the no-answer row entirely (never crashes, never exposes a
+        # new field the current web client cannot handle) -- the transcript
+        # looks exactly like it did before this change shipped.
+        assert [record.message.role for record in transcript.records] == ["user"]
 
 
 @pytest.mark.asyncio
@@ -1041,130 +1037,6 @@ async def test_chaos_3423_no_answer_row_is_never_treated_as_a_real_answer(
         assert len(records) == 1
         assert records[0].latest_answer_id != run_id
         assert records[0].latest_answer_id is None
-
-
-def _pinned_transcript_entry_schema() -> dict[str, Any]:
-    path = ARTIFACT_ROOT / "schemas" / "dev_conversation_transcript.v1.schema.json"
-    return json.loads(path.read_text(encoding="utf-8"))["$defs"]["DevTranscriptEntry"]
-
-
-def _assert_conforms_to_pinned_entry_schema(
-    entry: dict[str, Any], schema_def: dict[str, Any]
-) -> None:
-    """A dependency-free structural check against the VENDORED schema file
-    (this repo has no ``jsonschema`` dependency -- see
-    ``tests/providers/test_route_family_contract.py``'s identical rationale)
-    -- exactly the two invariants CHAOS-3440 requires never to regress:
-    ``additionalProperties: false`` (no unknown keys -- catches an `error`
-    field reappearing without the schema being reverted) and every
-    ``required`` key present.
-    """
-
-    allowed = set(schema_def["properties"])
-    extra = set(entry) - allowed
-    assert not extra, f"entry carries keys the pinned schema does not declare: {extra}"
-    missing = set(schema_def["required"]) - set(entry)
-    assert not missing, f"entry is missing pinned-schema-required keys: {missing}"
-
-
-@pytest.mark.asyncio
-async def test_chaos_3440_wire_transcript_conforms_to_the_pinned_v1_schema(
-    seeded,
-) -> None:
-    """CHAOS-3440 (filed from Codex adversarial review round 2, confirmed by
-    team-lead's scout with direct evidence from the ``dev-health-web``
-    checkout): the checked-in web client runtime-validates every transcript
-    response against this EXACT vendored schema file with a closed-world
-    validator, plus a hand-written invariant that every assistant entry
-    carries a real (non-null) ``answer``. For a conversation that reached a
-    no-answer terminal, the wire response must still validate: no unknown
-    keys (in particular, no `error` field), every entry either role="user"
-    or a role="assistant" entry with a non-null `answer` -- never a
-    null-answer assistant entry, and never an entry for the no-answer turn
-    at all.
-    """
-
-    maker, org_id, user_id = seeded
-    question = "What's the status of the Atlas project?"
-    conversation_id, run_id = await _seed_run(maker, org_id, user_id, question=question)
-
-    async with maker() as session:
-        service = DevPersistenceService(session)
-
-        def recorder_factory() -> Recorder:
-            return cast(
-                Recorder,
-                PersistenceRunRecorder(
-                    service,
-                    org_id=org_id,
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                    run_id=run_id,
-                    provider_source="platform",
-                ),
-            )
-
-        output = await run_preflight_orchestrator(
-            question=question,
-            entities=[
-                (str(org_id), ATLAS_PROJECT_ONE),
-                (str(org_id), ATLAS_PROJECT_TWO),
-            ],
-            org_id=str(org_id),
-            user_id=str(user_id),
-            conversation_id=str(conversation_id),
-            run_id=str(run_id),
-            answer_id=str(uuid.uuid4()),
-            script_id="chaos-3440-schema-conformance",
-            recorder_factory=recorder_factory,
-        )
-        await session.commit()
-        assert output.result.error is not None
-
-        # Setup control: the no-answer row really is in dev_messages (the
-        # thing CHAOS-3423 exists to guarantee) -- this test is about what
-        # the WIRE response does with it, not whether it was persisted.
-        assistant_rows = (
-            await session.scalars(
-                select(DevMessage).where(
-                    DevMessage.conversation_id == conversation_id,
-                    DevMessage.role == "assistant",
-                )
-            )
-        ).all()
-        assert len(assistant_rows) == 1
-
-        user = AuthenticatedUser(
-            user_id=str(user_id),
-            email="ask-dev@example.com",
-            org_id=str(org_id),
-            role="member",
-        )
-        transcript = await dev_router_module.get_conversation_transcript(
-            conversation_id,
-            (user, service, "request-chaos-3440"),
-        )
-        wire_payload = transcript.model_dump(mode="json")
-
-        schema_def = _pinned_transcript_entry_schema()
-        assert "error" not in schema_def["properties"], (
-            "the pinned v1 schema must never gain an `error` property "
-            "without a coordinated dev-health-web client update (CHAOS-3440)"
-        )
-
-        entries = wire_payload["items"]
-        assert entries, "setup control: the user turn must still be on the wire"
-        for entry in entries:
-            _assert_conforms_to_pinned_entry_schema(entry, schema_def)
-            if entry["role"] == "assistant":
-                assert entry.get("answer") is not None, (
-                    "a null-answer assistant entry on the wire is exactly "
-                    "what crashes AskDevProvider.toTranscriptEntry"
-                )
-
-        # The no-answer turn itself must not appear at all -- the wire
-        # transcript is byte-for-byte what it was before CHAOS-3423.
-        assert [e["role"] for e in entries] == ["user"]
 
 
 @pytest.mark.asyncio

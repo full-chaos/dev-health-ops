@@ -65,17 +65,6 @@ from .models.recommendations import (
     Recommendation,
     WindowInput,
 )
-from .resolvers.dev_evidence import (
-    resolve_dev_data_health,
-    resolve_dev_evidence_search,
-)
-from .resolvers.dev_metric import resolve_dev_metric, resolve_dev_metric_catalog
-from .resolvers.dev_scope import resolve_dev_scope_search
-from .resolvers.dev_status_change import (
-    resolve_dev_change_summary,
-    resolve_dev_status_snapshot,
-)
-from .resolvers.dev_work_graph import resolve_dev_work_graph_neighbors
 from .resolvers.reports import (
     CloneSavedReportInput,
     CreateSavedReportInput,
@@ -104,29 +93,6 @@ from .types.complexity import (
 from .types.compounding_risk import (
     CompoundingRiskFilterInput,
     CompoundingRiskResult,
-)
-from .types.dev_evidence import (
-    DevDataHealthInput,
-    DevDataHealthResult,
-    DevEvidenceSearchInput,
-    DevEvidenceSearchResult,
-)
-from .types.dev_metric import (
-    DevMetricCatalog,
-    DevMetricCatalogInput,
-    DevMetricQueryInput,
-    DevMetricResult,
-)
-from .types.dev_scope import DevScopeSearchInput, DevScopeSearchResult
-from .types.dev_status_change import (
-    DevChangeSummary,
-    DevChangeSummaryInput,
-    DevStatusSnapshot,
-    DevStatusSnapshotInput,
-)
-from .types.dev_work_graph import (
-    DevWorkGraphNeighborsInput,
-    DevWorkGraphNeighborsResult,
 )
 from .types.review_edges import (
     ReviewEdgesInput,
@@ -189,117 +155,6 @@ def get_context(info: Info) -> GraphQLContext:
 @strawberry.type
 class Query:
     """Root query type for analytics API."""
-
-    @strawberry.field(
-        description=(
-            "Search authorized Ask Dev V1 direct-scope entities. Results are "
-            "tenant-scoped, deterministic, and capped at 25 candidates."
-        )
-    )
-    async def dev_scope_search(
-        self,
-        info: Info,
-        org_id: str,
-        input: DevScopeSearchInput,
-    ) -> DevScopeSearchResult:
-        return await resolve_dev_scope_search(get_context(info), input)
-
-    @strawberry.field(
-        description="List the exact authorized Ask Dev V1 metric registry."
-    )
-    async def dev_metric_catalog(
-        self,
-        info: Info,
-        org_id: str,
-        input: DevMetricCatalogInput | None = None,
-    ) -> DevMetricCatalog:
-        return await resolve_dev_metric_catalog(get_context(info), input)
-
-    @strawberry.field(
-        description=(
-            "Query one registered Ask Dev V1 metric through the shared bounded "
-            "service, including prior-equivalent comparison and source state."
-        )
-    )
-    async def dev_metric(
-        self,
-        info: Info,
-        org_id: str,
-        input: DevMetricQueryInput,
-    ) -> DevMetricResult:
-        return await resolve_dev_metric(get_context(info), input)
-
-    @strawberry.field(
-        description=(
-            "Search bounded authorized Ask Dev evidence. Source text is "
-            "sanitized and explicitly untrusted; results are capped at 25. "
-            "Requires the canonical explicit-enable ask_dev entitlement."
-        )
-    )
-    async def dev_evidence_search(
-        self,
-        info: Info,
-        org_id: str,
-        input: DevEvidenceSearchInput,
-    ) -> DevEvidenceSearchResult:
-        return await resolve_dev_evidence_search(get_context(info), input)
-
-    @strawberry.field(
-        description=(
-            "Report source-specific Ask Dev coverage, freshness, failures, "
-            "and whether required sources permit a complete answer. Requires "
-            "the canonical explicit-enable ask_dev entitlement."
-        )
-    )
-    async def dev_data_health(
-        self,
-        info: Info,
-        org_id: str,
-        input: DevDataHealthInput,
-    ) -> DevDataHealthResult:
-        return await resolve_dev_data_health(get_context(info), input)
-
-    @strawberry.field(
-        description=(
-            "Return declared status separately from deterministic, evidence-backed "
-            "completion using the versioned Ask Dev status rules."
-        )
-    )
-    async def dev_status_snapshot(
-        self,
-        info: Info,
-        org_id: str,
-        input: DevStatusSnapshotInput,
-    ) -> DevStatusSnapshot:
-        return await resolve_dev_status_snapshot(get_context(info), input)
-
-    @strawberry.field(
-        description=(
-            "Return reproducible observed changes across explicit equal-duration "
-            "windows without upgrading correlation to cause."
-        )
-    )
-    async def dev_change_summary(
-        self,
-        info: Info,
-        org_id: str,
-        input: DevChangeSummaryInput,
-    ) -> DevChangeSummary:
-        return await resolve_dev_change_summary(get_context(info), input)
-
-    @strawberry.field(
-        description=(
-            "Return persisted, tenant-scoped work-graph neighbors with depth fixed "
-            "to one and code-owned relationship/result bounds."
-        )
-    )
-    async def dev_work_graph_neighbors(
-        self,
-        info: Info,
-        org_id: str,
-        input: DevWorkGraphNeighborsInput,
-    ) -> DevWorkGraphNeighborsResult:
-        return await resolve_dev_work_graph_neighbors(get_context(info), input)
 
     @strawberry.field(
         description="Get catalog of available dimensions, measures, and limits"

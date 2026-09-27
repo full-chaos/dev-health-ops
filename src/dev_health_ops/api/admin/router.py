@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends
 from dev_health_ops.api.admin.middleware import require_admin
 
 from .routers import (
-    ask_dev_router,
     credentials_router,
     customer_push_router,
     features_router,
@@ -20,7 +19,6 @@ from .routers import (
     pagerduty_bindings_router,
     pagerduty_router,
     pagerduty_services_router,
-    platform_ask_dev_router,
     platform_router,
     settings_router,
     setup_router,
@@ -43,7 +41,6 @@ router = APIRouter(
 )
 
 router.include_router(settings_router)
-router.include_router(ask_dev_router)
 router.include_router(setup_router)
 router.include_router(credentials_router)
 router.include_router(customer_push_router)
@@ -53,7 +50,6 @@ router.include_router(teams_router)
 router.include_router(users_router)
 router.include_router(orgs_router)
 router.include_router(platform_router)
-router.include_router(platform_ask_dev_router)
 router.include_router(features_router)
 router.include_router(github_app_router)
 router.include_router(pagerduty_router)

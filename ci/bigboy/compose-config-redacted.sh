@@ -14,7 +14,12 @@ set -euo pipefail
 # No cd here: -f/--env-file paths in "$@" are relative to the CALLER's cwd (matching
 # bigboy-cut.sh's own convention of `cd $R` before every compose invocation), not to
 # this script's own location.
-docker compose "$@" config 2>/dev/null \
+err=$(mktemp)
+trap 'rm -f "$err"' EXIT
+# compose's own stderr can quote a resolved value in some error shapes, so it is never
+# passed through; only the NAME of an unset required variable is surfaced.
+set +e
+docker compose "$@" config 2>"$err" \
   | awk -F': ' '
       /^[[:space:]]+[A-Za-z_][A-Za-z0-9_]*:/ {
         line = $0
@@ -37,3 +42,6 @@ docker compose "$@" config 2>/dev/null \
       }
     ' \
   | sort -u
+rc=${PIPESTATUS[0]}
+grep -o 'required variable [A-Za-z_][A-Za-z0-9_]* is missing' "$err" | sort -u >&2 || true
+exit "$rc"

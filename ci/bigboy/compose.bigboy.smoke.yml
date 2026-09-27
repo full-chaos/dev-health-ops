@@ -8,6 +8,9 @@ services:
   web-smoke:
     image: ghcr.io/full-chaos/dev-hops-api@sha256:ab18700f0ef7c29e5833525833c8726752970177c03f3d3bda87188c3bf09295
     profiles: ["smoke"]
+    # Run as the host operator (uid 1001), not the image's appuser (10001): the password
+    # file is 0600 and owned by the operator, and the receipt lands in _records/.
+    user: "1001:1001"
     entrypoint: ["python3"]
     command: ["/smoke/web-path-smoke.py"]
     working_dir: /smoke
@@ -16,10 +19,19 @@ services:
       DHO_SMOKE_ADMIN_EMAIL: ${DHO_SMOKE_ADMIN_EMAIL:?DHO_SMOKE_ADMIN_EMAIL required}
       DHO_SMOKE_ADMIN_PASSWORD_FILE: ${DHO_SMOKE_ADMIN_PASSWORD_FILE:?DHO_SMOKE_ADMIN_PASSWORD_FILE required}
       DHO_SMOKE_BASE_URL: http://traefik:3000
+      DHO_SMOKE_PUBLIC_HOST: www.commanderkeen.dev
+      DHO_SMOKE_WEB_SRC: /web-src
+      DHO_SMOKE_CATALOG: /catalog/catalog.json
       # A caller (e.g. bigboy-cut.sh) may export this to a per-cut path under
       # _records/bigboy-<sha8>/ before invoking; unset falls back to the flat name.
       DHO_SMOKE_RECEIPT_PATH: ${DHO_SMOKE_RECEIPT_PATH:-/receipts/web-path-smoke-receipt.json}
     volumes:
-      - ./ci/bigboy:/smoke:ro
+      # The script directory is passed in by web-path-smoke.sh (compose resolves ./ paths
+      # against the project dir, the devhealth root, which has no ci/bigboy of its own).
+      - ${DHO_SMOKE_DIR:?DHO_SMOKE_DIR required}:/smoke:ro
       - ./_records:/receipts
       - ${DHO_SMOKE_ADMIN_PASSWORD_FILE}:${DHO_SMOKE_ADMIN_PASSWORD_FILE}:ro
+      # Web source the smoke derives GraphQL documents and REST paths from (read-only).
+      - ./web/src:/web-src:ro
+      # The edge catalog at the deployed ops sha (web-path-smoke.sh provides it).
+      - ${DHO_SMOKE_CATALOG_FILE:?DHO_SMOKE_CATALOG_FILE required}:/catalog/catalog.json:ro

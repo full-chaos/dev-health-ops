@@ -2,59 +2,11 @@ package sso
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"time"
 )
-
-// oauthLoginNonceCookieName is the HttpOnly, SameSite=Lax cookie
-// initiateOAuthAuth/initiateOAuthByType set alongside the AEAD state --
-// see hashOAuthLoginNonce's doc comment for what it defends against
-// (D2745 P1-3), and samlLoginNonceCookie (samlstate.go)/D2748 for the
-// identical, already-landed treatment on SAML's RelayState this mirrors.
-const oauthLoginNonceCookieName = "dho_oauth_login_nonce"
-
-// oauthLoginNonceCookie builds the cookie set at /authorize (value=nonce,
-// non-empty maxAge) and the one used to clear it at /callback
-// (value="", maxAge=-1). Secure is a literal true, not conditioned on
-// appBaseURL()'s scheme at request time -- D2748's already-landed
-// reasoning applies identically here: validateOAuthConfigHTTPS (oauth.go,
-// D2745 P1-2) refuses an insecure http:// base_url/redirect_uri override
-// at config-load time, so a literal true removes a dead branch instead
-// of leaving it to rot.
-func oauthLoginNonceCookie(value string, maxAge int) *http.Cookie {
-	return &http.Cookie{
-		Name:     oauthLoginNonceCookieName,
-		Value:    value,
-		Path:     "/",
-		MaxAge:   maxAge,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-	}
-}
-
-// hashOAuthLoginNonce mirrors hashSAMLLoginNonce (samlstate.go)/
-// pkceChallenge (state.go): SHA-256, base64url, unpadded. D2745 P1-3
-// (team-lead, CHAOS-6986 r1): a genuine, unexpired OAuth `state` token
-// only proves this package minted it -- not which browser is presenting
-// it back at /callback. A login-CSRF works without this: an attacker
-// starts their OWN OAuth login, captures the resulting code+state pair
-// (both travel through the attacker's own browser), and gets a victim to
-// submit that pair to the victim's own browser's /callback -- the state
-// verifies fine (a real, unexpired token this package minted), silently
-// logging the victim into the attacker's identity. Binding it to a
-// same-origin HttpOnly SameSite=Lax cookie closes this: SameSite=Lax
-// cookies are not sent on a cross-site submission, so a cross-site-
-// replayed state arrives with no matching cookie and is refused in
-// oauthExchangeAndFetch before the token exchange ever runs.
-func hashOAuthLoginNonce(nonce string) string {
-	sum := sha256.Sum256([]byte(nonce))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
-}
 
 // oauthStateTTL mirrors oidcStateTTL (D2727-amended): 10 minutes, matching
 // Google's own authorization code lifetime and applied here for the same
@@ -93,10 +45,24 @@ type oauthState struct {
 	ProviderID  string `json:"provider_id"`
 	OrgID       string `json:"org_id"`
 	RedirectURI string `json:"redirect_uri,omitempty"`
-	// NonceHash is D2745 P1-3's browser-binding class ruling -- see
-	// hashOAuthLoginNonce's doc comment just above.
+	// NonceHash is D2745 P1-3's browser-binding class ruling (hashLoginNonce,
+	// loginnonce.go): the random login-nonce value initiateOAuthAuth/
+	// initiateOAuthByType also places in a per-flow cookie named by THIS
+	// state's own ID (loginNonceCookieName("oauth", state.ID), D2759). A
+	// genuine, unexpired OAuth `state` token only proves this package
+	// minted it -- not which browser is presenting it back at /callback.
+	// A login-CSRF works without this: an attacker starts their OWN OAuth
+	// login, captures the resulting code+state pair (both travel through
+	// the attacker's own browser), and gets a victim to submit that pair
+	// to the victim's own browser's /callback -- the state verifies fine
+	// (a real, unexpired token this package minted), silently logging the
+	// victim into the attacker's identity. Binding it to a same-origin
+	// HttpOnly SameSite=Lax cookie closes this: SameSite=Lax cookies are
+	// not sent on a cross-site submission, so a cross-site-replayed state
+	// arrives with no matching cookie and is refused in
+	// oauthExchangeAndFetch before the token exchange ever runs.
 	NonceHash string `json:"nonce_hash"`
-	ID        string `json:"id"` // random, no comparison meaning of its own.
+	ID        string `json:"id"` // random; ALSO this flow's login-nonce cookie name suffix (D2759) -- no longer "no comparison meaning of its own".
 	IssuedAt  int64  `json:"issued_at"`
 	ExpiresAt int64  `json:"expires_at"`
 }
@@ -110,28 +76,32 @@ var (
 // opaque `state` value initiateOAuthAuth/initiateOAuthByType return,
 // AAD-bound to state.ProviderID -- see mintOIDCState's doc comment
 // (state.go) for why the AAD binding matters.
-func mintOAuthState(secret string, state oauthState, now time.Time) (string, error) {
+// Also returns the generated ID directly (D2759): initiateOAuthAuth/
+// initiateOAuthByType need it to name this flow's login-nonce cookie, and
+// the caller has no other way to learn the value this function stamps
+// into state.ID internally.
+func mintOAuthState(secret string, state oauthState, now time.Time) (token, flowID string, err error) {
 	gcm, err := newGCM(secret, oauthStateHKDFInfo)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	id, err := randomURLSafe(16)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	state.ID = id
 	state.IssuedAt = now.Unix()
 	state.ExpiresAt = now.Add(oauthStateTTL).Unix()
 	plaintext, err := json.Marshal(state)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
-		return "", err
+		return "", "", err
 	}
 	sealed := gcm.Seal(nonce, nonce, plaintext, []byte(state.ProviderID))
-	return base64.RawURLEncoding.EncodeToString(sealed), nil
+	return base64.RawURLEncoding.EncodeToString(sealed), id, nil
 }
 
 // verifyOAuthState mirrors verifyOIDCState (state.go): the GCM tag, bound

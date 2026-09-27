@@ -60,7 +60,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -103,49 +102,43 @@ func decodeOAuthConfig(raw *string) (oauthConfigValues, error) {
 	return cfg, nil
 }
 
-// validateOAuthConfigHTTPS is D2745 P1-2: an admin-overridden base_url
-// (GitLab's self-hosted instance -- the one provider Python's own
-// OAuthConfig lets point at an arbitrary URL, this file's own doc
-// comment) or redirect_uri naming the insecure http:// scheme is refused
-// here, at config-load time -- every decodeOAuthConfig call site
-// (buildOAuthAuthorization at /authorize, oauthExchangeAndFetch at
-// /callback), so this is enforced at BOTH provider-config-validation
-// time and exchange time from the same check, exactly like SAML's
-// validateSAMLConfigHTTPS (saml.go, D2748).
+// validateOAuthConfigHTTPS is D2759's single shared URL policy
+// (validateHTTPSOrLoopback, loginnonce.go), replacing this function's own
+// former ad-hoc `strings.HasPrefix(x, "http://")` gate: an admin-
+// overridden base_url (GitLab's self-hosted instance -- the one provider
+// Python's own OAuthConfig lets point at an arbitrary URL, this file's
+// own doc comment) or redirect_uri is refused here, at config-load time,
+// unless it parses as https (or an http loopback address). This runs at
+// every decodeOAuthConfig call site (buildOAuthAuthorization at
+// /authorize, oauthExchangeAndFetch at /callback), so this is enforced
+// at BOTH provider-config-validation time and exchange time from the same
+// check, exactly like SAML's validateSAMLConfigHTTPS (saml.go).
 //
 // Only checked when the admin actually set an override -- an unset
 // RedirectURI falls back to appBaseURL()-derived default (an ops-level
 // guarantee, not a per-provider one), same scoping as SAML's check.
 //
-// D2752 (team-lead): loopback http (127.0.0.1/localhost/::1, RFC 8252
-// shape) is allowed unconditionally, host-checked by isLoopbackHTTPURL --
-// no env var, no build tag, no test-injected knob of any kind. The
-// earlier DEV_HEALTH_ALLOW_HTTP_OAUTH_LOOPBACK env-var gate is REMOVED:
-// "a runtime switch that weakens a security check never enters the
-// production binary, test or not." Everything else must be https.
+// D2759 (team-lead, r1 on #3355): the OLD raw-prefix version of this
+// check was case-sensitive -- "HTTP://attacker.example/..." never
+// matched "http://" and sailed straight through, refusing nothing.
+// validateHTTPSOrLoopback parses first and compares the PARSED,
+// normalized scheme, closing that class of bypass (also: a schemeless
+// "//host" value and an opaque "https:evil" value, neither of which the
+// old check considered at all, are refused too). D2752's own loopback
+// rule (unconditional, no env var/build tag/knob of any kind) is
+// unchanged, now enforced by the shared helper instead of this file's own
+// copy of isLoopbackHTTPURL (deleted -- see loginnonce.go's
+// isLoopbackHostname).
 func validateOAuthConfigHTTPS(cfg oauthConfigValues) error {
 	for _, candidate := range []string{cfg.BaseURL, cfg.RedirectURI} {
-		if candidate == "" || !strings.HasPrefix(candidate, "http://") {
+		if candidate == "" {
 			continue
 		}
-		if isLoopbackHTTPURL(candidate) {
-			continue
+		if err := validateHTTPSOrLoopback(candidate); err != nil {
+			return fmt.Errorf("OAuth base_url/redirect_uri %w", err)
 		}
-		return errors.New("OAuth base_url/redirect_uri must not use the insecure http:// scheme")
 	}
 	return nil
-}
-
-func isLoopbackHTTPURL(raw string) bool {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "http" {
-		return false
-	}
-	switch parsed.Hostname() {
-	case "localhost", "127.0.0.1", "::1":
-		return true
-	}
-	return false
 }
 
 // oauthProtocolFor is create_oauth_provider_instance's provider_type ->
@@ -420,8 +413,8 @@ func (h handlers) initiateOAuthAuth(w http.ResponseWriter, r *http.Request) {
 // buildOAuthAuthorization is generate_authorization_request, shared by
 // initiateOAuthAuth and initiateOAuthByType (both build the identical
 // response from a resolved provider row). w receives the D2745 P1-3
-// login-nonce cookie -- see hashOAuthLoginNonce's doc comment
-// (oauthstate.go) for what it defends against.
+// login-nonce cookie, D2759's per-flow shape -- see oauthState.NonceHash's
+// doc comment (oauthstate.go) for what it defends against.
 func (h handlers) buildOAuthAuthorization(w http.ResponseWriter, row *providerRow, providerID uuid.UUID, providerType string) (*pyjson.Object, error) {
 	config, err := decodeOAuthConfig(row.Config)
 	if err != nil {
@@ -441,14 +434,20 @@ func (h handlers) buildOAuthAuthorization(w http.ResponseWriter, row *providerRo
 	if err != nil {
 		return nil, err
 	}
-	encrypted, err := mintOAuthState(h.StateSecret, oauthState{
+	encrypted, flowID, err := mintOAuthState(h.StateSecret, oauthState{
 		ProviderID: row.ID, OrgID: row.OrgID, RedirectURI: redirectURI,
-		NonceHash: hashOAuthLoginNonce(loginNonce),
+		NonceHash: hashLoginNonce(loginNonce),
 	}, now)
 	if err != nil {
 		return nil, err
 	}
-	http.SetCookie(w, oauthLoginNonceCookie(loginNonce, int(oauthStateTTL/time.Second)))
+	// D2759: named by this flow's own state ID and scoped to this
+	// provider's own real callback path (not "/") -- two concurrent OAuth
+	// flows in the same browser (two tabs, or two providers, or the
+	// provider_id-keyed and by-type routes both used at once) no longer
+	// collide on a single fixed cookie name.
+	callbackPath := "/api/v1/auth/oauth/" + row.ID + "/callback"
+	issueLoginNonceCookie(w, "oauth", flowID, loginNonce, callbackPath, oauthStateTTL)
 	out := pyjson.NewObject()
 	out.Set("authorization_url", oauthAuthorizationURL(authorizationURL, providerType, config.ClientID, redirectURI, encrypted, scopes))
 	out.Set("state", encrypted)
@@ -499,16 +498,12 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var cookieNonce string
-	if cookie, err := r.Cookie(oauthLoginNonceCookieName); err == nil {
-		cookieNonce = cookie.Value
-	}
-	// One-shot: clear it immediately, same reasoning as SAML's ACS
-	// callback (saml.go, D2744/D2745) -- defense in depth alongside the
-	// state's own single-use-in-practice lifetime.
-	http.SetCookie(w, oauthLoginNonceCookie("", -1))
-
-	claims, err := h.oauthExchangeAndFetch(ctx, row, providerID, providerType, stateToken, code, cookieNonce)
+	// D2759: the login-nonce cookie is now per-flow (named by the state's
+	// own verified ID, not a fixed name), so it can only be looked up
+	// AFTER that state verifies -- done inside oauthExchangeAndFetch
+	// itself, which also clears it unconditionally
+	// (verifyAndClearLoginNonceCookie, loginnonce.go).
+	claims, err := h.oauthExchangeAndFetch(ctx, w, r, row, providerID, providerType, stateToken, code)
 	if err != nil {
 		if errors.Is(err, errOAuthNoVerifiedEmail) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
@@ -624,8 +619,8 @@ func oauthDomainDeniedDetail() *pyjson.Object {
 // oauthExchangeAndFetch is the callback's own inline body up to (not
 // including) the domain-allowlist check: verify state, exchange the code,
 // fetch user info.
-func (h handlers) oauthExchangeAndFetch(ctx context.Context, row *providerRow, providerID uuid.UUID,
-	providerType, stateToken, code, cookieNonce string) (oauthClaims, error) {
+func (h handlers) oauthExchangeAndFetch(ctx context.Context, w http.ResponseWriter, r *http.Request, row *providerRow, providerID uuid.UUID,
+	providerType, stateToken, code string) (oauthClaims, error) {
 	now := h.Now()
 	state, err := verifyOAuthState(h.StateSecret, stateToken, providerID.String(), now)
 	if err != nil {
@@ -637,15 +632,19 @@ func (h handlers) oauthExchangeAndFetch(ctx context.Context, row *providerRow, p
 	if state.OrgID != row.OrgID {
 		return oauthClaims{}, ssoAuthErr("OAuth state mismatch")
 	}
-	// D2745 P1-3 browser-binding class ruling: the state alone only proves
-	// this package minted it, not which browser is presenting it back
-	// (hashOAuthLoginNonce's doc comment, oauthstate.go, has the login-CSRF
-	// this closes). A missing cookie (withheld by SameSite=Lax on a
-	// cross-site submission, or simply never set) or one that hashes to a
-	// different value than the state sealed is refused here, before the
-	// token exchange ever runs -- unauthenticated (D2738): the caller has
-	// proven nothing about the browser binding.
-	if cookieNonce == "" || !constantTimeEqual(hashOAuthLoginNonce(cookieNonce), state.NonceHash) {
+	// D2745 P1-3 browser-binding class ruling, D2759 per-flow fix folded
+	// in: the state alone only proves this package minted it, not which
+	// browser is presenting it back (oauthState.NonceHash's doc comment,
+	// oauthstate.go, has the login-CSRF this closes). The cookie is
+	// looked up ONLY now, by the name this VERIFIED state's own ID gives
+	// it -- never by a caller-supplied or pre-read value. A missing
+	// cookie (withheld by SameSite=Lax on a cross-site submission, or
+	// simply never set), one under the wrong per-flow name, or one that
+	// hashes to a different value than the state sealed is refused here,
+	// before the token exchange ever runs -- unauthenticated (D2738): the
+	// caller has proven nothing about the browser binding.
+	callbackPath := "/api/v1/auth/oauth/" + row.ID + "/callback"
+	if !verifyAndClearLoginNonceCookie(w, r, "oauth", state.ID, callbackPath, state.NonceHash) {
 		return oauthClaims{}, ssoAuthErr("OAuth state mismatch")
 	}
 	config, err := decodeOAuthConfig(row.Config)

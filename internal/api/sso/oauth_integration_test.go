@@ -199,6 +199,68 @@ func TestOAuthGitLabFullRoundTrip(t *testing.T) {
 	}
 }
 
+// TestOAuthTwoConcurrentAuthorizeFlowsBothComplete pins D2759's P1-B fix
+// directly: two /authorize calls in the SAME browser (one cookie jar --
+// two tabs, or a retry) must not collide. Before the fix, both flows set
+// the identical fixed cookie name, so the second silently overwrote the
+// first in the jar and the first flow's later /callback failed with a
+// false "state mismatch" even though its own state was perfectly valid.
+func TestOAuthTwoConcurrentAuthorizeFlowsBothComplete(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	gitlab := startFakeGitLab(t)
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
+	})
+
+	client := newCookieClient(t)
+
+	authorize := func() string {
+		status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+		if status != http.StatusOK {
+			t.Fatalf("authorize: %d %v", status, authResp)
+		}
+		state, _ := authResp["state"].(string)
+		if state == "" {
+			t.Fatal("authorize: missing state")
+		}
+		return state
+	}
+
+	// Both /authorize calls happen BEFORE either /callback -- exactly the
+	// two-tab shape: flow A's cookie must still be there, unclobbered,
+	// when flow A finally completes, even though flow B's /authorize ran
+	// in between. Both flows are the SAME user (two tabs logging into
+	// the same account) -- a distinct fake identity per flow would need
+	// its own distinct username/external ID too (the fixture's fake
+	// GitLab server has neither vary per call), which is a fixture
+	// concern orthogonal to what this test actually pins.
+	stateA := authorize()
+	stateB := authorize()
+	if stateA == stateB {
+		t.Fatal("expected two distinct state tokens for two distinct /authorize calls")
+	}
+
+	complete := func(state string) {
+		t.Helper()
+		status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+			map[string]any{"code": "c", "state": state})
+		if status != http.StatusOK {
+			t.Fatalf("callback: status=%d body=%v -- the two flows' login-nonce cookies collided", status, body)
+		}
+		if body["email"] != gitlab.email {
+			t.Fatalf("callback: email=%v, want %s", body["email"], gitlab.email)
+		}
+	}
+
+	// Flow A completes LAST, after flow B's /authorize already ran -- the
+	// case the shared fixed cookie name used to break.
+	complete(stateB)
+	complete(stateA)
+}
+
 // TestOAuthCallbackRefusesATamperedState pins D2738 for OAuth: a state
 // that fails to authenticate never mutates the provider row, mirroring
 // OIDC's own D2738 tests (TestOIDCCallbackRefusesATamperedState et al.).
@@ -281,23 +343,32 @@ func TestOAuthCallbackRefusesATamperedLoginNonceCookie(t *testing.T) {
 	// Tamper with the jar's own cookie value in place -- the state itself
 	// stays genuine and unexpired; only the browser-side half of the
 	// binding is wrong, which is exactly the case this check exists to
-	// catch (a genuine state presented by the wrong browser).
-	serverURL, err := url.Parse(st.server.URL)
+	// catch (a genuine state presented by the wrong browser). D2759: the
+	// cookie's Path is now scoped to this provider's own callback route
+	// (not "/"), so it must be queried and re-set AT that path -- and its
+	// NAME is per-flow (suffixed by a random flow ID), so match by prefix
+	// rather than the old fixed literal. jar.Cookies() also does not
+	// report a cookie's own Path (Path is not part of a Cookie: request
+	// header) -- restoring it before the second SetCookies is what makes
+	// that call a REPLACE instead of silently adding a second, untampered
+	// cookie of the same name.
+	callbackURL, err := url.Parse(st.server.URL + "/api/v1/auth/oauth/" + providerID.String() + "/callback")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cookies := client.Jar.Cookies(serverURL)
+	cookies := client.Jar.Cookies(callbackURL)
 	found := false
 	for _, c := range cookies {
-		if c.Name == "dho_oauth_login_nonce" {
+		if strings.HasPrefix(c.Name, "dho_oauth_login_nonce_") {
 			c.Value = flipMiddleByte(c.Value)
+			c.Path = callbackURL.Path
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("authorize: expected a dho_oauth_login_nonce cookie")
+		t.Fatal("authorize: expected a dho_oauth_login_nonce_<flowID> cookie")
 	}
-	client.Jar.SetCookies(serverURL, cookies)
+	client.Jar.SetCookies(callbackURL, cookies)
 
 	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})

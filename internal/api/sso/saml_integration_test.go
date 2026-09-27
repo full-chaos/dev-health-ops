@@ -801,6 +801,73 @@ func TestSAMLACSHonoursAllowIdpInitiatedFalse(t *testing.T) {
 	}
 }
 
+// TestSAMLTwoConcurrentInitiateFlowsBothComplete pins D2759's P1-B fix
+// directly: two /initiate calls in the SAME browser (one cookie jar --
+// two tabs, or a retry) must not collide. Before the fix, both flows set
+// the identical fixed cookie name, so the second silently overwrote the
+// first in the jar and the first flow's later /acs failed with a false
+// "state mismatch" even though its own RelayState was perfectly valid.
+func TestSAMLTwoConcurrentInitiateFlowsBothComplete(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	idp := newSAMLIdP(t)
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/acs"}`,
+		idp.idp.MetadataURL.String(), idp.certConfigValue())
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
+	})
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+
+	initiate := func() (relayState, requestID string) {
+		status, initResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/saml/"+providerID.String()+"/initiate", map[string]any{})
+		if status != http.StatusOK {
+			t.Fatalf("initiate: status=%d body=%v", status, initResp)
+		}
+		redirectURL, err := url.Parse(initResp["redirect_url"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return redirectURL.Query().Get("RelayState"), inflateAndExtractRequestID(t, redirectURL.Query().Get("SAMLRequest"))
+	}
+
+	// Both /initiate calls happen BEFORE either /acs -- exactly the two-tab
+	// shape: flow A's cookie must still be there, unclobbered, when flow A
+	// finally completes, even though flow B's /initiate ran in between.
+	relayStateA, requestIDA := initiate()
+	relayStateB, requestIDB := initiate()
+	if relayStateA == relayStateB {
+		t.Fatal("expected two distinct RelayState tokens for two distinct /initiate calls")
+	}
+
+	complete := func(email, relayState, requestID string) {
+		t.Helper()
+		samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
+			spEntityID: "https://sp.test/m", acsURL: "https://sp.test/acs",
+			email: email, fullName: email, nameID: email, authnRequestID: requestID,
+		})
+		status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/saml/"+providerID.String()+"/acs",
+			map[string]any{"SAMLResponse": samlResponse, "RelayState": relayState})
+		if status != http.StatusOK {
+			t.Fatalf("acs (%s): status=%d body=%v -- the two flows' login-nonce cookies collided", email, status, body)
+		}
+		if body["email"] != email {
+			t.Fatalf("acs (%s): email=%v, want %s", email, body["email"], email)
+		}
+	}
+
+	// Flow A completes LAST, after flow B's /initiate already ran -- the
+	// case the shared fixed cookie name used to break.
+	complete("flow-b@example.test", relayStateB, requestIDB)
+	complete("flow-a@example.test", relayStateA, requestIDA)
+}
+
 // TestSAMLACSRefusesAMissingLoginNonceCookie and
 // TestSAMLACSRefusesATamperedLoginNonceCookie pin D2745's browser-binding
 // class ruling applied to SAML (from CHAOS-6986's P1-3): a genuine,
@@ -884,22 +951,37 @@ func TestSAMLACSRefusesATamperedLoginNonceCookie(t *testing.T) {
 	// itself stays genuine and unexpired; only the browser-side half of
 	// the binding is wrong, which is exactly the case this check exists
 	// to catch (a genuine RelayState presented by the wrong browser).
-	serverURL, err := url.Parse(st.server.URL)
+	// D2759: the cookie's Path is now scoped to this provider's own ACS
+	// route (not "/"), so it must be queried at THAT path -- a query at
+	// the bare server root would see no cookies at all, matching RFC
+	// 6265's own path-matching direction (a request path must be the
+	// cookie's path or an extension of it, never the other way). The
+	// cookie's NAME is also per-flow now (suffixed by a random flow ID),
+	// so match by prefix rather than the old fixed literal.
+	acsURL, err := url.Parse(st.server.URL + "/api/v1/auth/saml/" + providerID.String() + "/acs")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cookies := jar.Cookies(serverURL)
+	cookies := jar.Cookies(acsURL)
 	found := false
 	for _, c := range cookies {
-		if c.Name == "dho_saml_login_nonce" {
+		if strings.HasPrefix(c.Name, "dho_saml_login_nonce_") {
 			c.Value = flipMiddleByte(c.Value)
+			// jar.Cookies() does not report each cookie's own Path (it is
+			// building a request Cookie: header, which never carries Path)
+			// -- SetCookies-ing it back with Path="" does not overwrite
+			// the original path-scoped entry, it ADDS a second cookie of
+			// the same name, and the client then sends BOTH, the original
+			// still-valid one included, silently defeating the tamper.
+			// Restoring the real path here is what makes this a REPLACE.
+			c.Path = acsURL.Path
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("initiate: expected a dho_saml_login_nonce cookie for an allow_idp_initiated=false provider")
+		t.Fatal("initiate: expected a dho_saml_login_nonce_<flowID> cookie for an allow_idp_initiated=false provider")
 	}
-	jar.SetCookies(serverURL, cookies)
+	jar.SetCookies(acsURL, cookies)
 
 	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
 		spEntityID: "https://sp.test/m", acsURL: "https://sp.test/acs",

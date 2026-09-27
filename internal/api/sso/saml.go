@@ -131,29 +131,46 @@ func decodeSAMLConfig(raw *string) (samlConfigValues, error) {
 	return cfg, nil
 }
 
-// validateSAMLConfigHTTPS is D2748/D2745's class ruling (HTTPS-only
-// enforcement, extended from OAuth's base_url check to SAML): an admin-
+// validateSAMLConfigHTTPS is D2759's single shared URL policy
+// (validateHTTPSOrLoopback, loginnonce.go), replacing this function's own
+// former ad-hoc `strings.HasPrefix(x, "http://")` gate: an admin-
 // overridden sp_entity_id/sp_acs_url is refused here, at config-load
-// time, if it explicitly names the insecure http:// scheme. This runs at
-// every decodeSAMLConfig call site -- samlMetadata, initiateSAMLAuth,
-// samlACSCallback -- so an http override never reaches exchange time,
-// which is why the login-nonce cookie's Secure flag (samlstate.go) is a
-// literal true rather than conditioned on appBaseURL()'s own scheme: this
-// check is the guarantee that makes that literal safe.
+// time, unless it parses as https (or an http loopback address). This
+// runs at every decodeSAMLConfig call site -- samlMetadata,
+// initiateSAMLAuth, samlACSCallback -- so an insecure override never
+// reaches exchange time, which is why the login-nonce cookie's Secure
+// flag is a literal true rather than conditioned on appBaseURL()'s own
+// scheme: this check is the guarantee that makes that literal safe.
 //
-// Scoped to an explicit "http://" prefix, not "require https://": a SAML
-// entityID is conventionally a URI, not necessarily a dereferenceable
-// URL (e.g. "urn:example:sp"), and this port must not invent a stricter
-// shape requirement than Python's own get_saml_config ever had. Refusing
-// only the insecure scheme, when one is present, catches the real
-// concern (a browser could be told to submit this package's own state
-// back over plaintext) without rejecting a legitimate non-URL entityID.
+// D2759 (team-lead, r1 on #3355): the OLD raw-prefix version of this
+// check was case-sensitive -- "HTTP://attacker.example/..." never
+// matched "http://" and sailed straight through, refusing nothing.
+// validateHTTPSOrLoopback parses first and compares the PARSED,
+// normalized scheme, closing that class of bypass (also: a schemeless
+// "//host" value and an opaque "https:evil" value, neither of which the
+// old check considered at all, are refused too).
+//
+// Only checked when the admin actually set an override -- an empty
+// SPEntityID/SPACSURL is skipped, since "" means "fall back to the
+// computed default" (spEntityIDOf/spACSURLOf), not "refuse". Unlike
+// OAuth/OIDC's fields, SPEntityID is conventionally a URI but not
+// necessarily a dereferenceable URL (e.g. "urn:example:sp") in the SAML
+// spec itself; validateHTTPSOrLoopback's own "no scheme -> refuse" rule
+// means a bare non-URL entityID like that is now ALSO refused here where
+// the earlier, narrower "explicit http:// prefix only" check would have
+// let it through -- a deliberate behavior change per D2759's explicit
+// "one shared helper, delete the per-protocol gates, don't patch them
+// individually", recorded here rather than silently absorbed.
 func validateSAMLConfigHTTPS(cfg samlConfigValues) error {
-	if strings.HasPrefix(cfg.SPEntityID, "http://") {
-		return errors.New("SAML sp_entity_id must not use the insecure http:// scheme")
+	if cfg.SPEntityID != "" {
+		if err := validateHTTPSOrLoopback(cfg.SPEntityID); err != nil {
+			return fmt.Errorf("SAML sp_entity_id %w", err)
+		}
 	}
-	if strings.HasPrefix(cfg.SPACSURL, "http://") {
-		return errors.New("SAML sp_acs_url must not use the insecure http:// scheme")
+	if cfg.SPACSURL != "" {
+		if err := validateHTTPSOrLoopback(cfg.SPACSURL); err != nil {
+			return fmt.Errorf("SAML sp_acs_url %w", err)
+		}
 	}
 	return nil
 }
@@ -358,9 +375,9 @@ func (h handlers) initiateSAMLAuth(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, r, "generate saml login nonce", err)
 			return
 		}
-		token, err := mintSAMLState(h.StateSecret, samlState{
+		token, flowID, err := mintSAMLState(h.StateSecret, samlState{
 			ProviderID: row.ID, OrgID: row.OrgID, RequestID: requestID,
-			NonceHash: hashSAMLLoginNonce(loginNonce),
+			NonceHash: hashLoginNonce(loginNonce),
 		}, h.Now())
 		if err != nil {
 			h.fail(w, r, "mint saml state", err)
@@ -369,8 +386,13 @@ func (h handlers) initiateSAMLAuth(w http.ResponseWriter, r *http.Request) {
 		// D2745 (browser-binding class ruling, applied here from CHAOS-6986
 		// P1-3): pairs with the NonceHash check in processSAMLResponse --
 		// see samlState.NonceHash's doc comment (samlstate.go) for the
-		// login-CSRF this closes.
-		http.SetCookie(w, samlLoginNonceCookie(loginNonce, int(samlStateTTL/time.Second)))
+		// login-CSRF this closes. D2759: the cookie's NAME is per-flow
+		// (flowID = this exact state's own ID, returned by mintSAMLState)
+		// and its Path is scoped to this provider's own real ACS route,
+		// not "/" -- two concurrent SAML flows in the same browser no
+		// longer collide on a single fixed cookie name.
+		acsPath := "/api/v1/auth/saml/" + row.ID + "/acs"
+		issueLoginNonceCookie(w, "saml", flowID, loginNonce, acsPath, samlStateTTL)
 		params.Set("RelayState", token)
 	}
 	out := pyjson.NewObject()
@@ -446,7 +468,7 @@ var errSAMLAssertionReplayed = errors.New("SAML assertion has already been used"
 // certificate's own NotBefore/NotAfter window IS checked by goxmldsig
 // (Python's bare signxml call does not); recorded as an accepted, minor,
 // security-positive delta, not a ruling.
-func (h handlers) processSAMLResponse(ctx context.Context, row *providerRow, config samlConfigValues, base, samlResponse, relayState, cookieNonce string, now time.Time) (samlClaims, error) {
+func (h handlers) processSAMLResponse(ctx context.Context, w http.ResponseWriter, r *http.Request, row *providerRow, config samlConfigValues, base, samlResponse, relayState string, now time.Time) (samlClaims, error) {
 	spEntityID := spEntityIDOf(config, row.ID, base)
 	spACSURL := spACSURLOf(config, row.ID, base)
 
@@ -501,16 +523,22 @@ func (h handlers) processSAMLResponse(ctx context.Context, row *providerRow, con
 		if state.OrgID != row.OrgID {
 			return samlClaims{}, ssoAuthErr("SAML RelayState mismatch")
 		}
-		// D2745 browser-binding class ruling (from CHAOS-6986 P1-3): the
-		// RelayState alone only proves this package minted it, not which
-		// browser is presenting it back (samlState.NonceHash's doc comment
-		// has the login-CSRF this closes). A missing cookie (blocked by
-		// SameSite=Lax on a cross-site submission, or simply never set
-		// because the browser is not the one that called /initiate) or one
-		// that hashes to a different value than the RelayState sealed is
-		// refused here, before ParseXMLResponse ever runs -- unauthenticated
-		// (D2738): the caller has proven nothing about the browser binding.
-		if cookieNonce == "" || !constantTimeEqual(hashSAMLLoginNonce(cookieNonce), state.NonceHash) {
+		// D2745 browser-binding class ruling (from CHAOS-6986 P1-3), D2759
+		// per-flow fix folded in: the RelayState alone only proves this
+		// package minted it, not which browser is presenting it back
+		// (samlState.NonceHash's doc comment has the login-CSRF this
+		// closes). The cookie is looked up ONLY now, by the name this
+		// VERIFIED state's own ID gives it -- never by a caller-supplied
+		// or pre-read value -- so naming the cookie cannot itself be
+		// spoofed into checking the wrong flow. A missing cookie (blocked
+		// by SameSite=Lax on a cross-site submission, or simply never set
+		// because the browser is not the one that called /initiate), one
+		// under the wrong per-flow name, or one that hashes to a different
+		// value than the RelayState sealed is refused here, before
+		// ParseXMLResponse ever runs -- unauthenticated (D2738): the caller
+		// has proven nothing about the browser binding.
+		acsPath := "/api/v1/auth/saml/" + row.ID + "/acs"
+		if !verifyAndClearLoginNonceCookie(w, r, "saml", state.ID, acsPath, state.NonceHash) {
 			return samlClaims{}, ssoAuthErr("SAML RelayState mismatch")
 		}
 		possibleRequestIDs = []string{state.RequestID}
@@ -705,17 +733,13 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var cookieNonce string
-	if cookie, err := r.Cookie(samlLoginNonceCookieName); err == nil {
-		cookieNonce = cookie.Value
-	}
-	// One-shot: clear it immediately so the same browser cookie cannot be
-	// paired with a second RelayState/replay attempt (defense in depth --
-	// the assertion-replay guard above already refuses a second use of the
-	// same assertion regardless).
-	http.SetCookie(w, samlLoginNonceCookie("", -1))
-
-	claims, err := h.processSAMLResponse(ctx, row, config, appBaseURL(), samlResponse, relayState, cookieNonce, h.Now())
+	// D2759: the login-nonce cookie is now per-flow (named by the
+	// RelayState's own verified state ID, not a fixed name), so it can
+	// only be looked up AFTER that state verifies -- done inside
+	// processSAMLResponse itself, which also clears it unconditionally
+	// (verifyAndClearLoginNonceCookie, loginnonce.go) so it never outlives
+	// the one callback it was minted for.
+	claims, err := h.processSAMLResponse(ctx, w, r, row, config, appBaseURL(), samlResponse, relayState, h.Now())
 	if err != nil {
 		if errors.Is(err, errSAMLAssertionReplayed) {
 			// D2744: the assertion DID authenticate (signature, status,

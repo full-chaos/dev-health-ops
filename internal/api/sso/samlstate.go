@@ -2,46 +2,11 @@ package sso
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"time"
 )
-
-// samlLoginNonceCookieName is the HttpOnly, SameSite=Lax cookie initiateSAMLAuth
-// sets (only when the provider's own allow_idp_initiated is false) alongside
-// the AEAD RelayState -- see the browser-binding doc comment on
-// hashSAMLLoginNonce below for what it defends against.
-const samlLoginNonceCookieName = "dho_saml_login_nonce"
-
-// samlLoginNonceCookie builds the cookie set at initiate time (value=nonce,
-// non-empty maxAge) and the one used to clear it at ACS time (value="",
-// maxAge=-1) -- one constructor so both call sites stay identical apart
-// from those two fields.
-//
-// D2748 (team-lead, Semgrep cookie-missing-secure on this file): Secure is
-// a literal true, not derived from appBaseURL()'s scheme at request time.
-// This is not a dismissal of the finding -- it is D2745's P1-2 HTTPS-only
-// class ruling extended to SAML: validateSAMLConfigHTTPS (saml.go) now
-// refuses an http:// sp_entity_id/sp_acs_url override at config-decode
-// time, the same precondition OAuth's base_url validation gives its own
-// exchange. With that guarantee in place, a SAML deployment's own ACS URL
-// is never http, so a conditional Secure flag would only ever evaluate to
-// false in a misconfiguration this package already refuses earlier --
-// hardcoding true removes the dead branch instead of leaving it to rot.
-func samlLoginNonceCookie(value string, maxAge int) *http.Cookie {
-	return &http.Cookie{
-		Name:     samlLoginNonceCookieName,
-		Value:    value,
-		Path:     "/",
-		MaxAge:   maxAge,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-	}
-}
 
 // samlStateTTL mirrors oidcStateTTL/oauthStateTTL (D2727-amended's
 // established design): 10 minutes.
@@ -85,35 +50,31 @@ type samlState struct {
 	// requestID) -- the value ParseXMLResponse's possibleRequestIDs checks
 	// the assertion's SubjectConfirmationData.InResponseTo against.
 	RequestID string `json:"request_id"`
-	// NonceHash is hashSAMLLoginNonce of the random value initiateSAMLAuth
-	// also placed in samlLoginNonceCookieName -- D2745's browser-binding
-	// class ruling ("SAML's RelayState needs the same treatment", applied
-	// here from CHAOS-6986/OAuth's P1-3). A RelayState token authenticates
-	// only that IT was minted by this package; it says nothing about which
-	// browser is presenting it back. Without this, a login-CSRF works: an
-	// attacker starts their OWN IdP login, captures the resulting
-	// SAMLResponse+RelayState pair (both travel through the attacker's own
-	// browser, so the attacker legitimately holds both), and gets a victim
-	// to submit that exact pair to the victim's own browser's /acs -- the
-	// RelayState verifies fine (it is a real, unexpired token this package
-	// minted), silently logging the victim into the attacker's identity.
-	// Binding it to a same-origin HttpOnly SameSite=Lax cookie closes this:
-	// SameSite=Lax cookies are not sent on a cross-site POST (the form
-	// crewjam's IdP-side flow, and an attacker's replay, both use), so a
-	// cross-site-submitted RelayState arrives with no matching cookie and
-	// is refused in processSAMLResponse before ParseXMLResponse ever runs.
+	// NonceHash is hashLoginNonce (loginnonce.go) of the random value
+	// initiateSAMLAuth also placed in a per-flow cookie named by THIS
+	// state's own ID (loginNonceCookieName("saml", state.ID)) -- D2745's
+	// browser-binding class ruling ("SAML's RelayState needs the same
+	// treatment", applied here from CHAOS-6986/OAuth's P1-3), with D2759's
+	// per-flow cookie-naming fix folded in (a single fixed cookie name
+	// broke two concurrent SAML flows in the same browser). A RelayState
+	// token authenticates only that IT was minted by this package; it
+	// says nothing about which browser is presenting it back. Without
+	// this, a login-CSRF works: an attacker starts their OWN IdP login,
+	// captures the resulting SAMLResponse+RelayState pair (both travel
+	// through the attacker's own browser, so the attacker legitimately
+	// holds both), and gets a victim to submit that exact pair to the
+	// victim's own browser's /acs -- the RelayState verifies fine (it is
+	// a real, unexpired token this package minted), silently logging the
+	// victim into the attacker's identity. Binding it to a same-origin
+	// HttpOnly SameSite=Lax cookie closes this: SameSite=Lax cookies are
+	// not sent on a cross-site POST (the form crewjam's IdP-side flow,
+	// and an attacker's replay, both use), so a cross-site-submitted
+	// RelayState arrives with no matching cookie and is refused in
+	// processSAMLResponse before ParseXMLResponse ever runs.
 	NonceHash string `json:"nonce_hash"`
-	ID        string `json:"id"` // random, no comparison meaning of its own.
+	ID        string `json:"id"` // random; ALSO this flow's login-nonce cookie name suffix (D2759) -- no longer "no comparison meaning of its own".
 	IssuedAt  int64  `json:"issued_at"`
 	ExpiresAt int64  `json:"expires_at"`
-}
-
-// hashSAMLLoginNonce mirrors pkceChallenge's shape (state.go): SHA-256,
-// base64url, unpadded. Never reversed -- only ever compared, in constant
-// time (constantTimeEqual, state.go), against a freshly-hashed cookie value.
-func hashSAMLLoginNonce(nonce string) string {
-	sum := sha256.Sum256([]byte(nonce))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 var (
@@ -125,28 +86,31 @@ var (
 // opaque RelayState value initiateSAMLAuth returns when the provider's
 // own allow_idp_initiated is false, AAD-bound to state.ProviderID -- see
 // mintOIDCState's doc comment (state.go) for why the AAD binding matters.
-func mintSAMLState(secret string, state samlState, now time.Time) (string, error) {
+// Also returns the generated ID directly (D2759): initiateSAMLAuth needs
+// it to name this flow's login-nonce cookie, and the caller has no other
+// way to learn the value this function stamps into state.ID internally.
+func mintSAMLState(secret string, state samlState, now time.Time) (token, flowID string, err error) {
 	gcm, err := newGCM(secret, samlStateHKDFInfo)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	id, err := randomURLSafe(16)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	state.ID = id
 	state.IssuedAt = now.Unix()
 	state.ExpiresAt = now.Add(samlStateTTL).Unix()
 	plaintext, err := json.Marshal(state)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
-		return "", err
+		return "", "", err
 	}
 	sealed := gcm.Seal(nonce, nonce, plaintext, []byte(state.ProviderID))
-	return base64.RawURLEncoding.EncodeToString(sealed), nil
+	return base64.RawURLEncoding.EncodeToString(sealed), id, nil
 }
 
 // verifySAMLState mirrors verifyOIDCState/verifyOAuthState: the GCM tag,

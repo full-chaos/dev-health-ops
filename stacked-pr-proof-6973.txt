@@ -1,0 +1,2 @@
+Throwaway stacked-PR proof file for CHAOS-6973 (Security Scan pull_request
+trigger fix). This file and its PR are deleted/closed, never merged.

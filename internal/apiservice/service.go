@@ -235,7 +235,19 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	// configured); with no pool these paths are simply absent from the mux,
 	// same as any other not-yet-ported area.
 	if deps.Pool != nil && deps.Guard != nil {
-		routes = append(routes, sso.Routes(sso.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Now: deps.Now, Write: WriteError})...)
+		routes = append(routes, sso.Routes(sso.Deps{
+			Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Now: deps.Now, Write: WriteError,
+			// The two OIDC routes' provider-secret decrypt, AEAD state
+			// key and login token pair (CHAOS-6658); every other SSO
+			// route still ignores these three fields (sso.go's own doc
+			// comment). Cipher is the same FernetDecryptor
+			// (SETTINGS_ENCRYPTION_KEY) every other stored-secret decrypt
+			// in this process already uses. StateSecret reuses
+			// GitHubStateSigner's own APIJWTSecret.Reveal() (HKDF-derives
+			// a distinct key from it, state.go) -- no new secret material
+			// either way.
+			Cipher: deps.Decryptor, StateSecret: deps.GitHubStateSigner.Secret, Signer: deps.Signer,
+		})...)
 		routes = append(routes, billing.Routes(billing.Deps{
 			Pool: deps.Pool, Guard: deps.Guard, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger,
 			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, StripeKey: deps.StripeSecretKey, Producer: deps.Producer,

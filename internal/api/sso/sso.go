@@ -1,18 +1,25 @@
 // Package sso serves the enterprise SSO routes of api/auth/sso/router.py
 // under /api/v1/auth.
 //
-// Every route but activate and deactivate is gated by
-// @require_feature("sso_saml", required_tier="enterprise"). None of those
-// route functions takes a `session` or `org_id` keyword argument, so the
-// per-org check (_check_org_feature_async) never runs and only the process
-// license decides: has_feature("sso_saml") on the process LicenseManager.
-// The Go api runs without a process license (licensing.ProcessTier), and
-// sso_saml is not a community feature, so each gated route answers exactly
-// what the Python api answers there: its authentication, then its query and
-// body validation, then the 402. The SAML, OIDC and OAuth flows behind the
-// gate are not reachable on either plane and are not ported.
+// Every route but activate/deactivate and the two OIDC routes below is
+// gated by @require_feature("sso_saml", required_tier="enterprise"). None
+// of those route functions takes a `session` or `org_id` keyword argument,
+// so the per-org check (_check_org_feature_async) never runs and only the
+// process license decides: has_feature("sso_saml") on the process
+// LicenseManager. The Go api runs without a process license
+// (licensing.ProcessTier), and sso_saml is not a community feature, so
+// each gated route answers exactly what the Python api answers there: its
+// authentication, then its query and body validation, then the 402. The
+// SAML and OAuth flows behind that gate are not reachable on either plane
+// and are not ported.
 //
 // Activate and deactivate are not gated: they are ported in full.
+//
+// initiateOIDCAuth and oidcCallback (CHAOS-6658) are also ported in full,
+// with a REAL entitlement gate (requireEntitlement, gate.go): D2725 ruled
+// that Python's dead per-org fallback above is a delta to fix, not a
+// parity target, for these two routes specifically. See oidc.go's doc
+// comment for the rest of what that PR changed and why.
 package sso
 
 import (
@@ -22,9 +29,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
+	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
@@ -43,6 +52,36 @@ type Deps struct {
 	// Write renders the 404 and 405 the two-segment /oauth dispatcher
 	// answers; nil means httpapi.WriteError.
 	Write httpapi.ErrorWriter
+
+	// The following four are used only by initiateOIDCAuth and
+	// oidcCallback (CHAOS-6658); the other 15 routes are still the
+	// license-shim gated() serves and need none of them.
+
+	// Cipher decrypts sso_providers.encrypted_secrets' client_secret the
+	// way core.encryption.decrypt_value does; nil or unconfigured leaves
+	// a stored secret as-is, matching _decrypt_secret's legacy-plaintext
+	// fallback, which also runs when decryption itself fails. Unrelated
+	// to the OIDC state cipher below; a route can run for real without
+	// this ever being configured.
+	Cipher credentials.Cipher
+	// StateSecret derives (via HKDF, state.go) the AES-256-GCM key that
+	// AEAD-encrypts the opaque OIDC state value (D2727-amended): the
+	// api's own JWT_SECRET_KEY -- the literal value
+	// apiservice/service.go passes is deps.GitHubStateSigner.Secret, no
+	// new secret material. Routes does not mount the real OIDC handlers
+	// without it, since an empty secret can mint no state a callback
+	// could ever verify.
+	StateSecret string
+	// Signer mints the SSOLoginResponse token pair on a successful
+	// callback: the same edgetoken.Signer newProtection built from the
+	// api's own JWT_SECRET_KEY.
+	Signer *edgetoken.Signer
+	// HTTPClient reaches the IdP's discovery document, token endpoint,
+	// JWKS and userinfo endpoint; nil means a client over
+	// externalurl.GuardedTransport() (the SSRF guard credentials.Routes
+	// already uses for admin-configured URLs -- an OIDC issuer is exactly
+	// that kind of URL).
+	HTTPClient *http.Client
 }
 
 type handlers struct{ Deps }
@@ -62,11 +101,27 @@ func Routes(deps Deps) []httpapi.Route {
 	if deps.Write == nil {
 		deps.Write = httpapi.WriteError
 	}
+	if deps.HTTPClient == nil {
+		deps.HTTPClient = defaultOIDCClient()
+	}
 	h := handlers{deps}
 	g := deps.Guard
 	const prefix = "/api/v1/auth"
 	route := func(method, path string, handler http.Handler) httpapi.Route {
 		return httpapi.Route{Method: method, Pattern: prefix + path, Handler: handler}
+	}
+	// initiateOIDCAuth and oidcCallback need StateSecret (the AEAD opaque
+	// state token, state.go) and Signer (the login token pair) to run
+	// for real; a caller that wires neither -- an existing Deps literal
+	// from before this PR, or a deliberately license-shimmed deployment
+	// -- gets the same process-tier-only shim the other 15 routes still
+	// answer, rather than a route that mints a state no callback could
+	// ever decrypt.
+	oidcAuthorize := h.gated(body(oidcAuthRequest))
+	oidcCallbackHandler := h.gated(body(oidcCallbackRequest))
+	if deps.StateSecret != "" && deps.Signer != nil {
+		oidcAuthorize = http.HandlerFunc(h.initiateOIDCAuth)
+		oidcCallbackHandler = http.HandlerFunc(h.oidcCallback)
 	}
 	routes := []httpapi.Route{
 		route(http.MethodGet, "/sso/providers", g.Wrap(policy.Authenticated, h.gated(listQuery))),
@@ -79,8 +134,8 @@ func Routes(deps Deps) []httpapi.Route {
 		route(http.MethodGet, "/saml/{provider_id}/metadata", g.Wrap(policy.Public, h.gated(noInput))),
 		route(http.MethodPost, "/saml/{provider_id}/initiate", g.BodyFirst(policy.Public, h.gated(body(samlAuthRequest)))),
 		route(http.MethodPost, "/saml/{provider_id}/acs", g.BodyFirst(policy.Public, h.gated(body(samlCallbackRequest)))),
-		route(http.MethodPost, "/oidc/{provider_id}/authorize", g.BodyFirst(policy.Public, h.gated(body(oidcAuthRequest)))),
-		route(http.MethodPost, "/oidc/{provider_id}/callback", g.BodyFirst(policy.Public, h.gated(body(oidcCallbackRequest)))),
+		route(http.MethodPost, "/oidc/{provider_id}/authorize", g.BodyFirst(policy.Public, oidcAuthorize)),
+		route(http.MethodPost, "/oidc/{provider_id}/callback", g.BodyFirst(policy.Public, oidcCallbackHandler)),
 		route(http.MethodPost, "/oauth/providers", g.BodyFirst(policy.Authenticated, h.gated(body(oauthProviderCreate)))),
 		// PATCH /oauth/providers/{provider_id}, POST /oauth/{provider_id}/authorize,
 		// POST /oauth/{provider_id}/callback and GET /oauth/{provider_type}/authorize

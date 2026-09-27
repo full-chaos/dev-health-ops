@@ -1,0 +1,129 @@
+# CHAOS-6977 (D2683/D2709, 2026-09-27): tracked receipt copy. The LIVE operational file bigboy's
+# docker compose reads is compose/compose.bigboy.images.yml on the bigboy host (outside this repo,
+# in COMPOSE_FILE -- docker compose needs it at that path). This copy is the source-of-record for
+# review/history; keep it byte-identical to the live file at every cut (bigboy-cut.sh's
+# query-api-enabled-flags-current STEP already diffs the live file's GO_API_*_ENABLED block against
+# generate-query-api-enabled-flags.py's output -- this copy is not yet part of that automated check).
+#
+# gwc-venue-bigboy (2026-09-20, chris: "just go ahead and deploy bigboy images"); re-pinned 2026-09-24 by prod-ops
+# (R427 pre-prod venue, D2288) to ops main a97b97ed (CHAOS-6512+6259 group; previous overlay kept as .bak-1152962c): bigboy runs PROD's build
+# (was rev 156, ops 3689edec) so a venue receipt admits at the same build production runs.
+# Self-contained: also carries compose.bigboy.overrides.yml content (query-api x2 + ports, api nofile) so the
+# recreate does not drop the running project's overrides. migrate runs prod's own api image (migrations 0135).
+services:
+  api:
+    image: ghcr.io/full-chaos/dev-hops-api@sha256:794c5392a20cf4c5e669669a21192492f9301f2005d7f7e688f1b1a94fb561e3
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    # compose.yml mounts chris's ops checkout over /app and runs `pip install -e . && ... --reload`, so the api ran
+    # the CHECKOUT's code (its SDL digest 19485ec1), not the image's. Run the image's own installed code (prod's build).
+    volumes: !override
+      - ./.go-api-dev/envelope-private-key.pem:/secrets/go-api-envelope-private-key.pem:ro
+    entrypoint: !override ["sh", "-c", 'export GO_API_ENVELOPE_PRIVATE_KEY="$$(cat /secrets/go-api-envelope-private-key.pem)" && exec python -m dev_health_ops.cli --log-level info api --host 0.0.0.0 --port 8000']
+  # CHAOS-6434 (ops main a97b97ed and after): dev-health-query-api is RETIRED. query-api is now the
+  # `dho query-api` verb of the dho image; the root compose.yml's own query-api service (docker/query-api.Dockerfile)
+  # can no longer build against this ops sha, so this overlay replaces its image/command/entrypoint entirely
+  # rather than layering a digest onto it.
+  query-api:
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:319da9ad125f51046708060620b342597add356cd747c30f265aeb14b7ec30de
+    build: !reset null
+    entrypoint: !override ["/usr/local/bin/dho"]
+    command: !override ["query-api"]
+    ports: !override
+      - "8091-8092:8090"
+    deploy:
+      replicas: 2
+    # CHAOS-6967(b)/6971/D2709 (2026-09-27): these ~23 REST routes' Go-plane switch is a
+    # plain in-memory flag flipped ONCE at container boot from its own bare env var --
+    # never Postgres, never the routeswitch ledger `dho goapi routing enable` writes (that
+    # ledger is wired only into /query, GraphQL). bigboy-cut.sh recreates this service fresh
+    # every cut (Trap #420) with none of these set, so every REST proof leg 404s on a
+    # correctly-pathed, correctly-bearer'd request until they're set here to match prod.
+    # Values copied verbatim from deploy/values.prod.yaml:495-537 (the query-api Deployment's
+    # own env block) plus :486 (GO_API_INVESTMENT_EXPLAIN_ENABLED, a separate block a prior
+    # PR #121 once edited by mistake -- confirmed against the top-level queryApi:/api: keys
+    # and the rendered manifest, not just proximity). Re-derive from that same file at every
+    # cut; never hand-edit this list without citing the source lines again.
+    environment:
+      GO_API_QUADRANT_ENABLED: "true"
+      GO_API_FILTER_OPTIONS_ENABLED: "true"
+      GO_API_DRILLDOWN_PRS_ENABLED: "true"
+      GO_API_DRILLDOWN_ISSUES_ENABLED: "true"
+      GO_API_META_ENABLED: "true"
+      GO_API_EXPLAIN_ENABLED: "true"
+      GO_API_PEOPLE_SEARCH_ENABLED: "true"
+      GO_API_PEOPLE_SUMMARY_ENABLED: "true"
+      GO_API_PEOPLE_METRIC_ENABLED: "true"
+      GO_API_FLAME_ENABLED: "true"
+      GO_API_PEOPLE_DRILLDOWN_PRS_ENABLED: "true"
+      GO_API_PEOPLE_DRILLDOWN_ISSUES_ENABLED: "true"
+      GO_API_FLAME_AGGREGATED_ENABLED: "true"
+      GO_API_HEATMAP_ENABLED: "true"
+      GO_API_SANKEY_ENABLED: "true"
+      GO_API_INVESTMENT_ENABLED: "true"
+      GO_API_INVESTMENT_FLOW_ENABLED: "true"
+      GO_API_INVESTMENT_SUNBURST_ENABLED: "true"
+      GO_API_HOME_ENABLED: "true"
+      GO_API_OPPORTUNITIES_ENABLED: "true"
+      GO_API_WORK_UNITS_ENABLED: "true"
+      GO_API_WORK_UNIT_EXPLAIN_ENABLED: "true"
+      GO_API_INVESTMENT_EXPLAIN_ENABLED: "true"
+  migrate:
+    image: ghcr.io/full-chaos/dev-hops-api@sha256:794c5392a20cf4c5e669669a21192492f9301f2005d7f7e688f1b1a94fb561e3
+    volumes: !override []
+  # one-off prover shell, never started by 'up' (profile venue). POSTGRES_URI is interpolated by compose from
+  # the same defaults the stack uses, so no credential passes through a file or argv of this lane.
+  venue-tools:
+    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:507ee0e53eddc47424174ffd84269535003c62e1e18aa2459cc3a4668aecc41a
+    profiles: ["venue"]
+    user: "1001:1001"
+    entrypoint: ["sh", "-c"]
+    working_dir: /work
+    networks: [dev-health]
+    environment:
+      POSTGRES_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
+      GO_API_QUERY_API_URL: http://query-api:8090
+      GO_API_PROVE_VENUE_ACK: bigboy-compose
+      GO_API_ENVELOPE_KEY_ID: local-dev-20260906
+      GO_API_ENVELOPE_ISSUER: dev-health-ops-edge
+      GO_API_ENVELOPE_AUDIENCE: query-api
+      # value comes from the invoking environment (never written here)
+      GO_API_ENVELOPE_PRIVATE_KEY: ${GO_API_ENVELOPE_PRIVATE_KEY:-}
+    volumes:
+      - ./.go-api-dev/envelope-private-key.pem:/keys/envelope.pem:ro
+      - /var/lib/oci-cache/lane-scratch/gwc-venue-bigboy:/work
+  # venue prover: shares api's network namespace so the edge host is localhost (the CheckVenue host allowlist).
+  venue-prove:
+    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:507ee0e53eddc47424174ffd84269535003c62e1e18aa2459cc3a4668aecc41a
+    profiles: ["venue"]
+    user: "1001:1001"
+    entrypoint: ["sh", "-c"]
+    working_dir: /work
+    network_mode: "service:api"
+    environment:
+      POSTGRES_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
+      GO_API_QUERY_API_URL: http://query-api:8090
+      GO_API_PROVE_VENUE_ACK: bigboy-compose
+      GO_API_ENVELOPE_KEY_ID: local-dev-20260906
+      GO_API_ENVELOPE_ISSUER: dev-health-ops-edge
+      GO_API_ENVELOPE_AUDIENCE: query-api
+    volumes:
+      - ./.go-api-dev/envelope-private-key.pem:/keys/envelope.pem:ro
+      - /var/lib/oci-cache/lane-scratch/gwc-venue-bigboy:/work
+  # R427 pre-prod venue (prod-ops, 2026-09-24): the dho api (Go plane) at prod's build. Its Postgres and ClickHouse
+  # logins and this env file are provisioned by _records/bigboy-1152962/setup-goapi-logins.sh (0600, never printed).
+  go-api:
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:319da9ad125f51046708060620b342597add356cd747c30f265aeb14b7ec30de
+    entrypoint: ["/usr/local/bin/dho"]
+    command: ["api"]
+    env_file:
+      - path: ./.go-api-dev/go-api.env
+        required: true
+    environment:
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
+    networks: [dev-health]
+    ports:
+      - "127.0.0.1:8093:8000"
+    restart: unless-stopped

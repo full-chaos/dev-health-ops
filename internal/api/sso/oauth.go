@@ -281,12 +281,27 @@ func fetchOAuthUserInfo(ctx context.Context, client *oauthprovider.Client, provi
 	if !ok {
 		return oauthClaims{}, fmt.Errorf("%w: oauth user info email", errShape)
 	}
+	// D2745 (team-lead, CHAOS-6986 r1 P1-1): never look up or link an
+	// existing user, and never auto-provision a new one, by an email the
+	// provider itself has not verified -- an attacker who controls an
+	// unverified mailbox address could otherwise take over (or provision
+	// into) an account under that address. Refused here, before
+	// oauthCallback ever calls oauthProvisionUser, which is what makes
+	// "never link an existing user by an unverified email" categorical
+	// rather than a check the provisioning path also has to remember.
+	if !info.EmailVerified {
+		return oauthClaims{}, errOAuthNoVerifiedEmail
+	}
 	return oauthClaims{
 		email: email, username: optionalPyStr(info.Username), fullName: optionalPyStr(info.FullName),
 		avatarURL:  optionalPyStr(info.AvatarURL),
 		externalID: oauthprovider.PyStr(info.ProviderUserID),
 	}, nil
 }
+
+// errOAuthNoVerifiedEmail is D2745 P1-1's refusal sentinel -- see
+// fetchOAuthUserInfo's doc comment just above.
+var errOAuthNoVerifiedEmail = errors.New("no verified email address is available from this OAuth provider")
 
 // optionalPyStr is oauthprovider.PyStr, except a nil value (Python's
 // None, e.g. Google's always-absent username) stays "" instead of
@@ -428,6 +443,11 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 
 	claims, err := h.oauthExchangeAndFetch(ctx, row, providerID, providerType, stateToken, code)
 	if err != nil {
+		if errors.Is(err, errOAuthNoVerifiedEmail) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
+				"No verified email address is available from this OAuth provider", "oauth", "email_verification")
+			return
+		}
 		var unauth ssoUnauthenticated
 		if asSSOUnauthenticated(err, &unauth) {
 			h.recordSSOUnauthenticated(ctx, w, r, row.OrgID, providerID, unauth.msg, http.StatusBadRequest,
@@ -546,6 +566,15 @@ func (h handlers) oauthExchangeAndFetch(ctx context.Context, row *providerRow, p
 	if err != nil {
 		if errors.Is(err, errShape) || errors.Is(err, oauthprovider.ErrUnexpected) {
 			return oauthClaims{}, err // the bare 500, matching an uncaught Python exception.
+		}
+		if errors.Is(err, errOAuthNoVerifiedEmail) {
+			// D2745 P1-1: propagated as-is, NOT wrapped in ssoErrReason --
+			// this authenticated (the state verified; the access token
+			// exchange succeeded) but a per-account access decision, not
+			// IdP-provider health, is oauthCallback's job to route to
+			// recordSSOAuthenticatedDenial (no row flip), the same bucket
+			// as auto-provisioning-disabled just below in this file.
+			return oauthClaims{}, err
 		}
 		return oauthClaims{}, ssoErrReason(err.Error(), "oauth_userinfo_fetch_failed")
 	}

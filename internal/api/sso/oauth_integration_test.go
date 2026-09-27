@@ -45,13 +45,17 @@ type fakeGitLab struct {
 
 	email, username, fullName, avatarURL, userID string
 	tokenStatus, userStatus                      int // 0 means 200.
+	// confirmed is D2745 P1-1: GitLab's own confirmed_at signal. true by
+	// default so every EXISTING test (a verified account) is unaffected;
+	// set false only by the test that specifically exercises the refusal.
+	confirmed bool
 
 	receivedClientID, receivedClientSecret, receivedRedirectURI string
 }
 
 func startFakeGitLab(t *testing.T) *fakeGitLab {
 	t.Helper()
-	g := &fakeGitLab{email: "gitlab.user@example.test", username: "gluser", fullName: "GitLab User", userID: "42"}
+	g := &fakeGitLab{email: "gitlab.user@example.test", username: "gluser", fullName: "GitLab User", userID: "42", confirmed: true}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /oauth/token", g.serveToken)
 	mux.HandleFunc("GET /api/v4/user", g.serveUser)
@@ -89,10 +93,14 @@ func (g *fakeGitLab) serveUser(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"error":"forbidden"}`))
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	body := map[string]any{
 		"id": g.userID, "email": g.email, "username": g.username, "name": g.fullName, "avatar_url": g.avatarURL,
-	})
+	}
+	if g.confirmed {
+		body["confirmed_at"] = "2026-01-01T00:00:00Z"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func gitlabConfig(baseURL string) string {
@@ -294,6 +302,44 @@ func TestOAuthCallbackRefusesAnUnknownUserWithoutAutoProvision(t *testing.T) {
 	}
 	assertProviderRowUnchanged(t, ctx, st.pool, providerID, "active")
 	assertSSOAuditStage(t, ctx, st.pool, orgID, "provisioning")
+}
+
+// TestOAuthCallbackRefusesAnUnverifiedEmail pins D2745's P1-1 ruling:
+// GitLab's own account-confirmation signal (confirmed_at) absent means
+// this package must refuse the login before ever looking up or creating
+// a user by that email -- same bucket shape as auto-provisioning-disabled
+// (authenticated, audited, no provider row mutation), its own stage tag.
+func TestOAuthCallbackRefusesAnUnverifiedEmail(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	gitlab := startFakeGitLab(t)
+	gitlab.confirmed = false
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
+	})
+
+	status, authResp := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	if status != http.StatusOK {
+		t.Fatalf("authorize: %d %v", status, authResp)
+	}
+	status, body := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+		map[string]any{"code": "c", "state": authResp["state"]})
+	if status != http.StatusForbidden || body["detail"] != "No verified email address is available from this OAuth provider" {
+		t.Fatalf("status=%d body=%v, want 403 No verified email address is available from this OAuth provider", status, body)
+	}
+	assertProviderRowUnchanged(t, ctx, st.pool, providerID, "active")
+	assertSSOAuditStage(t, ctx, st.pool, orgID, "email_verification")
+
+	// Never linked or created: no user row exists at that email at all.
+	var count int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE email = $1`, gitlab.email).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("users: got %d rows for an unverified email, want 0 -- never link or provision by it", count)
+	}
 }
 
 // TestOAuthCallbackRefusesATokenExchangeFailure pins the other side of

@@ -55,7 +55,10 @@ func TestGitHubProfile(t *testing.T) {
 			emails: &route{200, `[{"email": "b@x.com", "verified": true}, {"email": "c@x.com", "primary": true, "verified": true}]`}, wantEmail: "c@x.com", wantID: "13"},
 		{name: "first verified email", user: route{200, `{"id": 14, "email": ""}`},
 			emails: &route{200, `[{"email": "d@x.com", "primary": true}, {"email": "e@x.com", "verified": 1}]`}, wantEmail: "e@x.com", wantID: "14"},
-		{name: "first email", user: route{200, `{"id": 15}`}, emails: &route{200, `[{"email": "f@x.com"}]`}, wantEmail: "f@x.com", wantID: "15"},
+		// D2745 P1-1: an email with no verified flag at all is no longer
+		// accepted -- this used to succeed with "f@x.com" (the unverified
+		// fallback githubPrimaryEmail's doc comment explains removing).
+		{name: "no verified email available (unverified entry only)", user: route{200, `{"id": 15}`}, emails: &route{200, `[{"email": "f@x.com"}]`}, wantErr: "userinfo"},
 		{name: "no email at all", user: route{200, `{"id": 16}`}, emails: &route{200, `[]`}, wantErr: "userinfo"},
 		{name: "emails refused", user: route{200, `{"id": 17}`}, emails: &route{403, `{}`}, wantErr: "userinfo"},
 		{name: "a non-object entry before a match", user: route{200, `{"id": 18}`}, emails: &route{200, `[1, {"email": "g@x.com", "primary": true, "verified": true}]`}, wantErr: "unexpected"},
@@ -97,18 +100,29 @@ func TestGitHubProfile(t *testing.T) {
 			if info.Email != c.wantEmail || info.ProviderUserID != c.wantID {
 				t.Fatalf("got email %v id %v", info.Email, info.ProviderUserID)
 			}
+			// D2745 P1-1: every email GitHub's FetchUserInfo returns must be
+			// verified -- the public-profile-email and primary/verified-entry
+			// paths are the only ones left standing (githubPrimaryEmail's own
+			// doc comment).
+			if !info.EmailVerified {
+				t.Fatalf("email %v was returned unverified", info.Email)
+			}
 		})
 	}
 }
 
 func TestGitLabAndGoogleRequiredFields(t *testing.T) {
 	client := fakeClient(t, map[string]route{
-		"/gl/api/v4/user": {200, `{"id": 7, "username": "u", "name": "N", "email": "m@x.com"}`},
-		"/google":         {200, `{"id": 9, "email": "g@x.com", "name": "G"}`},
+		"/gl/api/v4/user": {200, `{"id": 7, "username": "u", "name": "N", "email": "m@x.com", "confirmed_at": "2026-01-01T00:00:00Z"}`},
+		"/google":         {200, `{"id": 9, "email": "g@x.com", "name": "G", "verified_email": true}`},
 	})
 	info, err := client.FetchUserInfo(context.Background(), GitLab, "tok")
 	if err != nil || info.ProviderUserID != "7" || info.Email != "m@x.com" || info.Username != "u" {
 		t.Fatalf("gitlab: %+v %v", info, err)
+	}
+	// D2745 P1-1: GitLab's own account-confirmation signal (confirmed_at).
+	if !info.EmailVerified {
+		t.Fatalf("gitlab: confirmed_at was set but EmailVerified is false: %+v", info)
 	}
 	info, err = client.FetchUserInfo(context.Background(), Google, "tok")
 	if err != nil {
@@ -116,6 +130,25 @@ func TestGitLabAndGoogleRequiredFields(t *testing.T) {
 	}
 	if id, ok := info.ProviderUserID.(pyjson.Int); !ok || id.Int64() != 9 || info.Username != nil {
 		t.Fatalf("google keeps the raw id and has no username: %+v", info)
+	}
+	// D2745 P1-1: Google's own verified_email documented field.
+	if !info.EmailVerified {
+		t.Fatalf("google: verified_email was true but EmailVerified is false: %+v", info)
+	}
+
+	// D2745 P1-1: an unconfirmed GitLab account / an unverified Google
+	// email both still parse successfully (required fields are all
+	// present) but come back with EmailVerified false -- the rejection is
+	// fetchOAuthUserInfo's (oauth.go) job, not this package's.
+	unverified := fakeClient(t, map[string]route{
+		"/gl/api/v4/user": {200, `{"id": 8, "username": "u2", "name": "N2", "email": "n@x.com"}`},
+		"/google":         {200, `{"id": 10, "email": "h@x.com", "name": "G2", "verified_email": false}`},
+	})
+	if info, err := unverified.FetchUserInfo(context.Background(), GitLab, "tok"); err != nil || info.EmailVerified {
+		t.Fatalf("gitlab: no confirmed_at, want EmailVerified false: %+v %v", info, err)
+	}
+	if info, err := unverified.FetchUserInfo(context.Background(), Google, "tok"); err != nil || info.EmailVerified {
+		t.Fatalf("google: verified_email false, want EmailVerified false: %+v %v", info, err)
 	}
 	for _, body := range []string{`{"id": 1}`, `{"email": "x@x.com"}`, `[]`, `"text"`, `5`, `null`} {
 		client := fakeClient(t, map[string]route{"/gl/api/v4/user": {200, body}})

@@ -20,14 +20,25 @@ const samlLoginNonceCookieName = "dho_saml_login_nonce"
 // non-empty maxAge) and the one used to clear it at ACS time (value="",
 // maxAge=-1) -- one constructor so both call sites stay identical apart
 // from those two fields.
-func samlLoginNonceCookie(value string, maxAge int, secure bool) *http.Cookie {
+//
+// D2748 (team-lead, Semgrep cookie-missing-secure on this file): Secure is
+// a literal true, not derived from appBaseURL()'s scheme at request time.
+// This is not a dismissal of the finding -- it is D2745's P1-2 HTTPS-only
+// class ruling extended to SAML: validateSAMLConfigHTTPS (saml.go) now
+// refuses an http:// sp_entity_id/sp_acs_url override at config-decode
+// time, the same precondition OAuth's base_url validation gives its own
+// exchange. With that guarantee in place, a SAML deployment's own ACS URL
+// is never http, so a conditional Secure flag would only ever evaluate to
+// false in a misconfiguration this package already refuses earlier --
+// hardcoding true removes the dead branch instead of leaving it to rot.
+func samlLoginNonceCookie(value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name:     samlLoginNonceCookieName,
 		Value:    value,
 		Path:     "/",
 		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   secure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	}
 }

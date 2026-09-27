@@ -661,6 +661,34 @@ func TestSAMLRefusesANonEntitledOrg(t *testing.T) {
 	}
 }
 
+// TestSAMLConfigRefusesAnInsecureHTTPOverride pins D2748/D2745's
+// class ruling (HTTPS-only enforcement extended from OAuth's base_url
+// check to SAML): an admin-overridden sp_acs_url naming the insecure
+// http:// scheme is refused at config-load time (decodeSAMLConfig ->
+// validateSAMLConfigHTTPS, saml.go) -- before initiateSAMLAuth ever
+// builds a redirect, not merely a property the login-nonce cookie's
+// literal Secure:true (samlstate.go) happens to assume at runtime.
+func TestSAMLConfigRefusesAnInsecureHTTPOverride(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	idp := newSAMLIdP(t)
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"http://sp.test/acs"}`,
+		idp.idp.MetadataURL.String(), idp.certConfigValue())
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "saml", status: "active", config: config, autoProvision: true,
+	})
+
+	status, body := postJSON(t, st.server, "/api/v1/auth/saml/"+providerID.String()+"/initiate", map[string]any{})
+	if status != http.StatusInternalServerError {
+		t.Fatalf("initiate: status=%d body=%v, want 500 (an insecure sp_acs_url override refused at config-load time)", status, body)
+	}
+	if _, ok := body["redirect_url"]; ok {
+		t.Fatalf("initiate: got a redirect_url for a config this package should have refused: %v", body)
+	}
+}
+
 // inflateAndExtractRequestID inverts initiateSAMLAuth's own deflateRaw
 // (raw DEFLATE, no zlib header/trailer) to recover the real AuthnRequest
 // XML a genuine /initiate call generated, and extracts its own ID

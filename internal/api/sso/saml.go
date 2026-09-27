@@ -119,12 +119,43 @@ func decodeSAMLConfig(raw *string) (samlConfigValues, error) {
 	if nameIDFormat == "" {
 		nameIDFormat = defaultNameIDFormat
 	}
-	return samlConfigValues{
+	cfg := samlConfigValues{
 		EntityID: objString(object, "entity_id"), SSOURL: objString(object, "sso_url"),
 		SLOURL: objString(object, "slo_url"), Certificate: objString(object, "certificate"),
 		SPEntityID: objString(object, "sp_entity_id"), SPACSURL: objString(object, "sp_acs_url"),
 		NameIDFormat: nameIDFormat, AttributeMapping: mapping,
-	}, nil
+	}
+	if err := validateSAMLConfigHTTPS(cfg); err != nil {
+		return samlConfigValues{}, err
+	}
+	return cfg, nil
+}
+
+// validateSAMLConfigHTTPS is D2748/D2745's class ruling (HTTPS-only
+// enforcement, extended from OAuth's base_url check to SAML): an admin-
+// overridden sp_entity_id/sp_acs_url is refused here, at config-load
+// time, if it explicitly names the insecure http:// scheme. This runs at
+// every decodeSAMLConfig call site -- samlMetadata, initiateSAMLAuth,
+// samlACSCallback -- so an http override never reaches exchange time,
+// which is why the login-nonce cookie's Secure flag (samlstate.go) is a
+// literal true rather than conditioned on appBaseURL()'s own scheme: this
+// check is the guarantee that makes that literal safe.
+//
+// Scoped to an explicit "http://" prefix, not "require https://": a SAML
+// entityID is conventionally a URI, not necessarily a dereferenceable
+// URL (e.g. "urn:example:sp"), and this port must not invent a stricter
+// shape requirement than Python's own get_saml_config ever had. Refusing
+// only the insecure scheme, when one is present, catches the real
+// concern (a browser could be told to submit this package's own state
+// back over plaintext) without rejecting a legitimate non-URL entityID.
+func validateSAMLConfigHTTPS(cfg samlConfigValues) error {
+	if strings.HasPrefix(cfg.SPEntityID, "http://") {
+		return errors.New("SAML sp_entity_id must not use the insecure http:// scheme")
+	}
+	if strings.HasPrefix(cfg.SPACSURL, "http://") {
+		return errors.New("SAML sp_acs_url must not use the insecure http:// scheme")
+	}
+	return nil
 }
 
 // pyNone is a raw dict-subscript read of a key get_saml_config() always
@@ -339,7 +370,7 @@ func (h handlers) initiateSAMLAuth(w http.ResponseWriter, r *http.Request) {
 		// P1-3): pairs with the NonceHash check in processSAMLResponse --
 		// see samlState.NonceHash's doc comment (samlstate.go) for the
 		// login-CSRF this closes.
-		http.SetCookie(w, samlLoginNonceCookie(loginNonce, int(samlStateTTL/time.Second), strings.HasPrefix(base, "https://")))
+		http.SetCookie(w, samlLoginNonceCookie(loginNonce, int(samlStateTTL/time.Second)))
 		params.Set("RelayState", token)
 	}
 	out := pyjson.NewObject()
@@ -682,7 +713,7 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 	// paired with a second RelayState/replay attempt (defense in depth --
 	// the assertion-replay guard above already refuses a second use of the
 	// same assertion regardless).
-	http.SetCookie(w, samlLoginNonceCookie("", -1, strings.HasPrefix(appBaseURL(), "https://")))
+	http.SetCookie(w, samlLoginNonceCookie("", -1))
 
 	claims, err := h.processSAMLResponse(ctx, row, config, appBaseURL(), samlResponse, relayState, cookieNonce, h.Now())
 	if err != nil {

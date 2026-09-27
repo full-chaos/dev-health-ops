@@ -18,38 +18,26 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
-// jiraCombinedTeamCatalogCollector makes real Atlassian Teams collection
-// (internal/atlassianteams) the PRIMARY output of the jira team step for an
-// integration whose credential config carries atlassian_organization_id
-// (org-opt-in, set on the same jira integration row the credential lives
-// on -- see internal/synccli/jira_stored_credential.go's identical read),
-// falling back to the existing project-as-team catalog (ProjectAsTeam) only
-// when the Teams API is unavailable for this tenant this run (an error, or
-// a suspiciously empty answer -- see collectAtlassianTeams's doc comment).
-// An integration with no atlassian_organization_id configured, or with
-// auto_import_teams off, runs ProjectAsTeam exactly as before, unaffected.
+// jiraCombinedTeamCatalogCollector composes the existing project-as-team
+// catalog (ProjectAsTeam, unchanged, always runs) with a real Atlassian
+// Teams collection (internal/atlassianteams). Before this (D2770/CHAOS-7002),
+// internal/atlassianteams.Collect was only ever reachable from the standalone
+// `dho sync teams --provider jira` CLI verb -- a normal scheduled jira sync
+// never produced real ARI-shaped Atlassian Teams rows, only the generic
+// project-as-team fallback, unless a human ran the CLI verb by hand. This
+// type is registered under the "jira" key of the production Native map
+// (sync_dispatch.go) in ProjectAsTeam's place, so both writers run from the
+// same automatic post-sync/reference-discovery dispatch.
 //
-// D2775 (lead ruling): before this, internal/atlassianteams.Collect was only
-// ever reachable from the standalone `dho sync teams --provider jira` CLI
-// verb -- a normal scheduled jira sync never produced real ARI-shaped
-// Atlassian Teams rows, only the generic project-as-team fallback, unless a
-// human ran the CLI verb by hand. This type is registered under the "jira"
-// key of the production Native map (sync_dispatch.go) in ProjectAsTeam's
-// place, so the SAME credential seam the CLI verb fix resolves now also
-// drives the automatic post-sync/reference-discovery dispatch.
-//
-// Provenance: exactly one of the two writers runs per invocation, and each
-// writes into a disjoint row set of the SAME physical tables (teams /
-// team_memberships / team_project_ownership) -- Atlassian Teams rows carry
-// `native_team_key` = the team's full ARI (`ari:cloud:identity::team/...`),
-// project-as-team rows carry the Jira project key instead (never an ARI).
-// A row's own native_team_key IS its provenance: which path produced it is
-// directly queryable, no separate marker column needed. Read-time
-// team-attribution precedence (specificity 110 for a real Atlassian team vs
-// 100 for a project-as-team row) remains the safety net for any rows a
-// PRIOR run left behind under the other path (e.g. a run where Atlassian
-// Teams was temporarily unavailable, or before an org configured
-// atlassian_organization_id at all) -- see
+// The Atlassian Teams step is additive and org-opt-in: it runs only when the
+// resolved credential's config carries atlassian_organization_id (set on the
+// same jira integration row the credential itself lives on -- see
+// internal/synccli/jira_stored_credential.go's identical read). An org that
+// has not configured it yet is completely unaffected: ProjectAsTeam's result
+// passes through unchanged. Both writers target the SAME physical tables
+// (teams / team_memberships / team_project_ownership); team-attribution's
+// specificity ranking (110 for a real Atlassian team vs 100 for the
+// project-as-team fallback) resolves precedence automatically -- see
 // .github/docs-legacy/architecture/team-attribution.md §0.2a.
 type jiraCombinedTeamCatalogCollector struct {
 	// ProjectAsTeam is the interface, not the concrete
@@ -89,65 +77,47 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 	selections providersync.TeamCatalogSelections,
 	normalizedAt time.Time,
 ) (providersync.TeamCatalogResult, error) {
-	organizationID := strings.TrimSpace(credential.Config["atlassian_organization_id"])
-	// auto_import_teams (selections.Teams) gates this exactly the way it
-	// gates every other provider's Teams surface -- an integration with it
-	// off never attempts Atlassian Teams at all, matching D2775's "for jira
-	// integrations with auto_import_teams on".
-	attemptAtlassian := organizationID != "" && selections.Teams && client != nil && client.BaseURL != nil
-
-	if attemptAtlassian {
-		rows, collectErr := collector.collectAtlassianTeams(ctx, ref, credential, client, selections, normalizedAt, organizationID)
-		switch {
-		case collectErr == nil && len(rows.Teams) > 0:
-			// Primary: write real Atlassian Teams rows. A write failure here
-			// is an infrastructure fault (not "the tenant's Teams API is
-			// unavailable"), so it is never a fallback candidate -- it
-			// propagates exactly like ProjectAsTeam's own write failures do.
-			if _, err := atlassianteams.Write(ctx, collector.Conn, ref.OrgID, rows, atlassianteams.Selections{
-				Structure: selections.Teams, Members: selections.Members, Projects: selections.Projects,
-			}); err != nil {
-				return providersync.TeamCatalogResult{}, err
-			}
-			result := providersync.TeamCatalogResult{
-				TeamsWritten:       len(rows.Teams),
-				MembershipsWritten: len(rows.Memberships),
-				OwnershipWritten:   len(rows.Ownership),
-				MembersWritten:     len(distinctAtlassianTeamsMembers(rows.Memberships)),
-			}
-			for _, team := range rows.Teams {
-				result.TeamKeys = append(result.TeamKeys, team.ID)
-			}
-			return result, nil
-		case collectErr != nil && ref.Strict:
-			// Strict (reference discovery) propagates failures exactly like
-			// every other collector -- no silent fallback under strict.
-			return providersync.TeamCatalogResult{}, collectErr
-		default:
-			// Unavailable this run: either the read failed, or it returned
-			// suspiciously empty (far more often a permissions/configuration
-			// problem than a real zero-team organization, same caution the
-			// CLI verb's own --allow-empty refusal applies). Fall back to
-			// the project-as-team catalog and say why -- this IS the
-			// "provenance" of a fallback run: it is distinguishable in logs
-			// from an integration that simply never configured
-			// atlassian_organization_id (which never logs this line at all).
-			reason := "atlassian_teams_unavailable"
-			if collectErr == nil {
-				reason = "atlassian_teams_empty_result"
-			}
-			slog.Default().WarnContext(ctx, "jira_atlassian_teams_unavailable_fallback_to_project_as_team",
-				"org_id", ref.OrgID, "reason", reason, "error", collectErr)
-		}
+	result, err := collector.ProjectAsTeam.CollectTeamCatalog(ctx, ref, credential, client, selections, normalizedAt)
+	if err != nil {
+		return result, err
 	}
-	return collector.ProjectAsTeam.CollectTeamCatalog(ctx, ref, credential, client, selections, normalizedAt)
+	// A skipped or nothing-selected project-as-team walk means either the
+	// walk found nothing to do, or something is already wrong with this
+	// jira credential/connectivity -- either way, layering more calls under
+	// the same credential is not worth the risk here.
+	if result.Skipped || !selections.Any() {
+		return result, nil
+	}
+	organizationID := strings.TrimSpace(credential.Config["atlassian_organization_id"])
+	if organizationID == "" || client == nil || client.BaseURL == nil {
+		return result, nil
+	}
+	atlassianResult, err := collector.collectAtlassianTeams(ctx, ref, credential, client, selections, normalizedAt, organizationID)
+	if err != nil {
+		if ref.Strict {
+			return result, err
+		}
+		// Non-strict (post-sync dispatch): the project-as-team write above
+		// already succeeded and must not be undone by an Atlassian Teams
+		// failure -- log and keep that result, mirroring every other
+		// collector's non-strict walk-failure discipline in this package.
+		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "error", err)
+		return result, nil
+	}
+	result.TeamsWritten += len(atlassianResult.Rows.Teams)
+	result.MembershipsWritten += len(atlassianResult.Rows.Memberships)
+	result.OwnershipWritten += len(atlassianResult.Rows.Ownership)
+	result.MembersWritten += len(distinctAtlassianTeamsMembers(atlassianResult.Rows.Memberships))
+	for _, team := range atlassianResult.Rows.Teams {
+		result.TeamKeys = append(result.TeamKeys, team.ID)
+	}
+	return result, nil
 }
 
-// collectAtlassianTeams reads (never writes) the Atlassian Teams collection
-// for this tenant. The caller decides fallback-vs-hard-error from the
-// returned error: a read failure here means the Teams API was unavailable
-// for this tenant this run, which is a legitimate fallback trigger; a WRITE
-// failure (handled by the caller, not here) is not.
+type atlassianTeamsCollected struct {
+	Rows atlassianteams.Rows
+}
+
 func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	ctx context.Context,
 	ref providersync.TeamCatalogReference,
@@ -156,13 +126,13 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	selections providersync.TeamCatalogSelections,
 	normalizedAt time.Time,
 	organizationID string,
-) (atlassianteams.Rows, error) {
+) (atlassianTeamsCollected, error) {
 	if collector.Conn == nil {
-		return atlassianteams.Rows{}, providersync.ErrInvalidConfiguration
+		return atlassianTeamsCollected{}, providersync.ErrInvalidConfiguration
 	}
 	tenant, err := normalizeAtlassianTenantURL(client.BaseURL.String())
 	if err != nil {
-		return atlassianteams.Rows{}, err
+		return atlassianTeamsCollected{}, err
 	}
 	cloudID := strings.TrimSpace(credential.Config["atlassian_cloud_id"])
 	doer := collector.Doer
@@ -172,7 +142,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	if cloudID == "" {
 		cloudID, err = atlassianteams.ResolveCloudID(ctx, doer, tenant)
 		if err != nil {
-			return atlassianteams.Rows{}, err
+			return atlassianTeamsCollected{}, err
 		}
 	}
 	email, _ := credential.Secret("email")
@@ -184,16 +154,35 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 		}
 	}
 	if !email.Configured() || token == "" {
-		return atlassianteams.Rows{}, providersync.ErrInvalidConfiguration
+		return atlassianTeamsCollected{}, providersync.ErrInvalidConfiguration
 	}
 	gatewayClient := collector.newClient(tenant.String()+"/gateway/api", atlassian.BasicAPITokenAuth{Email: email.Reveal(), Token: token})
-	return atlassianteams.Collect(ctx, gatewayClient, atlassianteams.Params{
+	rows, err := atlassianteams.Collect(ctx, gatewayClient, atlassianteams.Params{
 		OrgID: ref.OrgID, OrganizationID: organizationID, SiteID: cloudID,
 		Selections: atlassianteams.Selections{
 			Structure: selections.Teams, Members: selections.Members, Projects: selections.Projects,
 		},
 		Now: normalizedAt,
 	})
+	if err != nil {
+		return atlassianTeamsCollected{}, err
+	}
+	if len(rows.Teams) == 0 {
+		// An empty Atlassian Teams answer is far more often a permissions or
+		// configuration problem than a real empty organization (see the CLI
+		// verb's identical refusal); the automatic path is silent-by-default
+		// (no --allow-empty escape hatch here), so it simply writes nothing
+		// rather than retracting the project-as-team fallback's members and
+		// links -- Write's own retraction logic only ever acts on the
+		// Atlassian-ARI-keyed rows it owns, never on project-as-team rows.
+		return atlassianTeamsCollected{}, nil
+	}
+	if _, err := atlassianteams.Write(ctx, collector.Conn, ref.OrgID, rows, atlassianteams.Selections{
+		Structure: selections.Teams, Members: selections.Members, Projects: selections.Projects,
+	}); err != nil {
+		return atlassianTeamsCollected{}, err
+	}
+	return atlassianTeamsCollected{Rows: rows}, nil
 }
 
 func distinctAtlassianTeamsMembers(memberships []atlassianteams.MembershipRow) []string {

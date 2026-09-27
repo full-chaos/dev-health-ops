@@ -121,35 +121,23 @@ at `unassigned` usually means the ClickHouse `teams` dimension is empty.
 | 6 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 7 only | 0–5 | `scope_type, scope_id, reason` |
 | 7 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
 
-### 0.2a Atlassian Teams (Jira) — real teams, project-as-team as the unavailability fallback
+### 0.2a Atlassian Teams (Jira) — real teams beside the project-as-team fallback
 
 Jira has two team models and both live in ClickHouse under `provider = 'jira'`:
 
-| | Project-as-team (fallback) | Atlassian Teams (real teams, PRIMARY) |
+| | Project-as-team (fallback) | Atlassian Teams (real teams) |
 |---|---|---|
-| Written by | the Jira team catalog / auto-import | `internal/atlassianteams` -- reachable standalone via `dho sync teams --provider jira`, and (CHAOS-7002/D2770/D2775) as the PRIMARY output of the same jira team-catalog auto-import for any integration with `auto_import_teams` on and `atlassian_organization_id` configured |
+| Written by | the Jira team catalog / auto-import | `internal/atlassianteams`, run automatically as an additional step of the same jira team-catalog auto-import (org-opt-in on the jira integration's `atlassian_organization_id` config; CHAOS-7002/D2770) -- also reachable standalone via `dho sync teams --provider jira` |
 | `teams.id` | the Jira project key (`PLAT`) | the uuid of the team's ARI (`ari:cloud:identity::team/<uuid>`), `native_team_key` = the full ARI |
 | Members (`team_memberships`, `source = 'native'`) | the project lead only, 100/10 | every `TEAM_MEMBER` of the team from the Teamwork Graph (`member_id = jira:<lower(accountId)>`, the same id the auto-import uses), 100/10 |
 | Project ownership (`team_project_ownership`, `source = 'native'`) | the project itself, specificity 100, priority 10 | the team's active projects, **specificity 110, priority 10** |
 
-**Write-time precedence (D2775):** for an integration with `atlassian_organization_id` configured, the automatic
-post-sync team step runs Atlassian Teams FIRST, every run. On success it is the run's ONLY writer -- the
-project-as-team catalog does not run at all that run. Project-as-team runs only as the FALLBACK, when the Teams API
-was unavailable for that tenant this run (a read failure, or a suspiciously empty answer, treated with the same
-caution as `dho sync teams`'s own `--allow-empty` refusal) -- logged as
-`jira_atlassian_teams_unavailable_fallback_to_project_as_team`, distinguishable from an integration that has simply
-never configured `atlassian_organization_id` (which never logs that line and always runs project-as-team, unchanged
-from before this fix). Provenance of which path produced a given row needs no separate column: a row's own
-`native_team_key` shape (an ARI, or a bare project key) already says which writer produced it.
-
-**Read-time precedence (the safety net for mixed/leftover state):** `project_ownership` candidates rank by
-`is_primary`, then `specificity` (higher first), then `priority` (lower first) (`RankDerivationCandidates`). An
-Atlassian team that works on a project therefore **outranks** the project standing in for a team (110 over 100) --
-this is what protects a project-as-team row a PRIOR fallback run (or a pre-D2775/pre-configuration history) left
-behind, until a later successful Atlassian Teams run's own deactivation logic retires it. The two id spaces cannot
-collide (a project key is not a uuid). The source is the existing `native` enum value: `team_*.source` has no room
-for another value without a ClickHouse migration (rule 4.1 above). Asserted by
-`TestAnAtlassianTeamOutranksTheProjectAsTeamOwnerInTheCascade`.
+`project_ownership` candidates rank by `is_primary`, then `specificity` (higher first), then `priority` (lower
+first) (`RankDerivationCandidates`). An Atlassian team that works on a project therefore **outranks** the project
+standing in for a team (110 over 100); the project-as-team row stays as the fallback for projects no Atlassian team
+claims. The two id spaces cannot collide (a project key is not a uuid), and the sync never writes the project-as-team
+rows. The source is the existing `native` enum value: `team_*.source` has no room for another value without a
+ClickHouse migration (rule 4.1 above). Asserted by `TestAnAtlassianTeamOutranksTheProjectAsTeamOwnerInTheCascade`.
 
 ### 0.3 Off-the-rails matrix (symptom → diagnosis → fix)
 

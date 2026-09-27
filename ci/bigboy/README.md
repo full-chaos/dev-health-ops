@@ -97,7 +97,7 @@ to the secret refs: `GO_API_EDGE_JWT_SECRET` (and, once the generator was extend
 query-api at all -- a real user's JWT was rejected outright with no way to serve real dashboard data.
 
 `bigboy-cut.sh`'s `query-api-enabled-flags-current` STEP now does two checks, both required for
-`DEPLOY_CHECKOUT=<deploy repo worktree>`:
+`DEPLOY_SHA=<pinned deploy commit>` (see "Pinned deploy values" below):
 1. Every NAME the generator emits (flags + secret refs) is present in the checked-in
    `compose/compose.bigboy.images.yml` -- fails loud (STEP rc=1) naming exactly which name(s) are
    missing, rather than a silent 404/401 surfacing hours later through a real user.
@@ -178,11 +178,9 @@ Every check below fails loud with a named finding; none can pass on an empty or 
   can emit (file-provider and label form) and the checked-in example must be exactly
   `Host(`traefik`)` or `Host(`traefik`) && PathRegexp(...)`. A public hostname, a second Host
   matcher, or an `||` that lets a rule match without the Host clause fails (the D2735 shape).
-- **Live router current** (`bigboy-cut.sh` STEP `router-current`, needs `DEPLOY_CHECKOUT`): the live
-  `.traefik-dynamic/planes.yml` must be byte-identical to the generator's output for that
-  `values.prod.yaml`. Point `DEPLOY_CHECKOUT` at the values prod is actually running, not deploy main:
-  bigboy follows prod's roll, so deploy main's un-rolled paths (e.g. rev 194's SSO routes) show here
-  as drift until that roll lands.
+- **Live router current** (`bigboy-cut.sh` STEP `router-current`, needs `DEPLOY_SHA`): the live
+  `.traefik-dynamic/planes.yml` must be byte-identical to the generator's output for the pinned
+  deploy sha (see "Pinned deploy values" below).
 - **Web env parity** (`check-web-env-parity.py`, STEP `web-env-parity`): every prod `ops.web.env` /
   `ops.web.extraEnv` NAME must be classified (overlay vs venue-local base) -- a new prod name fails,
   named; overlay names (`BACKEND_URL`, `AUTH_URL`) must be in `compose.bigboy.router.yml` with the
@@ -257,3 +255,31 @@ step**, one sitting, and this lane's permission classifier denied it (not attemp
    `KNOWN-MISSING` marker is removed from `routing-ops.txt`.
 
 If a step fails, revert step 1 first. No named limit in `goserved_ledger.json` is used for testopsRisk.
+
+## Pinned deploy values (R467)
+
+Deploy values can run AHEAD of the running build: a deploy PR that routes new paths to Go can merge
+before the ops change that serves them is in any image (rev 195's SSO group: deploy main routed 5
+SSO paths while bigboy still ran 4f014a9d). So the values source is an explicit input per cut:
+
+- `DEPLOY_SHA` (in the round's `round.env` and recorded in `_records/bigboy-<sha8>.deploy-sha.txt`),
+  read from `DEPLOY_REPO` (default the devhealth-root `deploy` checkout) with `git show` -- never a
+  working tree, never "deploy main".
+- STEP `deploy-pin`: `generate-plane-split-router.py --deploy-repo --deploy-sha --expect-ops-sha $NEW
+  --values-out ...` REFUSES (rc=3) when that deploy commit's `vendor/dev-health-ops` pin is not the
+  build the cut runs. Every values-driven STEP (router-current, query-api flags, web-env parity,
+  route-coverage) reads the file it wrote. Without `DEPLOY_SHA` those STEPs report rc=2 SKIPPED.
+- STEP `route-coverage` (`check-route-coverage.py`): one `ROUTEPROBE` request per routed path to each
+  Go plane; net/http's method-aware mux answers 405 (or 401 behind auth) for a registered path and
+  404 for none, before any handler runs. A 404 fails the STEP by name.
+
+Limits, stated plainly: the vendor-pin check cannot tell a deploy commit whose values are ahead of
+its own vendor pin (deploy main at R467 vendored 4f014a9d too), and the ROUTEPROBE check cannot tell
+a registered stub from a real handler (bigboy's 4f014a9d go-api answers the OIDC paths with 405
+because a placeholder is registered). The control for R467 is choosing `DEPLOY_SHA` = the deploy
+commit that was rolled (or proven) with this build -- today **8028ff17** for ops 4f014a9d.
+
+Regenerate the live router from a pinned sha:
+`generate-plane-split-router.py --deploy-repo /home/ubuntu/devhealth/deploy --deploy-sha 8028ff17
+--expect-ops-sha 4f014a9d9babfff17b6ca71a33778f2f69d30737 --format dynamic > .traefik-dynamic/planes.yml`
+(write to a temp file and rename; traefik hot-reloads).

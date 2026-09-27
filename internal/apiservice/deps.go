@@ -1,7 +1,6 @@
 package apiservice
 
 import (
-	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
+	"github.com/full-chaos/dev-health-ops/internal/api/licensing/processlicense"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -290,10 +290,11 @@ func buildDeps(
 	var deps Deps
 	var components []lifecycle.Component
 
-	if processLicenseConfigured(os.LookupEnv) {
-		return Deps{}, nil, dependencyFailure(ctx, logger, "api_process_license", "api_process_license_unsupported",
-			errors.New("LICENSE_KEY and LICENSE_PUBLIC_KEY are both set: the Go api does not evaluate a process-wide license, and its feature-gated routes would answer differently from the Python api; unset one or keep these routes on the Python api"))
-	}
+	// LicenseManager.initialize() (CHAOS-6663): the process-wide install
+	// license, verified once here as the Python lifespan does. It never
+	// stops start-up; anything short of a license in force is the community
+	// tier, logged with its reason.
+	processlicense.Install(ctx, os.LookupEnv, logger, time.Now().Unix())
 
 	// verify_rate_limit_config: a deployment that serves the limited routes
 	// (it has its database) must count them in the shared store outside
@@ -382,19 +383,4 @@ func buildDeps(
 		slog.Bool("webhook_secret_decryptor_configured", deps.Pool != nil && cfg.SettingsEncryptionKey.Configured()),
 	)
 	return deps, components, nil
-}
-
-// processLicenseVariables names the two variables Python's LicenseManager
-// reads when it activates a process-wide licence, and true when BOTH hold a
-// value: it validates a signed key only when a public key is configured and
-// a key is present, so either one alone leaves Python at the community tier
-// (the same answer the Go gates give). The Go feature gates decide from the
-// org's own licence rows only, so a process with both set would serve gated
-// routes differently from Python; start-up refuses instead.
-func processLicenseConfigured(lookup func(string) (string, bool)) bool {
-	holds := func(name string) bool {
-		value, ok := lookup(name)
-		return ok && value != ""
-	}
-	return holds("LICENSE_KEY") && holds("LICENSE_PUBLIC_KEY")
 }

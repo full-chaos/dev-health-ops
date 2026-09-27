@@ -169,7 +169,7 @@ func (h handlers) gated(validate validator) http.Handler {
 			// has_feature logs the denial as a license audit event (a log
 			// line only; nothing is stored).
 			h.Logger.WarnContext(r.Context(), "License audit: feature_access_denied",
-				"feature", ssoFeature, "current_tier", licensing.ProcessTier, "path", r.URL.Path)
+				"feature", ssoFeature, "current_tier", licensing.ProcessTier(), "path", r.URL.Path)
 			policy.WriteDetail(w, http.StatusPaymentRequired, licensing.FeatureNotLicensedDetail(ssoFeature, &ssoRequiredTier), nil)
 			return
 		}

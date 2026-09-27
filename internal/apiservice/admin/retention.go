@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -118,7 +119,9 @@ func retentionPolicyObject(p *retentionPolicy) *pyjson.Object {
 func (h *handlers) listRetentionResourceTypes(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	orgID := policy.UserFrom(ctx).OrgID
-	if orgID == "" {
+	// With no org, only the process license (checked first by the
+	// decorator, CHAOS-6663) can allow.
+	if orgID == "" && !licensing.ProcessHasFeature(retentionFeature) {
 		writeFeatureNotLicensed(w, retentionFeature)
 		return
 	}

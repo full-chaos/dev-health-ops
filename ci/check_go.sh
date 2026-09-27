@@ -842,7 +842,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  printf 'go test -count=1: internal/api/licensing (tier feature registry, limits, signing and process-license verification vs live Python)\n'
+  printf 'go test -count=1: internal/api/licensing (tier feature registry and limits vs live Python)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -851,8 +851,23 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestTierFeaturesMatchLivePython|TestSignLicenseMatchesLivePython|TestPythonB64DecodeMatchesLivePython|TestBigDurationLicensesVerifyIdenticallyGoSignedAndPythonSigned|TestVerifierMatchesLivePythonLicenseValidator)$' \
-        ./internal/api/licensing ./internal/api/licensing/processlicense
+        -run '^(TestTierFeaturesMatchLivePython|TestSignLicenseMatchesLivePython|TestPythonB64DecodeMatchesLivePython|TestBigDurationLicensesVerifyIdenticallyGoSignedAndPythonSigned)$' \
+        ./internal/api/licensing
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  printf 'go test -count=1: internal/api/licensing/processlicense (process-license verifier vs the live Python LicenseValidator)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestVerifierMatchesLivePythonLicenseValidator)$' \
+        ./internal/api/licensing/processlicense
   ); then
     rm -rf -- "${proof_dir}"
     return 1

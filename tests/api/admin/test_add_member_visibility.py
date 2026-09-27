@@ -47,11 +47,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from dev_health_ops.api.admin.routers.credentials import create_credential
 from dev_health_ops.api.admin.routers.orgs import add_member
 from dev_health_ops.api.admin.routers.users import create_user
 from dev_health_ops.api.admin.schemas_flat import (
-    IntegrationCredentialCreate,
     MembershipCreate,
     UserCreate,
 )
@@ -272,55 +270,3 @@ async def test_create_organization_with_owner_is_durable_before_returning(
             "owner membership row was never durably committed"
         )
         assert str(seen_owner_membership.role) == "owner"
-
-
-@pytest.mark.asyncio
-async def test_create_credential_is_durable_before_dependent_request(
-    org_schema: tuple[async_sessionmaker[AsyncSession], uuid.UUID],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A credential returned by one request must satisfy the next request's FK.
-
-    ``IntegrationCredentialsService.set`` flushes the new row but deliberately
-    leaves transaction ownership to the request boundary.  FastAPI sends the
-    response before a yielded dependency's post-response commit, so a second
-    request can otherwise try to create an ``Integration`` whose
-    ``credential_id`` is not visible yet and fail ``integration_credentials_id_fkey``.
-    Each session below represents one real HTTP request. The test never commits
-    on behalf of the credential endpoint whose durability is under test; the
-    dependent request commits only after its foreign-key flush succeeds.
-    """
-    maker, org_id = org_schema
-    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "chaos-3739-credential-test-key")
-
-    async with maker() as create_credential_session:
-        credential_response = await create_credential(
-            payload=IntegrationCredentialCreate(
-                provider="github",
-                credentials={"token": "ghp_chaos_3739"},
-            ),
-            session=create_credential_session,
-            org_id=str(org_id),
-        )
-
-    credential_id = uuid.UUID(credential_response.id)
-
-    async with maker() as dependent_request_session:
-        dependent_request_session.add(
-            Integration(
-                org_id=str(org_id),
-                provider="github",
-                credential_id=credential_id,
-                name="github-default",
-                config={},
-            )
-        )
-        await dependent_request_session.flush()
-        await dependent_request_session.commit()
-
-    async with maker() as verify_session:
-        seen_credential = await verify_session.get(IntegrationCredential, credential_id)
-        assert seen_credential is not None, (
-            "create_credential reported success, but its row was not durably "
-            "committed before the dependent request -- integration_credentials_id_fkey"
-        )

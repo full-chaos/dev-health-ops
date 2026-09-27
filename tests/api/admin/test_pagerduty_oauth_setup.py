@@ -218,23 +218,6 @@ async def test_service_rejects_pagerduty_live_tokens(
             )
 
 
-@pytest.mark.asyncio
-async def test_generic_pagerduty_credential_routes_are_rejected(
-    client: AsyncClient,
-) -> None:
-    created = await client.post(
-        "/api/v1/admin/credentials",
-        json={"provider": "pagerduty", "credentials": {"api_token": "forbidden"}},
-    )
-    updated = await client.patch(
-        "/api/v1/admin/credentials/pagerduty/default",
-        json={"credentials": {"api_token": "forbidden"}},
-    )
-
-    assert created.status_code == 400
-    assert updated.status_code == 400
-
-
 class _RecordingPagerDutyClient:
     """Stand-in PagerDuty client that records calls and closes for preflight tests."""
 

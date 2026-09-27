@@ -5,6 +5,7 @@ package apiservice
 import (
 	"context"
 	"encoding/base64"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -48,8 +49,9 @@ func (f venueFixture) tokenSpecs() map[string]map[string]any {
 func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixture {
 	t.Helper()
 	f := venueFixture{}
-	for _, id := range []*uuid.UUID{&f.orgA, &f.orgB, &f.orgFree, &f.orgNoLicense, &f.member, &f.admin, &f.owner, &f.superuser, &f.outsider, &f.inactive, &f.stale, &f.impersonator} {
-		*id = uuid.New()
+	// Deterministic ids: a frozen golden records request bodies and rows that carry them.
+	for index, id := range []*uuid.UUID{&f.orgA, &f.orgB, &f.orgFree, &f.orgNoLicense, &f.member, &f.admin, &f.owner, &f.superuser, &f.outsider, &f.inactive, &f.stale, &f.impersonator} {
+		*id = uuid.MustParse(venueoracle.StableUUID("venue-seed-" + strconv.Itoa(index)))
 	}
 	statements := []struct {
 		sql  string

@@ -30,6 +30,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -310,11 +311,22 @@ VALUES ($1, $2, $11, $3, $4, $9, $10, $5, 'member', $6::json, $7::json, $8::json
 
 func postJSON(t *testing.T, server *httptest.Server, path string, body map[string]any) (int, map[string]any) {
 	t.Helper()
+	return postJSONWithClient(t, http.DefaultClient, server, path, body)
+}
+
+// postJSONWithClient is postJSON but through a caller-supplied client, so
+// tests that need /authorize's Set-Cookie (the D2745 browser-binding
+// login nonce) to actually reach the following /callback POST -- or need
+// to control whether it does -- can use a cookiejar-backed http.Client
+// instead of postJSON's bare http.DefaultClient, which carries no cookie
+// jar at all.
+func postJSONWithClient(t *testing.T, client *http.Client, server *httptest.Server, path string, body map[string]any) (int, map[string]any) {
+	t.Helper()
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.Post(server.URL+path, "application/json", strings.NewReader(string(raw)))
+	resp, err := client.Post(server.URL+path, "application/json", strings.NewReader(string(raw)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,6 +334,18 @@ func postJSON(t *testing.T, server *httptest.Server, path string, body map[strin
 	var out map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&out)
 	return resp.StatusCode, out
+}
+
+// newCookieClient is a *http.Client whose jar carries the D2745 P1-3
+// login-nonce cookie /authorize sets to the following /callback POST --
+// the same technique already landed on SAML/OAuth (D2744/D2745).
+func newCookieClient(t *testing.T) *http.Client {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Client{Jar: jar}
 }
 
 // TestOIDCAuthorizeAndCallbackFullRoundTrip is the happy path: an
@@ -341,7 +365,8 @@ func TestOIDCAuthorizeAndCallbackFullRoundTrip(t *testing.T) {
 		clientSecretEncryptedFallback: "test-client-secret",
 	})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: status=%d body=%v", status, authResp)
 	}
@@ -364,7 +389,7 @@ func TestOIDCAuthorizeAndCallbackFullRoundTrip(t *testing.T) {
 	const testEmail = "new.user@allowed.example"
 	idp.set(nonce, testEmail, "New User", "idp-subject-1")
 
-	status, cbResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+	status, cbResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
 		map[string]any{"code": "test-auth-code", "state": state})
 	if status != http.StatusOK {
 		t.Fatalf("callback: status=%d body=%v", status, cbResp)
@@ -486,7 +511,8 @@ func TestOIDCCallbackRefusesADomainNotOnTheAllowlist(t *testing.T) {
 		protocol: "oidc", status: "active", config: config, autoProvision: true, allowedDomains: &domains,
 	})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
@@ -494,7 +520,7 @@ func TestOIDCCallbackRefusesADomainNotOnTheAllowlist(t *testing.T) {
 	nonce := parsed.Query().Get("nonce")
 	idp.set(nonce, "someone@not-allowed.example", "Someone", "sub-2")
 
-	status, body := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusForbidden {
 		t.Fatalf("status=%d body=%v, want 403", status, body)
@@ -536,14 +562,15 @@ func TestOIDCCallbackRefusesATamperedState(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "oidc", status: "active", config: "{}", autoProvision: true})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
 	state, _ := authResp["state"].(string)
 	tampered := flipMiddleByte(state)
 
-	status, body := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": tampered})
 	if status != http.StatusBadRequest || body["detail"] != "OIDC authentication failed" {
 		t.Fatalf("status=%d body=%v, want 400 OIDC authentication failed", status, body)
@@ -555,6 +582,94 @@ func TestOIDCCallbackRefusesATamperedState(t *testing.T) {
 	// (empty issuer) would ALSO fail with the same 400 -- assert the
 	// RECORDED reason is specifically the state check, not that later
 	// stage, or this test could pass with state validation deleted.
+	var meta []byte
+	if err := st.pool.QueryRow(ctx, `SELECT request_metadata::text FROM audit_logs
+WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY created_at DESC LIMIT 1`, orgID).Scan(&meta); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(meta), `"stage":"state_auth"`) && !strings.Contains(string(meta), `"stage": "state_auth"`) {
+		t.Fatalf("audit request_metadata = %s, want a state_auth stage", meta)
+	}
+}
+
+// TestOIDCCallbackRefusesAMissingLoginNonceCookie and
+// TestOIDCCallbackRefusesATamperedLoginNonceCookie pin D2745's browser-
+// binding class ruling applied to OIDC (from CHAOS-6986's P1-3, already
+// landed on SAML/OAuth): a genuine, unexpired state alone is not enough
+// -- the login nonce cookie set at /authorize must also be present and
+// match. A missing cookie is exactly what a cross-site (login-CSRF)
+// submission looks like: SameSite=Lax withholds the cookie on a
+// cross-site POST.
+func TestOIDCCallbackRefusesAMissingLoginNonceCookie(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "oidc", status: "active", config: "{}", autoProvision: true})
+
+	// A real /authorize call, but WITHOUT a cookie jar: the Set-Cookie is
+	// dropped on the floor, exactly as if the following /callback POST
+	// arrived from a different browser.
+	status, authResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+	if status != http.StatusOK {
+		t.Fatalf("authorize: %d %v", status, authResp)
+	}
+	status, body := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+		map[string]any{"code": "c", "state": authResp["state"]})
+	if status != http.StatusBadRequest || body["detail"] != "OIDC authentication failed" {
+		t.Fatalf("status=%d body=%v, want 400 OIDC authentication failed", status, body)
+	}
+	assertProviderRowUnchanged(t, ctx, st.pool, providerID, "active")
+	var meta []byte
+	if err := st.pool.QueryRow(ctx, `SELECT request_metadata::text FROM audit_logs
+WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY created_at DESC LIMIT 1`, orgID).Scan(&meta); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(meta), `"stage":"state_auth"`) && !strings.Contains(string(meta), `"stage": "state_auth"`) {
+		t.Fatalf("audit request_metadata = %s, want a state_auth stage", meta)
+	}
+}
+
+func TestOIDCCallbackRefusesATamperedLoginNonceCookie(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "oidc", status: "active", config: "{}", autoProvision: true})
+
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+	if status != http.StatusOK {
+		t.Fatalf("authorize: %d %v", status, authResp)
+	}
+
+	// Tamper with the jar's own cookie value in place -- the state itself
+	// stays genuine and unexpired; only the browser-side half of the
+	// binding is wrong, which is exactly the case this check exists to
+	// catch (a genuine state presented by the wrong browser).
+	serverURL, err := url.Parse(st.server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookies := client.Jar.Cookies(serverURL)
+	found := false
+	for _, c := range cookies {
+		if c.Name == "dho_oidc_login_nonce" {
+			c.Value = flipMiddleByte(c.Value)
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("authorize: expected a dho_oidc_login_nonce cookie")
+	}
+	client.Jar.SetCookies(serverURL, cookies)
+
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+		map[string]any{"code": "c", "state": authResp["state"]})
+	if status != http.StatusBadRequest || body["detail"] != "OIDC authentication failed" {
+		t.Fatalf("status=%d body=%v, want 400 OIDC authentication failed", status, body)
+	}
+	assertProviderRowUnchanged(t, ctx, st.pool, providerID, "active")
 	var meta []byte
 	if err := st.pool.QueryRow(ctx, `SELECT request_metadata::text FROM audit_logs
 WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY created_at DESC LIMIT 1`, orgID).Scan(&meta); err != nil {
@@ -631,7 +746,8 @@ func TestOIDCCallbackRefusesAnUnknownUserWithoutAutoProvision(t *testing.T) {
 		protocol: "oidc", status: "active", config: config, autoProvision: false,
 	})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
@@ -639,7 +755,7 @@ func TestOIDCCallbackRefusesAnUnknownUserWithoutAutoProvision(t *testing.T) {
 	nonce := parsed.Query().Get("nonce")
 	idp.set(nonce, "nobody@example.test", "Nobody", "sub-3")
 
-	status, body := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusBadRequest || body["detail"] != "OIDC user provisioning failed" {
 		t.Fatalf("status=%d body=%v, want 400 OIDC user provisioning failed", status, body)
@@ -684,15 +800,16 @@ func TestOIDCCallbackRefusesAnExpiredState(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "oidc", status: "active", config: "{}", autoProvision: true})
 
+	client := newCookieClient(t)
 	st.clock.freeze(time.Now())
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
 	// oidcStateTTL (state.go) is 10 minutes.
 	st.clock.advance(11 * time.Minute)
 
-	status, body := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusBadRequest || body["detail"] != "OIDC authentication failed" {
 		t.Fatalf("status=%d body=%v, want 400 OIDC authentication failed", status, body)
@@ -721,12 +838,13 @@ func TestOIDCCallbackRefusesStateIssuedForAnotherProvider(t *testing.T) {
 	providerA := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "oidc", status: "active", config: "{}", autoProvision: true})
 	providerB := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "oidc", status: "active", config: "{}", autoProvision: true})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerA.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerA.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
 
-	status, body := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerB.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerB.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusBadRequest || body["detail"] != "OIDC authentication failed" {
 		t.Fatalf("status=%d body=%v, want 400 OIDC authentication failed", status, body)
@@ -756,7 +874,8 @@ func TestOIDCCallbackRefusesAWrongNonce(t *testing.T) {
 	config := fmt.Sprintf(`{"client_id":"c","issuer":%q,"token_endpoint":%q,"jwks_uri":%q}`, idp.server.URL, idp.server.URL+"/token", idp.server.URL+"/jwks")
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "oidc", status: "active", config: config, autoProvision: true})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
@@ -765,7 +884,7 @@ func TestOIDCCallbackRefusesAWrongNonce(t *testing.T) {
 	// step's own nonce (embedded in the state) will not match.
 	idp.set("a-completely-different-nonce", "someone@example.test", "Someone", "sub-4")
 
-	status, body := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	if status != http.StatusBadRequest || body["detail"] != "OIDC authentication failed" {
 		t.Fatalf("status=%d body=%v, want 400 OIDC authentication failed", status, body)
@@ -797,7 +916,8 @@ func TestOIDCLoginRefreshTokenIsUsable(t *testing.T) {
 		clientSecretEncryptedFallback: "test-client-secret",
 	})
 
-	status, authResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("authorize: status=%d body=%v", status, authResp)
 	}
@@ -807,7 +927,7 @@ func TestOIDCLoginRefreshTokenIsUsable(t *testing.T) {
 	}
 	idp.set(parsed.Query().Get("nonce"), "refresh.user@allowed.example", "Refresh User", "idp-subject-refresh")
 
-	status, cbResp := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+	status, cbResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
 		map[string]any{"code": "test-auth-code", "state": authResp["state"]})
 	if status != http.StatusOK {
 		t.Fatalf("callback: status=%d body=%v", status, cbResp)

@@ -11,10 +11,63 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"time"
 
 	"golang.org/x/crypto/hkdf"
 )
+
+// oidcLoginNonceCookieName is the HttpOnly, SameSite=Lax cookie
+// initiateOIDCAuth sets alongside the AEAD state -- see
+// hashOIDCLoginNonce's doc comment below for what it defends against
+// (D2745's browser-binding class ruling, applied here from CHAOS-6659/
+// CHAOS-6986's already-landed identical treatment on SAML's RelayState
+// and OAuth's own state).
+const oidcLoginNonceCookieName = "dho_oidc_login_nonce"
+
+// oidcLoginNonceCookie builds the cookie set at /authorize (value=nonce,
+// non-empty maxAge) and the one used to clear it at /callback (value="",
+// maxAge=-1). Unlike SAML's samlLoginNonceCookie/OAuth's
+// oauthLoginNonceCookie (both D2748-hardened to a literal Secure: true,
+// because each of those has its own config-load-time HTTPS-only
+// validation making an insecure override unreachable), OIDC has no such
+// validation in this PR's scope -- D2745's class ruling for OIDC is
+// explicitly "the same [browser-binding] treatment", not a new P1-2-style
+// HTTPS-only ask. appBaseURL()'s own default is a genuine plain-http
+// value in local/dev use (oidc.go's own doc comment on
+// appBaseURLDefault), so Secure stays conditioned on the request's own
+// scheme, exactly as SAML's FIRST cut (before D2748) did.
+func oidcLoginNonceCookie(value string, maxAge int, secure bool) *http.Cookie {
+	return &http.Cookie{
+		Name:     oidcLoginNonceCookieName,
+		Value:    value,
+		Path:     "/",
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
+// hashOIDCLoginNonce mirrors pkceChallenge's shape below: SHA-256,
+// base64url, unpadded. D2745 (team-lead, browser-binding class ruling,
+// applied here from CHAOS-6986's P1-3 after landing on SAML/OAuth
+// first): a genuine, unexpired OIDC state only proves this package
+// minted it, not which browser is presenting it back at /callback. A
+// login-CSRF works without this: an attacker starts their OWN OIDC
+// login, captures the resulting code+state pair (both travel through
+// the attacker's own browser), and gets a victim to submit that pair to
+// the victim's own browser's /callback -- the state verifies fine (a
+// real, unexpired token this package minted), silently logging the
+// victim into the attacker's identity. Binding it to a same-origin
+// HttpOnly SameSite=Lax cookie closes this: SameSite=Lax cookies are not
+// sent on a cross-site submission, so a cross-site-replayed state
+// arrives with no matching cookie and is refused in exchangeAndValidate
+// before the token exchange ever runs.
+func hashOIDCLoginNonce(nonce string) string {
+	sum := sha256.Sum256([]byte(nonce))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
 
 // oidcStateTTL bounds how long a caller has between fetching
 // authorization_url and completing the round trip at the IdP. Google's own
@@ -77,12 +130,17 @@ const oidcStateHKDFInfo = "dev-health-ops:oidc-state-aead-v1"
 type oidcState struct {
 	ProviderID   string `json:"provider_id"`
 	OrgID        string `json:"org_id"`
-	Nonce        string `json:"nonce"`
+	Nonce        string `json:"nonce"`                   // the OIDC PROTOCOL nonce (id_token replay check) -- NOT the browser-binding login nonce below.
 	CodeVerifier string `json:"code_verifier,omitempty"` // "" when PKCE was not requested.
 	RedirectURI  string `json:"redirect_uri,omitempty"`
-	ID           string `json:"id"` // a random value, no comparison meaning of its own; see the doc comment above.
-	IssuedAt     int64  `json:"issued_at"`
-	ExpiresAt    int64  `json:"expires_at"`
+	// NonceHash is hashOIDCLoginNonce of the random value initiateOIDCAuth
+	// also placed in oidcLoginNonceCookieName -- D2745's browser-binding
+	// class ruling. Distinct from Nonce above: this one binds the state to
+	// the browser presenting it, not to the id_token the IdP returns.
+	NonceHash string `json:"nonce_hash"`
+	ID        string `json:"id"` // a random value, no comparison meaning of its own; see the doc comment above.
+	IssuedAt  int64  `json:"issued_at"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
 var (
@@ -189,7 +247,7 @@ func verifyOIDCState(secret, token, providerID string, now time.Time) (oidcState
 	if err := json.Unmarshal(plaintext, &state); err != nil {
 		return oidcState{}, errInvalidOIDCState
 	}
-	if state.ProviderID != providerID || state.OrgID == "" || state.Nonce == "" || state.ID == "" {
+	if state.ProviderID != providerID || state.OrgID == "" || state.Nonce == "" || state.ID == "" || state.NonceHash == "" {
 		return oidcState{}, errInvalidOIDCState
 	}
 	if now.Unix() > state.ExpiresAt {

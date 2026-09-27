@@ -23,7 +23,8 @@ const (
 
 func mustMint(t *testing.T, secret, providerID, orgID string, now time.Time) string {
 	t.Helper()
-	token, err := mintOIDCState(secret, oidcState{ProviderID: providerID, OrgID: orgID, Nonce: "n1", CodeVerifier: "v1"}, now)
+	token, err := mintOIDCState(secret, oidcState{ProviderID: providerID, OrgID: orgID, Nonce: "n1", CodeVerifier: "v1",
+		NonceHash: hashOIDCLoginNonce("test-login-nonce")}, now)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}

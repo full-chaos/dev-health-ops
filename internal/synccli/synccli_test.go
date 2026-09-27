@@ -67,20 +67,20 @@ type recorded struct {
 }
 
 func stubDeps(rec *recorded, client atlassianteams.Client, openErr error) deps {
-	return deps{
-		newClient: func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.Client {
-			rec.gatewayURL, rec.auth = gatewayURL, auth
-			return client
-		},
-		openStore: func(context.Context, string) (driver.Conn, error) {
-			rec.opened++
-			if openErr != nil {
-				return nil, openErr
-			}
-			return closer{}, nil
-		},
-		now: func() time.Time { return time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC) },
+	d := defaultDeps()
+	d.newClient = func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.Client {
+		rec.gatewayURL, rec.auth = gatewayURL, auth
+		return client
 	}
+	d.openStore = func(context.Context, string) (driver.Conn, error) {
+		rec.opened++
+		if openErr != nil {
+			return nil, openErr
+		}
+		return closer{}, nil
+	}
+	d.now = func() time.Time { return time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC) }
+	return d
 }
 
 func run(t *testing.T, env map[string]string, d deps, args ...string) (int, string, string) {
@@ -111,7 +111,10 @@ func TestUsageErrorsRunNothing(t *testing.T) {
 }
 
 func TestMissingSettingsAreRefusedByNameWithoutValues(t *testing.T) {
-	for _, drop := range []string{"ATLASSIAN_ORGANIZATION_ID", "ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN", "ATLASSIAN_JIRA_BASE_URL", "CLICKHOUSE_URI"} {
+	// ATLASSIAN_ORGANIZATION_ID and CLICKHOUSE_URI stay required even with a
+	// fully-configured env credential (the offline/test path): dropping
+	// either must still be refused by name, unchanged from before D2770.
+	for _, drop := range []string{"ATLASSIAN_ORGANIZATION_ID", "CLICKHOUSE_URI"} {
 		env := validEnv()
 		delete(env, drop)
 		rec := &recorded{}
@@ -131,6 +134,38 @@ func TestMissingSettingsAreRefusedByNameWithoutValues(t *testing.T) {
 	}
 }
 
+// TestAnIncompleteEnvCredentialFallsToDBResolution is the D2770 guard test:
+// dropping any ONE of the ATLASSIAN_EMAIL/API_TOKEN/JIRA_BASE_URL triple now
+// means the env can no longer run the offline/test path alone, so the verb
+// must attempt the stored-credential resolution instead of refusing by
+// naming the dropped ATLASSIAN_* var (the OLD, defective behavior this
+// fix removes). With no Postgres configured in the test stub, that
+// resolution attempt itself is refused, naming POSTGRES_URI -- proving the
+// fallback fired rather than the old env-only refusal.
+func TestAnIncompleteEnvCredentialFallsToDBResolution(t *testing.T) {
+	for _, drop := range []string{"ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN", "ATLASSIAN_JIRA_BASE_URL"} {
+		env := validEnv()
+		delete(env, drop)
+		rec := &recorded{}
+		code, _, stderr := run(t, env, stubDeps(rec, failingClient{}, nil), "--provider", "jira", "--org", "o")
+		if code != cli.ExitRefused {
+			t.Errorf("%s: exit %d, want %d", drop, code, cli.ExitRefused)
+		}
+		if strings.Contains(stderr, `"required settings are not set`) {
+			t.Errorf("%s: still refusing with the old env-only message instead of falling back to DB resolution: %s", drop, stderr)
+		}
+		if !strings.Contains(stderr, PostgresURIKey) {
+			t.Errorf("%s: did not attempt (and refuse) DB resolution: %s", drop, stderr)
+		}
+		if strings.Contains(stderr, tokenValue) || strings.Contains(stderr, "ch-pass-value") {
+			t.Errorf("%s: a secret value leaked: %s", drop, stderr)
+		}
+		if rec.opened != 0 {
+			t.Errorf("%s: opened the store", drop)
+		}
+	}
+}
+
 func TestLegacyNamesAndTheDerivedSite(t *testing.T) {
 	env := validEnv()
 	delete(env, "ATLASSIAN_EMAIL")
@@ -140,7 +175,11 @@ func TestLegacyNamesAndTheDerivedSite(t *testing.T) {
 	env["JIRA_EMAIL"] = "legacy@example.test"
 	env["JIRA_API_TOKEN"] = tokenValue
 	env["JIRA_BASE_URL"] = "http://acme.atlassian.net"
-	s, err := readSettings(lookup(env))
+	overrides, err := readEnvOverrides(lookup(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := settingsFromEnv(overrides)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +203,11 @@ func TestTokenFileIsRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	env["ATLASSIAN_API_TOKEN_FILE"] = path
-	s, err := readSettings(lookup(env))
+	overrides, err := readEnvOverrides(lookup(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := settingsFromEnv(overrides)
 	if err != nil || s.token != tokenValue {
 		t.Fatalf("token from _FILE = %q, %v", s.token, err)
 	}
@@ -173,7 +216,7 @@ func TestTokenFileIsRead(t *testing.T) {
 func TestABadSelectionOfSourcesFailsBeforeAnyRead(t *testing.T) {
 	env := validEnv()
 	env["ATLASSIAN_API_TOKEN_FILE"] = "/x"
-	if _, err := readSettings(lookup(env)); err == nil {
+	if _, err := readEnvOverrides(lookup(env)); err == nil {
 		t.Fatal("a token set both directly and as a file must be refused")
 	}
 }

@@ -79,7 +79,8 @@ func (f *pagerDutyDisconnectFakeServer) count() int {
 // left after the request are compared byte for byte.
 func TestPagerDutyDisconnectVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, pagerDutyGolden("disconnect", "TestPagerDutyDisconnectVenueOracle", "f2b1a74501d45a8a300d53b74c212395d6917f4a0b5deac4e87747ffb71c7b15"))
+	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-disconnect-32-by"
 
 	fake := &pagerDutyDisconnectFakeServer{failTokens: map[string]bool{}}
@@ -97,9 +98,9 @@ func TestPagerDutyDisconnectVenueOracle(t *testing.T) {
 	type orgSpec struct{ id uuid.UUID }
 	orgs := map[string]*orgSpec{}
 	for _, slug := range []string{"connected", "empty", "bad-cipher", "with-binding", "revoke-fails", "revoke-redirects", "malformed-json", "extra-key"} {
-		orgs[slug] = &orgSpec{id: uuid.New()}
+		orgs[slug] = &orgSpec{id: uuid.MustParse(venueoracle.StableUUID("pd-disc-org-" + slug))}
 	}
-	adminID, memberID := uuid.New(), uuid.New()
+	adminID, memberID := uuid.MustParse(venueoracle.StableUUID("pd-disc-admin")), uuid.MustParse(venueoracle.StableUUID("pd-disc-member"))
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   root,
@@ -237,21 +238,20 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`,
 	if err != nil {
 		t.Fatalf("build decryptor: %v", err)
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: pagerDutyDisconnectVenueClientID, RevokeURL: fakeServer.URL}
 	})
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 
 	compare := func(name, query string) {
 		t.Helper()
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		if source != goRows {
-			t.Errorf("%s differs after the writes:\n python: %s\n go:     %s", name, source, goRows)
-		}
+		golden.CompareRows(t, name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		}, goRows)
 	}
 	compare("integration_credentials rows", `SELECT org_id, provider, name, is_active, (credentials_encrypted IS NULL)::text FROM integration_credentials ORDER BY org_id, name`)
 	compare("provider_oauth_credentials rows", `SELECT org_id, provider, credential_name FROM provider_oauth_credentials ORDER BY org_id`)
@@ -275,4 +275,5 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`,
 	if fake.count() < 4 {
 		t.Errorf("fake pagerduty revoke server saw only %d calls", fake.count())
 	}
+	golden.Finish(t)
 }

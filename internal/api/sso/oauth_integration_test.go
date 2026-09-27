@@ -457,6 +457,57 @@ func TestOAuthByType404sWhenNoneFound(t *testing.T) {
 	}
 }
 
+// TestOAuthPairDispatch404sAnUnmatchedShape is D2743's precondition (2):
+// the deploy-side collapse of the 4 two-segment oauth ingress paths
+// (providers/{id} PATCH, {id}/authorize POST, {id}/callback POST,
+// {type}/authorize GET) into one wildcard `/api/v1/auth/oauth/{a}/{b}`
+// entry is only safe because go-api's own dispatcher (sso.go's oauthPair)
+// refuses any OTHER two-segment shape on its own -- proving that here,
+// not just asserting it by reading the code.
+func TestOAuthPairDispatch404sAnUnmatchedShape(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	// No pairRoute's matches() checks a second segment of "frobnicate"
+	// against any method, so this falls all the way through to
+	// oauthPair's own h.Write(w, r, httpapi.CodeNotFound) (sso.go).
+	status, _ := getJSON(t, st.server, "/api/v1/auth/oauth/some-id/frobnicate")
+	if status != http.StatusNotFound {
+		t.Fatalf("GET .../some-id/frobnicate: status=%d, want 404", status)
+	}
+	status, _ = postJSON(t, st.server, "/api/v1/auth/oauth/some-id/frobnicate", map[string]any{})
+	if status != http.StatusNotFound {
+		t.Fatalf("POST .../some-id/frobnicate: status=%d, want 404", status)
+	}
+}
+
+// TestOAuthPairDispatch405sAWrongMethod is D2743's precondition (2), the
+// other half: a path oauthPair DOES recognize, on a method none of its
+// routes registered for that shape, gets a 405 (Allow header naming the
+// real method), never silently a 200 or a 404 that could mask a real
+// route existing.
+func TestOAuthPairDispatch405sAWrongMethod(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	// .../{provider_id}/callback only registers POST (sso.go's oauthPair).
+	req, err := http.NewRequest(http.MethodGet, st.server.URL+"/api/v1/auth/oauth/some-id/callback", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := st.server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET .../some-id/callback: status=%d, want 405", resp.StatusCode)
+	}
+	if resp.Header.Get("Allow") != http.MethodPost {
+		t.Fatalf("Allow header = %q, want %q", resp.Header.Get("Allow"), http.MethodPost)
+	}
+}
+
 func TestOAuthByTypeRefusesANonEntitledOrg(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

@@ -1,0 +1,17 @@
+# CHAOS-6993: the bigboy GraphQL prove harness's one-off additions to venue-prove.
+# Used ONLY by bigboy-graphql-prove.sh, never in bigboy-cut.sh's shared -f chain, so an
+# unset PROVE_* variable can never break an unrelated STEP.
+#
+# venue-prove already shares api's network namespace (the edge is localhost:8000, the
+# host CheckVenue allows) and carries POSTGRES_URI, GO_API_PROVE_VENUE_ACK and the
+# GO_API_ENVELOPE_* identifiers, with the envelope key file mounted at /keys/envelope.pem.
+# `dho goapi prove` also mints the edge access token in process, which needs the api's
+# JWT_SECRET_KEY: compose substitutes it from ops/.env (--env-file, D2728), so the value
+# never passes through a shell variable, argv or file of the operator.
+services:
+  venue-prove:
+    environment:
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY required -- pass --env-file ops/.env}
+      PROVE_ORG: ${PROVE_ORG:?PROVE_ORG required}
+    volumes:
+      - ${PROVE_ARTIFACT_DIR:?PROVE_ARTIFACT_DIR required}:/proof

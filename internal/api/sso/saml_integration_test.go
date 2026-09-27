@@ -104,6 +104,11 @@ type samlResponseOpts struct {
 	notBefore                                   time.Time
 	skipSign                                    bool
 	tamperAfterSign                             bool
+	// noSubjectConfirmation strips every SubjectConfirmation element
+	// BEFORE signing, so the returned assertion is genuinely, validly
+	// signed with zero of them -- proving r1's P2 finding (Go accepted
+	// this; Python's process_saml_response explicitly rejects it).
+	noSubjectConfirmation bool
 }
 
 type staticSPProvider struct{ sp *saml.EntityDescriptor }
@@ -175,6 +180,9 @@ func (idp *samlIdP) signedSAMLResponse(t *testing.T, opts samlResponseOpts) stri
 	if !opts.notOnOrAfter.IsZero() {
 		req.Assertion.Conditions.NotOnOrAfter = opts.notOnOrAfter
 		req.Assertion.Subject.SubjectConfirmations[0].SubjectConfirmationData.NotOnOrAfter = opts.notOnOrAfter
+	}
+	if opts.noSubjectConfirmation {
+		req.Assertion.Subject.SubjectConfirmations = nil
 	}
 	// A custom "email"/"full_name" attribute statement, matching what
 	// this package's own attribute_mapping convention (config.
@@ -362,6 +370,51 @@ func TestSAMLACSRefusesAnUnsignedAssertion(t *testing.T) {
 	}
 	assertProviderRowUnchanged(t, ctx, st.pool, providerID, "active")
 	assertSSOAuditStage(t, ctx, st.pool, orgID, "signature_auth")
+}
+
+// TestSAMLACSRefusesAnAssertionWithNoSubjectConfirmation pins r1's P2
+// finding: crewjam/saml's own validateAssertion iterates
+// assertion.Subject.SubjectConfirmations but never rejects an EMPTY list
+// -- the per-confirmation Recipient/NotOnOrAfter checks simply never run,
+// so a validly-signed assertion with zero of them sailed through
+// ParseXMLResponse with no error at all before this fix. Python's
+// process_saml_response explicitly requires at least one
+// (sso.py:576-578). This is a genuine parity break (Go strictly more
+// permissive), not a delta to preserve -- unlike the state_auth-stage
+// tests above, this failure occurs AFTER signature verification
+// succeeds, so it legitimately flips the row (Python's identical
+// SAMLProcessingError does too, via record_error).
+func TestSAMLACSRefusesAnAssertionWithNoSubjectConfirmation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	idp := newSAMLIdP(t)
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/acs"}`,
+		idp.idp.MetadataURL.String(), idp.certConfigValue())
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
+
+	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
+		spEntityID: "https://sp.test/m", acsURL: "https://sp.test/acs",
+		email: "noconfirmation@example.test", fullName: "No Confirmation", nameID: "noconfirmation@example.test",
+		noSubjectConfirmation: true,
+	})
+	status, body := postJSON(t, st.server, "/api/v1/auth/saml/"+providerID.String()+"/acs", map[string]any{"SAMLResponse": samlResponse})
+	if status != http.StatusBadRequest || body["detail"] != "SAML authentication failed" {
+		t.Fatalf("status=%d body=%v, want 400 SAML authentication failed", status, body)
+	}
+	var lastError *string
+	var providerStatus string
+	if err := st.pool.QueryRow(ctx, `SELECT last_error, status FROM sso_providers WHERE id = $1`, providerID).
+		Scan(&lastError, &providerStatus); err != nil {
+		t.Fatal(err)
+	}
+	if lastError == nil || !strings.Contains(*lastError, "subject confirmation") {
+		t.Fatalf("last_error = %v, want a recorded subject-confirmation reason", lastError)
+	}
+	if providerStatus != "error" {
+		t.Fatalf("provider status = %q, want %q: a genuinely-authenticated but structurally-invalid assertion must still flip it", providerStatus, "error")
+	}
 }
 
 func TestSAMLACSRefusesAWrongIssuer(t *testing.T) {

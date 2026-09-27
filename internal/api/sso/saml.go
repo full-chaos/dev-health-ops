@@ -439,6 +439,22 @@ func processSAMLResponse(row *providerRow, config samlConfigValues, base, samlRe
 		}
 		return samlClaims{}, ssoAuthErr(reason)
 	}
+	// r1 review (CHAOS-6659, P2): crewjam/saml's own validateAssertion
+	// (service_provider.go) iterates assertion.Subject.SubjectConfirmations
+	// but does not reject an EMPTY list -- an assertion with zero
+	// SubjectConfirmation elements skips the per-confirmation Recipient and
+	// NotOnOrAfter checks entirely (the range loop body simply never
+	// runs) and sails through ParseXMLResponse with no error. Python's own
+	// process_saml_response explicitly requires at least one
+	// (`if subject_confirmation is None: raise SAMLProcessingError(...)`,
+	// sso.py:576-578) -- a genuine parity break, Go strictly more
+	// permissive than Python, not a delta to preserve. Closed here by
+	// requiring the same precondition Python does, in the same relative
+	// position (after signature/status/issuer/audience, before this
+	// port's own attribute extraction).
+	if assertion.Subject == nil || len(assertion.Subject.SubjectConfirmations) == 0 {
+		return samlClaims{}, ssoErr("SAML subject confirmation missing")
+	}
 
 	var nameID string
 	if assertion.Subject != nil && assertion.Subject.NameID != nil {

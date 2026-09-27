@@ -55,6 +55,11 @@ type fakeGitLab struct {
 
 func startFakeGitLab(t *testing.T) *fakeGitLab {
 	t.Helper()
+	// D2745 P1-2: this fixture's own base_url is a real http://127.0.0.1
+	// loopback (httptest.Server never serves https), which validateOAuthConfigHTTPS
+	// (oauth.go) now refuses by default -- allowed here, and only here,
+	// via the same env-var escape hatch a real prod deploy never sets.
+	t.Setenv("DEV_HEALTH_ALLOW_HTTP_OAUTH_LOOPBACK", "1")
 	g := &fakeGitLab{email: "gitlab.user@example.test", username: "gluser", fullName: "GitLab User", userID: "42", confirmed: true}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /oauth/token", g.serveToken)
@@ -555,6 +560,30 @@ func TestOAuthByTypeRefusesANonEntitledOrg(t *testing.T) {
 	status, body := getJSON(t, st.server, "/api/v1/auth/oauth/gitlab/authorize?org_id="+orgID.String())
 	if status != http.StatusPaymentRequired {
 		t.Fatalf("status=%d body=%v, want 402", status, body)
+	}
+}
+
+// TestOAuthConfigRefusesAnInsecureHTTPBaseURL pins D2745 P1-2: a
+// non-loopback http:// base_url override is refused at config-load
+// time -- before initiateOAuthAuth ever builds an authorization_url --
+// unlike the loopback exception every OTHER GitLab test in this file
+// relies on (startFakeGitLab's own t.Setenv), which stays gated behind
+// DEV_HEALTH_ALLOW_HTTP_OAUTH_LOOPBACK and is deliberately NOT set here.
+func TestOAuthConfigRefusesAnInsecureHTTPBaseURL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "oauth_gitlab", status: "active", config: gitlabConfig("http://gitlab.example.internal"), autoProvision: true,
+	})
+
+	status, body := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	if status != http.StatusInternalServerError {
+		t.Fatalf("authorize: status=%d body=%v, want 500 (an insecure, non-loopback base_url refused at config-load time)", status, body)
+	}
+	if _, ok := body["authorization_url"]; ok {
+		t.Fatalf("authorize: got an authorization_url for a config this package should have refused: %v", body)
 	}
 }
 

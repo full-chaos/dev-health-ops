@@ -59,6 +59,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/google/uuid"
@@ -92,10 +93,62 @@ func decodeOAuthConfig(raw *string) (oauthConfigValues, error) {
 	if err != nil {
 		return oauthConfigValues{}, err
 	}
-	return oauthConfigValues{
+	cfg := oauthConfigValues{
 		ClientID: objString(object, "client_id"), RedirectURI: objString(object, "redirect_uri"),
 		BaseURL: objString(object, "base_url"), Scopes: scopes,
-	}, nil
+	}
+	if err := validateOAuthConfigHTTPS(cfg); err != nil {
+		return oauthConfigValues{}, err
+	}
+	return cfg, nil
+}
+
+// validateOAuthConfigHTTPS is D2745 P1-2: an admin-overridden base_url
+// (GitLab's self-hosted instance -- the one provider Python's own
+// OAuthConfig lets point at an arbitrary URL, this file's own doc
+// comment) or redirect_uri naming the insecure http:// scheme is refused
+// here, at config-load time -- every decodeOAuthConfig call site
+// (buildOAuthAuthorization at /authorize, oauthExchangeAndFetch at
+// /callback), so this is enforced at BOTH provider-config-validation
+// time and exchange time from the same check, exactly like SAML's
+// validateSAMLConfigHTTPS (saml.go, D2748).
+//
+// Only checked when the admin actually set an override -- an unset
+// RedirectURI falls back to appBaseURL()-derived default (an ops-level
+// guarantee, not a per-provider one), same scoping as SAML's check.
+//
+// Loopback http (127.0.0.1/localhost/::1) is allowed only when
+// DEV_HEALTH_ALLOW_HTTP_OAUTH_LOOPBACK=1 is set -- the ruling's own
+// "loopback http allowed only under a test build tag/explicit dev flag
+// prod cannot set", done here as an env var flag (the same shape as
+// DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER, pgmigrate/history.go) rather
+// than a new build tag: prod's deploy config never sets this var, so it
+// is always false in a real deployment; a test sets it via t.Setenv to
+// exercise its own http:// fake-server loopback address (startFakeGitLab,
+// oauth_integration_test.go).
+func validateOAuthConfigHTTPS(cfg oauthConfigValues) error {
+	for _, candidate := range []string{cfg.BaseURL, cfg.RedirectURI} {
+		if candidate == "" || !strings.HasPrefix(candidate, "http://") {
+			continue
+		}
+		if isLoopbackHTTPURL(candidate) && os.Getenv("DEV_HEALTH_ALLOW_HTTP_OAUTH_LOOPBACK") == "1" {
+			continue
+		}
+		return errors.New("OAuth base_url/redirect_uri must not use the insecure http:// scheme")
+	}
+	return nil
+}
+
+func isLoopbackHTTPURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "http" {
+		return false
+	}
+	switch parsed.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 // oauthProtocolFor is create_oauth_provider_instance's provider_type ->

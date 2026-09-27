@@ -244,15 +244,30 @@ type oauthClaims struct {
 // usage does: user_info.email is used as a str (router.py:1198's
 // .split("@")), so a non-string email is the SAME uncaught-exception shape
 // Python has (a bare 500, via errShape here rather than an AttributeError
-// there); username/full_name/avatar_url are used only via
-// _present_str-style presence checks, so PyStr's str() coercion is close
-// enough for those and never crashes; provider_user_id is stored into
-// users.auth_provider_id (a text column) via PyStr, matching every
-// PRODUCTION-REACHABLE case (github/gitlab already str(); Google's is the
-// one dataclass field whose type hint (`str`) Python's own runtime does
-// not honor -- passing the raw int through to a Text column would 500 in
-// Python too on any real database, so PyStr here is the safe, equivalent
-// outcome, not a parity break).
+// there).
+//
+// r1 review (CHAOS-6986, P1): an EARLIER version of this function called
+// oauthprovider.PyStr(info.Username)/PyStr(info.FullName) unconditionally,
+// on the (wrong) theory that "str() coercion is close enough and never
+// crashes." That is false: Google's fetch_user_info never sets Username
+// at all (nil), and router.py:1229 passes user_info.username straight
+// into User(username=...) with NO str() coercion -- Python stores SQL
+// NULL there. PyStr(nil), by contrast, returns the Python repr of None,
+// the literal string "None" (pyRepr's own `case nil: return "None"`) --
+// not empty, so the OLD code stored a literal "None" username for EVERY
+// auto-provisioned Google user. users.username carries a UNIQUE index
+// (0001_initial_schema.py), so the FIRST such user succeeds and every
+// subsequent one fails insertion outright. optionalPyStr below returns ""
+// for a nil value (this file's own empty-string-means-unset convention,
+// e.g. oauthProvisionUser's `if claims.username != ""` checks), never
+// stringifying a genuine absence -- used for Username/FullName/AvatarURL,
+// the three optional fields; ProviderUserID keeps unconditional PyStr,
+// since it is REQUIRED and non-nil for all three providers (confirmed:
+// github/gitlab already str() it themselves in Python; Google's provider_
+// user_id is the one dataclass field whose `str` type hint Python's own
+// runtime does not honor, but it's never nil, so PyStr's coercion there
+// is still exactly Python's own eventual str()-on-insert behavior, not a
+// parity break -- unlike Username/FullName, which genuinely can be nil).
 func fetchOAuthUserInfo(ctx context.Context, client *oauthprovider.Client, providerType, accessToken string) (oauthClaims, error) {
 	info, err := client.FetchUserInfo(ctx, providerType, accessToken)
 	if err != nil {
@@ -267,9 +282,21 @@ func fetchOAuthUserInfo(ctx context.Context, client *oauthprovider.Client, provi
 		return oauthClaims{}, fmt.Errorf("%w: oauth user info email", errShape)
 	}
 	return oauthClaims{
-		email: email, username: oauthprovider.PyStr(info.Username), fullName: oauthprovider.PyStr(info.FullName),
+		email: email, username: optionalPyStr(info.Username), fullName: optionalPyStr(info.FullName),
+		avatarURL:  optionalPyStr(info.AvatarURL),
 		externalID: oauthprovider.PyStr(info.ProviderUserID),
 	}, nil
+}
+
+// optionalPyStr is oauthprovider.PyStr, except a nil value (Python's
+// None, e.g. Google's always-absent username) stays "" instead of
+// becoming the literal string "None" -- see fetchOAuthUserInfo's doc
+// comment for the bug this closes.
+func optionalPyStr(value pyjson.Value) string {
+	if value == nil {
+		return ""
+	}
+	return oauthprovider.PyStr(value)
 }
 
 // initiateOAuthAuth is POST /oauth/{provider_id}/authorize, dispatched

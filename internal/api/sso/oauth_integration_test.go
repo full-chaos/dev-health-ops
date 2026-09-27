@@ -107,6 +107,7 @@ func TestOAuthGitLabFullRoundTrip(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	gitlab := startFakeGitLab(t)
 	gitlab.email = "new.gitlab.user@allowed.example"
+	gitlab.avatarURL = "https://gitlab.example/avatar.png"
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
 		clientSecretEncryptedFallback: "gitlab-secret",
@@ -142,9 +143,13 @@ func TestOAuthGitLabFullRoundTrip(t *testing.T) {
 		t.Fatalf("gitlab token endpoint received client_secret=%q, want the decrypted stored value", gitlab.receivedClientSecret)
 	}
 
+	// r1 review (CHAOS-6986, P2): fetchOAuthUserInfo previously never
+	// populated AvatarURL at all for any provider, so this column was
+	// silently NULL forever (an earlier version of this test asserted
+	// exactly that NULL, which proved the bug rather than a feature).
 	var count int
-	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE email = $1 AND auth_provider = 'gitlab' AND avatar_url IS NULL`,
-		gitlab.email).Scan(&count); err != nil {
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE email = $1 AND auth_provider = 'gitlab' AND avatar_url = $2`,
+		gitlab.email, gitlab.avatarURL).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {

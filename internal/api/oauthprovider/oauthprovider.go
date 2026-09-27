@@ -60,13 +60,17 @@ var DefaultEndpoints = Endpoints{
 
 // UserInfo is OAuthUserInfo. Each field holds the JSON value Python holds:
 // ProviderUserID is a str for GitHub and GitLab (str() of the id) and the
-// raw id for Google; Email is the raw email value; Username and FullName
-// are the raw values of .get(), nil when absent or null.
+// raw id for Google; Email is the raw email value; Username, FullName and
+// AvatarURL are the raw values of .get() (AvatarURL: "avatar_url" for
+// GitHub/GitLab, "picture" for Google, matching
+// OAuthUserInfo.avatar_url's own per-provider mapping), nil when absent
+// or null.
 type UserInfo struct {
 	ProviderUserID pyjson.Value
 	Email          pyjson.Value
 	Username       pyjson.Value
 	FullName       pyjson.Value
+	AvatarURL      pyjson.Value
 }
 
 // UserInfoError is OAuthUserInfoError. Reason names the failure class for
@@ -177,7 +181,8 @@ func (c *Client) github(ctx context.Context, token string) (*UserInfo, error) {
 	}
 	login, _ := user.Get("login")
 	name, _ := user.Get("name")
-	return &UserInfo{ProviderUserID: PyStr(id), Email: email, Username: login, FullName: name}, nil
+	avatarURL, _ := user.Get("avatar_url")
+	return &UserInfo{ProviderUserID: PyStr(id), Email: email, Username: login, FullName: name, AvatarURL: avatarURL}, nil
 }
 
 // githubPrimaryEmail is _fetch_primary_email.
@@ -263,7 +268,8 @@ func (c *Client) gitlab(ctx context.Context, token string) (*UserInfo, error) {
 	}
 	username, _ := user.Get("username")
 	name, _ := user.Get("name")
-	return &UserInfo{ProviderUserID: PyStr(id), Email: email, Username: username, FullName: name}, nil
+	avatarURL, _ := user.Get("avatar_url")
+	return &UserInfo{ProviderUserID: PyStr(id), Email: email, Username: username, FullName: name, AvatarURL: avatarURL}, nil
 }
 
 func (c *Client) google(ctx context.Context, token string) (*UserInfo, error) {
@@ -276,7 +282,8 @@ func (c *Client) google(ctx context.Context, token string) (*UserInfo, error) {
 		return nil, err
 	}
 	name, _ := user.Get("name")
-	return &UserInfo{ProviderUserID: id, Email: email, FullName: name}, nil
+	picture, _ := user.Get("picture")
+	return &UserInfo{ProviderUserID: id, Email: email, FullName: name, AvatarURL: picture}, nil
 }
 
 // requiredFields is the GitLab/Google try block: user_data["id"] and

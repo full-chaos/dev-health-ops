@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,33 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
+
+// syncLogBuffer guards a bytes.Buffer with a mutex: registry.go's reportRefusals writes the
+// refusal-log record from its own background goroutine while this harness polls and reads it from
+// the test goroutine, so a bare bytes.Buffer is a real, -race-detected data race (caught by CI's
+// go-quality-leg race leg, not a review finding).
+type syncLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncLogBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
+func (b *syncLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // CHAOS-6949. health.Registry logs a bounded "readiness check refused" line (CHAOS-6883,
 // registry.go's reportRefusals) naming each failing check's Cause and TimedOut -- wired for every
@@ -39,8 +67,8 @@ func reconcilerReadinessCauseHarness(t *testing.T, database *fakeReconcilerDatab
 	t.Helper()
 	t.Chdir(filepath.Join("..", ".."))
 	registry := health.NewRegistry(readinessTestCheckTimeout)
-	var logs bytes.Buffer
-	registry.SetRefusalLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
+	logs := &syncLogBuffer{}
+	registry.SetRefusalLogger(slog.New(slog.NewJSONHandler(logs, nil)))
 
 	sources := reconcilerSourcesForTest(t, database)
 	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {

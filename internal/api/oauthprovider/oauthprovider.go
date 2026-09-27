@@ -60,13 +60,36 @@ var DefaultEndpoints = Endpoints{
 
 // UserInfo is OAuthUserInfo. Each field holds the JSON value Python holds:
 // ProviderUserID is a str for GitHub and GitLab (str() of the id) and the
-// raw id for Google; Email is the raw email value; Username and FullName
-// are the raw values of .get(), nil when absent or null.
+// raw id for Google; Email is the raw email value; Username, FullName and
+// AvatarURL are the raw values of .get() (AvatarURL: "avatar_url" for
+// GitHub/GitLab, "picture" for Google, matching
+// OAuthUserInfo.avatar_url's own per-provider mapping), nil when absent
+// or null.
+//
+// EmailVerified is D2745 (team-lead, CHAOS-6986 r1 P1-1): NOT a Python
+// field -- Python's own three OAuth clients never check any verified
+// flag before returning an email, an account-takeover gap this port
+// does not replicate (Python shares it; recorded as a ticket, not fixed
+// there, per the ruling). Resolved per-provider, inside each provider's
+// own fetch function, since the source differs by provider:
+//   - GitHub: true whenever the resolved email came from the account's
+//     own public profile field (GitHub only lets a VERIFIED email be set
+//     public) or from a primary/verified entry in /user/emails; false
+//     is never returned as an email -- see githubPrimaryEmail's doc
+//     comment for the fallback this removes.
+//   - GitLab: user_data.get("confirmed_at") truthy (a non-null
+//     confirmation timestamp is GitLab's own account-confirmation
+//     signal; GitLab's basic /user response does not expose a
+//     per-email verified flag the way GitHub's multi-email model does).
+//   - Google: user_data.get("verified_email"), the v2 userinfo
+//     endpoint's own documented boolean field.
 type UserInfo struct {
 	ProviderUserID pyjson.Value
 	Email          pyjson.Value
+	EmailVerified  bool
 	Username       pyjson.Value
 	FullName       pyjson.Value
+	AvatarURL      pyjson.Value
 }
 
 // UserInfoError is OAuthUserInfoError. Reason names the failure class for
@@ -164,11 +187,13 @@ func (c *Client) github(ctx context.Context, token string) (*UserInfo, error) {
 		return nil, ErrUnexpected
 	}
 	email, _ := user.Get("email")
-	if !Truthy(email) {
+	verified := Truthy(email) // the account's own public email is always verified: GitHub only lets a verified address be set public.
+	if !verified {
 		email, err = c.githubPrimaryEmail(ctx, headers)
 		if err != nil {
 			return nil, err
 		}
+		verified = true // githubPrimaryEmail (below) never returns an unverified email -- see its own doc comment.
 	}
 	id, present := user.Get("id")
 	if !present {
@@ -177,10 +202,22 @@ func (c *Client) github(ctx context.Context, token string) (*UserInfo, error) {
 	}
 	login, _ := user.Get("login")
 	name, _ := user.Get("name")
-	return &UserInfo{ProviderUserID: PyStr(id), Email: email, Username: login, FullName: name}, nil
+	avatarURL, _ := user.Get("avatar_url")
+	return &UserInfo{ProviderUserID: PyStr(id), Email: email, EmailVerified: verified, Username: login, FullName: name, AvatarURL: avatarURL}, nil
 }
 
-// githubPrimaryEmail is _fetch_primary_email.
+// githubPrimaryEmail is _fetch_primary_email, adjusted from Python by
+// D2745 (team-lead, CHAOS-6986 r1 P1-1): Python's own _fetch_primary_email
+// (and this port's earlier version) fell back to the FIRST email entry
+// with no verified flag at all once no primary+verified or verified entry
+// existed, silently accepting an unverified email -- a caller could
+// register any email on GitHub, leave it unverified, and still complete
+// login/auto-provisioning under that address. Closed here (Python is not
+// changed; recorded as a ticket per the ruling): the unverified fallback
+// is removed. Every email this function returns is verified; if none is,
+// the caller gets the same UserInfoError class the empty-list case
+// already returns, routed by fetchOAuthUserInfo (oauth.go) to D2745's
+// no-verified-email bucket.
 func (c *Client) githubPrimaryEmail(ctx context.Context, headers map[string]string) (pyjson.Value, error) {
 	data, err := c.get(ctx, c.Endpoints.GitHubEmails, headers, "github emails")
 	if err != nil {
@@ -220,10 +257,7 @@ func (c *Client) githubPrimaryEmail(ctx context.Context, headers map[string]stri
 			return email(object)
 		}
 	}
-	if Truthy(data) {
-		return email(objects[0])
-	}
-	return nil, &UserInfoError{Reason: "no email found in github account"}
+	return nil, &UserInfoError{Reason: "no verified email found in github account"}
 }
 
 // iterate is Python's `for x in value` over a decoded JSON value: a list
@@ -263,7 +297,10 @@ func (c *Client) gitlab(ctx context.Context, token string) (*UserInfo, error) {
 	}
 	username, _ := user.Get("username")
 	name, _ := user.Get("name")
-	return &UserInfo{ProviderUserID: PyStr(id), Email: email, Username: username, FullName: name}, nil
+	avatarURL, _ := user.Get("avatar_url")
+	confirmedAt, _ := user.Get("confirmed_at")
+	return &UserInfo{ProviderUserID: PyStr(id), Email: email, EmailVerified: Truthy(confirmedAt),
+		Username: username, FullName: name, AvatarURL: avatarURL}, nil
 }
 
 func (c *Client) google(ctx context.Context, token string) (*UserInfo, error) {
@@ -276,7 +313,9 @@ func (c *Client) google(ctx context.Context, token string) (*UserInfo, error) {
 		return nil, err
 	}
 	name, _ := user.Get("name")
-	return &UserInfo{ProviderUserID: id, Email: email, FullName: name}, nil
+	picture, _ := user.Get("picture")
+	verifiedEmail, _ := user.Get("verified_email")
+	return &UserInfo{ProviderUserID: id, Email: email, EmailVerified: Truthy(verifiedEmail), FullName: name, AvatarURL: picture}, nil
 }
 
 // requiredFields is the GitLab/Google try block: user_data["id"] and

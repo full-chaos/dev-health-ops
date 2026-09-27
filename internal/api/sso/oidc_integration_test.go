@@ -277,6 +277,7 @@ type providerOpts struct {
 	protocol, status, config      string
 	allowedDomains                *string
 	autoProvision                 bool
+	isDefault                     bool   // CHAOS-6986: initiate_oauth_by_type's is_default preference.
 	clientSecretEncryptedFallback string // stored as-is (no cipher configured in this test), simulating legacy plaintext.
 	// disallowIdpInitiated is D2744's coverage: the zero value (false)
 	// keeps every EXISTING test's behavior (allow_idp_initiated=true,
@@ -299,9 +300,9 @@ func seedProvider(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID u
 	if _, err := pool.Exec(ctx, `INSERT INTO sso_providers
 	(id, org_id, name, protocol, status, is_default, allow_idp_initiated, auto_provision_users, default_role,
 	 config, encrypted_secrets, allowed_domains, created_at, updated_at)
-VALUES ($1, $2, $9, $3, $4, false, $10, $5, 'member', $6::json, $7::json, $8::json, now(), now())`,
+VALUES ($1, $2, $11, $3, $4, $9, $10, $5, 'member', $6::json, $7::json, $8::json, now(), now())`,
 		id, orgID, opts.protocol, opts.status, opts.autoProvision, opts.config, secrets, opts.allowedDomains,
-		"Test Provider "+id.String()[:8], !opts.disallowIdpInitiated); err != nil {
+		opts.isDefault, !opts.disallowIdpInitiated, "Test Provider "+id.String()[:8]); err != nil {
 		t.Fatalf("seed provider: %v", err)
 	}
 	return id

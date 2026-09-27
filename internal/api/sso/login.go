@@ -52,10 +52,25 @@ func asSSOUnauthenticated(err error, target *ssoUnauthenticated) bool {
 // near-identical types. Its message is recorded onto the provider
 // (record_error) and into an audit row, never surfaced verbatim to the
 // caller -- the router always answers its own fixed per-branch message.
-type ssoProcessing struct{ msg string }
+//
+// reason is D2742 (team-lead, CHAOS-6986): OAuth's Python router echoes
+// the raw upstream (IdP/exchange/userinfo) error text into the CLIENT-
+// facing 400 detail (router.py:1191's f"OAuth authentication failed:
+// {e}") -- an information-exposure delta this port does NOT replicate.
+// reason is a stable, non-echoing machine code (e.g.
+// "oauth_token_exchange_failed") a caller can act on; the real upstream
+// text (msg) still goes to last_error/audit and the structured log,
+// never the response. OIDC/SAML never echo upstream text (their
+// messages are already fixed, generic strings), so their ssoErr call
+// sites leave reason empty and their caller-visible detail is unaffected.
+type ssoProcessing struct{ msg, reason string }
 
 func (e ssoProcessing) Error() string { return e.msg }
 func ssoErr(msg string) error         { return ssoProcessing{msg: msg} }
+
+// ssoErrReason is ssoErr with a reason code attached -- see ssoProcessing's
+// doc comment.
+func ssoErrReason(msg, reason string) error { return ssoProcessing{msg: msg, reason: reason} }
 
 func asSSOProcessing(err error, target *ssoProcessing) bool {
 	if processing, ok := err.(ssoProcessing); ok {

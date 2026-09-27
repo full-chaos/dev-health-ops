@@ -83,6 +83,7 @@ Usage: pass-bigboy-auth.py [out_dir]
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -211,7 +212,24 @@ def rebuild_token(secret: str, token_id: str) -> str:
     shape, just against different tables)."""
     tid = token_id.replace("-", "")
     sig = hmac.new(secret.encode(), bytes.fromhex(tid), hashlib.sha256).hexdigest()
-    return f"{token_id}.{sig}"
+    return f"{tid}.{sig}"
+
+
+def jwt_claim(token: str | None, claim: str):
+    """Unverified read of one JWT claim (base64url payload segment, no signature check --
+    this script never needs to trust the token, only compare what plane minted it).
+    refresh.py's grace-window replay re-signs a fresh JWT carrying the SAME jti claim
+    (routers/refresh.py: "Re-issue the *same* successor JWT (same JTI...)"), so comparing
+    the raw token strings for equality is the wrong check -- the signature and iat differ
+    by design on every re-issue. Compare the jti claim instead."""
+    if not token or "." not in token:
+        return None
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload)).get(claim)
+    except Exception:
+        return None
 
 
 def main() -> int:
@@ -355,15 +373,18 @@ def main() -> int:
                 http(plane, "POST", "/api/v1/auth/refresh", {"refresh_token": refresh}),
             )
             successor1 = (r.get("json") or {}).get("refresh_token")
-            # replay the ORIGINAL refresh token inside the 30s grace window: must answer the SAME successor
+            # replay the ORIGINAL refresh token inside the 30s grace window: must answer a JWT
+            # carrying the SAME jti claim (refresh.py re-signs a fresh JWT on replay -- same jti,
+            # different iat/signature -- so comparing raw token strings is the wrong check).
             r = record(
                 "s-refresh1-replay",
                 plane,
                 http(plane, "POST", "/api/v1/auth/refresh", {"refresh_token": refresh}),
             )
             successor2 = (r.get("json") or {}).get("refresh_token")
+            jti1, jti2 = jwt_claim(successor1, "jti"), jwt_claim(successor2, "jti")
             print(
-                f"REFRESH_GRACE plane={plane} same_successor={successor1 == successor2 and successor1 is not None}"
+                f"REFRESH_GRACE plane={plane} same_successor_jti={jti1 == jti2 and jti1 is not None}"
             )
 
             record(
@@ -582,8 +603,13 @@ def main() -> int:
         email = f"venue-auth-orgtel-{RUN}@example.com"
         pw = f"VenueProbe-{RUN}-4!"
         h = bcrypt_hash(pw)
+        # is_superuser=true (unlike every other throwaway user here): tel-report's
+        # require_platform_role (telemetry/router.py) gates on is_superuser specifically
+        # (CHAOS-4722/G-32 -- collect_usage_stats() is instance-wide, org membership is
+        # the wrong axis), so an org-admin-only user always gets a MATCHING 403 on both
+        # planes here, never reaching the actual comparison the row exists to make.
         uid = sql(f"""INSERT INTO users (id, email, password_hash, is_active, is_verified, is_superuser)
-                     VALUES (gen_random_uuid(), '{email}', '{h}', true, true, false) RETURNING id;""")
+                     VALUES (gen_random_uuid(), '{email}', '{h}', true, true, true) RETURNING id;""")
         created_user_ids.append(uid)
         sql(
             f"INSERT INTO memberships (id, user_id, org_id, role) VALUES (gen_random_uuid(), '{uid}', '{ORG}', 'admin');"

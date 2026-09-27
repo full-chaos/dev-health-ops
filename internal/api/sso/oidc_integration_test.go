@@ -535,7 +535,7 @@ func TestOIDCCallbackRefusesATamperedState(t *testing.T) {
 		t.Fatalf("authorize: %d %v", status, authResp)
 	}
 	state, _ := authResp["state"].(string)
-	tampered := state[:len(state)-1] + flipLastRune(state)
+	tampered := flipMiddleByte(state)
 
 	status, body := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": tampered})
@@ -577,15 +577,23 @@ func assertProviderRowUnchanged(t *testing.T, ctx context.Context, pool *pgxpool
 	}
 }
 
-func flipLastRune(s string) string {
-	if s == "" {
-		return "x"
+// flipMiddleByte tampers a base64url-encoded AEAD token reliably: it
+// decodes to raw bytes, flips every bit of the MIDDLE byte, and
+// re-encodes. The earlier approach here (flipping the state string's LAST
+// base64 character) could land on a padding-only bit range of the final
+// character and silently decode to the SAME underlying bytes depending on
+// the payload's length modulo 3 -- observed to intermittently (~50% of
+// runs) pass a "tampered" state's GCM tag check when writing CHAOS-6986's
+// own OAuth state test against a differently-shaped (shorter) payload. A
+// middle byte is never a padding position, so this always changes the
+// ciphertext GCM authenticates over, regardless of payload length.
+func flipMiddleByte(s string) string {
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil || len(raw) == 0 {
+		return s + "x"
 	}
-	last := s[len(s)-1]
-	if last == 'a' {
-		return "b"
-	}
-	return "a"
+	raw[len(raw)/2] ^= 0xFF
+	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
 // TestOIDCCallbackRefusesAnUnknownUserWithoutAutoProvision pins the

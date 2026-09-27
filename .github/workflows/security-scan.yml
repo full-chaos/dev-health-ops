@@ -3,8 +3,15 @@ name: Security Scan
 on:
   push:
     branches: [main]
+  # CHAOS-6973: a stacked PR's base is a sibling branch, never main -- with
+  # `branches: [main]` here that meant Gitleaks/pip-audit/Semgrep silently
+  # never ran on any stacked PR in this repo's history (confirmed on
+  # #3330/#3331: zero Security Scan check-runs, not even a cancelled one,
+  # while #3329, the bottom of that same stack with base=main, got a real
+  # run). Same fix test.yml/typecheck.yml already carry for the identical
+  # reason: match every base, not just main.
   pull_request:
-    branches: [main]
+    branches: ["**"]
   merge_group:
 
 concurrency:

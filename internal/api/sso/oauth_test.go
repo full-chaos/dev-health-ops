@@ -37,6 +37,7 @@ func TestFetchOAuthUserInfoGoogleUsernameStaysEmpty(t *testing.T) {
 		// GoogleOAuthProvider.fetch_user_info never reads or sets one.
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id": "112233445566778899", "email": "googler@example.test", "name": "A Googler", "picture": "https://example.test/pic.jpg",
+			"verified_email": true, // D2745 P1-1: fetchOAuthUserInfo now refuses an unverified email.
 		})
 	}))
 	defer server.Close()

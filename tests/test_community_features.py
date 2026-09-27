@@ -116,7 +116,6 @@ class TestCommunityEndpointsNotGated:
             "add_member",
             "update_member_role",
             "remove_member",
-            "transfer_ownership",
         }
 
         gated_endpoints = set()

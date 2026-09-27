@@ -19,7 +19,6 @@ from dev_health_ops.api.admin.schemas import (
     OrganizationUpdate,
     OrgInviteCreate,
     OrgInviteResponse,
-    OwnershipTransfer,
 )
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.invites import create_invite, send_invite_email
@@ -343,20 +342,3 @@ async def remove_member(
     if not deleted:
         raise HTTPException(status_code=404, detail="Membership not found")
     return {"deleted": True}
-
-
-@router.post("/orgs/{org_id}/transfer-ownership/{from_user_id}")
-async def transfer_ownership(
-    org_id: str,
-    from_user_id: str,
-    payload: OwnershipTransfer,
-    session: AsyncSession = Depends(get_session),
-    current_user: AuthenticatedUser = Depends(require_admin),
-) -> dict:
-    await _ensure_org_admin_access(session, org_id, current_user)
-    svc = MembershipService(session)
-    try:
-        await svc.transfer_ownership(org_id, from_user_id, payload.new_owner_user_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"success": True}

@@ -219,3 +219,41 @@ Every check below fails loud with a named finding; none can pass on an empty or 
 - Both need `DHO_SMOKE_ADMIN_EMAIL` and `DHO_SMOKE_ADMIN_PASSWORD_FILE` in `ops/.env`.
 - Exit codes: 0 pass; 1 fail (named); 2 refused target (`DHO_SMOKE_BASE_URL` outside the allowlist);
   3 passed except named KNOWN-MISSING checks.
+
+## GraphQL prove harness (CHAOS-6993, partial)
+
+`bigboy-graphql-prove.sh <full ops sha>` + `compose.bigboy.prove.yml` run the prove leg of prod's
+STEP 216 (`pod-r216.sh`) on the compose stack, from `venue-prove` (api's network namespace, so the
+edge is `localhost:8000`):
+
+1. refuse unless `venue-prove`'s image is `go-api-tools:sha-<sha>` (prover build skew);
+2. derive the local org read-only (the single org of the local admin account; never printed);
+3. `dho goapi routing repoint` every row to the running build (provenance only; prove refuses stale rows);
+4. `dho goapi prove` for the local org -- read-only against org data, writes proof receipts only;
+   both credentials are minted in process (envelope key loaded from the mounted file inside the
+   container; `JWT_SECRET_KEY` by compose substitution from `ops/.env`);
+5. `dho goapi routing enable` for each `KNOWN-MISSING` op in `routing-ops.txt`, then the parity check.
+
+Full output names the org and stays under the devhealth-root `_records/bigboy-<sha8>/graphql-prove-<ts>/`.
+
+First live run (4f014a9d): repoint 49 rows (47 changed), prove attempted=250 executed=183
+PROVEN_GO_ONLY=178. **testopsRisk is still not provable here**: it has no routing row, so prove
+refuses it (`operation_not_routed_to_go`). An unrouted op can only be proven as a `shadow` row through
+query-api's measurement route `POST /query/proof`, which query-api registers only when BOTH are set:
+
+- `DEV_HEALTH_ENV` = a declared non-production posture (e.g. `bigboy`; never `prod`/`production`)
+- `GO_API_PROOF_ROUTE_ENABLED=true`
+
+Bigboy's query-api sets neither (same posture as prod). The remaining sequence is an **operator
+step**, one sitting, and this lane's permission classifier denied it (not attempted):
+
+1. set both names on query-api, recreate query-api only; probe that `/query/proof` is not reachable
+   through the public host (it must land on web) nor through `Host: traefik`;
+2. `dho goapi routing disable -operations testopsRisk -mode shadow -apply ...`, then repoint;
+3. `dho goapi prove ... -proof-url http://query-api:8090/query/proof`;
+4. `dho goapi routing enable -operations testopsRisk -mode canary ...`;
+5. remove both names, recreate query-api, check with `container-env-names.sh` that both are gone,
+   re-run the 12-path plane readback, and expect `check-routing-parity.py` to report 50/50 once the
+   `KNOWN-MISSING` marker is removed from `routing-ops.txt`.
+
+If a step fails, revert step 1 first. No named limit in `goserved_ledger.json` is used for testopsRisk.

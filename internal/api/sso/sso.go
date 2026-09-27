@@ -1,25 +1,28 @@
 // Package sso serves the enterprise SSO routes of api/auth/sso/router.py
 // under /api/v1/auth.
 //
-// Every route but activate/deactivate and the two OIDC routes below is
-// gated by @require_feature("sso_saml", required_tier="enterprise"). None
-// of those route functions takes a `session` or `org_id` keyword argument,
-// so the per-org check (_check_org_feature_async) never runs and only the
-// process license decides: has_feature("sso_saml") on the process
+// Every route but activate/deactivate and the eight OIDC/SAML/OAuth routes
+// below is gated by @require_feature("sso_saml", required_tier="enterprise").
+// None of those route functions takes a `session` or `org_id` keyword
+// argument, so the per-org check (_check_org_feature_async) never runs and
+// only the process license decides: has_feature("sso_saml") on the process
 // LicenseManager. The Go api runs without a process license
 // (licensing.ProcessTier), and sso_saml is not a community feature, so
 // each gated route answers exactly what the Python api answers there: its
-// authentication, then its query and body validation, then the 402. The
-// SAML and OAuth flows behind that gate are not reachable on either plane
-// and are not ported.
+// authentication, then its query and body validation, then the 402. Only
+// the provider CRUD routes (create/read/update/delete/list) are behind
+// that gate and are not ported.
 //
 // Activate and deactivate are not gated: they are ported in full.
 //
-// initiateOIDCAuth and oidcCallback (CHAOS-6658) are also ported in full,
+// initiateOIDCAuth/oidcCallback (CHAOS-6658), samlMetadata/
+// initiateSAMLAuth/samlACSCallback (CHAOS-6659) and initiateOAuthAuth/
+// oauthCallback/initiateOAuthByType (CHAOS-6986) are ported in full, each
 // with a REAL entitlement gate (requireEntitlement, gate.go): D2725 ruled
 // that Python's dead per-org fallback above is a delta to fix, not a
-// parity target, for these two routes specifically. See oidc.go's doc
-// comment for the rest of what that PR changed and why.
+// parity target, for these eight routes specifically. See oidc.go's,
+// saml.go's and oauth.go's own doc comments for what each PR changed and
+// why.
 package sso
 
 import (
@@ -209,15 +212,29 @@ type pairRoute struct {
 // (FastAPI routes do not add HEAD); else 404.
 func (h handlers) oauthPair() http.Handler {
 	g := h.Guard
+	// CHAOS-6986: like OIDC (initiateOIDCAuth/oidcCallback) and SAML
+	// (samlMetadata/initiateSAMLAuth/samlACSCallback), the three real OAuth
+	// handlers need StateSecret (the AEAD opaque state token, oauthstate.go)
+	// and Signer (the login token pair, login.go's finishSSOLogin) to run
+	// for real; without either, these three stay the same process-tier-only
+	// shim the other two /oauth routes (providers PATCH) still answer.
+	oauthAuthorize := h.gated(body(oauthAuthRequest))
+	oauthCallbackHandler := h.gated(body(oauthCallbackRequest))
+	oauthByType := h.gated(byTypeQuery)
+	if h.StateSecret != "" && h.Signer != nil {
+		oauthAuthorize = http.HandlerFunc(h.initiateOAuthAuth)
+		oauthCallbackHandler = http.HandlerFunc(h.oauthCallback)
+		oauthByType = http.HandlerFunc(h.initiateOAuthByType)
+	}
 	routes := []pairRoute{
 		{http.MethodPatch, func(first, _ string) bool { return first == "providers" },
 			g.BodyFirst(policy.Authenticated, h.gated(body(oauthProviderUpdate)))},
 		{http.MethodPost, func(_, second string) bool { return second == "authorize" },
-			g.BodyFirst(policy.Public, h.gated(body(oauthAuthRequest)))},
+			g.BodyFirst(policy.Public, oauthAuthorize)},
 		{http.MethodPost, func(_, second string) bool { return second == "callback" },
-			g.BodyFirst(policy.Public, h.gated(body(oauthCallbackRequest)))},
+			g.BodyFirst(policy.Public, oauthCallbackHandler)},
 		{http.MethodGet, func(_, second string) bool { return second == "authorize" },
-			g.Wrap(policy.Public, h.gated(byTypeQuery))},
+			g.Wrap(policy.Public, oauthByType)},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		first, second := r.PathValue("first"), r.PathValue("second")

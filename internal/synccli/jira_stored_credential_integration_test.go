@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -94,7 +95,7 @@ func TestResolveJiraStoredSettingsUsesTheStoredCredential(t *testing.T) {
 	defer pool.Close()
 
 	tenantInfo := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != atlassianTenantInfoPath {
+		if r.URL.Path != atlassianteams.TenantInfoPath {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
 		_, _ = w.Write([]byte(`{"cloudId":"tenant-info-cloud-id"}`))

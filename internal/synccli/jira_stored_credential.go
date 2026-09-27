@@ -2,16 +2,13 @@ package synccli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -31,13 +28,6 @@ const jiraTeamsScopeIntegrationID = "cli-sync-teams"
 // WHICH value is in use, only redundantly agree on it.
 var jiraTeamsTokenAliases = []string{"api_token", "apiToken", "token"}
 
-// atlassianTenantInfoPath is Atlassian's own unauthenticated, per-tenant
-// endpoint that maps a site's base URL to its cloud id -- the same
-// mechanism Atlassian Connect/Forge apps use to resolve cloudId without a
-// stored value. Nothing in ops or the vendored atlassian client calls it
-// yet.
-const atlassianTenantInfoPath = "/_edge/tenant_info"
-
 // resolveJiraStoredSettings resolves the org's stored Jira integration
 // credential into this verb's settings shape -- the SAME
 // providerfoundation.CredentialResolver -> PostgresCredentialRepository ->
@@ -47,7 +37,10 @@ const atlassianTenantInfoPath = "/_edge/tenant_info"
 // already resolves for this org. atlassian_organization_id (and,
 // optionally, atlassian_cloud_id) are read from the SAME credential config
 // JSON base_url already lives in; cloud id, when not stored, is derived
-// live from the tenant's own base URL via atlassianTenantInfoPath.
+// live from the tenant's own base URL via atlassianteams.ResolveCloudID --
+// shared with the automatic post-sync team-catalog collector
+// (internal/workerservice), so the two paths can never derive it two
+// different ways.
 func resolveJiraStoredSettings(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -88,7 +81,7 @@ func resolveJiraStoredSettings(
 	}
 	cloudID := strings.TrimSpace(credential.Config["atlassian_cloud_id"])
 	if cloudID == "" {
-		cloudID, err = resolveCloudIDForTenant(ctx, doer, tenant)
+		cloudID, err = atlassianteams.ResolveCloudID(ctx, doer, tenant)
 		if err != nil {
 			return settings{}, fmt.Errorf("resolve the atlassian cloud id: %w", err)
 		}
@@ -112,53 +105,6 @@ func resolveJiraStoredSettings(
 		token:          token,
 		gatewayURL:     tenant.String() + gatewayPath,
 	}, nil
-}
-
-// resolveCloudIDForTenant calls atlassianTenantInfoPath first (a real
-// Atlassian cloud id), falling back to the tenant subdomain -- the same
-// derivation the env-only path has always used -- only when that call
-// fails, so an outage of that endpoint does not newly break what an
-// explicit override already worked around.
-func resolveCloudIDForTenant(ctx context.Context, doer providerfoundation.HTTPDoer, tenant *url.URL) (string, error) {
-	if id, err := fetchTenantCloudID(ctx, doer, tenant); err == nil && id != "" {
-		return id, nil
-	}
-	host := tenant.Hostname()
-	if i := strings.Index(host, "."); i > 0 {
-		return host[:i], nil
-	}
-	return "", fmt.Errorf("the tenant_info endpoint failed and %q has no subdomain to fall back to", host)
-}
-
-func fetchTenantCloudID(ctx context.Context, doer providerfoundation.HTTPDoer, tenant *url.URL) (string, error) {
-	if doer == nil {
-		doer = &http.Client{Timeout: 15 * time.Second}
-	}
-	target := *tenant
-	target.Path = atlassianTenantInfoPath
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
-	if err != nil {
-		return "", err
-	}
-	response, err := doer.Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("tenant_info returned status %d", response.StatusCode)
-	}
-	var payload struct {
-		CloudID string `json:"cloudId"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return "", fmt.Errorf("decode tenant_info response: %w", err)
-	}
-	cloudID := strings.TrimSpace(payload.CloudID)
-	if cloudID == "" {
-		return "", errors.New("tenant_info response had no cloudId")
-	}
-	return cloudID, nil
 }
 
 func openPostgresPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {

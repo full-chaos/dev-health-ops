@@ -605,10 +605,26 @@ func buildSyncCoordinatorWorker(
 		// cycles. This closes out the native-collector provider set --
 		// every provider team_provider_capabilities() lists now has one, so
 		// the Python bridge's TeamAutoImport is unreachable for all of them.
-		"jira": providersync.JiraTeamCatalogCollector{
-			Handler: providersync.JiraTeamCatalogRouteHandler{},
-			Sink: providersync.JiraTeamCatalogClickHouseEffects{
-				Conn: clickhouseConnection, Lease: teamCatalogLease{},
+		// CHAOS-7002/D2770: jira's entry composes the project-as-team catalog
+		// above with a real Atlassian Teams collection (internal/
+		// atlassianteams), additive and org-opt-in on the credential's own
+		// atlassian_organization_id config -- see
+		// jira_atlassian_teams_collector.go's doc comment. Before this, the
+		// real collector was reachable only from the standalone `dho sync
+		// teams --provider jira` CLI verb, never from an automatic sync.
+		"jira": jiraCombinedTeamCatalogCollector{
+			ProjectAsTeam: providersync.JiraTeamCatalogCollector{
+				Handler: providersync.JiraTeamCatalogRouteHandler{},
+				Sink: providersync.JiraTeamCatalogClickHouseEffects{
+					Conn: clickhouseConnection, Lease: teamCatalogLease{},
+				},
+			},
+			Conn: clickhouseConnection,
+			Doer: &http.Client{
+				Timeout: 45 * time.Second,
+				CheckRedirect: func(*http.Request, []*http.Request) error {
+					return http.ErrUseLastResponse
+				},
 			},
 		},
 	}

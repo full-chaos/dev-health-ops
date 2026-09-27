@@ -127,7 +127,7 @@ Jira has two team models and both live in ClickHouse under `provider = 'jira'`:
 
 | | Project-as-team (fallback) | Atlassian Teams (real teams) |
 |---|---|---|
-| Written by | the Jira team catalog / auto-import | `dho sync teams --provider jira` (`internal/atlassianteams`) |
+| Written by | the Jira team catalog / auto-import | `internal/atlassianteams`, run automatically as an additional step of the same jira team-catalog auto-import (org-opt-in on the jira integration's `atlassian_organization_id` config; CHAOS-7002/D2770) -- also reachable standalone via `dho sync teams --provider jira` |
 | `teams.id` | the Jira project key (`PLAT`) | the uuid of the team's ARI (`ari:cloud:identity::team/<uuid>`), `native_team_key` = the full ARI |
 | Members (`team_memberships`, `source = 'native'`) | the project lead only, 100/10 | every `TEAM_MEMBER` of the team from the Teamwork Graph (`member_id = jira:<lower(accountId)>`, the same id the auto-import uses), 100/10 |
 | Project ownership (`team_project_ownership`, `source = 'native'`) | the project itself, specificity 100, priority 10 | the team's active projects, **specificity 110, priority 10** |

@@ -2,6 +2,7 @@ import argparse
 import base64
 import json
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -1315,8 +1316,37 @@ def test_package_metadata_identifies_bsl_and_links_canonical_docs():
 
 
 # ---------------------------------------------------------------------------
-# G6 (CHAOS-1209) — OrgFeatureOverride updated_by tracking
+# CHAOS-6978 — FeatureFlag.created_at/updated_at must share one clock read
 # ---------------------------------------------------------------------------
+
+
+def test_feature_flag_created_and_updated_share_one_clock_read(monkeypatch):
+    """A fresh FeatureFlag row must stamp created_at/updated_at from a single
+    wall-clock read, mirroring the Go seeder's one `stamp := now().UTC()`
+    bound to both columns. Two independent `datetime.now()` calls in
+    __init__ let CI-load jitter push updated_at past created_at by more
+    than the venue oracle's 1ms `stamps_equal` tolerance (CHAOS-6978)."""
+    import itertools
+
+    from dev_health_ops.models import licensing as licensing_module
+
+    ticks = itertools.count()
+
+    class FakeDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            # Each call advances the clock, so two separate reads in
+            # __init__ would disagree by more than 1ms; one shared read
+            # must not.
+            return datetime(2026, 1, 1, tzinfo=tz) + timedelta(
+                milliseconds=5 * next(ticks)
+            )
+
+    monkeypatch.setattr(licensing_module, "datetime", FakeDatetime)
+
+    feature = licensing_module.FeatureFlag(key="clock_probe", name="Clock Probe")
+
+    assert feature.created_at == feature.updated_at
 
 
 class TestOrgFeatureOverrideUpdatedBy:

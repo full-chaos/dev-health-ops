@@ -9,6 +9,7 @@ func init() {
 		"GET /api/v1/admin/llm-settings":        true,
 		"GET /api/v1/admin/llm-settings/budget": true,
 		"GET /api/v1/admin/llm-settings/spend":  true,
+		"GET /api/v1/admin/llm-settings/status": true,
 		"PUT /api/v1/admin/llm-settings":        true,
 	})
 }

@@ -52,6 +52,7 @@ var wantResponseModelRoutes = map[string]bool{
 	"GET /api/v1/admin/llm-settings":                                                   true,
 	"GET /api/v1/admin/llm-settings/budget":                                            true,
 	"GET /api/v1/admin/llm-settings/spend":                                             true,
+	"GET /api/v1/admin/llm-settings/status":                                            true,
 	"GET /api/v1/admin/orgs":                                                           true,
 	"GET /api/v1/admin/orgs/{org_id}":                                                  true,
 	"GET /api/v1/admin/orgs/{org_id}/feature-overrides":                                true,

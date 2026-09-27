@@ -207,6 +207,23 @@ type oidcConfigValues struct {
 
 var defaultOIDCScopes = []string{"openid", "profile", "email"}
 
+// validateOIDCRedirectURIHTTPS is team-lead's D2749-follow-up ruling
+// ("apply the same host-only shape to the OIDC PR's login-nonce cookie
+// Secure literal so all three providers share one rule"): https
+// required except a loopback host (isLoopbackHTTPURL, state.go),
+// checked unconditionally -- no env var, no build tag, no knob of any
+// kind, mirroring D2748 (SAML)/D2752 (OAuth) exactly. Unlike SAML/OAuth's
+// admin-stored config, initiateOIDCAuth's redirect_uri is caller-
+// request-supplied (this route's own optional body field, not a
+// provider config field), so this is checked at the point it is read
+// rather than at a "config load" step -- there is none for it.
+func validateOIDCRedirectURIHTTPS(redirectURI string) error {
+	if !strings.HasPrefix(redirectURI, "http://") || isLoopbackHTTPURL(redirectURI) {
+		return nil
+	}
+	return errors.New("redirect_uri must not use the insecure http:// scheme")
+}
+
 func decodeOIDCConfig(raw *string) (oidcConfigValues, error) {
 	object, err := decodeConfigObject(raw)
 	if err != nil {
@@ -321,6 +338,10 @@ func (h handlers) initiateOIDCAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	redirect := appBaseURL() + "/oidc/" + row.ID + "/callback"
 	if redirectSet && redirectURI != "" {
+		if err := validateOIDCRedirectURIHTTPS(redirectURI); err != nil {
+			policy.WriteDetail(w, http.StatusBadRequest, err.Error(), nil)
+			return
+		}
 		redirect = redirectURI
 	}
 	params := url.Values{
@@ -358,7 +379,7 @@ func (h handlers) initiateOIDCAuth(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "mint oidc state", err)
 		return
 	}
-	http.SetCookie(w, oidcLoginNonceCookie(loginNonce, int(oidcStateTTL/time.Second), strings.HasPrefix(appBaseURL(), "https://")))
+	http.SetCookie(w, oidcLoginNonceCookie(loginNonce, int(oidcStateTTL/time.Second)))
 	out := pyjson.NewObject()
 	out.Set("authorization_url", authEndpoint+"?"+params.Encode())
 	out.Set("state", encrypted)
@@ -419,7 +440,7 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	// One-shot: clear it immediately, same reasoning as SAML/OAuth's own
 	// callback (saml.go/oauth.go, D2744/D2745) -- defense in depth
 	// alongside the state's own single-use-in-practice lifetime.
-	http.SetCookie(w, oidcLoginNonceCookie("", -1, strings.HasPrefix(appBaseURL(), "https://")))
+	http.SetCookie(w, oidcLoginNonceCookie("", -1))
 
 	claims, err := h.exchangeAndValidate(ctx, row, providerID, stateToken, code, codeVerifierField, codeVerifierSet, cookieNonce)
 	if err != nil {

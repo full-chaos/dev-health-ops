@@ -157,3 +157,36 @@ func flipOneChar(s string) string {
 	raw[len(raw)/2] ^= 0xFF
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
+
+// TestValidateOIDCRedirectURIHTTPS pins team-lead's D2749-follow-up
+// ruling ("all three providers share one rule"): https is always
+// accepted, http is refused UNLESS the host is loopback
+// (127.0.0.1/localhost/::1, RFC 8252 shape) -- checked unconditionally,
+// no env var, no build tag, no test-injected knob of any kind, mirroring
+// D2748 (SAML)/D2752 (OAuth) exactly.
+func TestValidateOIDCRedirectURIHTTPS(t *testing.T) {
+	cases := []struct {
+		name        string
+		redirectURI string
+		wantErr     bool
+	}{
+		{"https accepted", "https://app.example.com/oidc/callback", false},
+		{"http non-loopback refused", "http://app.example.com/oidc/callback", true},
+		{"http loopback accepted (127.0.0.1)", "http://127.0.0.1:8080/oidc/callback", false},
+		{"http loopback accepted (localhost)", "http://localhost:8080/oidc/callback", false},
+		{"http loopback accepted (::1)", "http://[::1]:8080/oidc/callback", false},
+		{"unset is fine", "", false},
+		{"a non-URL value is fine (not http://, no scheme claim)", "not-a-url", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateOIDCRedirectURIHTTPS(c.redirectURI)
+			if c.wantErr && err == nil {
+				t.Fatalf("redirect_uri=%q: want an error, got nil", c.redirectURI)
+			}
+			if !c.wantErr && err != nil {
+				t.Fatalf("redirect_uri=%q: want no error, got %v", c.redirectURI, err)
+			}
+		})
+	}
+}

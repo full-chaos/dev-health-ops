@@ -12,10 +12,30 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"golang.org/x/crypto/hkdf"
 )
+
+// isLoopbackHTTPURL mirrors OAuth's own copy of this check (D2752,
+// oauth.go, not yet merged onto main as of this PR -- each provider's
+// worktree defines it independently until the branches converge): true
+// for an http:// URL whose host is a loopback address (RFC 8252 shape).
+// D2749-follow-up (team-lead, "all three providers share one rule"):
+// https required except a loopback host, checked unconditionally, no
+// env var / build tag / knob of any kind.
+func isLoopbackHTTPURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "http" {
+		return false
+	}
+	switch parsed.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
 
 // oidcLoginNonceCookieName is the HttpOnly, SameSite=Lax cookie
 // initiateOIDCAuth sets alongside the AEAD state -- see
@@ -27,24 +47,23 @@ const oidcLoginNonceCookieName = "dho_oidc_login_nonce"
 
 // oidcLoginNonceCookie builds the cookie set at /authorize (value=nonce,
 // non-empty maxAge) and the one used to clear it at /callback (value="",
-// maxAge=-1). Unlike SAML's samlLoginNonceCookie/OAuth's
-// oauthLoginNonceCookie (both D2748-hardened to a literal Secure: true,
-// because each of those has its own config-load-time HTTPS-only
-// validation making an insecure override unreachable), OIDC has no such
-// validation in this PR's scope -- D2745's class ruling for OIDC is
-// explicitly "the same [browser-binding] treatment", not a new P1-2-style
-// HTTPS-only ask. appBaseURL()'s own default is a genuine plain-http
-// value in local/dev use (oidc.go's own doc comment on
-// appBaseURLDefault), so Secure stays conditioned on the request's own
-// scheme, exactly as SAML's FIRST cut (before D2748) did.
-func oidcLoginNonceCookie(value string, maxAge int, secure bool) *http.Cookie {
+// maxAge=-1). Secure is a literal true -- team-lead's D2749-follow-up
+// ruling ("apply the same host-only shape to the OIDC PR's login-nonce
+// cookie Secure literal so all three providers share one rule"):
+// initiateOIDCAuth now refuses a caller-supplied redirect_uri naming the
+// insecure http:// scheme unless its host is loopback
+// (isLoopbackHTTPURL), the same rule D2748 (SAML)/D2752 (OAuth) apply to
+// their own admin-stored config -- mirroring their reasoning exactly,
+// just checked at request time rather than config-load time, since this
+// route's redirect_uri is caller-supplied, not admin-configured.
+func oidcLoginNonceCookie(value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name:     oidcLoginNonceCookieName,
 		Value:    value,
 		Path:     "/",
 		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   secure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	}
 }

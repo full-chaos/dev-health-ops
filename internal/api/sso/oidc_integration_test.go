@@ -494,6 +494,29 @@ func TestOIDCAuthorizeRefusesWrongProtocolAndInactiveStatus(t *testing.T) {
 	}
 }
 
+// TestOIDCAuthorizeRefusesAnInsecureHTTPRedirectURI pins team-lead's
+// D2749-follow-up ruling ("all three providers share one rule"): a
+// caller-supplied redirect_uri naming a non-loopback http:// URL is
+// refused before this package ever mints a state or sets the login-nonce
+// cookie -- mirroring SAML's TestSAMLConfigRefusesAnInsecureHTTPOverride
+// and OAuth's TestOAuthConfigRefusesAnInsecureHTTPBaseURL.
+func TestOIDCAuthorizeRefusesAnInsecureHTTPRedirectURI(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "oidc", status: "active", config: "{}", autoProvision: true})
+
+	status, body := postJSON(t, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize",
+		map[string]any{"redirect_uri": "http://not-a-loopback.example.test/callback"})
+	if status != http.StatusBadRequest || body["detail"] != "redirect_uri must not use the insecure http:// scheme" {
+		t.Fatalf("status=%d body=%v, want 400 redirect_uri must not use the insecure http:// scheme", status, body)
+	}
+	if _, ok := body["state"]; ok {
+		t.Fatalf("got a state for a redirect_uri this package should have refused: %v", body)
+	}
+}
+
 // TestOIDCCallbackRefusesADomainNotOnTheAllowlist pins the 403 branch.
 // Unlike the exchange and provisioning failures, Python's router raises
 // this HTTPException as a bare, unwrapped 403 -- outside the

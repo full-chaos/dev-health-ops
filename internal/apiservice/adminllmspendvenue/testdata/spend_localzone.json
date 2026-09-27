@@ -1,0 +1,431 @@
+{
+  "header": {
+    "test": "TestAdminLLMSpendLocalZoneVenueOracle",
+    "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
+    "producer_digest": "c0f6de73e34fa0583fea646a33b5f133309c1639cf5fc59dd5ebe0f439faed19",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/adminllmspendvenue/ -test '^TestAdminLLMSpendLocalZoneVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+  },
+  "requests": [
+    {
+      "name": "community tier is refused",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "6b3ef7ad6d6308ddc418d1425d3afd9a6917376cd7ae200c6bcd5581ac4a77d5",
+      "status": 402,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5b6983e2-bfdb-4fc6-9121-95d7606ff62d"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "kill switch is refused",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "a416a39088e62a4fdaa563d525e0ca07e99fa336f25eb729c7bba561740ad7bd",
+      "status": 403,
+      "headers": {
+        "content-length": "119",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "80dc8308-9fa0-45a1-b421-e04fce977bbc"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"byo_llm\",\"message\":\"BYO LLM is not enabled for this organization\"}}"
+    },
+    {
+      "name": "rich ",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "7206",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1214adb3-6e31-41e0-9443-22628a676e5b"
+      },
+      "body": "{\"since\":\"2026-08-27T20:08:14.241407Z\",\"limit\":20,\"runs\":[{\"run_id\":\"big\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4611686018427387904,\"input_tokens\":9007199254740993,\"output_tokens\":18446744073709551000,\"computed_at\":\"2026-09-25T23:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-00\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"run-00\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":2,\"input_tokens\":105,\"output_tokens\":11,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"straddle\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":20,\"input_tokens\":20,\"output_tokens\":20,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-01\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{\"fallback_reason\":1}},{\"run_id\":\"run-01\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":3,\"input_tokens\":106,\"output_tokens\":12,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{\"fallback_reason\":1}},{\"run_id\":\"run-02\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T20:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-02\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4,\"input_tokens\":107,\"output_tokens\":13,\"computed_at\":\"2026-09-25T20:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-03\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T19:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-03\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":5,\"input_tokens\":108,\"output_tokens\":14,\"computed_at\":\"2026-09-25T19:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-04\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T18:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-04\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":6,\"input_tokens\":109,\"output_tokens\":15,\"computed_at\":\"2026-09-25T18:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-05\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T17:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-05\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":7,\"input_tokens\":110,\"output_tokens\":16,\"computed_at\":\"2026-09-25T17:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-06\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T16:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-06\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":8,\"input_tokens\":111,\"output_tokens\":17,\"computed_at\":\"2026-09-25T16:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-07\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T15:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-07\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":9,\"input_tokens\":112,\"output_tokens\":18,\"computed_at\":\"2026-09-25T15:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-08\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T14:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-08\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":10,\"input_tokens\":113,\"output_tokens\":19,\"computed_at\":\"2026-09-25T14:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-09\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T13:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-09\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":11,\"input_tokens\":114,\"output_tokens\":20,\"computed_at\":\"2026-09-25T13:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-10\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T12:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-10\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":12,\"input_tokens\":115,\"output_tokens\":21,\"computed_at\":\"2026-09-25T12:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-11\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T11:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-11\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":13,\"input_tokens\":116,\"output_tokens\":22,\"computed_at\":\"2026-09-25T11:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-12\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T10:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-12\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":14,\"input_tokens\":117,\"output_tokens\":23,\"computed_at\":\"2026-09-25T10:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-13\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T09:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-13\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":15,\"input_tokens\":118,\"output_tokens\":24,\"computed_at\":\"2026-09-25T09:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-14\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T08:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-14\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":16,\"input_tokens\":119,\"output_tokens\":25,\"computed_at\":\"2026-09-25T08:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-15\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T07:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-15\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":17,\"input_tokens\":120,\"output_tokens\":26,\"computed_at\":\"2026-09-25T07:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-16\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T06:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-16\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":18,\"input_tokens\":121,\"output_tokens\":27,\"computed_at\":\"2026-09-25T06:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-17\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T05:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-17\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":19,\"input_tokens\":122,\"output_tokens\":28,\"computed_at\":\"2026-09-25T05:00:00\",\"failures_by_class\":{}}],\"legacy\":[{\"run_id\":\"\",\"marker\":\"legacy_empty_run_id\",\"provider\":\"openai\",\"model\":\"a-model\",\"calls\":4,\"input_tokens\":14,\"output_tokens\":4,\"computed_at\":\"2026-09-25T20:00:00\"},{\"run_id\":\"\",\"marker\":\"legacy_empty_run_id\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":3,\"input_tokens\":13,\"output_tokens\":3,\"computed_at\":\"2026-09-25T20:00:00\"},{\"run_id\":\"\",\"marker\":\"legacy_empty_run_id\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":3,\"input_tokens\":23,\"output_tokens\":3,\"computed_at\":\"2026-09-25T20:00:00\"}]}"
+    },
+    {
+      "name": "rich limit=3",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?limit=3",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "1479",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "45f1af24-02d2-445d-867c-ff2e509537ad"
+      },
+      "body": "{\"since\":\"2026-08-27T20:08:14.543243Z\",\"limit\":3,\"runs\":[{\"run_id\":\"big\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4611686018427387904,\"input_tokens\":9007199254740993,\"output_tokens\":18446744073709551000,\"computed_at\":\"2026-09-25T23:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-00\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"run-00\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":2,\"input_tokens\":105,\"output_tokens\":11,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"straddle\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":20,\"input_tokens\":20,\"output_tokens\":20,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{}}],\"legacy\":[{\"run_id\":\"\",\"marker\":\"legacy_empty_run_id\",\"provider\":\"openai\",\"model\":\"a-model\",\"calls\":4,\"input_tokens\":14,\"output_tokens\":4,\"computed_at\":\"2026-09-25T20:00:00\"},{\"run_id\":\"\",\"marker\":\"legacy_empty_run_id\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":3,\"input_tokens\":13,\"output_tokens\":3,\"computed_at\":\"2026-09-25T20:00:00\"},{\"run_id\":\"\",\"marker\":\"legacy_empty_run_id\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":3,\"input_tokens\":23,\"output_tokens\":3,\"computed_at\":\"2026-09-25T20:00:00\"}]}"
+    },
+    {
+      "name": "rich since=2026-09-25T15%3A00%3A00",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?since=2026-09-25T15%3A00%3A00",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "801",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "506700e5-10e4-4e37-8faa-b1ee44ed4215"
+      },
+      "body": "{\"since\":\"2026-09-25T15:00:00\",\"limit\":20,\"runs\":[{\"run_id\":\"big\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4611686018427387904,\"input_tokens\":9007199254740993,\"output_tokens\":18446744073709551000,\"computed_at\":\"2026-09-25T23:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-00\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"run-00\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":2,\"input_tokens\":105,\"output_tokens\":11,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}}],\"legacy\":[]}"
+    },
+    {
+      "name": "rich since=2026-09-25T15%3A00%3A01",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?since=2026-09-25T15%3A00%3A01",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "277",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4a6d19c3-50fd-40ed-9efe-1bef0f8fc678"
+      },
+      "body": "{\"since\":\"2026-09-25T15:00:01\",\"limit\":20,\"runs\":[{\"run_id\":\"big\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4611686018427387904,\"input_tokens\":9007199254740993,\"output_tokens\":18446744073709551000,\"computed_at\":\"2026-09-25T23:00:00\",\"failures_by_class\":{}}],\"legacy\":[]}"
+    },
+    {
+      "name": "rich since=2026-09-25T14%3A59%3A59",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?since=2026-09-25T14%3A59%3A59",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "801",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8c144fe3-37f7-4db7-ab4c-d03323930989"
+      },
+      "body": "{\"since\":\"2026-09-25T14:59:59\",\"limit\":20,\"runs\":[{\"run_id\":\"big\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4611686018427387904,\"input_tokens\":9007199254740993,\"output_tokens\":18446744073709551000,\"computed_at\":\"2026-09-25T23:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-00\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"run-00\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":2,\"input_tokens\":105,\"output_tokens\":11,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}}],\"legacy\":[]}"
+    },
+    {
+      "name": "rich since=2026-09-25T14%3A00%3A00",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?since=2026-09-25T14%3A00%3A00",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "1343",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "88ef801b-e391-4a22-9394-c085f853906e"
+      },
+      "body": "{\"since\":\"2026-09-25T14:00:00\",\"limit\":20,\"runs\":[{\"run_id\":\"big\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4611686018427387904,\"input_tokens\":9007199254740993,\"output_tokens\":18446744073709551000,\"computed_at\":\"2026-09-25T23:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-00\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"run-00\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":2,\"input_tokens\":105,\"output_tokens\":11,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"straddle\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":20,\"input_tokens\":20,\"output_tokens\":20,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-01\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{\"fallback_reason\":1}},{\"run_id\":\"run-01\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":3,\"input_tokens\":106,\"output_tokens\":12,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{\"fallback_reason\":1}}],\"legacy\":[]}"
+    },
+    {
+      "name": "rich since=2026-09-25T14%3A00%3A01",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?since=2026-09-25T14%3A00%3A01",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "801",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "eac5f864-1c18-4801-888c-f3161383826d"
+      },
+      "body": "{\"since\":\"2026-09-25T14:00:01\",\"limit\":20,\"runs\":[{\"run_id\":\"big\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4611686018427387904,\"input_tokens\":9007199254740993,\"output_tokens\":18446744073709551000,\"computed_at\":\"2026-09-25T23:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-00\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"run-00\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":2,\"input_tokens\":105,\"output_tokens\":11,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}}],\"legacy\":[]}"
+    },
+    {
+      "name": "rich since=2026-09-24T11%3A00%3A00",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?since=2026-09-24T11%3A00%3A00",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "7198",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c932f6cf-bc72-4b14-8632-a9a5af54386f"
+      },
+      "body": "{\"since\":\"2026-09-24T11:00:00\",\"limit\":20,\"runs\":[{\"run_id\":\"big\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4611686018427387904,\"input_tokens\":9007199254740993,\"output_tokens\":18446744073709551000,\"computed_at\":\"2026-09-25T23:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-00\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"run-00\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":2,\"input_tokens\":105,\"output_tokens\":11,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"straddle\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":20,\"input_tokens\":20,\"output_tokens\":20,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-01\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{\"fallback_reason\":1}},{\"run_id\":\"run-01\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":3,\"input_tokens\":106,\"output_tokens\":12,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{\"fallback_reason\":1}},{\"run_id\":\"run-02\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T20:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-02\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4,\"input_tokens\":107,\"output_tokens\":13,\"computed_at\":\"2026-09-25T20:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-03\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T19:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-03\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":5,\"input_tokens\":108,\"output_tokens\":14,\"computed_at\":\"2026-09-25T19:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-04\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T18:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-04\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":6,\"input_tokens\":109,\"output_tokens\":15,\"computed_at\":\"2026-09-25T18:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-05\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T17:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-05\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":7,\"input_tokens\":110,\"output_tokens\":16,\"computed_at\":\"2026-09-25T17:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-06\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T16:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-06\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":8,\"input_tokens\":111,\"output_tokens\":17,\"computed_at\":\"2026-09-25T16:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-07\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T15:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-07\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":9,\"input_tokens\":112,\"output_tokens\":18,\"computed_at\":\"2026-09-25T15:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-08\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T14:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-08\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":10,\"input_tokens\":113,\"output_tokens\":19,\"computed_at\":\"2026-09-25T14:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-09\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T13:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-09\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":11,\"input_tokens\":114,\"output_tokens\":20,\"computed_at\":\"2026-09-25T13:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-10\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T12:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-10\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":12,\"input_tokens\":115,\"output_tokens\":21,\"computed_at\":\"2026-09-25T12:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-11\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T11:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-11\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":13,\"input_tokens\":116,\"output_tokens\":22,\"computed_at\":\"2026-09-25T11:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-12\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T10:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-12\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":14,\"input_tokens\":117,\"output_tokens\":23,\"computed_at\":\"2026-09-25T10:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-13\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T09:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-13\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":15,\"input_tokens\":118,\"output_tokens\":24,\"computed_at\":\"2026-09-25T09:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-14\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T08:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-14\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":16,\"input_tokens\":119,\"output_tokens\":25,\"computed_at\":\"2026-09-25T08:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-15\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T07:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-15\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":17,\"input_tokens\":120,\"output_tokens\":26,\"computed_at\":\"2026-09-25T07:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-16\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T06:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-16\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":18,\"input_tokens\":121,\"output_tokens\":27,\"computed_at\":\"2026-09-25T06:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-17\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T05:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-17\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":19,\"input_tokens\":122,\"output_tokens\":28,\"computed_at\":\"2026-09-25T05:00:00\",\"failures_by_class\":{}}],\"legacy\":[{\"run_id\":\"\",\"marker\":\"legacy_empty_run_id\",\"provider\":\"openai\",\"model\":\"a-model\",\"calls\":4,\"input_tokens\":14,\"output_tokens\":4,\"computed_at\":\"2026-09-25T20:00:00\"},{\"run_id\":\"\",\"marker\":\"legacy_empty_run_id\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":3,\"input_tokens\":13,\"output_tokens\":3,\"computed_at\":\"2026-09-25T20:00:00\"},{\"run_id\":\"\",\"marker\":\"legacy_empty_run_id\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":3,\"input_tokens\":23,\"output_tokens\":3,\"computed_at\":\"2026-09-25T20:00:00\"}]}"
+    },
+    {
+      "name": "rich since=2026-09-25T22%3A00%3A00Z",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?since=2026-09-25T22%3A00%3A00Z",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "802",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f4632ba6-0a24-471d-bde6-4b392a19e23f"
+      },
+      "body": "{\"since\":\"2026-09-25T22:00:00Z\",\"limit\":20,\"runs\":[{\"run_id\":\"big\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4611686018427387904,\"input_tokens\":9007199254740993,\"output_tokens\":18446744073709551000,\"computed_at\":\"2026-09-25T23:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-00\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"run-00\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":2,\"input_tokens\":105,\"output_tokens\":11,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}}],\"legacy\":[]}"
+    },
+    {
+      "name": "rich since=2026-09-25T22%3A00%3A01Z",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?since=2026-09-25T22%3A00%3A01Z",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "278",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "76cac955-11d3-4d4d-8bc4-17b85de3c4e1"
+      },
+      "body": "{\"since\":\"2026-09-25T22:00:01Z\",\"limit\":20,\"runs\":[{\"run_id\":\"big\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4611686018427387904,\"input_tokens\":9007199254740993,\"output_tokens\":18446744073709551000,\"computed_at\":\"2026-09-25T23:00:00\",\"failures_by_class\":{}}],\"legacy\":[]}"
+    },
+    {
+      "name": "rich since=2026-09-25T21%3A00%3A00Z",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?since=2026-09-25T21%3A00%3A00Z",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "1344",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "212e15dd-a78a-464b-9593-50876c2480f5"
+      },
+      "body": "{\"since\":\"2026-09-25T21:00:00Z\",\"limit\":20,\"runs\":[{\"run_id\":\"big\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4611686018427387904,\"input_tokens\":9007199254740993,\"output_tokens\":18446744073709551000,\"computed_at\":\"2026-09-25T23:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-00\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"run-00\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":2,\"input_tokens\":105,\"output_tokens\":11,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"straddle\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":20,\"input_tokens\":20,\"output_tokens\":20,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-01\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{\"fallback_reason\":1}},{\"run_id\":\"run-01\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":3,\"input_tokens\":106,\"output_tokens\":12,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{\"fallback_reason\":1}}],\"legacy\":[]}"
+    },
+    {
+      "name": "rich since=2026-09-25T22%3A00%3A00",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?since=2026-09-25T22%3A00%3A00",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "64",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e6eb5ca6-d233-43b9-803e-20be3c8a7d55"
+      },
+      "body": "{\"since\":\"2026-09-25T22:00:00\",\"limit\":20,\"runs\":[],\"legacy\":[]}"
+    },
+    {
+      "name": "rich since=2026-09-25T15%3A00%3A00",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?since=2026-09-25T15%3A00%3A00",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1f1e5525b5a22a050c4938d970fbef16da62d881649f171a907dafd080d70ec7",
+      "status": 200,
+      "headers": {
+        "content-length": "801",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d0791ceb-18d7-4633-ab74-df9236285ce7"
+      },
+      "body": "{\"since\":\"2026-09-25T15:00:00\",\"limit\":20,\"runs\":[{\"run_id\":\"big\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":4611686018427387904,\"input_tokens\":9007199254740993,\"output_tokens\":18446744073709551000,\"computed_at\":\"2026-09-25T23:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-00\",\"provider\":\"anthropic\",\"model\":\"claude-x\",\"calls\":2,\"input_tokens\":7,\"output_tokens\":3,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}},{\"run_id\":\"run-00\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":2,\"input_tokens\":105,\"output_tokens\":11,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"unknown_outcome\":8,\"categorization_error\":4,\"OK\":1,\" ok\":1,\"repaired\":2,\"invalid_llm_output\":1}}],\"legacy\":[]}"
+    },
+    {
+      "name": "other organization",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?limit=100",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cbb3dd8c3f7d5f86a5da19494f02c2750e9ce8303e58f2735141d0fcb8ad5f10",
+      "status": 200,
+      "headers": {
+        "content-length": "4541",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6c7c38f5-68f3-4bbd-b134-976b571776c9"
+      },
+      "body": "{\"since\":\"2026-08-27T20:08:18.106083Z\",\"limit\":100,\"runs\":[{\"run_id\":\"run-00\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T22:00:00\",\"failures_by_class\":{\"invalid_llm_output\":1}},{\"run_id\":\"run-01\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T21:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-02\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T20:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-03\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T19:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-04\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T18:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-05\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T17:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-06\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T16:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-07\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T15:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-08\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T14:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-09\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T13:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-10\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T12:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-11\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T11:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-12\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T10:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-13\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T09:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-14\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T08:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-15\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T07:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-16\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T06:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-17\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T05:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-18\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T04:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-19\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T03:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-20\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T02:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-21\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T01:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-22\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T00:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-23\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-24T23:00:00\",\"failures_by_class\":{}},{\"run_id\":\"run-24\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-24T22:00:00\",\"failures_by_class\":{}}],\"legacy\":[{\"run_id\":\"\",\"marker\":\"legacy_empty_run_id\",\"provider\":\"openai\",\"model\":\"gpt-5-mini\",\"calls\":999,\"input_tokens\":999,\"output_tokens\":999,\"computed_at\":\"2026-09-25T20:00:00\"}]}"
+    },
+    {
+      "name": "community tier with a bad limit",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?limit=0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "6b3ef7ad6d6308ddc418d1425d3afd9a6917376cd7ae200c6bcd5581ac4a77d5",
+      "status": 422,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e4e5a8f1-859b-4d4a-9f5d-6654dea0ec85"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"0\",\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "kill switch with a bad since",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?since=abc",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "a416a39088e62a4fdaa563d525e0ca07e99fa336f25eb729c7bba561740ad7bd",
+      "status": 422,
+      "headers": {
+        "content-length": "194",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1f0a49de-f9b4-493b-8575-3db8b6cc4ae3"
+      },
+      "body": "{\"detail\":[{\"type\":\"datetime_from_date_parsing\",\"loc\":[\"query\",\"since\"],\"msg\":\"Input should be a valid datetime or date, input is too short\",\"input\":\"abc\",\"ctx\":{\"error\":\"input is too short\"}}]}"
+    },
+    {
+      "name": "a member is not an admin",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "edc373aee65eec122f2dfe41a7f0f533469e1171b6a78278ee88d9d0c51ba751",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f9d1401d-1d0f-4945-9101-9d04ffa987c0"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "member with a bad limit",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend?limit=0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "edc373aee65eec122f2dfe41a7f0f533469e1171b6a78278ee88d9d0c51ba751",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6212819c-8f64-4047-8068-2e1aed9ee355"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "no credentials",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings/spend",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c3cb7eb9-1186-4eee-b0ce-dbecc058eb3b"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    }
+  ]
+}

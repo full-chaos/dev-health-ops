@@ -1,0 +1,2812 @@
+{
+  "header": {
+    "test": "TestLLMSettingsRoutesVenueOracle",
+    "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
+    "producer_digest": "c0f6de73e34fa0583fea646a33b5f133309c1639cf5fc59dd5ebe0f439faed19",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestLLMSettingsRoutesVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+  },
+  "requests": [
+    {
+      "name": "get seeded",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "0b421402383e97f316eedb8e0f8b74c7aba8d20082dcc17350113f1b27a209cf",
+      "status": 200,
+      "headers": {
+        "content-length": "125",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3c149e1a-b912-427c-9eca-508eec198411"
+      },
+      "body": "{\"provider\":\"openai\",\"model\":\"gpt-5\",\"api_key\":\"sk-s…1234\",\"base_url\":\"https://gateway.example.invalid/v1\",\"concurrency\":8}"
+    },
+    {
+      "name": "get empty org",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "a26b8e1af4dec59a101c1e6d9187c8226a49d413dcb3c235663a4bf5d36dfaa8",
+      "status": 200,
+      "headers": {
+        "content-length": "2",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d65b72cf-dae7-4384-9f46-56c28707da52"
+      },
+      "body": "{}"
+    },
+    {
+      "name": "get bad rows is a server error",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "033b8524ac254c1025daaaac7a6c107fd3f9d99cefbe1882191b9f53af7f383c",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "get empty-string rows",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "90a9575fc05f01b8f3e4b4e7573710d6cf6054362aaa230f48d4d0a0a832e3fb",
+      "status": 200,
+      "headers": {
+        "content-length": "46",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e7df550c-e618-497a-a2ef-f42e177fb995"
+      },
+      "body": "{\"provider\":\"openai\",\"model\":\"\",\"base_url\":\"\"}"
+    },
+    {
+      "name": "get community refused",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "49cf6f56124730cf98e41e92692d61ba6492ce24a6f519bdad17c72dc73710ad",
+      "status": 402,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "278dfebc-f460-4409-b310-8207c0241087"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "get kill switch refused",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "0e2637c7f24f1af4ffb28249b71b4c589a75d9e2437afd0c162454dc7aa18dfd",
+      "status": 403,
+      "headers": {
+        "content-length": "119",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d7a5df5c-ae4a-4077-8c3f-710fa14c4f86"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"byo_llm\",\"message\":\"BYO LLM is not enabled for this organization\"}}"
+    },
+    {
+      "name": "get downgraded refused",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "a10440682687f41784fcca93378d410aada61a524469e0148b75680e8fe98249",
+      "status": 402,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c32af010-d2f2-4e03-9bed-b84fa419f4ae"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "get invalid licence tier",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4aec7eeb0cb67ebef9a1f75002135bb0a160af5b60367e2edcf78f2d66f47e8e",
+      "status": 402,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "88f5903f-e30d-4f67-9ad4-cb2179008bec"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "get org id not a uuid",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "360228b2207aeeebc9ded435eaa2a522facbe1c7ff47cbd91905220720cf5881",
+      "status": 404,
+      "headers": {
+        "content-length": "80",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "73c8cc78-2d1a-4d3d-806e-b2e04d469db9"
+      },
+      "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
+    },
+    {
+      "name": "get org missing",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "a10e793ef7c87389479fe5d15bc74a272c561d18205938d3a082dc9b6b7a271a",
+      "status": 404,
+      "headers": {
+        "content-length": "80",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b9779477-3d2b-4f9a-aba1-541910b90fae"
+      },
+      "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
+    },
+    {
+      "name": "get superuser without org",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "5954c8b878012b84da59015846f26a1f4bb6bb05e2c2180e9457a9613f5c870b",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9d2838ca-187c-49fd-82c8-5036426e0c6e"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "get member refused",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "5505f2cbe3891308224b6bdcd847fea3bc7d85ebdb6fb9a26007d5731ad1a544",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fb655de2-78d7-40ec-b494-614cecde5e50"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "get unauthenticated",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c4eb2b07-10cf-432a-9b37-87f7a51f0db2"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "post is 405",
+      "method": "POST",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "169cb7ea28e9e2dfac8848dfd83775f4f3dd6ff6ff2c6734dc7ceff03a4054d1",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1a88617d-e9d3-4b07-a5ae-83b90b0c86e0"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "patch is 405",
+      "method": "PATCH",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "169cb7ea28e9e2dfac8848dfd83775f4f3dd6ff6ff2c6734dc7ceff03a4054d1",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c154dd67-c444-4965-b394-1171182b9343"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "W put provider only",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "8dbd0a6384e9576e853f958d321f071781040ad7da3021f92d3608521506d9b9",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "21",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "eb040a81-9954-4d9a-8f50-79f2abcf61ba"
+      },
+      "body": "{\"provider\":\"openai\"}"
+    },
+    {
+      "name": "W put every field",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "a5bdf4591c70167d18afb453059da02f1dbf3ecd88caf0ccc2b73997c95f3324",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "117",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b3b1321c-9c94-4708-80e6-b031a7294652"
+      },
+      "body": "{\"provider\":\"anthropic\",\"model\":\"m1\",\"api_key\":\"sk-a…mnop\",\"base_url\":\"https://example.invalid/v1\",\"concurrency\":4}"
+    },
+    {
+      "name": "W get after every field",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e78ced8cf7d206c617b657175d74a89da7957640df103366646b7fe3d0749578",
+      "status": 200,
+      "headers": {
+        "content-length": "117",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6aa52cf9-3852-432a-a0d4-bff1b82c0912"
+      },
+      "body": "{\"provider\":\"anthropic\",\"model\":\"m1\",\"api_key\":\"sk-a…mnop\",\"base_url\":\"https://example.invalid/v1\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put keeps key when omitted",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "110769d90ebf4e6e6f7807458e789f2fbbd80a6ee1eefb107d50ad0a0621165f",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "77",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "11e540b0-654f-431d-9d9e-ff705672c98d"
+      },
+      "body": "{\"provider\":\"anthropic\",\"model\":\"m2\",\"api_key\":\"sk-a…mnop\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put short key",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "98302737320a57e721c671fb3d18d94d88ed21e5441be5f6fe9a62cee4af0faa",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "58",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a99030c5-7354-4f2d-b61c-2bfb074a2a6f"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"********\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put 8 char key",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "96ea9c00827cddfff8e028a9f6e3d88055cd2bbd18d83f46bf927a27004e62bc",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "58",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9ebf6b1c-1870-436a-9724-1fd1d5564ecd"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"********\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put 9 char key",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "92489564cb0b2974edeab2bdf634337fd06f827659e545fa4d8edbaef62a60be",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "00eca029-b227-443a-b0a0-d224da4c0a1a"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"1234…6789\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put unicode key",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "51c23abdb4e23ff56c233a2e79db8c7434077342b2586083d2f1633fb0a761e6",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "69",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "87419022-e0b3-4a79-975c-36943fb59aba"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"ключ…ключ\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put empty key",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "b2ef8fa9baa43a9330fe62b468396756a20e1ffbfd4d487307ed26fc37fe6fe5",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "37",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c45d863d-36a2-4ee8-8eda-c803ec73fa8d"
+      },
+      "body": "{\"provider\":\"openai\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put null key keeps",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "62a8527aebdc4da2d050f8469236f455e2366e4bc032c00c56fed4d46b590bd9",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "37",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0e4cfdbe-b3fd-4707-8eb9-681481ab160b"
+      },
+      "body": "{\"provider\":\"openai\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put long key",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "8c74556646ea7699d954bc73047f0a77282830d38bfd34db43eec38ce14c4391",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5fd14150-79df-4585-be3c-07a09cab0410"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put whitespace provider",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "a48e27633be686fe72b63ec53933bb0678ca1e9e899449e512fd03c7c28f152f",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "55",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2646afa4-14ea-4a0b-a60e-45427bd4519e"
+      },
+      "body": "{\"provider\":\"\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put dotted capital I provider",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "548715b090197c89f24e33f147fd0d9ffb656e64740a1b68e776f8a90a4abdff",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "65",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "af3d2cf6-8581-4a80-ad6a-ab8ce4300695"
+      },
+      "body": "{\"provider\":\"i̇stanbul\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put final sigma provider",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e95e6992fffb8ea05b3a93bc91947646f8fd94a97c4dd3b1ba12f3764cbf4c37",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "59",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e647fdc1-41eb-420d-a125-05e4b5ad4093"
+      },
+      "body": "{\"provider\":\"ας\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put tab provider",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "500336b73eb16dd415515035f60733e7a77fc4c6ed0e3d4606831d88e6de9ca4",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0287ba3b-663b-4cef-b684-a35eaedc242e"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put model null clears",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "9aa640fe2b55c3fae4cb54f9f227b429f877ea7d4e903c293a58b379f4092bc6",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f172836f-1cc7-404b-adab-8fb4dbc88b32"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put model unicode",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "b3968ccab1a348f0f012837a74ae9dba55f641df3cafa1bcf68bdb59542b070f",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "81",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "70cae770-f8ea-49aa-b472-4ea155ddf357"
+      },
+      "body": "{\"provider\":\"openai\",\"model\":\"模型-é\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":4}"
+    },
+    {
+      "name": "W put concurrency 1",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "06aaaf8d70ca7486f5310cf7b638082b7e5c36fb9896f7bee7fc773b0eee7705",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "39cd8646-14fb-45bf-9018-6a3952e2dbb2"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W put concurrency 32",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "9286e3a1ad70f8eab77ae34287e134854f65b287c63788d0e20e760c768aaec7",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ca40608e-012a-4266-8939-170790fa4338"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":32}"
+    },
+    {
+      "name": "W put concurrency 0",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "4b420dfd196b9e3b3784b3ec9df9ac43deecf7b00d18239ffde4a3a5ae034f32",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "dbe7112a-002e-4c89-9518-fd3fe2f680a6"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"concurrency\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":0,\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "W put concurrency 33",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "d452bbde46deadce91715bd8b6ec8ab98f37aebe66e6b8afe93eb7c3a3e7d3ef",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "521cc7b2-c67e-4086-b8c6-a5b60ed8d267"
+      },
+      "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"body\",\"concurrency\"],\"msg\":\"Input should be less than or equal to 32\",\"input\":33,\"ctx\":{\"le\":32}}]}"
+    },
+    {
+      "name": "W put concurrency string",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "674ef79e52918756cd875464f39fcf80647ad47b5b70642ab7e1e3b1fd512423",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "07656522-8ac6-4394-b9dd-9fdf95348cd9"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":7}"
+    },
+    {
+      "name": "W put concurrency float",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "a07914519eb30e2daf5e680960f21bd56c45aa60e0d383eaf2d5805f6b7c9754",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f6cae418-8120-4bcc-87cd-9a313b10a82a"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":6}"
+    },
+    {
+      "name": "W put concurrency fraction",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "8e08caca62eca5ea20872bc3dccbb891e3db2d4761a82733e1d065d91a62d91f",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "156",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "715c3c48-eeb6-4e88-8dc8-7cb06f7f46ec"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_from_float\",\"loc\":[\"body\",\"concurrency\"],\"msg\":\"Input should be a valid integer, got a number with a fractional part\",\"input\":6.5}]}"
+    },
+    {
+      "name": "W put concurrency bool",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "8f43c99c69b2b7d701c1404acafc4e10543e371f7ccabba558bfb23b69ad8922",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ac8f6ef3-d906-46e2-b43c-f6035733a817"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W put concurrency null keeps",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "ff516216648cb79733bf4362ec523b0ac2e43d1329481fc36c50e894f31c6497",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a915097a-92c0-4c39-92e0-34ffe51dc902"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W put provider empty",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "7d5ee561772cf6668dca7cce46609bf21f23eebbf01ed1a8101dd5a44927cb52",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "148",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "965886f5-afe1-49e1-bc70-f19bb1752717"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"provider\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
+    },
+    {
+      "name": "W put provider missing",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "91",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7a32028e-363b-412a-ac21-7eb53380f488"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"provider\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "W put provider null",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "b9509744052ba4243acc3825ac2725752c9e3ad80c5f40aa33b6e600068ed0ee",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "17fd3ede-2123-4d55-8e67-667ea31a501b"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"provider\"],\"msg\":\"Input should be a valid string\",\"input\":null}]}"
+    },
+    {
+      "name": "W put provider number",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "9e467d019ec796e8c515c476eadd574894760a8585f4fd61ecf248f9e2c9b82d",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "110",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "42a27634-969b-4953-9e73-5712862fc5c1"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"provider\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+    },
+    {
+      "name": "W put model number",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "6895dd60218d4e57b3333ae114424885efe98ede5d61ff921d4a5ad68b526f83",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "107",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4a199095-a0ae-46c0-ae33-6a821dbe41a2"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"model\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+    },
+    {
+      "name": "W put several errors",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "9d7f54585464cadc1c795937b349ea5b3ef2648868adfaad3c3aece9cab4944d",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "430",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "40f240e9-2733-457d-9b12-da3d3a479c50"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"provider\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}},{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"concurrency\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":0,\"ctx\":{\"ge\":1}},{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"budget_limit_micro_usd\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":-1,\"ctx\":{\"ge\":0}}]}"
+    },
+    {
+      "name": "W base_url port range",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "18088dc6d210d05c977af0ed3c00c3f9d473216abed49fef20c19f30754dfb2e",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "122",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9633f97d-ac51-4d29-96d1-822f92ae28ce"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url is invalid: Port out of range 0-65535\"}}"
+    },
+    {
+      "name": "W base_url open bracket",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "60307964d484c86fcdf2f8f201049ae90679c88c632ca4dd4cb109be738afdfb",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W base_url text port",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e5b11f49ba0979a2e7207bd6926b88cada1649c9500ce0edacef40f0699b7c52",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "199298d9-eb4d-4119-b637-2fd18590b52c"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url is invalid: Port could not be cast to integer value as 'abc'\"}}"
+    },
+    {
+      "name": "W base_url negative port",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "5a17ae47c2d3da2592f03ca797ac5ef9b2b7e26199024a770e9ab0f6651dda9c",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f7ed1ea1-b7d4-4fce-a202-cab682286d18"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url is invalid: Port could not be cast to integer value as '-1'\"}}"
+    },
+    {
+      "name": "W base_url percent host",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "97c2ecc21abf35af214fd4b0edc2799ffbf89ff22bf43dc1525c2f8f988f2acd",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "102",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2a0a0a76-bbf5-485d-884f-411b423878b8"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"base_url\":\"https://exa%mple.invalid/v1\",\"concurrency\":1}"
+    },
+    {
+      "name": "W base_url percent suffix host",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e511e02c5b1e82e02acd9c2cfd21bcbbf88a92a9946c3ec7f688f8608c5c5b34",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "102",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "60716637-620f-4970-b8d8-0043dd2ace00"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"base_url\":\"https://example%.invalid/v1\",\"concurrency\":1}"
+    },
+    {
+      "name": "W base_url bad ipv6 literal",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "5a2d5d1fc4a8aa1d0abd00a0fd52324d45553b9bdf4cf7f78c2853256585528e",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W base_url long label",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "1db0a662b14d6f287373205f908f38998f1248d6ca59a5459fc5a1a6daa9abea",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "107",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "95027160-cefa-4a4a-9d49-abea8679f5ce"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host is not valid IDNA\"}}"
+    },
+    {
+      "name": "W base_url fullwidth private address",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "faef4d0f34e01671ab74b2c37780e2ab93c8ab5d89dec6d66ccd5dc06def5397",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "122",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d07ba5a1-3793-4946-b920-7c4a1df1ee4e"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
+    },
+    {
+      "name": "W base_url fullwidth loopback address",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "69653b120a16135ae1c6bf6a824358c38ae5207e56d0d90b4f3b7caf1ed66704",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "122",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3fe3dd46-cf18-4f48-9858-392522ccd542"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
+    },
+    {
+      "name": "W base_url ideographic dot address",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "7d477d721694c979aabf720ac8ca32dcf85068b36717f0a380066497b16826b5",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "122",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "50ba4979-411a-48ed-9355-2482d5b362c6"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
+    },
+    {
+      "name": "W base_url empty",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "0da77f461afc1d8949a3e5fa90d2fcebe1f0cf91761413907e278bf53d0bf481",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "75",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d87c707f-82cc-4fee-8aa8-643f524c63ab"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"base_url\":\"\",\"concurrency\":1}"
+    },
+    {
+      "name": "W base_url null",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "4ace701ac6bb811fba100a1040e9bbee132fea6947e1e130be5271c06907658d",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cc26fcf6-a017-4f3c-a59e-1ff2d67f922f"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W base_url http",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "7abb1736276f5a60f114f9028846a2f30d734aa0c1dbd1f4a412fd0ceb03d27d",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "99",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0477bae4-a23d-4831-a79a-436088d8984a"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must use https\"}}"
+    },
+    {
+      "name": "W base_url ftp",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "cd2bb28a36ae658749a5d51ea7740950a09a8d3ce7a0f3507cc8fc6b9f75acc4",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "107",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cb2cf030-487b-4f0a-a05e-5dec8b7d8af9"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must use http or https\"}}"
+    },
+    {
+      "name": "W base_url userinfo",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "3062bab80e04ca98a5075112c961185c54507680969e808807e62b2c740fe3a7",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "110",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5722b4ea-250d-4b36-8457-568c6536e956"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must not include userinfo\"}}"
+    },
+    {
+      "name": "W base_url private ip",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "81b4524820355402806a63bd2364b705cea5353a8307607b0ab1e4aea0cc33c5",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "122",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "490311d1-170d-44fb-93e4-d9322bfbaa20"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
+    },
+    {
+      "name": "W base_url loopback v6",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "8c0d2d610e5cb16df42e32acab1b9fe8f40cd5c2fed55fccdd45ec3443631bff",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "122",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a53958f2-f9a6-4300-840a-5ea9e5d481c5"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
+    },
+    {
+      "name": "W base_url public literal",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "95e505279f6d2a26fcc1af921700612a96ad4df73b6ff5d8b0e11074ed024f3e",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "93",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4fe85670-04dc-4bb6-a0c2-08b971b44c48"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"base_url\":\"https://8.8.8.8/v1\",\"concurrency\":1}"
+    },
+    {
+      "name": "W base_url space",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "dcafc1a9defb54339a91d2329e86a6fa0ba0a47308fe4efe16fb6a78e874ee53",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "134",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "41080078-73ca-4dd4-a0ce-0eb9cf2fa001"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must not contain whitespace or control characters\"}}"
+    },
+    {
+      "name": "W base_url control",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "ab4e9257db027bab799f1e0c95fe355da8a434e04dde2ffc4d6ba852b340a304",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "134",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "44b9f080-1aed-42b7-ae52-9be0f59c1b3e"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must not contain whitespace or control characters\"}}"
+    },
+    {
+      "name": "W base_url port ok",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "016c3b2386f1a155356d722a4fc8f668d4480774dfa491b9b3dee62962715750",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "106",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e876de3d-e21b-4952-a2ad-a1d98fbdbc8f"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"base_url\":\"https://example.invalid:8443/v1\",\"concurrency\":1}"
+    },
+    {
+      "name": "W base_url empty port",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "3673431ee78546e360a332d607ad4d109ea914535ac6f902c5c65f335caa3b3f",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "102",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6a15df99-7338-4f87-995f-59b643ec2da6"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"base_url\":\"https://example.invalid:/v1\",\"concurrency\":1}"
+    },
+    {
+      "name": "W base_url unicode host",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "2e258c19fe9f8af9ae1e1b8eead8118cd91c4e606fad942398987091711a3523",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "95",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e5cf432a-1207-418a-b36f-f9994a9f8182"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"base_url\":\"https://例え.jp/v1\",\"concurrency\":1}"
+    },
+    {
+      "name": "W base_url zone id",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "05f5a856894d701444d1b9446ab6eefa975c7681be7adccbc6399e38cb185ccd",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "122",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b953647e-7b16-4d01-ac02-3fe2d700ae91"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
+    },
+    {
+      "name": "W base_url uppercase scheme",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "ac45fe8c191db197ec145c7a2054eab2c7881b2b09c553573618cbac393a06c8",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "12554d4a-f4c9-4695-9e00-5b411d300819"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"base_url\":\"HTTPS://Example.Invalid/v1\",\"concurrency\":1}"
+    },
+    {
+      "name": "W base_url scheme only",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "8844754da708c8cdbe97a9cb72e93ff4f7e82495b0cd1aad5598716733025001",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "102",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f6405170-5105-495d-ad43-226c782774ff"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url is missing a host\"}}"
+    },
+    {
+      "name": "W base_url ipv4 mapped ipv6",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "209e5dbd85abcadc07069e1f9cabbcd0a624f5426e9660e7a3de18bbdcbbe794",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "122",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3a49c830-1fd8-45c5-9918-93e5ed661a67"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url host resolves to a non-public address\"}}"
+    },
+    {
+      "name": "W base_url no host",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e6fc49b8e676a51da6427116c4a09c88fc915f57a69c628436c056500be20361",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "102",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d66a751c-210b-4953-adaf-522139947445"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url is missing a host\"}}"
+    },
+    {
+      "name": "W base_url not a url",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "9b8a66f652244363649551e07c104384bb8e3057ac4bbad015ee5f2aeef8fdb8",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "134",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f38b4100-b04a-4053-8e34-70c9bd463bc9"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must not contain whitespace or control characters\"}}"
+    },
+    {
+      "name": "W base_url bad refusal keeps rows",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "1d71e85bde32bb4368a5898cd13f52868f9969d11b4fe957d543cdde433169e9",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "99",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7f38ff83-8fd3-49ac-b810-0ef8fce17535"
+      },
+      "body": "{\"detail\":{\"error\":\"invalid_base_url\",\"feature\":\"byo_llm\",\"message\":\"LLM base_url must use https\"}}"
+    },
+    {
+      "name": "W get after refusal",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e78ced8cf7d206c617b657175d74a89da7957640df103366646b7fe3d0749578",
+      "status": 200,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "95dbcd8b-8788-470b-98a0-4bae0893e3d3"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"base_url\":\"HTTPS://Example.Invalid/v1\",\"concurrency\":1}"
+    },
+    {
+      "name": "W budget zero",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "c901f2eaadabf1ca5b7f3f061ad74f90cebeb2e96efb65b37c6db58b18899222",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c939015d-35e0-481e-b7b2-33bc19a23ef0"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W budget at the operator ceiling",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "26fac388b61bf1a5af76da3e43b96d35b0c2cde66e3228a24a18d05bcbbcac9b",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fc52e757-ed96-42ca-8dce-5dcdc254acc1"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W budget over the ceiling rolls back",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "0075a587c3f211e4f70ffc5d2c27c6eefd97ace51ae5a00351059c822c635ddf",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "137",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7b51edfb-f6c1-4be4-b011-ac0083ff79c2"
+      },
+      "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 10000000\"}}"
+    },
+    {
+      "name": "W get after rollback",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e78ced8cf7d206c617b657175d74a89da7957640df103366646b7fe3d0749578",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "56aa723f-631e-4a5a-b5fe-48db35944323"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W budget huge",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "1989601a99ff3bf5718fc3680387a23f4113125feaaf56d5aff84e1421c2f4c8",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 400,
+      "headers": {
+        "content-length": "137",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bbe5b8ae-951c-4db5-8752-36fbc3321b39"
+      },
+      "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 10000000\"}}"
+    },
+    {
+      "name": "W budget negative",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "d869961942f4d4ecb016171509eb0aa1c4245a0139b7f5dce562ec540a9ce111",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "159",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4e843772-c88c-4287-b5a7-2eec16e94337"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"budget_limit_micro_usd\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":-1,\"ctx\":{\"ge\":0}}]}"
+    },
+    {
+      "name": "W budget string",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "b9ab5b49e18c0d1c619857f8bea94a2f23583545826c5aa8378341c3ac976b41",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9303cfe7-de30-4d05-8d12-e3840c98280f"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W budget float whole",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e2f8b06e5f4099dbe8785e0b464ff79ac1ec04508a577279cf38a8df59591e1d",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5c71adc2-2415-4251-9a73-f38fbc4e17ed"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W budget float fraction",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "34e7e7ef7eaf35ab00b0956e16e5416b463e0c9dd9b0159491cb17654106acb3",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "167",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b2d54084-c844-41f1-abd3-88f29d15ac73"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_from_float\",\"loc\":[\"body\",\"budget_limit_micro_usd\"],\"msg\":\"Input should be a valid integer, got a number with a fractional part\",\"input\":5.5}]}"
+    },
+    {
+      "name": "W budget bool",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e5026d67525c6126c00efd189c534575000e29ccbcad782cf40382dccb4c5ab0",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2d8dee3c-bb07-417b-a0d5-4ea3159f579e"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W budget exponent",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "d011acb137ec4c6bba3ba334153440d039cf1ff321ad6163f206412f52be5efc",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c56f7d26-6dd3-499b-8d1e-0bd72530275c"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W budget null",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "2d23ee4a616ea60eb756962d95bcdb98b2a68439503df498e9caf92f1e429925",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6463a776-df2f-4021-8c63-280d92c08ed1"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W budget replaces",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e6d7462284652ae7bd9afa3bfbaa1e087fa28adcb19275a686dff89369e765bb",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fd4cfbd9-a92c-44bc-81a0-91286fef3b3f"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W budget same value",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e6d7462284652ae7bd9afa3bfbaa1e087fa28adcb19275a686dff89369e765bb",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 200,
+      "headers": {
+        "content-length": "61",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ae207fec-2b4d-40f9-a49a-2291c49c12e4"
+      },
+      "body": "{\"provider\":\"openai\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W budget impersonated refused",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "b84fadec4f9e3366d5c83b460cf33c9afeadd0f3fc1455067b1416b17fed655b",
+      "request_headers_sha256": "3e1892cc56305d85c38c1baf1c189e0686b15410867393619f81429d347d5d7e",
+      "status": 403,
+      "headers": {
+        "content-length": "122",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e5a33f91-29e6-4381-9a33-cf5e66a7d3dd"
+      },
+      "body": "{\"detail\":{\"error\":\"impersonated_write_forbidden\",\"message\":\"BYO LLM budget changes are unavailable while impersonating\"}}"
+    },
+    {
+      "name": "W budget impersonated bad url still refused first",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "5c6fe7403cf9d1dd56ed4754503b437d3be08a83a601a1644d5d2236df16e427",
+      "request_headers_sha256": "3e1892cc56305d85c38c1baf1c189e0686b15410867393619f81429d347d5d7e",
+      "status": 403,
+      "headers": {
+        "content-length": "122",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f0f61f8b-92b2-4494-87eb-b76e17c8b6c6"
+      },
+      "body": "{\"detail\":{\"error\":\"impersonated_write_forbidden\",\"message\":\"BYO LLM budget changes are unavailable while impersonating\"}}"
+    },
+    {
+      "name": "W impersonated without budget",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e29832f4ea9a316a0097041589ba9a6bb7ae9949919f4c39b88c0eb20ccac513",
+      "request_headers_sha256": "3e1892cc56305d85c38c1baf1c189e0686b15410867393619f81429d347d5d7e",
+      "status": 200,
+      "headers": {
+        "content-length": "75",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "18f30801-a35a-4de9-92f3-647bf89aa3f6"
+      },
+      "body": "{\"provider\":\"openai\",\"model\":\"imp\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W budget licence ceiling",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "a224aa5edf56b54ed57fae071cd7b69fff46a3122802efd0cb437ff8e7ee6d38",
+      "request_headers_sha256": "ac9f2c713ab0fac9ced364c3697d7ad547d9cb7e782a7f8dba93a8e605d74e4a",
+      "status": 200,
+      "headers": {
+        "content-length": "21",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "12f1a95c-6de3-4b9f-923f-02cd8c950228"
+      },
+      "body": "{\"provider\":\"openai\"}"
+    },
+    {
+      "name": "W budget over licence ceiling",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "415bb0cb21a7cf213009c3da1d2dd09640a000f373497c64e4549732f9a2124c",
+      "request_headers_sha256": "ac9f2c713ab0fac9ced364c3697d7ad547d9cb7e782a7f8dba93a8e605d74e4a",
+      "status": 400,
+      "headers": {
+        "content-length": "136",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2c4422a3-83b6-4304-8734-903aab06d930"
+      },
+      "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 5000000\"}}"
+    },
+    {
+      "name": "W budget licence text ceiling",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e1c12353be6a1785bdf729879ec4e3eea2dbcc7b0e36d13f306ee1ddf8916e96",
+      "request_headers_sha256": "72249cac594e7d4a7ba6849af1cd81eac952814a59c0f05a98833f3198b86c8b",
+      "status": 200,
+      "headers": {
+        "content-length": "21",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "96b65b5e-4a65-4ad2-a431-ba9c64660e19"
+      },
+      "body": "{\"provider\":\"openai\"}"
+    },
+    {
+      "name": "W budget over licence text ceiling",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "5b43acd6078f44c4fbb30e9c84ac4ff91a05d4a79d8da38aadc95f3ed4b206a5",
+      "request_headers_sha256": "72249cac594e7d4a7ba6849af1cd81eac952814a59c0f05a98833f3198b86c8b",
+      "status": 400,
+      "headers": {
+        "content-length": "133",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4a24358c-502d-473d-a76a-fe6614ee7d4c"
+      },
+      "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 7000\"}}"
+    },
+    {
+      "name": "W budget invalid licence ceiling",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "b84fadec4f9e3366d5c83b460cf33c9afeadd0f3fc1455067b1416b17fed655b",
+      "request_headers_sha256": "d7de28b03045c7664b8420ac845957b6fd425299667b23f8110a8cac89641bd8",
+      "status": 400,
+      "headers": {
+        "content-length": "130",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0f169a5f-9859-4ee2-8d8e-2506822574be"
+      },
+      "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 0\"}}"
+    },
+    {
+      "name": "W budget zero under invalid licence ceiling",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "c901f2eaadabf1ca5b7f3f061ad74f90cebeb2e96efb65b37c6db58b18899222",
+      "request_headers_sha256": "d7de28b03045c7664b8420ac845957b6fd425299667b23f8110a8cac89641bd8",
+      "status": 200,
+      "headers": {
+        "content-length": "21",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d5189dcf-a746-4fc3-8dc3-10ff3b865c00"
+      },
+      "body": "{\"provider\":\"openai\"}"
+    },
+    {
+      "name": "W budget float licence ceiling",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "b84fadec4f9e3366d5c83b460cf33c9afeadd0f3fc1455067b1416b17fed655b",
+      "request_headers_sha256": "88254ff9a8d4c5d20a14d2b833d7e9eedd89acbdfe45afb1cbdc1d52750db0d8",
+      "status": 400,
+      "headers": {
+        "content-length": "130",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1ba3db0f-9a59-4f1e-80b8-3832ac19b984"
+      },
+      "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 0\"}}"
+    },
+    {
+      "name": "W budget licence above operator",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "12c85d2889ff7fef301b5d426bee9ad3ae87a39dfc2f716a574db0b166e1771a",
+      "request_headers_sha256": "2fdd7f7f0e7cc22cb2b2e7b2bebd511eb7953ba02df85ba93eb596b0cbda7770",
+      "status": 400,
+      "headers": {
+        "content-length": "137",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ebaa4173-f8e6-4e84-aa16-04404794da12"
+      },
+      "body": "{\"detail\":{\"error\":\"budget_limit_exceeds_maximum\",\"feature\":\"byo_llm\",\"message\":\"budget_limit_micro_usd must be between 0 and 10000000\"}}"
+    },
+    {
+      "name": "W budget licence above operator ok",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "26fac388b61bf1a5af76da3e43b96d35b0c2cde66e3228a24a18d05bcbbcac9b",
+      "request_headers_sha256": "2fdd7f7f0e7cc22cb2b2e7b2bebd511eb7953ba02df85ba93eb596b0cbda7770",
+      "status": 200,
+      "headers": {
+        "content-length": "21",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "31cbb9fc-5674-4f03-a66c-d337c07c70c3"
+      },
+      "body": "{\"provider\":\"openai\"}"
+    },
+    {
+      "name": "W budget licence without the key",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "26fac388b61bf1a5af76da3e43b96d35b0c2cde66e3228a24a18d05bcbbcac9b",
+      "request_headers_sha256": "831f29db558f192c66b25260788dfc7aa9d1788be6549aac9b8855955b0fa472",
+      "status": 200,
+      "headers": {
+        "content-length": "21",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5b8e84ae-8874-4b8c-9abf-30d96bb0bc51"
+      },
+      "body": "{\"provider\":\"openai\"}"
+    },
+    {
+      "name": "W budget licence null overrides",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "26fac388b61bf1a5af76da3e43b96d35b0c2cde66e3228a24a18d05bcbbcac9b",
+      "request_headers_sha256": "1e229194942dec5e6893ffb318712cc901ce915d6787c688076a7fad40c352f7",
+      "status": 200,
+      "headers": {
+        "content-length": "21",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "afc2f7df-ea0e-4bda-8956-da9e8e8b65e6"
+      },
+      "body": "{\"provider\":\"openai\"}"
+    },
+    {
+      "name": "W put community refused",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
+      "request_headers_sha256": "7f020f3c60a76a39888bf4cc8f1f8a5e028ffc756cd84fd7b4217ea02dad9157",
+      "status": 402,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7d02f03e-1bca-4422-8737-e12b44a9125e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "W put kill switch refused",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
+      "request_headers_sha256": "d5d74683d69e93edb6896691d9758f8cb90174af2ea304ce7bc3140239a5cce9",
+      "status": 403,
+      "headers": {
+        "content-length": "119",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bd3537f4-eeec-420a-bd6c-8cb74be35569"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"byo_llm\",\"message\":\"BYO LLM is not enabled for this organization\"}}"
+    },
+    {
+      "name": "W put downgraded refused",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
+      "request_headers_sha256": "80be6d343de29bcc7b84651a67a230d94fb3c2cf10ab0c7b99ec6abfcf4d4d27",
+      "status": 402,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c3e3fd15-79ed-44a4-9203-5e1a2cc424c9"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "W put invalid licence tier",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
+      "request_headers_sha256": "1dbc48cd6996b495dc41e7874a48b7e379c75830fc5ab8daf0c651415ef00d32",
+      "status": 402,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "12a7bc6a-9a05-48e6-805c-b1a417ef1a17"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "W put org not a uuid",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
+      "request_headers_sha256": "0f8de41366825bd5da55857bfdd6531c225f3548b75319e1531380c5703f7fe2",
+      "status": 404,
+      "headers": {
+        "content-length": "80",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e9e06f2c-bd79-46f9-a638-30b976c1d0af"
+      },
+      "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
+    },
+    {
+      "name": "W put org missing",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
+      "request_headers_sha256": "45b5bfd648a46ea044ae897a929c8285515576ab785b0c2329d5770d09f4eff4",
+      "status": 404,
+      "headers": {
+        "content-length": "80",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c4c2fde5-e09d-4a5b-a162-338e7e9733ad"
+      },
+      "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
+    },
+    {
+      "name": "W put 422 beats the gate",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "7d5ee561772cf6668dca7cce46609bf21f23eebbf01ed1a8101dd5a44927cb52",
+      "request_headers_sha256": "7f020f3c60a76a39888bf4cc8f1f8a5e028ffc756cd84fd7b4217ea02dad9157",
+      "status": 422,
+      "headers": {
+        "content-length": "148",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "171bb126-f625-40db-ae3c-273b2c339531"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"provider\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
+    },
+    {
+      "name": "W put 422 beats org check",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "0f8de41366825bd5da55857bfdd6531c225f3548b75319e1531380c5703f7fe2",
+      "status": 422,
+      "headers": {
+        "content-length": "91",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5630c9fe-e011-44ae-bba9-10cdd1e5d092"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"provider\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "W put superuser without org",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
+      "request_headers_sha256": "d161db3252007bd1424f05aee7a6564a19554e245833d4edd74698b9d66e48d4",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3ebb0889-1213-46f0-962d-7bc2e72c347d"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "W put member refused",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
+      "request_headers_sha256": "637a6aff39665a719580ef5ac49d9bd6bb9f121d7ce8a9a467215b1bcfc7dc9a",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ee616a56-b015-4adb-a971-320dddc404c0"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "W put body list",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ae29576c-022b-48d6-8c25-a53bb89c361d"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "W put body null",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "bb99e5bb3a756453730056b900774c14cb31358abd79a0903bf0e0349d0ade7a",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f8bc1dd6-03ca-4ce9-9680-9a923da7db2b"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "W put invalid json",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "request_headers_sha256": "b5b476664f92366597dc74d97692243f7b1cd03025b73b1af5f35230fd65bec0",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "589a2d8d-4f42-4bcc-859d-8b473ab4cad6"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
+    },
+    {
+      "name": "W put non-json content type",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "5e21d86b709b6aa2d5fff6d7cfed56ab73bf002020a6399a955c0b09791d4613",
+      "request_headers_sha256": "28b5fdb2b04f92a8ace891902c9b0d6622cf9eb2a9097c8b7cb06e2fed9b1a0d",
+      "status": 422,
+      "headers": {
+        "content-length": "148",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d6b9225d-c00c-46b2-8b08-3b62cf9851bc"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":\"x\"}]}"
+    },
+    {
+      "name": "W put unauthenticated",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "0726f015af53444f3513e80ea8388228381525b01910d3c1788276a4871da8e3",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c676bf82-9481-4441-a87a-0452e603fdd1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "W put over bad rows rolls back",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "b0b08590c84d7b2edead76ab47c58d0b669d7ae8e6a4e3ec45978a782b9e881e",
+      "request_headers_sha256": "233ed00e7ae225bf6f52be12f9d7dac3edb78435ec7e603739db6a8b20890af3",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W put over empty-string rows",
+      "method": "PUT",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "d3d1b7a882a6b2597116b0db4d5551bd2df4c262adfcf805ed8d7adbeac452d8",
+      "request_headers_sha256": "ac9f2c713ab0fac9ced364c3697d7ad547d9cb7e782a7f8dba93a8e605d74e4a",
+      "status": 200,
+      "headers": {
+        "content-length": "57",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1ef1c4ad-ae94-40d5-990c-879576d87fe0"
+      },
+      "body": "{\"provider\":\"openai\",\"model\":\"m\",\"api_key\":\"sk-e…lled\"}"
+    },
+    {
+      "name": "W get after empty-string rows",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "90a9575fc05f01b8f3e4b4e7573710d6cf6054362aaa230f48d4d0a0a832e3fb",
+      "status": 200,
+      "headers": {
+        "content-length": "57",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f1dd3a91-31c5-403e-8c25-cca2a3a4371f"
+      },
+      "body": "{\"provider\":\"openai\",\"model\":\"m\",\"api_key\":\"sk-e…lled\"}"
+    },
+    {
+      "name": "W get final write org",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e78ced8cf7d206c617b657175d74a89da7957640df103366646b7fe3d0749578",
+      "status": 200,
+      "headers": {
+        "content-length": "75",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c50c2ccd-5f63-4c05-b7a6-985a9901abb9"
+      },
+      "body": "{\"provider\":\"openai\",\"model\":\"imp\",\"api_key\":\"kkkk…kkkk\",\"concurrency\":1}"
+    },
+    {
+      "name": "W get final read org",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "0b421402383e97f316eedb8e0f8b74c7aba8d20082dcc17350113f1b27a209cf",
+      "status": 200,
+      "headers": {
+        "content-length": "125",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9ec1cb0a-fb09-465d-b95f-dc3534c9c23d"
+      },
+      "body": "{\"provider\":\"openai\",\"model\":\"gpt-5\",\"api_key\":\"sk-s…1234\",\"base_url\":\"https://gateway.example.invalid/v1\",\"concurrency\":8}"
+    },
+    {
+      "name": "W delete seeded",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "0b421402383e97f316eedb8e0f8b74c7aba8d20082dcc17350113f1b27a209cf",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f39186ea-994c-4912-adc9-410e6804db18"
+      },
+      "body": "{\"deleted\":true}"
+    },
+    {
+      "name": "W delete again",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "0b421402383e97f316eedb8e0f8b74c7aba8d20082dcc17350113f1b27a209cf",
+      "status": 404,
+      "headers": {
+        "content-length": "35",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7cbdd277-b289-44c2-9319-0168e68ba439"
+      },
+      "body": "{\"detail\":\"LLM settings not found\"}"
+    },
+    {
+      "name": "W get after delete",
+      "method": "GET",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "0b421402383e97f316eedb8e0f8b74c7aba8d20082dcc17350113f1b27a209cf",
+      "status": 200,
+      "headers": {
+        "content-length": "2",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ebc2cc83-664e-41d4-a7fe-0ce8ea2b665f"
+      },
+      "body": "{}"
+    },
+    {
+      "name": "W delete downgraded still works",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "a10440682687f41784fcca93378d410aada61a524469e0148b75680e8fe98249",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6437d24e-712f-48b0-9303-7fff2863e7d6"
+      },
+      "body": "{\"deleted\":true}"
+    },
+    {
+      "name": "W delete community without rows",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "49cf6f56124730cf98e41e92692d61ba6492ce24a6f519bdad17c72dc73710ad",
+      "status": 404,
+      "headers": {
+        "content-length": "35",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3d0c4b0b-634b-4a42-b1fc-4891a4627a71"
+      },
+      "body": "{\"detail\":\"LLM settings not found\"}"
+    },
+    {
+      "name": "W delete kill switch without rows",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "0e2637c7f24f1af4ffb28249b71b4c589a75d9e2437afd0c162454dc7aa18dfd",
+      "status": 404,
+      "headers": {
+        "content-length": "35",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "21ffb8e2-95fd-4863-98a6-051c9a0be9cd"
+      },
+      "body": "{\"detail\":\"LLM settings not found\"}"
+    },
+    {
+      "name": "W delete empty org",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "a26b8e1af4dec59a101c1e6d9187c8226a49d413dcb3c235663a4bf5d36dfaa8",
+      "status": 404,
+      "headers": {
+        "content-length": "35",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fc3d7bc3-f1e9-43b3-ab6b-92859da7afb2"
+      },
+      "body": "{\"detail\":\"LLM settings not found\"}"
+    },
+    {
+      "name": "W delete org not a uuid",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "360228b2207aeeebc9ded435eaa2a522facbe1c7ff47cbd91905220720cf5881",
+      "status": 404,
+      "headers": {
+        "content-length": "80",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5f59c80b-e46d-4831-b8cf-68da53610d25"
+      },
+      "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
+    },
+    {
+      "name": "W delete org missing",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "a10e793ef7c87389479fe5d15bc74a272c561d18205938d3a082dc9b6b7a271a",
+      "status": 404,
+      "headers": {
+        "content-length": "80",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "753e536d-9ef6-4df0-84cd-b6ebe9241163"
+      },
+      "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
+    },
+    {
+      "name": "W delete superuser without org",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "5954c8b878012b84da59015846f26a1f4bb6bb05e2c2180e9457a9613f5c870b",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6821eb4e-c94e-4ca0-84bf-2ea996936eb7"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "W delete member refused",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "5505f2cbe3891308224b6bdcd847fea3bc7d85ebdb6fb9a26007d5731ad1a544",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "481ab66a-472d-4ec1-aae1-9c6d0757dbf0"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "W delete unauthenticated",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8892eae7-7c7f-4e1d-a852-0a3f79679bae"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "W delete bad rows",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "033b8524ac254c1025daaaac7a6c107fd3f9d99cefbe1882191b9f53af7f383c",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "228e5bd1-fe19-4b34-a482-aac1b6f5481e"
+      },
+      "body": "{\"deleted\":true}"
+    },
+    {
+      "name": "W delete write org",
+      "method": "DELETE",
+      "path": "/api/v1/admin/llm-settings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e78ced8cf7d206c617b657175d74a89da7957640df103366646b7fe3d0749578",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "47aadc5d-e1c1-4442-ac40-bbb059069bc7"
+      },
+      "body": "{\"deleted\":true}"
+    }
+  ],
+  "rows": {
+    "settings rows": {
+      "rows": "537ac8b4-37a4-5964-977f-92046fdef32bllmapi_keytruev1:\u003ctoken\u003eEncrypted BYO LLM API key for this organizationtrue | 537ac8b4-37a4-5964-977f-92046fdef32bllmbase_urlfalse \u003cnil\u003eBYO LLM base URL for this organizationtrue | 537ac8b4-37a4-5964-977f-92046fdef32bllmconcurrencyfalse\u003cnil\u003efalse | 537ac8b4-37a4-5964-977f-92046fdef32bllmmodelfalsemBYO LLM model for this organizationtrue | 537ac8b4-37a4-5964-977f-92046fdef32bllmproviderfalseopenaiBYO LLM provider for this organizationtrue | 537ac8b4-37a4-5964-977f-92046fdef32bllm_budgetlimit_micro_usdfalse5000000Organization BYO LLM monetary ceiling in integer micro-USD; stored separately from provider credentialstrue | 79117ba4-55f0-5db9-add2-f26de95db417llmbase_urlfalse \u003cnil\u003eBYO LLM base URL for this organizationtrue | 79117ba4-55f0-5db9-add2-f26de95db417llmmodelfalse \u003cnil\u003eBYO LLM model for this organizationtrue | 79117ba4-55f0-5db9-add2-f26de95db417llmproviderfalseopenaiBYO LLM provider for this organizationtrue | 79117ba4-55f0-5db9-add2-f26de95db417llm_budgetlimit_micro_usdfalse10000000Organization BYO LLM monetary ceiling in integer micro-USD; stored separately from provider credentialstrue | 79e95ecd-e15c-5b72-b88e-0868841ca31bllmbase_urlfalse \u003cnil\u003eBYO LLM base URL for this organizationtrue | 79e95ecd-e15c-5b72-b88e-0868841ca31bllmmodelfalse \u003cnil\u003eBYO LLM model for this organizationtrue | 79e95ecd-e15c-5b72-b88e-0868841ca31bllmproviderfalseopenaiBYO LLM provider for this organizationtrue | 79e95ecd-e15c-5b72-b88e-0868841ca31bllm_budgetlimit_micro_usdfalse0Organization BYO LLM monetary ceiling in integer micro-USD; stored separately from provider credentialstrue | b43f0dfe-c010-5eac-a569-230b813c8a15llmbase_urlfalse \u003cnil\u003eBYO LLM base URL for this organizationtrue | b43f0dfe-c010-5eac-a569-230b813c8a15llmmodelfalse \u003cnil\u003eBYO LLM model for this organizationtrue | b43f0dfe-c010-5eac-a569-230b813c8a15llmproviderfalseopenaiBYO LLM provider for this organizationtrue | b43f0dfe-c010-5eac-a569-230b813c8a15llm_budgetlimit_micro_usdfalse10000000Organization BYO LLM monetary ceiling in integer micro-USD; stored separately from provider credentialstrue | bda1191b-d6ee-599d-9ece-fcdbc82deeeallm_budgetlimit_micro_usdfalse1234Organization BYO LLM monetary ceiling in integer micro-USD; stored separately from provider credentialstrue | d89101c8-2c97-5da0-b255-bb3cf3297c31llmbase_urlfalse \u003cnil\u003eBYO LLM base URL for this organizationtrue | d89101c8-2c97-5da0-b255-bb3cf3297c31llmmodelfalse \u003cnil\u003eBYO LLM model for this organizationtrue | d89101c8-2c97-5da0-b255-bb3cf3297c31llmproviderfalseopenaiBYO LLM provider for this organizationtrue | d89101c8-2c97-5da0-b255-bb3cf3297c31llm_budgetlimit_micro_usdfalse7000Organization BYO LLM monetary ceiling in integer micro-USD; stored separately from provider credentialstrue | d89a385f-e29a-5d7a-ae8e-356a0cf4c0dcllmbase_urlfalse \u003cnil\u003eBYO LLM base URL for this organizationtrue | d89a385f-e29a-5d7a-ae8e-356a0cf4c0dcllmmodelfalse \u003cnil\u003eBYO LLM model for this organizationtrue | d89a385f-e29a-5d7a-ae8e-356a0cf4c0dcllmproviderfalseopenaiBYO LLM provider for this organizationtrue | d89a385f-e29a-5d7a-ae8e-356a0cf4c0dcllm_budgetlimit_micro_usdfalse10000000Organization BYO LLM monetary ceiling in integer micro-USD; stored separately from provider credentialstrue | d9ce9770-4fe2-5e08-8d09-6ef3b9ba676cgeneralunrelatedfalsekept\u003cnil\u003efalse | d9ce9770-4fe2-5e08-8d09-6ef3b9ba676cllm_budgetlimit_micro_usdfalse250000seed budgetfalse | e5748d0e-f69f-5fc0-b37f-36ef1828f8abgeneralunrelatedfalsekept\u003cnil\u003efalse"
+    }
+  }
+}

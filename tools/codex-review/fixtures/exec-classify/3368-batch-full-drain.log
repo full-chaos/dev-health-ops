@@ -1,0 +1,12 @@
+exec
+/bin/bash -lc 'go test ./...' in /w
+exec
+/bin/bash -lc 'ls -la' in /w
+exec
+/bin/bash -lc 'sed -n "1,50p" .codex-review.patch' in /w
+ succeeded in 100ms:
+ok
+ succeeded in 5ms:
+total 0
+ succeeded in 12ms:
+diff --git a/x b/x

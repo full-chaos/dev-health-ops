@@ -247,6 +247,45 @@ diffcheck "the real #3276 r1 log (no diff read): not seen" "$FIXTURES/3276-multi
 # still lack a resolution at EOF of this excerpt).
 diffcheck "CHAOS-7018: a batched exec burst leaves unresolved blocks UNKNOWN, never silently 'not seen'" "$FIXTURES/3360-batched-burst.log" 0 3
 
+# 10b. #3368 r1 P1 (EXECUTED, reproduced by the reviewer): the FIRST FIFO fix's status-line
+# check was gated on `phase == "cmd"`, which only holds for the ONE line immediately after
+# an `exec` marker -- so a burst that fully DRAINS (N execs, THEN N status lines back to
+# back, no exec markers between the statuses) resolved only the FIRST status and silently
+# dropped the rest as ordinary output text. Reviewer's own repro: 3 queued execs (go test,
+# ls, a genuinely successful patch read) followed by all 3 returned statuses gave
+# `1 0 0 0 2` instead of the correct `1 0 0 1 0`. This is the exact shape the earlier
+# 3360-batched-burst fixture does NOT cover (that one has only ONE status line total, so
+# the phase=="cmd" gate never got exercised past its first use). Unlike 3360's excerpt,
+# every entry here genuinely IS resolvable -- this fixture's whole point is that a full,
+# clean drain must produce zero UNKNOWN, not that the answer is honestly unknowable.
+#
+# D2827: checked in as a real fixture file (not an ephemeral test-local string) --
+# 3368-batch-full-drain.log.
+diffcheck "#3368 r1 P1 fix: a fully-drained batch (N execs, then N statuses with no exec markers between them) resolves EVERY entry, not just the first" "$FIXTURES/3368-batch-full-drain.log" 1 0
+GO_AFTER_DRAIN=$(classify "$FIXTURES/3368-batch-full-drain.log" | awk '{print $1}')
+if [ "$GO_AFTER_DRAIN" = 1 ]; then
+  echo "ok   #3368 r1 P1 fix: the go-test entry in a fully-drained batch is still counted (gos=1)"
+else
+  echo "FAIL: fully-drained batch gos said '${GO_AFTER_DRAIN:-<none>}', want 1" >&2; fails=$((fails + 1))
+fi
+
+# 10c. D2827: a SECOND fixture, batch PLUS interleaved output -- not just a clean
+# batch-then-statuses run. Same 3 queued execs, but each status line is followed by that
+# entry's own genuine multi-line output (test result lines, an `ls -la` listing, a real
+# unified diff) BEFORE the next status line arrives. Proves the fix does not just handle
+# the degenerate "all statuses adjacent" case: ordinary output text between resolutions
+# must never be mistaken for a status line (the status regex is specific enough that none
+# of this fixture's own output content happens to match it), and the FIFO queue must keep
+# draining correctly across real output, not just across bare status lines.
+# 3368-batch-interleaved-output.log.
+diffcheck "#3368 r1 P1 fix, D2827: a batch with real interleaved output (not just adjacent statuses) still resolves every entry" "$FIXTURES/3368-batch-interleaved-output.log" 1 0
+GO_AFTER_INTERLEAVED=$(classify "$FIXTURES/3368-batch-interleaved-output.log" | awk '{print $1}')
+if [ "$GO_AFTER_INTERLEAVED" = 1 ]; then
+  echo "ok   #3368 r1 P1 fix, D2827: the go-test entry survives real interleaved output between resolutions (gos=1)"
+else
+  echo "FAIL: interleaved-output batch gos said '${GO_AFTER_INTERLEAVED:-<none>}', want 1" >&2; fails=$((fails + 1))
+fi
+
 # 11. Regression control for the same fix: a real SERIAL excerpt (chaos-6907-3359-r1, normal
 # exec/status/output framing, no burst -- the queue never holds more than one entry) where a
 # compound `&&`-chained command correctly FAILS as a whole (git diff denied) and a SEPARATE,

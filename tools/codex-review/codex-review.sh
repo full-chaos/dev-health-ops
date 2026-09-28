@@ -2672,6 +2672,17 @@ EXEC_CLASSIFY_AWK=$(cat <<'AWK'
 # a block resolved WHILE it is still the tail (front == tail at resolution) -- the output
 # text immediately following an out-of-order resolution belongs to a LATER block, not the
 # one just resolved, and attributing it would corrupt `hits` rather than merely miss it.
+#
+# r1 P1 fix (#3368): the status-line check below used to be gated on `phase == "cmd"`,
+# which only holds for the ONE line immediately after an `exec` marker -- so a burst of
+# results (three execs, THEN three status lines back to back, no exec markers between the
+# statuses) resolved only the FIRST status and silently dropped the rest as bare output
+# text, undercounting diffs and overcounting unknown. Reproduced by the reviewer: 3
+# queued execs (go test/ls/patch-read) followed by all 3 statuses gave `1 0 0 0 2`
+# instead of the correct `1 0 0 1 0`. A status line unambiguously resolves the oldest
+# PENDING entry regardless of phase -- there is always at most one unambiguous "next"
+# entry to resolve as long as front<=tail, so the check now fires whenever an entry is
+# still pending, not only right after an `exec` marker.
 function norm(s) {
   sub(/^[ \t(]+/, "", s)
   while (match(s, /^[A-Za-z_][A-Za-z0-9_]*=[^ \t]*[ \t]+/)) s = substr(s, RLENGTH + 1)
@@ -2733,12 +2744,12 @@ function resolve(this_ok, this_failed,    attributable) {
   phase = "cmd"
   next
 }
+front <= tail && $0 ~ /^ *(succeeded|failed|exited [0-9]+) in [0-9]+ms/ {
+  resolve($0 ~ /^ *succeeded in/, $0 ~ /^ *failed in/)
+  phase = "out"
+  next
+}
 tail >= front && phase == "cmd" {
-  if ($0 ~ /^ *(succeeded|failed|exited [0-9]+) in [0-9]+ms/) {
-    resolve($0 ~ /^ *succeeded in/, $0 ~ /^ *failed in/)
-    phase = "out"
-    next
-  }
   Q_ncmd[tail]++
   if (Q_ncmd[tail] == 1) {
     if (first_go($0)) Q_is_go[tail] = 1
@@ -2830,7 +2841,15 @@ fi
 # does NOT match the "python" in "python3" -- that is covered by the
 # separate `\bpython3\b` alternative).
 EXECUTED_EXECS=$((GO_EXECS + PY_EXECS))
-warn "round recorded $EXEC_BLOCKS exec block(s) ($GO_EXECS go test/run/build, $PY_EXECS pytest/uv run/ruff/mypy/bash-or-sh-script/python/shellcheck/py_compile)"
+# r1 P2 fix (#3368): DIFF_UNKNOWN used to surface only inside the DIFF_SEEN=0 branch below
+# -- a round with a CONFIRMED diff (DIFF_SEEN=1) but SOME blocks still unresolved (e.g. a
+# batched burst where the LAST pending entry never got a status line at all) printed no
+# trace of that ambiguity anywhere in its log.
+# D2827: printed UNCONDITIONALLY, literally always part of the line -- even at 0 -- not
+# appended only "when >0". A conditional append makes the count's ABSENCE ambiguous (did
+# nothing go unresolved, or did this build of the wrapper simply not carry the fix?); a
+# fixed literal position never leaves that open.
+warn "round recorded $EXEC_BLOCKS exec block(s) ($GO_EXECS go test/run/build, $PY_EXECS pytest/uv run/ruff/mypy/bash-or-sh-script/python/shellcheck/py_compile, ${DIFF_UNKNOWN:-0} unresolved/unknown)"
 
 if [ "${DIFF_SEEN:-0}" -eq 0 ]; then
   if [ "${DIFF_UNKNOWN:-0}" -gt 0 ]; then

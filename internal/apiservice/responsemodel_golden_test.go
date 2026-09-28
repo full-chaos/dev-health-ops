@@ -166,6 +166,7 @@ var wantResponseModelRoutes = map[string]bool{
 	"POST /api/v1/admin/integrations/{integration_id}/sync":                            true,
 	"POST /api/v1/admin/ip-allowlist":                                                  true,
 	"POST /api/v1/admin/ip-allowlist/check":                                            true,
+	"POST /api/v1/admin/llm-settings/readiness":                                        true,
 	"POST /api/v1/admin/orgs":                                                          true,
 	"POST /api/v1/admin/orgs/{org_id}/feature-overrides":                               true,
 	"POST /api/v1/admin/orgs/{org_id}/invites":                                         true,

@@ -28,7 +28,9 @@ def main() -> None:
         from dev_health_ops.api.admin.schemas import TeamDiscoverResponse
 
         svc = TeamDiscoveryService(None, "venue-oracle-org")
-        result = await svc.discover_gitlab(token=token, group_path=group_path, url=base_url)
+        result = await svc.discover_gitlab(
+            token=token, group_path=group_path, url=base_url
+        )
         # The route's own response envelope (teams.py:285-293,318-324):
         # exactly one discover_gitlab call, then TeamDiscoverResponse from
         # its teams/truncated/warnings, serialized the way FastAPI does

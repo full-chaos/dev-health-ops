@@ -398,7 +398,7 @@ func TestResolveWorkItemTeamAttributions_NoTruncationSignalBelowLimit(t *testing
 }
 
 // TestDefaultRecordWorkItemTeamAttributionsTruncation_LogsAndIncrementsCounter
-// is CHAOS-3969 round 2's layer, ported from
+// is the production-body layer, ported from
 // TestDefaultRecordWorkUnitTeamAttributionsTruncation_LogsAndIncrementsCounter:
 // the resolveWorkItemTeamAttributions-level tests above swap
 // recordWorkItemTeamAttributionsTruncation WHOLESALE, which proves the

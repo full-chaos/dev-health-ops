@@ -4,10 +4,8 @@ package workgraph
 // dev_health_ops.api.graphql.resolvers.team_attribution.resolve_work_item_team_attributions
 // (ops/src/dev_health_ops/api/graphql/resolvers/team_attribution.py) -- the
 // per-WORK-ITEM team-attribution provenance CHAOS-2600 originally shipped.
-// teamattribution.go's own doc comment used to call this sibling
-// "DELIBERATELY left unported" (CHAOS-3969, no real caller at the time);
-// chris ruled otherwise (D2909, "Add them to graphql"), so it is ported
-// here.
+// teamattribution.go's doc comment calls this sibling unported; it is
+// ported here.
 //
 // Distinct from, and never a duplicate of, ResolveWorkUnitTeamAttributions
 // above: that function COLLAPSES a work unit's member work items' primary

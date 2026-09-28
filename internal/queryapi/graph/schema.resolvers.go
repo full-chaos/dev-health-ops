@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -627,9 +628,8 @@ func (r *queryResolver) FeatureFlagEvents(ctx context.Context, orgID string, fla
 }
 
 // WorkItemTeamAttributions is the resolver for the workItemTeamAttributions
-// field (CHAOS-7066). CHAOS-3969 left this sibling of
-// WorkUnitTeamAttributions unported (no web caller at the time); chris
-// ruled otherwise (D2909, "Add them to graphql"). Ports team_attribution.py's
+// field (CHAOS-7066). It is the per-work-ITEM provenance sibling of
+// WorkUnitTeamAttributions. Ports team_attribution.py's
 // resolve_work_item_team_attributions via
 // workgraph.ResolveWorkItemTeamAttributions -- the per-work-ITEM
 // provenance reader, distinct from WorkUnitTeamAttributions' per-work-UNIT
@@ -666,7 +666,16 @@ func (r *queryResolver) WorkItemTeamAttributions(ctx context.Context, orgID stri
 	// Python's OrgIdAuthExtension refuses an orgId argument that differs from
 	// the authenticated org before the resolver runs; do the same (fail
 	// closed) rather than silently answering for the authenticated org.
-	if orgID != "" && orgID != claims.OrgID {
+	if orgID == "" || orgID != strings.TrimSpace(orgID) {
+		return nil, &gqlerror.Error{
+			Message: "A valid organization ID is required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if orgID != claims.OrgID {
 		return nil, &gqlerror.Error{
 			Message: "Access denied: cannot query org '" + orgID + "'",
 			Path:    graphql.GetPath(ctx),

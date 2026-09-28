@@ -26,6 +26,17 @@ func TestWorkItemTeamAttributions_OrgIDMismatchIsRefused(t *testing.T) {
 		t.Fatalf("ClickHouse reached %d times for a foreign orgId, want 0", len(ch.calls))
 	}
 
+	for _, bad := range []string{"", " org-1"} {
+		ch := &scopeRecordingClient{}
+		_, err := (&Resolver{ClickHouse: ch}).Query().WorkItemTeamAttributions(ctx, bad, nil, nil)
+		if !workItemRefusedAs(err, "A valid organization ID is required") {
+			t.Fatalf("orgId %q: err = %v, want A valid organization ID is required", bad, err)
+		}
+		if len(ch.calls) != 0 {
+			t.Fatalf("orgId %q reached ClickHouse %d times, want 0", bad, len(ch.calls))
+		}
+	}
+
 	ch = &scopeRecordingClient{}
 	_, _ = (&Resolver{ClickHouse: ch}).Query().WorkItemTeamAttributions(ctx, "org-1", nil, nil)
 	if len(ch.calls) != 1 {

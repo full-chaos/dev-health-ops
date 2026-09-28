@@ -235,15 +235,7 @@ echo "=== fixtures generate (--overwrite-real-users) ==="
   --with-metrics \
   --with-work-graph
 
-assert_api_is_the_one_we_booted "before readiness preparation"
-echo "=== prepare_ask_dev_acceptance.py ==="
-ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
-TEST_SUPERUSER_EMAIL=admin@devhealth.example \
-TEST_SUPERUSER_PASSWORD=devhealth123 \
-ASK_DEV_ACCEPTANCE_ORG_IDS_OUTPUT="${log_dir}/acceptance-org-ids.json" \
-  "${venv_python}" \
-  "${ops_root}/scripts/acceptance/prepare_ask_dev_acceptance.py"
+assert_api_is_the_one_we_booted "before platform allowance preconditions"
 
 echo "=== PRECONDITION C: platform cost allowance cannot gate the measurement ==="
 # The 2026-08-07 10:03 run was degraded to UNMEASURED because 59 of 90 cases

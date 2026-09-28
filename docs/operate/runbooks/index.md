@@ -14,7 +14,6 @@ lifecycle: active
 - [Operator commands for the Go worker stack](operator-commands.md)
 - [Database or migration failure](database-or-migration-failure.md)
 - [Provider authentication failure](provider-authentication-failure.md)
-- [Ask Dev web proxy or browser failure](ask-dev-web-proxy-or-browser-failure.md)
 - [Performance or rate-limit failure](performance-or-rate-limit.md)
 - [Backup or restore failure](backup-or-restore-failure.md)
 - [Disaster recovery](disaster-recovery.md)

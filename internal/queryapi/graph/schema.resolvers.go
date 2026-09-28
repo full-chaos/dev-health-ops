@@ -634,10 +634,9 @@ func (r *queryResolver) FeatureFlagEvents(ctx context.Context, orgID string, fla
 // workgraph.ResolveWorkItemTeamAttributions -- the per-work-ITEM
 // provenance reader, distinct from WorkUnitTeamAttributions' per-work-UNIT
 // aggregate (see that function's own doc comment for why both stay).
-// Same "authorized org always wins" convention as WorkUnitTeamAttributions
-// above: orgID is the GraphQL argument, but the org actually queried is
-// claims.OrgID from the verified envelope, never the caller-supplied
-// value.
+// Org scoping: the org queried is claims.OrgID from the verified envelope;
+// an orgId argument that differs from it is refused with Python's
+// "Access denied: cannot query org" (see the guard below).
 //
 // Result cap: the list is capped at workgraph.workUnitTeamAttributionsMaxRows rows (shared with the work-unit reader),
 // exactly as Python's resolver is (the field is a bare list, so neither
@@ -657,6 +656,19 @@ func (r *queryResolver) WorkItemTeamAttributions(ctx context.Context, orgID stri
 	if !ok || claims.OrgID == "" {
 		return nil, &gqlerror.Error{
 			Message: "Authorization required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// Python's OrgIdAuthExtension refuses an orgId argument that differs from
+	// the authenticated org before the resolver runs; do the same (fail
+	// closed) rather than silently answering for the authenticated org.
+	if orgID != "" && orgID != claims.OrgID {
+		return nil, &gqlerror.Error{
+			Message: "Access denied: cannot query org '" + orgID + "'",
 			Path:    graphql.GetPath(ctx),
 			Extensions: map[string]interface{}{
 				"code": "AUTHORIZATION_ERROR",

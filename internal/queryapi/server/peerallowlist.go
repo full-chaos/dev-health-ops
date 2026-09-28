@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -78,18 +79,40 @@ func newAllowlistListener(inner net.Listener, allowed []*net.IPNet) net.Listener
 	return &allowlistListener{Listener: inner, allowed: allowed}
 }
 
+// peerIP parses a net.Conn.RemoteAddr().String() into the bare IP a CIDR
+// match compares against, stripped of its port and (for a link-local IPv6
+// peer) its zone identifier.
+//
+// A scoped address ("[fe80::1%eth0]:12345") carries a zone naming WHICH
+// interface it arrived on -- net.ParseIP does not accept that suffix at all
+// (returns nil for the whole string), so every such peer was refused
+// outright before this fix, even one genuinely inside an allowed CIDR
+// (codex r1, executed repro: a real fe80::/10 allowlist entry refused a
+// real link-local peer at that exact address). The zone says nothing a CIDR
+// match needs -- net.IPNet.Contains compares bytes, not scope -- so it is
+// stripped before parsing, never consulted. Returns nil if remoteAddr does
+// not parse as host:port or the host is not an IP at all.
+func peerIP(remoteAddr string) net.IP {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return nil
+	}
+	if zone := strings.IndexByte(host, '%'); zone >= 0 {
+		host = host[:zone]
+	}
+	return net.ParseIP(host)
+}
+
 func (l *allowlistListener) Accept() (net.Conn, error) {
 	for {
 		conn, err := l.Listener.Accept()
 		if err != nil {
 			return nil, err
 		}
-		host, _, splitErr := net.SplitHostPort(conn.RemoteAddr().String())
-		ip := net.ParseIP(host)
-		if splitErr == nil && ip != nil && cidrsPermit(l.allowed, ip) {
+		remote := conn.RemoteAddr().String()
+		if ip := peerIP(remote); ip != nil && cidrsPermit(l.allowed, ip) {
 			return conn, nil
 		}
-		remote := conn.RemoteAddr().String()
 		_ = conn.Close()
 		peerRefusedCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("listener", "query-internal-http")))
 		logPeerRefusalRateLimited(remote)

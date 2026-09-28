@@ -82,6 +82,53 @@ func TestPeerOutsideTheAllowlistIsRefusedBeforeAnyHandlerRuns(t *testing.T) {
 	}
 }
 
+// Codex r1 (executed repro against a real dho query-api process bound to a
+// real link-local interface): QUERY_API_INTERNAL_ALLOWED_CIDRS=fe80::/10
+// refused a real peer connecting from fe80::17ff:fe00:3876%enp0s10 -- a
+// scoped address genuinely inside that CIDR. net.ParseIP rejected the
+// zone-qualified string outright, so peerIP returned nil and cidrsPermit
+// was never even reached, exactly as if the peer had refused for being
+// outside the allowlist.
+func TestPeerIPStripsTheZoneFromALinkLocalIPv6Address(t *testing.T) {
+	ip := peerIP("[fe80::17ff:fe00:3876%enp0s10]:59218")
+	if ip == nil {
+		t.Fatal("peerIP returned nil for a scoped IPv6 address -- this is the P1 codex r1 found")
+	}
+	nets := mustCIDRs(t, "fe80::/10")
+	if !cidrsPermit(nets, ip) {
+		t.Fatalf("parsed IP %v is not permitted by fe80::/10, want it to be -- the zone must not survive into the parsed value", ip)
+	}
+	if !ip.Equal(net.ParseIP("fe80::17ff:fe00:3876")) {
+		t.Fatalf("peerIP = %v, want the zone-stripped address fe80::17ff:fe00:3876", ip)
+	}
+}
+
+// A scoped address OUTSIDE the allowlist must still be refused -- stripping
+// the zone must not turn the check into "any link-local address passes".
+func TestPeerIPZoneStrippingStillRefusesAnAddressOutsideTheAllowlist(t *testing.T) {
+	ip := peerIP("[fe80::dead:beef%enp0s10]:1234")
+	if ip == nil {
+		t.Fatal("peerIP returned nil, want a parsed address")
+	}
+	nets := mustCIDRs(t, "10.0.0.0/8")
+	if cidrsPermit(nets, ip) {
+		t.Fatal("a link-local address was permitted by an unrelated CIDR -- zone stripping must not widen the match")
+	}
+}
+
+// Ordinary (non-scoped) addresses, IPv4 and IPv6, are unaffected.
+func TestPeerIPHandlesOrdinaryAddressesUnchanged(t *testing.T) {
+	if ip := peerIP("127.0.0.1:80"); ip == nil || !ip.Equal(net.ParseIP("127.0.0.1")) {
+		t.Fatalf("peerIP(127.0.0.1:80) = %v", ip)
+	}
+	if ip := peerIP("[::1]:80"); ip == nil || !ip.Equal(net.ParseIP("::1")) {
+		t.Fatalf("peerIP([::1]:80) = %v", ip)
+	}
+	if ip := peerIP("not-a-host-port"); ip != nil {
+		t.Fatalf("peerIP(malformed) = %v, want nil", ip)
+	}
+}
+
 func mustCIDRs(t *testing.T, entries ...string) []*net.IPNet {
 	t.Helper()
 	nets := make([]*net.IPNet, 0, len(entries))

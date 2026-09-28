@@ -91,14 +91,12 @@ fi
 #
 # EXCLUDED, unclean under this pin (cleaning them is separate work):
 #   ci/check_go_containers.sh, ci/local_validate.sh, ci/run_live_backend_e2e.sh,
-#   ci/run_metrics_executed_proof.sh, and four under scripts/acceptance/
-#   (armed_corpus_boot.sh, resolve_acr_parent_compose.sh, run_ask_dev_compose.sh,
-#   run_ask_dev_provider_profile.sh).
+#   ci/run_metrics_executed_proof.sh, and two under scripts/acceptance/
+#   (resolve_acr_parent_compose.sh, run_ask_dev_provider_profile.sh).
 #
 # ALSO EXCLUDED, and for a different reason worth stating -- these are clean
 # under 0.11.0 but DIRTY under 0.9.0 and 0.10.0, i.e. they pass only because of the
 # narrowing described above:
-#   scripts/acceptance/armed_corpus_run.sh   (SC2015 under 0.9.0 AND 0.10.0)
 #   scripts/backup-standing.sh               (SC2015 under 0.9.0 AND 0.10.0)
 # 0.9.0 is named first deliberately: it is the version the runner actually
 # ships, so it is the one that makes these exclusions load-bearing today.
@@ -141,7 +139,6 @@ FILES=(
   "${ROOT}/ci/run_tests.sh"
   "${ROOT}/docker/init-extra-dbs.sh"
   "${ROOT}/scripts/acceptance/container_source_guard.sh"
-  "${ROOT}/scripts/acceptance/mint_ask_dev_world_snapshot.sh"
   "${ROOT}/scripts/acceptance/run_wave4_corpus.sh"
   "${ROOT}/scripts/build-images.sh"
   "${ROOT}/scripts/run_py_tool.sh"

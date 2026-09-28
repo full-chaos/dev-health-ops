@@ -39,7 +39,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GUARD_SCRIPT = ROOT / "scripts" / "acceptance" / "container_source_guard.sh"
-MINT_SCRIPT = ROOT / "scripts" / "acceptance" / "mint_ask_dev_world_snapshot.sh"
 _BASE_PATH = "/usr/bin:/bin"
 _TIMEOUT = 30
 
@@ -247,55 +246,3 @@ def _parse_bash_string_list(text: str, *, var_name: str) -> tuple[str, ...]:
         f"the script itself has drifted"
     )
     return tuple(line.strip() for line in match.group(1).splitlines() if line.strip())
-
-
-def test_shared_guard_and_mint_signature_lists_have_no_undocumented_drift() -> None:
-    """Review finding (post-merge-readiness pass on #1592): the shared boot
-    guard's `CONTAINER_SOURCE_GUARD_FILES` (5 files) and the mint script's
-    own `fixture_sources` (4 files, #1582/CHAOS-3544, unchanged here) are
-    two SEPARATE literals with nothing pinning them to each other -- and
-    they had ALREADY drifted (the shared list adds `dev_health_ops/__init__.py`
-    that mint's list has never had). Nothing caught that silently; this test
-    exists so nothing can again.
-
-    The relationship is EXACT and asserted both directions, not just
-    "some overlap": mint's list must be a subset of the shared list (every
-    fixture-generation file mint has always hashed is still hashed by every
-    ordinary boot), and the shared list's only addition over mint's must be
-    the one, deliberate, documented file.
-
-    Why `__init__.py` is shared-only, not backfilled into mint: it is not a
-    fixture-generation file at all -- CHAOS-3572 explicitly generalizes the
-    ordinary-boot signature "beyond the four fixture files" (the ticket's own
-    suggested shape) to anchor the comparison to the installed package
-    location itself (see container_source_guard.sh's own comment on
-    `CONTAINER_SOURCE_GUARD_FILES`), which the narrower one-off mint check
-    never needed and this task was not asked to widen. If mint's list ever
-    gains files beyond that anchor, or the shared list drops below it, this
-    assertion is the thing that goes red instead of the two lists silently
-    diverging further.
-    """
-
-    guard_text = GUARD_SCRIPT.read_text(encoding="utf-8")
-    mint_text = MINT_SCRIPT.read_text(encoding="utf-8")
-
-    shared_files = set(
-        _parse_bash_string_list(guard_text, var_name="CONTAINER_SOURCE_GUARD_FILES")
-    )
-    mint_files = set(_parse_bash_string_list(mint_text, var_name="fixture_sources"))
-
-    assert shared_files, "the shared guard's file list must not be empty"
-    assert mint_files, "the mint guard's file list must not be empty"
-
-    assert mint_files <= shared_files, (
-        f"every file mint hashes must still be hashed by the shared ordinary-"
-        f"boot guard -- mint hashes {sorted(mint_files - shared_files)} that "
-        f"the shared guard does not, so an ordinary boot would miss drift the "
-        f"mint would catch.\nshared={sorted(shared_files)}\nmint={sorted(mint_files)}"
-    )
-    assert shared_files - mint_files == {"dev_health_ops/__init__.py"}, (
-        f"the shared guard's only addition over mint's list must be the "
-        f"documented package-anchor file -- any other difference is "
-        f"undocumented drift, not a deliberate generalization.\n"
-        f"extra in shared: {sorted(shared_files - mint_files)}"
-    )

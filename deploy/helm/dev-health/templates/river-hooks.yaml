@@ -90,6 +90,17 @@ password key still exists -- an override could delete it.
 {{- end }}
 {{- $provisionKeda := and $anyAutoscale (ne $kedaRole "") }}
 {{- /*
+CHAOS-7102: query-api's own least-privilege role, opt-in the same way
+`RIVER_KEDA_READONLY_DATABASE_ROLE` is above but gated on the role NAME
+being set rather than a separate autoscaling flag -- this role has no
+analogous "is this feature on" signal of its own, and `dho migrate
+roles`/rivermigrate.queryAPILeg already treat a blank value as the only
+"not opted in" signal that exists. See deploy/go-workers/README.md
+"query-api role" for the full rollout order this and the river-migrate
+Job's own QUERY_API_DATABASE_ROLE env below are steps 2 and 3 of.
+*/}}
+{{- $provisionQueryAPI := ne .Values.config.QUERY_API_DATABASE_ROLE "" }}
+{{- /*
 CHAOS-6951: this Job runs `dho migrate roles` (CHAOS-6901), so, like the River
 hook below, its image must be a pinned operator image carrying dho as the
 entrypoint. It is provisionRoles.image, else riverMigrate.image, else
@@ -108,7 +119,7 @@ local dev Never onto this PINNED REGISTRY image and make it unpullable.
 {{- $rolesPullPolicy := .Values.migrations.hook.provisionRoles.pullPolicy | default .Values.migrations.hook.riverMigrate.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default "IfNotPresent" }}
 {{- include "dev-health.pinnedOperatorImageCheck" (dict "context" . "image" $rolesImage "pullPolicy" $rolesPullPolicy "flagLabel" "the provision-roles hook image (migrations.hook.provisionRoles.image, else migrations.hook.riverMigrate.image, else migrations.hook.routeActivate.image)" "verb" "`dho migrate roles`") }}
 {{- if and (not $poolerSecret.create) (not $poolerSecret.externalSecretName) }}
-{{- fail "migrations.hook.provisionRoles.enabled=true needs a Secret carrying the RIVER_*_DATABASE_PASSWORD keys (three, plus RIVER_KEDA_READONLY_PASSWORD when KEDA autoscaling is enabled): either set goWorkers.pgbouncer.secret.create=true, or point goWorkers.pgbouncer.secret.externalSecretName at a pre-created one. The provisioning Job sets each role's password from that Secret, and a role created with a password the poolers do not share cannot authenticate." }}
+{{- fail "migrations.hook.provisionRoles.enabled=true needs a Secret carrying the RIVER_*_DATABASE_PASSWORD keys (three, plus RIVER_KEDA_READONLY_PASSWORD when KEDA autoscaling is enabled and QUERY_API_DATABASE_PASSWORD when config.QUERY_API_DATABASE_ROLE is set): either set goWorkers.pgbouncer.secret.create=true, or point goWorkers.pgbouncer.secret.externalSecretName at a pre-created one. The provisioning Job sets each role's password from that Secret, and a role created with a password the poolers do not share cannot authenticate." }}
 {{- end }}
 {{- /*
 Which Secret this Job mounts, and why it is not simply the pooler Secret.
@@ -151,6 +162,9 @@ stringData:
   RIVER_COORDINATOR_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD is required when migrations.hook.provisionRoles.enabled=true" $poolerSecret.data.RIVER_COORDINATOR_DATABASE_PASSWORD | quote }}
 {{- if $provisionKeda }}
   RIVER_KEDA_READONLY_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_KEDA_READONLY_PASSWORD is required when migrations.hook.provisionRoles.enabled=true and a goWorkers group has autoscaling.enabled=true" $poolerSecret.data.RIVER_KEDA_READONLY_PASSWORD | quote }}
+{{- end }}
+{{- if $provisionQueryAPI }}
+  QUERY_API_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.QUERY_API_DATABASE_PASSWORD is required when config.QUERY_API_DATABASE_ROLE is set -- chris/prod-ops own this value (CHAOS-7102 rollout step 2); never generate or guess it" $poolerSecret.data.QUERY_API_DATABASE_PASSWORD | quote }}
 {{- end }}
 {{- end }}
 {{- /*
@@ -267,6 +281,15 @@ spec:
                 secretKeyRef:
                   name: {{ $provisionSecretName }}
                   key: RIVER_KEDA_READONLY_PASSWORD
+{{- end }}
+{{- if $provisionQueryAPI }}
+            - name: QUERY_API_DATABASE_ROLE
+              value: {{ .Values.config.QUERY_API_DATABASE_ROLE | quote }}
+            - name: QUERY_API_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $provisionSecretName }}
+                  key: QUERY_API_DATABASE_PASSWORD
 {{- end }}
           envFrom:
             - secretRef:

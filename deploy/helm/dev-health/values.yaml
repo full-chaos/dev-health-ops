@@ -544,6 +544,10 @@ goWorkers:
         RIVER_QUEUE_DATABASE_PASSWORD: "change-me-river-queue-password"
         RIVER_COORDINATOR_DATABASE_PASSWORD: "change-me-river-coordinator-password"
         RIVER_KEDA_READONLY_PASSWORD: "change-me-river-keda-readonly-password"
+        # CHAOS-7102: only read when config.QUERY_API_DATABASE_ROLE is set
+        # (river-hooks.yaml's $provisionQueryAPI); harmless unused placeholder
+        # otherwise, same convention as the four above it.
+        QUERY_API_DATABASE_PASSWORD: "change-me-query-api-password"
   # -- The one image every group runs: dho, whose first argument (each group's
   #    `subcommand`) selects the service -- `worker`, `reconciler`,
   #    `scheduler` or `stream-runner`. A group's own `image` overrides it (the

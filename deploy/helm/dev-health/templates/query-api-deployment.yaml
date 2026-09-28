@@ -104,6 +104,21 @@ spec:
             */}}
             - name: GO_API_REGISTRY_POSTGRES_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: GO_API_REGISTRY_POSTGRES_URI}}
+            {{- /*
+            CHAOS-7102: the role GO_API_REGISTRY_POSTGRES_URI's DSN authenticates
+            AS, once an operator has provisioned it (rollout steps 2-4,
+            deploy/go-workers/README.md "query-api role") and repointed that DSN
+            at the role's own direct connection. query-api's own posture check
+            (/readyz) gates on this env matching pg_stat_activity.usename for the
+            registry pool -- a role name here with the DSN still on the owner
+            role leaves the pod permanently NotReady, by design (fail closed).
+            Plain value, not a Secret: the role name is not a credential; only
+            the DSN's password is. Empty (the default) is a real no-op --
+            query_route.go's own readiness check treats an unset role the same
+            as "not opted in yet".
+            */}}
+            - name: QUERY_API_DATABASE_ROLE
+              value: {{ .Values.config.QUERY_API_DATABASE_ROLE | default "" | quote }}
             - name: GO_API_ENVELOPE_JWKS_PATH
               value: {{ .Values.queryApi.envelope.jwksPath | quote }}
             - name: GO_API_ENVELOPE_ISSUER

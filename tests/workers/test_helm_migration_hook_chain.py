@@ -38,6 +38,7 @@ _RELEASE = "hook-chain"
 _MIGRATE = f"{_RELEASE}-dev-health-migrate"
 _PROVISION = f"{_RELEASE}-dev-health-provision-roles"
 _RIVER = f"{_RELEASE}-dev-health-river-migrate"
+_QUERY_API = f"{_RELEASE}-dev-health-query-api"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("helm") is None, reason="helm is not installed"
@@ -58,6 +59,14 @@ def _jobs(*sets: str) -> dict[str, dict]:
         doc["metadata"]["name"]: doc
         for doc in _render(*sets)
         if doc.get("kind") == "Job"
+    }
+
+
+def _deployments(*sets: str) -> dict[str, dict]:
+    return {
+        doc["metadata"]["name"]: doc
+        for doc in _render(*sets)
+        if doc.get("kind") == "Deployment"
     }
 
 
@@ -365,8 +374,13 @@ def _river_env(jobs: dict[str, dict]) -> dict[str, dict]:
     return {item["name"]: item for item in container["env"]}
 
 
+def _provision_env(jobs: dict[str, dict]) -> dict[str, dict]:
+    container = jobs[_PROVISION]["spec"]["template"]["spec"]["containers"][0]
+    return {item["name"]: item for item in container["env"]}
+
+
 def test_query_api_database_role_defaults_to_an_empty_noop() -> None:
-    """CHAOS-7113/CHAOS-6804 rollout step 1: shipping this env wire must not,
+    """CHAOS-7102/CHAOS-6804 rollout step 1: shipping this env wire must not,
     by itself, change what `dho migrate river` does on any existing
     deployment. rivermigrate.queryAPILeg treats a blank value as "apply
     nothing" (returns ("", nil, nil)), so the chart's own default must stay
@@ -379,8 +393,8 @@ def test_query_api_database_role_defaults_to_an_empty_noop() -> None:
 
 def test_query_api_database_role_is_wired_through_to_the_river_job() -> None:
     """Rollout step 3 (deploy/go-workers/README.md "query-api role"): once an
-    operator has created the login (step 2, out of band) and sets this
-    value, `dho migrate river` must actually receive it as plain env -- no
+    operator has created the login (step 2) and sets this value,
+    `dho migrate river` must actually receive it as plain env -- no
     secretKeyRef, since this Job only grants an EXISTING role and never
     creates one or needs its password.
     """
@@ -392,20 +406,73 @@ def test_query_api_database_role_is_wired_through_to_the_river_job() -> None:
     assert "valueFrom" not in item
 
 
-def test_query_api_database_role_is_absent_from_the_provisioning_job(
-    tmp_path: Path,
-) -> None:
-    """Rollout step 2 creates the login out of band (`dho migrate roles` run
-    directly, or the provisioning script) -- deliberately NOT through this
-    chart's weight-5 provisioning Job, "until the chart moves" (the README's
-    own words). Wiring the role into the weight-10 river-migrate Job must not
-    leak it into the weight-5 Job too, which would let a role that was never
-    actually created reach a grant statement that assumes it exists.
+def test_query_api_database_role_is_absent_from_the_provisioning_job_by_default() -> (
+    None
+):
+    """Unlike the river-migrate Job above (which always renders the env,
+    empty-string no-op included, to match RIVER_COORDINATOR_DATABASE_ROLE's
+    unconditional style), the weight-5 provisioning Job only needs this at
+    all when a login must actually be created -- rendering an unconditional
+    secretKeyRef to a key that may not exist in a pre-created external Secret
+    would break every deployment that never opted in. Gated the same way
+    RIVER_KEDA_READONLY_DATABASE_ROLE is gated on autoscaling, just on the
+    role value itself, since query-api has no other "is this on" signal.
     """
-    job = _provision_job(tmp_path)
-    container = job["spec"]["template"]["spec"]["containers"][0]
-    names = {item["name"] for item in container["env"]}
-    assert "QUERY_API_DATABASE_ROLE" not in names, sorted(names)
+    env = _provision_env(_jobs(*_BOTH_ON))
+    assert "QUERY_API_DATABASE_ROLE" not in env, sorted(env)
+    assert "QUERY_API_DATABASE_PASSWORD" not in env, sorted(env)
+
+
+def test_query_api_database_role_is_wired_through_to_the_provisioning_job() -> None:
+    """Rollout step 2 (deploy/go-workers/README.md "query-api role"): once an
+    operator sets config.QUERY_API_DATABASE_ROLE, `dho migrate roles` must
+    receive both the role name (plain env, not a credential) and its
+    password (secretKeyRef into the same provision-roles Secret the three
+    required roles' passwords already come from) so it can actually create
+    the login -- this is the piece that used to be "out of band... until the
+    chart moves" in the README; CHAOS-7102 is that move.
+    """
+    env = _provision_env(
+        _jobs(*_BOTH_ON, "config.QUERY_API_DATABASE_ROLE=devhealth_query_api")
+    )
+    role = env["QUERY_API_DATABASE_ROLE"]
+    assert role["value"] == "devhealth_query_api"
+    assert "valueFrom" not in role
+    password = env["QUERY_API_DATABASE_PASSWORD"]
+    assert "value" not in password
+    assert password["valueFrom"]["secretKeyRef"]["key"] == "QUERY_API_DATABASE_PASSWORD"
+
+
+def _query_api_env(*sets: str) -> dict[str, dict]:
+    deployments = _deployments("queryApi.enabled=true", *sets)
+    container = deployments[_QUERY_API]["spec"]["template"]["spec"]["containers"][0]
+    return {item["name"]: item for item in container["env"]}
+
+
+def test_query_api_deployment_database_role_defaults_to_an_empty_noop() -> None:
+    """Rollout step 4's other half: query-api's own /readyz posture check
+    (query_route.go) treats an unset role the same "not opted in" way the
+    migrate-side leg does, so the Deployment's own default must also stay
+    empty -- setting a real role name here before the login exists and
+    GO_API_REGISTRY_POSTGRES_URI is repointed would just leave every pod
+    NotReady.
+    """
+    env = _query_api_env()
+    assert env["QUERY_API_DATABASE_ROLE"]["value"] == ""
+
+
+def test_query_api_deployment_database_role_is_wired_through() -> None:
+    """Rollout step 4: once steps 2-3 have run and an operator repoints
+    GO_API_REGISTRY_POSTGRES_URI at the new role's direct DSN (a Secret
+    value this chart never sees), the Deployment must still carry the role
+    NAME as a first-class, non-secret env -- not left to freeform
+    queryApi.extraEnv -- so the posture check's identity assertion has
+    something to compare against.
+    """
+    env = _query_api_env("config.QUERY_API_DATABASE_ROLE=devhealth_query_api")
+    item = env["QUERY_API_DATABASE_ROLE"]
+    assert item["value"] == "devhealth_query_api"
+    assert "valueFrom" not in item
 
 
 def test_role_passwords_never_appear_in_the_rendered_manifest() -> None:

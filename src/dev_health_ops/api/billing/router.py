@@ -1,4 +1,7 @@
-"""Billing endpoints: Stripe webhooks, checkout, portal, and entitlements."""
+"""Billing endpoints: checkout, portal, entitlements, refunds, invoices and
+billing audit. The Stripe webhook route lived here too until CHAOS-7033
+deleted it as dead code (ingress never routed it to this app; the Go port
+in internal/api/billing is the only plane that ever served it)."""
 
 from __future__ import annotations
 

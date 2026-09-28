@@ -99,7 +99,6 @@ file-level comment above.
 {{- end }}
 {{- $mintOrg := required "migrations.hook.goApiRoutingTools.mintOrg is required whenever queryApi.enabled=true -- a disposable operator/fixture org, never a real customer org" $tools.mintOrg }}
 {{- $queryApiURL := include "dev-health.queryApiURL" . }}
-{{- $postgresSecretName := include "dev-health.goPgbouncerSecretName" . }}
 {{- $envelopeSecretName := include "dev-health.secretName" . }}
 ---
 apiVersion: batch/v1
@@ -187,11 +186,22 @@ spec:
               value: {{ $queryApiURL | quote }}
             - name: RELEASE_NAME
               value: {{ .Release.Name | quote }}
+            # D2831 (#3369 r2 P1): these hooks read/write go_api_candidate_build/
+            # go_api_routing_state/go_api_proof_run -- the SAME tables query-api's
+            # own GO_API_REGISTRY_POSTGRES_URI DSN is documented to be the only
+            # correct source for (values.yaml's own comment on that key: "What
+            # must NOT happen instead: granting these three tables to
+            # RIVER_DOMAIN_DATABASE_ROLE so the existing pooler role can read
+            # them ... the shape of a prior multi-day outage"). The Go pgbouncer
+            # Secret's POSTGRES_URI (below, was the source here) IS that
+            # RIVER_DOMAIN_DATABASE_ROLE DSN -- reproduced live: `permission
+            # denied for table go_api_routing_state`. Source from the SAME
+            # Secret+key query-api-deployment.yaml already uses instead.
             - name: POSTGRES_URI
               valueFrom:
                 secretKeyRef:
-                  name: {{ $postgresSecretName }}
-                  key: POSTGRES_URI
+                  name: {{ $envelopeSecretName }}
+                  key: GO_API_REGISTRY_POSTGRES_URI
             - name: GO_API_ENVELOPE_ISSUER
               value: {{ .Values.queryApi.envelope.issuer | quote }}
             - name: GO_API_ENVELOPE_AUDIENCE
@@ -257,11 +267,14 @@ spec:
               value: {{ $queryApiURL | quote }}
             - name: RELEASE_NAME
               value: {{ .Release.Name | quote }}
+            # D2831 (#3369 r2 P1): same fix as routing-carry above -- source
+            # from the role that owns the registry tables, never the Go
+            # pgbouncer Secret's RIVER_DOMAIN_DATABASE_ROLE DSN.
             - name: POSTGRES_URI
               valueFrom:
                 secretKeyRef:
-                  name: {{ $postgresSecretName }}
-                  key: POSTGRES_URI
+                  name: {{ $envelopeSecretName }}
+                  key: GO_API_REGISTRY_POSTGRES_URI
             - name: GO_API_ENVELOPE_ISSUER
               value: {{ .Values.queryApi.envelope.issuer | quote }}
             - name: GO_API_ENVELOPE_AUDIENCE

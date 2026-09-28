@@ -196,6 +196,13 @@ def test_inventory_row_count_matches_the_baseline():
     change -- chris's ruling ("dead route"), the whole surface is gone, not
     migrated. The rows stand at 320 (272 REST + 48 GraphQL), recounted from
     the file.
+    = 319, -1 REST under CHAOS-7033: `POST /api/v1/billing/webhooks/stripe`
+    is deleted with its row in the same change -- the Python Stripe webhook
+    route was already unreachable in production (ingress routes this path
+    to the Go api only) and CHAOS-7032 froze its 4 venue-oracle tests onto
+    recorded Python answers first, so the coverage those rows measured
+    survives in Go. The rows stand at 319 (271 REST + 48 GraphQL),
+    recounted from the file.
 
     MERGE HAZARD, recorded because it has now nearly landed silently more
     than once. Each change edited these same asserts, and each was correct
@@ -216,9 +223,9 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 272, len(rest)
+    assert len(rest) == 271, len(rest)
     assert len(graphql) == 48, len(graphql)
-    assert len(rows) == 320, len(rows)
+    assert len(rows) == 319, len(rows)
 
 
 def test_no_graphql_subscription_is_profiled():
@@ -296,7 +303,10 @@ def test_classification_summary_matches_the_baseline():
     # deleted dev* GraphQL field rows were ALL protected (ops_access_token_hs256
     # / the same GraphQL-wide auth, respectively); none were public. Recounted
     # from the file.
-    assert len(protected) == 295, len(protected)
+    # - 1 more under CHAOS-7033: the deleted `POST /api/v1/billing/webhooks/
+    # stripe` row was protected (stripe_webhook_signature). Recounted from
+    # the file.
+    assert len(protected) == 294, len(protected)
     # 20 + the four fastapi doc routes + /metrics.
     assert len(public) == 25, len(public)
     assert len(protected) + len(public) == len(rows)

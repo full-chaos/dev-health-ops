@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -145,39 +144,6 @@ async def test_create_refund_validation_errors(client: AsyncClient):
         )
 
     assert response.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_refund_webhook_event_delegates_to_service(client: AsyncClient):
-    event = SimpleNamespace(
-        type="charge.refund.updated",
-        data=SimpleNamespace(object=SimpleNamespace(id="re_test_123")),
-    )
-    with (
-        patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
-        patch(
-            "dev_health_ops.api.billing.router.get_webhook_secret",
-            return_value="whsec_test",
-        ),
-        patch("dev_health_ops.api.billing.router.get_postgres_session") as mock_db,
-        patch(
-            "dev_health_ops.api.billing.router.refund_service.process_webhook",
-            new=AsyncMock(),
-        ) as mock_process,
-    ):
-        mock_client = MagicMock()
-        mock_client.construct_event.return_value = event
-        mock_client_fn.return_value = mock_client
-        mock_db.return_value = _DummySessionCtx(MagicMock())
-
-        response = await client.post(
-            "/api/v1/billing/webhooks/stripe",
-            content=b"{}",
-            headers={"stripe-signature": "valid"},
-        )
-
-    assert response.status_code == 200
-    mock_process.assert_awaited_once()
 
 
 @pytest.mark.asyncio

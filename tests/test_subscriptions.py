@@ -118,34 +118,6 @@ async def test_subscription_service_idempotency_skips_duplicate_event() -> None:
 
 
 @pytest.mark.asyncio
-async def test_webhook_handles_new_subscription_events(authed_client) -> None:
-    event = _make_stripe_event("customer.subscription.created")
-
-    with (
-        patch(
-            "dev_health_ops.api.billing.router.get_webhook_secret",
-            return_value="whsec_test",
-        ),
-        patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
-        patch(
-            "dev_health_ops.api.billing.router._process_subscription_event"
-        ) as mock_process,
-    ):
-        mock_client = MagicMock()
-        mock_client.construct_event.return_value = event
-        mock_client_fn.return_value = mock_client
-
-        resp = await authed_client.post(
-            "/api/v1/billing/webhooks/stripe",
-            content=b"{}",
-            headers={"stripe-signature": "valid"},
-        )
-
-        assert resp.status_code == 200
-        mock_process.assert_awaited_once_with(event)
-
-
-@pytest.mark.asyncio
 async def test_subscription_endpoints(authed_client) -> None:
     SubscriptionService = _subscription_service_cls()
     org_id = str(uuid.uuid4())

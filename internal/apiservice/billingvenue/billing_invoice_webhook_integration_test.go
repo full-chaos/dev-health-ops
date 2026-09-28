@@ -40,6 +40,7 @@ const invoiceWebhookSubscription = "sub_1UJ8n0EIXptJX86ewrDPuKoH"
 func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
+	golden := venueoracle.OpenGolden(t, webhookGoldenSpec(t.Name(), goldenDigest(t.Name())))
 	fake := newFakeStripe()
 	goStripe := httptest.NewServer(fake.plane("go"))
 	t.Cleanup(goStripe.Close)
@@ -51,7 +52,7 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 	}
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			if _, err := admin.Exec(ctx, `INSERT INTO subscriptions (id, org_id, billing_plan_id, billing_price_id, stripe_subscription_id,
@@ -78,9 +79,14 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 		StripeSecretKey:    loaded.StripeSecretKey, APIBilling: loaded.APIBilling,
 		StripeWebhookSecret: loaded.StripeWebhookSecret, LicensePrivateKey: loaded.LicensePrivateKey,
 	}
-	base := startBillingVenueAPI(t, ctx, cfg, venue, goStripe.URL)
+	// Prime the golden's lifecycle (recordedAt needs at least one Python call
+	// first) so the webhook signatures below are stamped from the recorded
+	// clock, not the instant a later frozen replay happens to run at.
+	golden.Python(t, venue, []venueoracle.Request{})
+	goNow := recordedAt(t, golden, time.Now().UTC())
+	base := startBillingVenueAPI(t, ctx, cfg, venue, goStripe.URL, func() time.Time { return goNow })
 
-	stamp := time.Now().Unix() + 200
+	stamp := goNow.Unix() + 200
 	orgA, orgB, orgD := seed.orgA.String(), seed.orgB.String(), seed.orgD.String()
 	var requests []venueoracle.Request
 	send := func(name, eventID, eventType string, edit func(object map[string]any)) {
@@ -155,7 +161,17 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 			object["currency"], object[field] = "jpy", 2147483648
 		})
 	}
-	for field, value := range map[string]any{"amount": 2147483648, "quantity": 2147483648, "negative amount": -2147483649} {
+	// A slice, not a map: under the golden pattern (CHAOS-7032) the recorded
+	// and replayed requests are matched by POSITION across two separate
+	// processes, and Go's map iteration order is randomized per process --
+	// range over a map here sent this case's three sub-cases in a different
+	// order on record vs. replay, so the golden's request 22 stopped lining
+	// up with what a later run actually sent (found: attempt 7 replay).
+	for _, item := range []struct {
+		field string
+		value any
+	}{{"amount", 2147483648}, {"quantity", 2147483648}, {"negative amount", -2147483649}} {
+		field, value := item.field, item.value
 		send("line "+field+" beyond int4", "evt_in_line_"+strings.ReplaceAll(field, " ", "_"), "invoice.finalized", func(object map[string]any) {
 			invoice("in_line_"+strings.ReplaceAll(field, " ", "_"), "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other")(object)
 			object["lines"].(map[string]any)["data"].([]any)[0].(map[string]any)[strings.TrimPrefix(field, "negative ")] = value
@@ -277,17 +293,25 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 		"billing:invoice_receipt:"+orgB+":evt_in_sub_paid"), `{"amount_cents": 1000, "currency": "usd", "invoice_url": "https://invoice.stripe.test/venue"}`)
 
 	// The Python plane: the named divergence (its handler 500s and writes no
-	// invoice).
-	python := venue.ServePython(t, requests)
+	// invoice). No response here is compared with a Go answer (nothing above
+	// re-sent these requests to Go), so each is declared inspected instead.
+	python := golden.Python(t, venue, requests)
+	golden.Consumed(t, python...)
 	statuses := map[int]int{}
 	for _, response := range python {
 		statuses[response.Status]++
 	}
-	pythonRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), `SELECT count(*) FROM invoices WHERE stripe_invoice_id LIKE 'in\_%'`)
+	pythonRows := golden.InspectRows(t, "invoice_count", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), `SELECT count(*) FROM invoices WHERE stripe_invoice_id LIKE 'in\_%'`)
+	})
 	receipt += fmt.Sprintf("python plane (named divergence): answers %v, invoice rows %s\n", statuses, pythonRows)
 	if pythonRows != "0" {
 		t.Errorf("the Python plane wrote invoices (%s): the named divergence no longer holds; compare the planes instead", pythonRows)
 	}
 	t.Log("\n" + receipt)
+	// No Go answer is compared against a Python one here (see the comment
+	// above): nothing in this test calls venueoracle.Diff.
+	golden.SkipDiff(t)
 	venueoracle.WriteGoOnlyProof(t, "Go applies test-mode invoice events (rows, status order, org resolution, notifications); the Python handler 500s and writes nothing (CHAOS-6526)")
+	golden.Finish(t)
 }

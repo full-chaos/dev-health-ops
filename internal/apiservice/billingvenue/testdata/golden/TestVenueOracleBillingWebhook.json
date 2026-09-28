@@ -1,0 +1,2094 @@
+{
+  "header": {
+    "test": "TestVenueOracleBillingWebhook",
+    "python_build": "c3a755abd3b30ba41625178c6bb00e1e2c219fcb",
+    "producer_digest": "593bfd8c0effcfa724b10a3b0693c70faec29674020088362a4af2ad1d85568a",
+    "recipe": "git worktree add --detach \u003cdir\u003e c3a755abd3b30ba41625178c6bb00e1e2c219fcb; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestVenueOracleBillingWebhook$' ."
+  },
+  "requests": [
+    {
+      "name": "checkout: team (org A, existing license)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "818865b9d54125686dff1ccd16e731b853d1780bacf813ce92a225f6661676d5",
+      "request_headers_sha256": "2ba1264a552168181332901685b4723afbf7a1aa58b32ec9a5a7262a606b48ab",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d9c9a5c7-363d-4f5d-922e-a08270d08d64"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: enterprise (org D, no license)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "6854d9ceafd8d68d590266082c6ed4f9495a2adf8935b45d2be623268772e487",
+      "request_headers_sha256": "bee5398ad4693658fcd8b35d70c19d247958ea27b80dc122d22b0e62c40546ab",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "22b21bbd-70f2-4120-8188-9e26e3bee146"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: unknown price",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "9fac8b3ccac8265a26277167fc8b1c2e74b5e93f2f12ad5f81f3edd35db95656",
+      "request_headers_sha256": "98ef354f3f69240ea4dda32e640c4b6bccebe0d373ef483b0db196d629f57fce",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2bd3a871-bf6b-4c29-9565-2685722b7aba"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: null price then enterprise",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "b7da8e44d151867d413a05abad185801edce3d16e86db6567e5a2abfb1e507a5",
+      "request_headers_sha256": "2ca33225fb39a5644aa36c2b339b0e51425e54bf5080cf16b7591d016698c6fe",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "de60724d-227c-4715-b2ef-975c2c31aa7f"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: item without price",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "8ae5f014567a41e2ef673045eedfb8d1e90c8e8b4864ffbcaf17a50a1a7557bf",
+      "request_headers_sha256": "8ec86db98bda8d87036264e329c7a187db5b81c90f5df7505312997f14f02bcb",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "13a79a96-5b66-49aa-88d2-9fab4b319980"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: first recognized price wins",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "62319173be58ecddffb4c827529f4bcfd2e7a3fc265c6470fba49d164bc22fcf",
+      "request_headers_sha256": "97c9520b3bc450a6574844b9a43ef79cf84de9b28d7e4cd4ee657517040c8fd4",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f32a4bbf-f606-44eb-abee-774b8a271f68"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: blank price id then enterprise",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "78376f80599099ee291135fb22124a6c0e69d54ebe93c2c325f932e0b77ba111",
+      "request_headers_sha256": "e54d1c7071f635d7c1e5947f00b4f2dbead7b392f22473b679664bf82078dbdc",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d5c74b40-18b0-4565-a6a1-96b29d2e3053"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: line items fail",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "a9c9b23f2372e162b451f87a203e0fe7a804ee18ddfd1d5bcf52f0bb1add461e",
+      "request_headers_sha256": "18112e22c95212bb062a5f023fab9e4f0615f7697f11ad46000977242fc832e3",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a0a647fe-e06a-4822-9d28-88ea3e786cf4"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: no line items",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "482be2ac5141afa6ae88a40bc46c489535ac0871d21d6a33b05ed55b76ebc1ed",
+      "request_headers_sha256": "8ecf60af1a2ba6aa1cb0f7b7fb4456bff5cb7c1c54aab634b38dc15d1f82de8e",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e1385ba8-45cb-47ea-9f73-3709b8880dd3"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: no session id",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "5e0556a23fa227e7ff0387cfb8f61634d0cde8b6520d61ca27547641ad0dfe1b",
+      "request_headers_sha256": "460e724eccb4509496fcdccaa67f3cfc830498d3d431a639e2068c56c280cd53",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "611bbd74-1fe3-490e-8526-d4b96a37a181"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: manual org",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "ba45b24f249ed6e8dee99341a8f56020c93200c93f9e5c24a31204231b7a132d",
+      "request_headers_sha256": "d288dc019367f429a0d140184b06ad91561d457c80ad1b123f62b4c023513ab0",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f3a6b6f9-6fae-4d21-b3e9-bd8848a57c5e"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: org not a uuid",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "350ab458b8c7a604d5091d8cc982b65255cf2e4e8d672425063a74f00a27e7af",
+      "request_headers_sha256": "b3c51abf95a84c98e0f653a724b063d3bf983f4f023cac842ff56cae7dd01dbf",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4b3c45d3-e4fd-4354-9063-a49214a26a6c"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: unknown org",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "3ff5fab0836feb78befe21c3b34bc994713f7717d8a0b1f45ea80013e8ef0da7",
+      "request_headers_sha256": "c568aab0c08cd3d520d866a415becbb08ec3c3942ef06450b15d92573314aca7",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "acdea40d-27fa-435a-a8d4-0f62b40ee7d5"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: no org_id",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "399a2243eefbe2296f34d606e181e9310fe689a2470aaf1b1039140c88909a74",
+      "request_headers_sha256": "c63dfaef420434c4ec2025c40d2bc087d8716f22e915df6f414c11ac880c46d6",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cca9b585-c4e5-4adf-8db9-f2fcc5a292a4"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: empty org_id",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "bfa1d684fb82ac28400904b811c46122c0f8b4c636a9b15d55acc4eb8eaf42b5",
+      "request_headers_sha256": "83c0db4d75adf24c12bc9ffcf5da5ced82d793a0de188c9415e53e5dca538490",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a8c1e4f8-d4bf-4987-afa0-750a920a4c2f"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: metadata null",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "b4c21c9720e5c4a7b8a63f40c22cc45f1733b487def6daa9bc4c1e27cd11345a",
+      "request_headers_sha256": "32b196a18fbc866c582f630d69bc424e13b8490d1b36da05e315184a9f402fdc",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "checkout: metadata a string",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "1c8757e74271719806f8f19cea4416f31009187568660059eb682162b105e4b9",
+      "request_headers_sha256": "d27674af41eca6a4a826388c90c271bb8042eeea4640a99a6228859e3fa2d10e",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "checkout: no customer",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "f163d91eaa92388f64ce814ace89465d8903dfc25e7e37f3e91739dc1492a58c",
+      "request_headers_sha256": "e5c41baa30496d0c60ed6fe6234450a1a457af842b2cb54d9596451ed2a81164",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "da5415aa-c55f-48e9-9c30-0e2e320ee62b"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: empty customer",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "6b5979068126566db254b906e2a46d224b88183091b985f183fcf2d8b489a608",
+      "request_headers_sha256": "da15a3fd8af654439818b3f83e3965fc35e4e7954f7a1cb370cfe85f4b220f40",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0dcd424e-8ca5-4ff6-ac91-01db33cbd5a8"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "checkout: object not a dict",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "1edcd224dc794b39469cc494b8f511e19fd9bb5244a4cd108e444383067103d0",
+      "request_headers_sha256": "c6245c97655661145d498ddc95965352b6d443832d36efbec0d619dc00277ffe",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "98ed4a24-9c88-4e65-9d51-e85159567d47"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "invoice.payment_failed: no org",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "60440f22fcea7ae9bf352182cdabf1e2cf9989f868894e8fd9e895a1a01195d9",
+      "request_headers_sha256": "0c4f29d602486367df7d05a95666817e004ab591f992f47875a301abed1a8497",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "05e3c82c-7729-4d1f-ac0d-1370f04d3751"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "invoice.payment_failed: metadata null",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e9db1d12f3156baad7f59ef747f2ffc22bb38117c74dff99f564e03dc35bec31",
+      "request_headers_sha256": "e2192581762c980d4208a93a609600db3321795435ef691831d2ccf837ccb886",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "79888db1-fa99-405b-98f6-791f61fe49ae"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "invoice.payment_failed: empty org_id",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "0c6c3a3a1397ed81b8570e921fe8ba6c4e45232e95f10888cf5c120c5dc078ec",
+      "request_headers_sha256": "b395f34020aa93bed21135de147ad34316b6456b50f19bf1f01c1494246e38c8",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3db03ec6-bb50-47a0-927d-ee9275e72aa1"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: enterprise, trialing (org 1)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "3c67c9a22d85233f215443f933ec36d680b17c4816c5fd23b86c37fe8e93f749",
+      "request_headers_sha256": "d05d1eb0942b4567f8729ea7321d3d36c202af786d227c9626e7b5d15b541a69",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b811926a-ac85-4063-80b9-73146752e796"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.updated: seeded enterprise price, dates as strings (org 1)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "22765136a575ce22126a16f18619dc42b884fd38500db6f786a80db71b2c1e7e",
+      "request_headers_sha256": "3aaa2319e28ed76a6c3fa75cdd837b4087fce7375361e844f11465a041e17b69",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2deb9332-6ca5-482c-95c1-5eeb795f48cb"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.updated: the same event again (org 1)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "22765136a575ce22126a16f18619dc42b884fd38500db6f786a80db71b2c1e7e",
+      "request_headers_sha256": "3aaa2319e28ed76a6c3fa75cdd837b4087fce7375361e844f11465a041e17b69",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a004622d-9018-495d-ad4a-16876d79688b"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.deleted: canceled (org 1)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "ba878a097dc37f58f7c4d0f5fe70510de1d2e76ef8d416483977151e9790aca6",
+      "request_headers_sha256": "fc6782e488bae6f283073b458f424e59ddf88eba5538369a1c39a40fe702004f",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "afd2c45a-5add-44ad-9fd4-543996cc2f7d"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.deleted: again (org 1)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "974c21a20561caaf128f70bf0fd142b110ebff0318cfde8f995565ff86d33f5e",
+      "request_headers_sha256": "cda04fd342fe5a4d5c4fc8cfed3f64cd7b3d14f27954991108d90a0a6a4e83df",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c7906149-e966-433d-bc74-bd4adfc1746a"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: incomplete_expired (org 2)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "cbe7b3c4c674cb813e0f8dd4e51538742b0055c2ea9728ec66fd1d05555a1001",
+      "request_headers_sha256": "e13d9fff8cfbdb00b59be92699874cf3cefd6fb75609f57c88b7a31e19ede1b8",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e670d3dd-c972-4b80-8741-04130d15f2c8"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: manual org (org 3)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "f548f81e6ed3c48c1c840d6bca7b5d5e3837c8b8901ab04a34d025f47d300932",
+      "request_headers_sha256": "bbd591c4cbe328937676196d618631dfbc23682bd755c2c2a5b1e0422ca0880b",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9707381f-19f6-4dd4-b06e-e2a558fe3dec"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.updated: manual org (org 3)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "8a62483987a9a59641b85bccffd4a3b8162c248150cc67a9c91067c336c2fb5a",
+      "request_headers_sha256": "32e0c0b05af5b504f5c54c80a1d4af4f4558022f7cd0c07c8d8aa846141fd2bd",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "80cd9466-b0f2-490d-afba-ed8ae8ee7813"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.deleted: manual org (org 3)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "5989931f1b54879c574a6d217eebe171e4a74d6ec09182d935a29384ced08d37",
+      "request_headers_sha256": "09e60197dcb1ae0d9e8f230e61e81e5a03f51227096646ae9f014abab793dc15",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0d103597-95eb-4493-b8c0-30374d325350"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.updated: items data an object (org 4)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "974585c2dd47512db5afd08f56ed050292e97b83184f582881783c4078838a7f",
+      "request_headers_sha256": "507cd2fba73454a9f6051abd69b44a04c52a1880aa53a721b8a7fd86f97cca65",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "591f8e3a-53f1-4cd6-ae49-962dadc825d5"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.updated: items data null",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "8a4a950d94c411063d9c2a6e1dca839ae2d58ce5ea52dc747802f9e454692d4c",
+      "request_headers_sha256": "96d3d96c813d94bb49981af1af92ab0b7c561d4d27ed29fafbcf7bb40b89eff4",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "sub.updated: items data a number",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e50a43dd29cc7fa5390ee0903337be1e7481709af3441be3fbb6671bb893d912",
+      "request_headers_sha256": "df75864592de052c31141151a7714e45f4808b15f1d914b5ac9f0fd775c5b8b1",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "sub.updated: price id an object",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "0b21d1fcdcb8696b702279288c31b5a04f57caef5d93ab55dbd9f2a34a008d08",
+      "request_headers_sha256": "ee1100565d237a91ad96074ef0854ef7ec808d48fec1f9ce9d442c4264ef54b1",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "sub.created: no items",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "3c3ad049631a96be76d86feef76769ee6e49aefc65e6b0465e3616c4c5e2fb89",
+      "request_headers_sha256": "c598f87a8341ac751ff218997321fc3fd7f8122eeb614b31210d51235bd60195",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "982cb800-cbca-4055-abd7-2404e3a14107"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: unknown price",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "36a31a96f21a131caa7e6138e7c4ccff83f1eacd152107730c4c400420ed2dcc",
+      "request_headers_sha256": "95c6b6c09168ecea1b4417bf8a8ebd4d6d562cacd06ad36a9b530b5203ee2db6",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "92f68e30-ce46-4850-941b-4a7646b97cdf"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: active (org 5)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "dfa26927f7e23f9b6665b70b4b9450fcfe27b0b5041385b706a01e56f7ab17ca",
+      "request_headers_sha256": "9a152d4241720f66abc0d87a7709935c7f34d4ababecfd35941bc4a393d9b76e",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "102412e2-06cb-4b2f-87f7-3323077b160c"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.updated: canceled, customer an int (org 5)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "91791d12144ff7f5b3dcc11e724d8636d55d33ead04be1a8d72ba5484c48d62a",
+      "request_headers_sha256": "22b987c56c4b26c0e9a33d74391ef9e53615cb32f7a2fd23508da2d57fd27875",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b42dad3c-ec62-4f5c-9482-55c7b4ddfab1"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: customer null, fractional trial end, empty-object flag (org 6)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "4b1180eccddb5fcce9e374c9c91ab70ca461e75fa2bdc411058b25d01a28be27",
+      "request_headers_sha256": "7731804720b42d3b453ef5e5f21f359badfd54b5e91475ebe0e1b1f8ecaa3a0a",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3df2d623-070e-4229-8c5b-4c94fa9ec3c9"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: customer empty",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "25e12addfe11c0cc3f837e16b4327264513b84933bc288adb2f92941e6755078",
+      "request_headers_sha256": "e6c125b3576530f76b81dfc302430d20199e921634819e68c2f4af1ea2fc6faa",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7d5bfaa0-271d-409c-a4a8-2d3fce63fb41"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: no status, braced org, bad period end (org 7)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "9ecf51525f7540471aef48d47f8b9251b8c2d7845daabd48b368d39af9f62687",
+      "request_headers_sha256": "bf936a30a097e91c50c86659eb2a95ee4050bdc7d3376a9f2f0515c65cdf9c5b",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c91f6948-6a38-4e9b-bcfa-64cd90c10a2d"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: status a number (org 7)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "5e846f5b508ab41f857779ef973a32da30e5d9b9bab8941b011c87cc225f56aa",
+      "request_headers_sha256": "de503cb613f1927dd857e1f0c2d12964879b25cc5dc5276fbf7c59bb4582dab7",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1ae695b5-1f69-433d-bbb4-387314c00cee"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: canceled_at past time_t",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "b158f60456349254dbdb3242dd53894e3b2c96e4dc0e489fae556b48b40b03ba",
+      "request_headers_sha256": "060feb97ef497b64adca41dc02e7349749ac2c3e8c6a404315094b2859c81217",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "aeb20d30-e23b-4047-9662-ed805c12bb0f"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: canceled_at past year 9999",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "19b983f36a85f7f9dd4f7a5746f297cdf78ffc53010be29b0aa79fb1e024b011",
+      "request_headers_sha256": "fda59a595ebd726f4b7178fd04268c64f1ecfc48cc9a1e29e78d0e775df4f82f",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4bb5842a-47b3-4b4d-aeca-1231a1a2b501"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: trial_start before year 1",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "fc6302edc1ffd799459681ad519880b7ef7195284320e493704fb633b77b1e31",
+      "request_headers_sha256": "0df16d29b70aea206eeb2b877d66501cb7d9f63ce6ba7180c2acd1846c60dad8",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d5cf2234-a51b-49ca-83ec-fc2879c2d4b1"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: no org_id",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "66fcd655a3ae62400105603d67d48f6d3cb96f2bd3bb01bef744dce5db088c35",
+      "request_headers_sha256": "1d6db1e1bcd706cb14d7b0decd9516bef3119b3f43ad97616246ae98666f2a05",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c35836aa-f5c6-4b4c-a6bc-21a869cbc8de"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: metadata null",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "3f68ea2329fc374da67fd8c7a4df02d124e7a1f1d7a29c92ac4b1725d204c8c2",
+      "request_headers_sha256": "dd75de7ef29af689a6599caf2a3f31a9d0139aedc0e9c34d93deee1f4720cbfe",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9d2146dd-7270-4390-bf2a-bca12376fb67"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: metadata a string",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "48045909e0948ae6aa19093f138a4294e91b65cfa4d255b3e2bf4764e500a04c",
+      "request_headers_sha256": "0164ecba0485cc4faf1081e30ab3e52341949681967568e70b70fec1612846a6",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "90911137-da80-4f7c-98b4-ae6807e05377"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: org_id not a uuid",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "24fb47213cb7d353b88fb4436c7eac9f958eb8f4fb3ae2ed9756bab4070c526f",
+      "request_headers_sha256": "1c8e93979fdb70d3f8143606b477d45b822174ffe2d56a5bf72bf01fe414c100",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cd0608eb-f4a5-4ad3-8c51-87f73734b51c"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: org_id an int",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "496133555a33c03b444acc405f302e8bf1695bedba8b0ac5c9aa6422f5ad4c14",
+      "request_headers_sha256": "3b88a85c45e119730ab849a6558823a571bf6abe2dffe6e09e9379615c5f4a80",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ec44197c-1965-421c-800d-60449c085c82"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: empty org_id",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "4981c3ef8508c8ba46e6968fe17410dfbad919e48005a2b08c9dc3ff0a7a2a3f",
+      "request_headers_sha256": "9ab2839e951ebc19b1543537e0850f8d8cb5d9d4194331d4a65f7c013d18911d",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8a954951-5fcb-4276-8860-494fbbb087fb"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.created: no event id",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "5fda8a62ba6de36520b3ff7863a399c1ad7ce76de1800adb1b667949cc7aa8cd",
+      "request_headers_sha256": "484133b1c02d01e8c568a0ce91a132010d973b2695e0d5ba257581588f168883",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1e7966e6-b91d-48cb-a218-71d5f67ad726"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.updated: unknown org",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "c619e8c0e9141e5ce5d9add969c56bbfd304cb3f9226fbb17c4a5d56c7639052",
+      "request_headers_sha256": "16953f22ab9b2093207cd2311bbd7d6f137528d4c2e46b93b42a720d81d69e29",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1ee08b23-8331-475d-b1dc-835c41488a89"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.updated: org an int",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "951e905d4786b7cc20214ea9c0120d1801a1c430a9f2d25b240aff95fe9ec519",
+      "request_headers_sha256": "69de82b0a5b99e352157253b633d1c78f330da8b515bca6b1123ff71c93585ba",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e884db00-28d2-49f3-ab9b-470f9b27f42d"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.updated: unknown price keeps the plan (org A)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e0993fcb678ee50003d4a0d0e635051930c1a645211a0b5db3faec3724584137",
+      "request_headers_sha256": "0600820d0966395bc957258cd61c7f7af3d4b12a0c351e47db2078bf80f88b49",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fb99348d-e687-4edf-b447-b9cd403710d4"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.updated: no items (org A)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "994a21f28a6dc08ffc1cbf3f2e9e1b49ded1538713620fe05607005714f2b9b6",
+      "request_headers_sha256": "21434c6c45e4aa4f436f99ae820cd96225693e1c081373949a48bb4d4adb15d6",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6102ec95-db05-42ba-b0d3-0edc18a8ea5a"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.deleted: no org_id",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "c43c831f266a402b47506a380d2cdc546d4a9c8c3b2847846516f3a354bba04b",
+      "request_headers_sha256": "ff4a5c5a926cd68954d5a20c339b898dd8310ae02320f3333a231d42fbb1a74c",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1c78a869-5bcd-4c77-8107-3c5e516caf07"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.deleted: org not a uuid",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "7a596006ce2803956ded58550a0fa886097a86bab41daf06f14377581ea872f1",
+      "request_headers_sha256": "bbdbfff172bb5da8e361c93ffd77f99fc994edde8dae3fd93763545952ee9462",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e47c69e4-db8e-4072-bb5d-35f5a9b1826a"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.deleted: empty org tier (org 9)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "1d41ff5cee2fd4e7089bb6ad50e761254f35ac020cec1352cbe6376f574c3744",
+      "request_headers_sha256": "46923409584b3395cafed5086e74342cca9044ec58cac57d09453db602e667c1",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a648c924-2d99-4690-862b-1b7197d17d2a"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.deleted: license managed by hand (org 10)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "db63e5e5bfd2520e1cbc9a6d4993f1b0d2ebf43dd2e9752e219210c5dcda2445",
+      "request_headers_sha256": "f785c83a46cead0b8f0e4fa300002c949750f7e4ff9d5d4c1894eae88914fe85",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cd40d2b4-a6e7-4fc3-97b8-ac3c87bf3802"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "sub.deleted: unknown org",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "041e7832101886a3a43589addff92ae078e623174999ccce69cc3f0b4759ea77",
+      "request_headers_sha256": "9685b81356692192e4d76be1ea3a6c34dc61816a3d376c14cfd9e8ef1fcaf6a1",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ab3c36b1-c3d0-4c71-97bf-05873a0a913b"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "trial: 3.5 days left (org 8)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "045bf3370bf47bc343cb8b01d6c8233fe06be232ca3b0e54fc31152f5eaf89f8",
+      "request_headers_sha256": "c5d81cc4363d7320ffe4bd82227a5a66e9c9867ae3a57378cab3246e91097079",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "388b15a9-af7e-4232-8c59-7e66aa1dc201"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "trial: float end (org 8)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "acd7fcc958f0fe0237f0bc27011c7f1af443906f1ec0e4d0759e01a09e6a4918",
+      "request_headers_sha256": "93549a80e1f31dbee6d5dc8c76deaaecfb2f3a2d27b7de742d78eab3fd29c5c0",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "56d3adb5-aee1-49ca-abe7-d18af04414f7"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "trial: numeric string (org 8)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "0f6032d240d694c71a53c7d63d33b2dd6a9502a6203e48fbb6498136b7527555",
+      "request_headers_sha256": "7621ec45ee69efed2148dd11ff29ca0d347d989a64da49a0c4e1aa2cfd57d886",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4d8e6fd8-96ec-462b-9f43-23c5bde9c3d4"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "trial: bool (org 8)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "f63343711d9e1332954d0163ab8b77a03279e2499201afa61d45a942f1737d27",
+      "request_headers_sha256": "41a9a8c5a381d03defc9c6a580597e2c8da1993aa438f15c3b1b727b9b0be35b",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9cbabd4b-107e-42ab-a874-aedbe009ae52"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "trial: missing trial_end",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "b17e05afb19d6bb720bec048b22b41e6ea7cc0de485886fac7370fbbf0388063",
+      "request_headers_sha256": "559ab6872e26000fbea017e7735e48ddd5b637cf1d44db8399006a74169bd1ae",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2593de7f-e9c2-42e3-8424-549342587a30"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "trial: garbage",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "02fe2f18c190d480eeff6eb8e05fcf602de34dcbe1a8edbe074db542a45dccd2",
+      "request_headers_sha256": "8ccdd1e1bcba827f59864432f78f81ebe13d154ab6e33a1ec34cb7b76b2e6f32",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4f5eea05-3be7-4ad2-91ac-12b8edf190b3"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "trial: a list",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "8eceb818e84b4126e8856d64428985d09c0c2915b8e41a6c415fad6ba2620a8b",
+      "request_headers_sha256": "a2117954e878562e0b7e7a2569f534442766eecebac2c1ea740c331783bccfd1",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "71b4a20b-625b-4318-ba41-5670985d731a"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "trial: past year 9999",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "bdff2f5f420e6d4eea8efe253f91259fa16e2af6bd9a11eb9a6e19c4187e60dc",
+      "request_headers_sha256": "666c64e263faa9bcedb212fab7ab5f176bdb6f73de88dfc0198e9a7f6bb85c22",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7b9c8484-60e1-493b-8d0b-1609ddcac0d9"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "trial: float past time_t",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "d0965eb4b4140dfebc28e2bba075f0da615c2b3e7725779719525f56afd9fd03",
+      "request_headers_sha256": "1893c3657f650e35ae54956cb27cbf4663912f05d18553e5d53a0b1a9f0e19a7",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "trial: org not a uuid",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "745171b25b60b76a209d78236ca7277ef6ef0fa0e70cb25e11b92495426fc2e7",
+      "request_headers_sha256": "13984a3975691f8e5617f8e63b738b88cd8318aa146aa1e931157e4e5037cdeb",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a19bdae4-e482-4377-bc34-0b58e4468198"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "trial: no org",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "3003dc128f048132f794cdb447ed6b91f38e070ec4d7c47a8e72a1221318cb3f",
+      "request_headers_sha256": "abc02d608dcf031e708fe7952a1028f5bf689200d36b3c8d809bc5571791ded1",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b4d2a7f5-80b9-432d-b4e9-3c21fdecc1b9"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "trial: NaN",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "1452771230ecd9ecee03002ce532855da5b7d21bd51349aec1e4a742ad8a0ad3",
+      "request_headers_sha256": "4056ae9a46d59d5a9b4d21a0622a504ea7dfbf43312129b8b2e000bf2ff4c228",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "003257b4-ffac-4715-8b0a-a6265efc68c8"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "trial: Infinity",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e132d8806d953b7ab55c2fa6f265b1818270a417bac2fca8812485e743276595",
+      "request_headers_sha256": "60e7bfc949187755af03cb10c211764d41bb0c1ff877cebf2eee8ba0a057737a",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "refund: created (org 1, invoice)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "56ac459c74be4a9797e9867828b869c88fddba4f803587c4407ae5bc678859ee",
+      "request_headers_sha256": "581099da01adac974a0bcc1d14f7295a74fdc97491e60f5c25a57e21f85a5e82",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9585e08a-7dba-48cc-bad4-4e22ce3c5b42"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "refund: the same refund succeeded",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "aab980adefbfc7af5bfc80e229db1207f68a41ca74ac5221565c63bb4870cbab",
+      "request_headers_sha256": "a597eb7344897cda2f2649027a4efe5bfbd88faed23788c5235b699a92b6cf8c",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "dc0d5043-afac-4cae-86a5-2de6dd6b0e4a"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "refund: failed with a reason",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "8bdd348fb5966c83d01111f7d8681b5986c32fe03298a478e30c4c649162914f",
+      "request_headers_sha256": "80bad994a005454786fd52c9a6873c673da5f2facbc3e8251c7c4f9a297c65c5",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1338086f-ee23-4cbf-8602-7885c0f7fb93"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "refund: failure reason absent keeps it, reason null clears it",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "1ef40febfec1d2676cbd7c032667625085e0190f7f9199b7a4fc82b5437bcc26",
+      "request_headers_sha256": "d62d19871c9a828f34df2f2c5c87d264fad1d34dc62c7f8152aa4733f9d57e38",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e78fad46-fbc8-478e-afbe-7d8c37cd2b2c"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "refund: charge, payment intent, amount and currency absent keep the stored ones",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "82f5016f073a6911b449bc5555d11df34ba370e3fa0d46126cb962868736def7",
+      "request_headers_sha256": "5043cb03b467ca287dd8b812ed5211020aa2fab25475ba85e195ce0a047aff99",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f933c89e-91ae-42e8-a8a9-3ac01a07977b"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "refund: stored refund, no org in the event",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "4e2f68f3c8a93a2becacd080cfa7663037e2b6201758fb105fe3012b59ac30ed",
+      "request_headers_sha256": "60c83dac1815c0563b5f1c41af6e27b4c268a8add4adf8ad769e678100ab2c48",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d901e927-8b62-4975-9a4d-6ff4669878fa"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "refund: stored refund, the event names another org",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "34078001cc9cb165d65fa70671ab347b5c473d98e2bc9f07db422293ceda270c",
+      "request_headers_sha256": "e295dc87c2c6af638c965c4640c1f6de039bc1453e35b74dfc6adf94d5c2cde7",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "88ddcf33-a7e1-43cd-9204-e6be416ced41"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "refund: unknown refund, no org",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "65f8fe08d814022f60fd686f16ce61b624c9a0e613c96ff9ac1e1484bb72e74c",
+      "request_headers_sha256": "644874cf42381c721f800b0a926c9fab20b4334e6bf8397c74ffcf0e6370fcd8",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5ec684c4-f8e4-445b-8122-22aaca3a3006"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "refund: unknown refund, org not a uuid",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "0a9bc31e19c933e0c14e3faf76b7cd1b12acd97920231db6afc85d01b51eb71e",
+      "request_headers_sha256": "009e0d2fe48567ea69471d423ebb807c63fe69e2ee496cb3fd9b003f9209b3d1",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5e5a6850-cfe3-4642-9a0a-b8939f796296"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "refund: unknown refund, metadata null",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e7aee88390858f1134e09ca6d050fb4b032a84f4c2a3d526e540e439cacdb9c1",
+      "request_headers_sha256": "d7c47b7e6ab5958f4f84be7a10e7a6a08ef26aa2299f155e4923b602545f7824",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "98caa1ae-0a23-450b-83f9-2b6da3c9a811"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "refund: no id",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "be502165159641ae7f9f659db41a5e2dab5a624cab3d0bfaa5cfeeff54ad15a0",
+      "request_headers_sha256": "ee4488f46c35af1b10c31ac98c35a247f912e99b424aa9c478e92fffaaea718f",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2e9e6ffa-9931-43b1-98eb-5cf19f850020"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "refund: invoice id not a uuid",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "adef366770e1a8df14a7dd098da6d8d5faa9cff87bcb3dd59ea77842a0792144",
+      "request_headers_sha256": "375455807a3ddf8c9b643530cc58acb01848259f4981afd596922da4e20f8395",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b193f13d-73ad-4e91-b3b7-57f40125b309"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "refund: nothing but id and org",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "858e173f7f69e047c65103a81aac28aa3433059a91caccf949d2a374d7ac3b04",
+      "request_headers_sha256": "87daf48b2ecb9ea2b706783d29139c7ff6e97b5455c3fed20b738f23f531e0ad",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a5afa6f8-aff1-48d5-bc9a-228c05edc5f4"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "charge.refunded: two listed refunds",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "573d0cd92551c8398d44413a2fd0418d78a0fa92ea62235de3e55628309e1c24",
+      "request_headers_sha256": "df9c77f7a019acbd1bf1d8b14fdb07222bfe2041e19687fac2d6352e24612b38",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "afd67427-c84b-431b-9459-a98682762ce2"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "charge.refunded: no refund list",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "5f21de877f5333752353e88204450c4ddadc21e01fd01e86dc9f63ebae586274",
+      "request_headers_sha256": "600fff42c1adfe1d6437eb70c109661de570b8e3c237bc398fb7f1d746cfdf68",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "acbe5f5d-d66b-423c-a9ec-165489bcd87c"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "charge.refunded: refunds not a list",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "67914420444d7acf8449d0b91b9b06e0a7cfb9d43b14dcfa2f5a53e1e7d4ad06",
+      "request_headers_sha256": "92c2460ea776daa9505186add8559f0f6a19d8285dc4ccc03f3b46d12ce65eb5",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "10e309d2-0b6d-4ddf-baaf-4ae3eb9fb053"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "unhandled type",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "dce3b080d395e91993fa7776821a59de07fffa1d215e8fe34b1e701eb67229d8",
+      "request_headers_sha256": "6e7fe9a2ef36b7a6db51952ca4643d88f158dd73180b6f546a846738f00faa1b",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cdda3b12-f21b-4351-918c-ef443794203f"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "signature: missing header",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "d1305d50d6130c531f10d2ab9c0dbfdf6b96dae20a5ca987d1bb24be717ea42e",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 400,
+      "headers": {
+        "content-length": "37",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2647b171-3f2c-4c4d-97a9-1087d0ef6c05"
+      },
+      "body": "{\"detail\":\"Invalid Stripe signature\"}"
+    },
+    {
+      "name": "signature: empty header",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "d1305d50d6130c531f10d2ab9c0dbfdf6b96dae20a5ca987d1bb24be717ea42e",
+      "request_headers_sha256": "aea86763f533335d742e2075a6212161d44b3a38f620eb7d2150974768c24877",
+      "status": 400,
+      "headers": {
+        "content-length": "37",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a23d566f-f1af-409f-bbf4-a23e2f1807b2"
+      },
+      "body": "{\"detail\":\"Invalid Stripe signature\"}"
+    },
+    {
+      "name": "signature: wrong secret",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "d1305d50d6130c531f10d2ab9c0dbfdf6b96dae20a5ca987d1bb24be717ea42e",
+      "request_headers_sha256": "de54cfb3379ab5083e4356d2d749477e71fd42a4fa70d2627db01e66b22af52f",
+      "status": 400,
+      "headers": {
+        "content-length": "37",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8b1bd7de-c546-4b14-9388-d26d1486b1d9"
+      },
+      "body": "{\"detail\":\"Invalid Stripe signature\"}"
+    },
+    {
+      "name": "signature: expired",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "d1305d50d6130c531f10d2ab9c0dbfdf6b96dae20a5ca987d1bb24be717ea42e",
+      "request_headers_sha256": "41c7e9dd96e880310d8f6c5a4018646a69db025b89cb5392301ecbdeb6b76615",
+      "status": 400,
+      "headers": {
+        "content-length": "37",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "35410623-36d3-49b5-952f-e19f6ab6b69e"
+      },
+      "body": "{\"detail\":\"Invalid Stripe signature\"}"
+    },
+    {
+      "name": "signature: garbage header",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "d1305d50d6130c531f10d2ab9c0dbfdf6b96dae20a5ca987d1bb24be717ea42e",
+      "request_headers_sha256": "461439e98cfa7500950fbf4b67a0ae0a8eb02e6af619c6443426db1eaacbff71",
+      "status": 400,
+      "headers": {
+        "content-length": "37",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "62fb94fc-c390-459f-81d7-23ff63d706ea"
+      },
+      "body": "{\"detail\":\"Invalid Stripe signature\"}"
+    },
+    {
+      "name": "payload: not utf-8",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "28c3fe2a92f6a683f68ba18c49bcbfbed5cd8da43d773ae0a72def08ed79c088",
+      "request_headers_sha256": "fccd56dcffe6476194bbe2bda69af3b191c335a22ddfae29a4db37d5e337dee8",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "payload: not json",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "3a3358abc4cd58081d1b7ef0f8d6bb8eabba50ba30c7adc3a45acf248a539b82",
+      "request_headers_sha256": "69c7e88e9d3ddb9f999cd9165bd0ec11896c6fba92367ea3f62efd003ce9dec5",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "payload: a list",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "5baab216befd8eb312a7a15bfe4e7a361db1d22c0d4d6d37a1ddbf4999108fcf",
+      "request_headers_sha256": "8f16b2f1632765101f98d7c3696136f3f751a51cdd2a44cd2266c971ef2db52a",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "payload: v2 thin event",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "7ab049525dd26f053d7230e913972ae06d86b1f5004de4c80cc6f25fa4ad3cfd",
+      "request_headers_sha256": "6f877a7f3df18d12e870957e4514f5631e19777433b373d70e04b2b4c1046c5c",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "payload: no type",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "52445c6169f296ff942f7d8d5f1f9e5cd3d3f14f00693d2a76673ae803954f87",
+      "request_headers_sha256": "155bc24df07bbddf32ed99fd45c844f244efab8faec1b1fddb6d8c1789e2f7b6",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "payload: type not a string",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "aa801c0331341562771f386cdde466c346c81eaa889f2b4de85b31765a834bab",
+      "request_headers_sha256": "856845e5cc695a61c993cc3ce5e4ef8c7e214ade553095186961e84a5c650a74",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "payload: no data",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e21040e9c279d979c4450d6de7be17e1d03fe38cce9cb2e35b3d2ac74c4edc3b",
+      "request_headers_sha256": "750709861bd6c41f193d367adfe5620219ea0d2d37c0f31821d6c3d3541899a1",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "payload: data without object",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "ec42108c422cc36d37d242258f5fa69327803ff7febb6400d742dad0aa13a3ad",
+      "request_headers_sha256": "780f53ad57d99aff71dd3dc97549b1161a3e0e9f8c66c3feaf1000bb6a4a4b34",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "payload: data a list",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "d54858c6481cd9674522362a0b31f240fc85dc37272d8af963fac449e5625bc0",
+      "request_headers_sha256": "8e3a2f5c51882cfe1cae8f6cda9a4b4f09f6552d346cca08c48565c152a40d5b",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "405",
+      "method": "GET",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4d695d97-0399-4457-aa55-838afeab3281"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    }
+  ],
+  "rows": {
+    "recorded_at": {
+      "rows": "2026-09-28T15:33:19.920068077Z"
+    },
+    "refund_metadata_kept": {
+      "rows": "0 of 5"
+    },
+    "rows:billing_notifications": {
+      "rows": "subscription_cancelled ¦ 88888888-0000-4000-8000-000000000001 ¦ billing:subscription_cancelled:88888888-0000-4000-8000-000000000001:eadd68673cd19717fa6abb0096873c47860ba3985f5d189c558d32e588c141f4 ¦ {\"tier\": \"community\"} ¦ \u003cnow\u003e ¦ true ¦ true\nsubscription_cancelled ¦ 88888888-0000-4000-8000-000000000003 ¦ billing:subscription_cancelled:88888888-0000-4000-8000-000000000003:938bc48536a7a57a004a3204882059951293434b5c0c66f73c9d52d00153abe4 ¦ {\"tier\": \"team\"} ¦ \u003cnow\u003e ¦ true ¦ true\nsubscription_cancelled ¦ 88888888-0000-4000-8000-000000000009 ¦ billing:subscription_cancelled:88888888-0000-4000-8000-000000000009:d133bfed9905b64f1704af88636ce7a82d13e0753a5acff48e0e01461ad21136 ¦ {\"tier\": \"unknown\"} ¦ \u003cnow\u003e ¦ true ¦ true\nsubscription_cancelled ¦ 88888888-0000-4000-8000-00000000000a ¦ billing:subscription_cancelled:88888888-0000-4000-8000-00000000000a:938bc48536a7a57a004a3204882059951293434b5c0c66f73c9d52d00153abe4 ¦ {\"tier\": \"team\"} ¦ \u003cnow\u003e ¦ true ¦ true\nsubscription_cancelled ¦ \u003cid\u003e ¦ billing:subscription_cancelled:\u003cid\u003e:d133bfed9905b64f1704af88636ce7a82d13e0753a5acff48e0e01461ad21136 ¦ {\"tier\": \"unknown\"} ¦ \u003cnow\u003e ¦ true ¦ true\nsubscription_changed ¦ 88888888-0000-4000-8000-000000000001 ¦ billing:subscription_changed:88888888-0000-4000-8000-000000000001:deb4e1f497344907165c24aebd04716cb3507ec4b0fd6e9b1f4492952e6e097e ¦ {\"old_tier\": \"enterprise\", \"new_tier\": \"team\"} ¦ \u003cnow\u003e ¦ true ¦ true\nsubscription_changed ¦ 88888888-0000-4000-8000-000000000004 ¦ billing:subscription_changed:88888888-0000-4000-8000-000000000004:0646d65417bfabe46872d7d05c198fe6e30871045492f29e2fa9da93b93b0433 ¦ {\"old_tier\": \"community\", \"new_tier\": \"team\"} ¦ \u003cnow\u003e ¦ true ¦ true\ntrial_expiring ¦ 88888888-0000-4000-8000-000000000008 ¦ billing:trial_expiring:88888888-0000-4000-8000-000000000008:\u003ctrial key\u003e ¦ {\"days_remaining\": 0, \"trial_end_date\": \"1970-01-01\"} ¦ \u003cnow\u003e ¦ true ¦ true\ntrial_expiring ¦ 88888888-0000-4000-8000-000000000008 ¦ billing:trial_expiring:88888888-0000-4000-8000-000000000008:\u003ctrial key\u003e ¦ {\"days_remaining\": 0, \"trial_end_date\": \"2026-09-24\"} ¦ \u003cnow\u003e ¦ true ¦ true\ntrial_expiring ¦ 88888888-0000-4000-8000-000000000008 ¦ billing:trial_expiring:88888888-0000-4000-8000-000000000008:\u003ctrial key\u003e ¦ {\"days_remaining\": 0, \"trial_end_date\": \"2026-09-27\"} ¦ \u003cnow\u003e ¦ true ¦ true\ntrial_expiring ¦ 88888888-0000-4000-8000-000000000008 ¦ billing:trial_expiring:88888888-0000-4000-8000-000000000008:\u003ctrial key\u003e ¦ {\"days_remaining\": 4, \"trial_end_date\": \"2026-10-02\"} ¦ \u003cnow\u003e ¦ true ¦ true"
+    },
+    "rows:org_licenses": {
+      "rows": "092d1323-14fb-5f19-b878-28bcca58f9d6 team true \u003cnull\u003e saas stripe valid=true {\"contact_email\":null,\"exp\":\"\\u003cper-run\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cper-run\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cper-run\\u003e\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"tier\":\"team\"}\n1bdff33b-214e-5dbf-9424-b30e42a9a0ad team true cus_fail saas stripe \u003cnull\u003e\n37aa5733-344b-54a7-9210-c911e4ccf37a enterprise true cus_A saas stripe valid=true {\"contact_email\":null,\"exp\":\"\\u003cper-run\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cper-run\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cper-run\\u003e\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"tier\":\"team\"}\n77777777-0000-4000-8000-000000000001 enterprise true \u003cnull\u003e saas stripe valid=true {\"contact_email\":null,\"exp\":\"\\u003cper-run\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":true,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":true,\"custom_retention\":true,\"customer_push_ingest\":true,\"data_export\":true,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":true,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":true,\"priority_support\":true,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":true,\"sso_saml\":true,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":30,\"iat\":\"\\u003cper-run\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cper-run\\u003e\",\"limits\":{\"api_rate\":-1,\"backfill_days\":null,\"repos\":-1,\"users\":-1},\"org_name\":null,\"sub\":\"77777777-0000-4000-8000-000000000001\",\"tier\":\"enterprise\"}\n77777777-0000-4000-8000-000000000002 team true \u003cnull\u003e saas stripe valid=true {\"contact_email\":null,\"exp\":\"\\u003cper-run\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cper-run\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cper-run\\u003e\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"77777777-0000-4000-8000-000000000002\",\"tier\":\"team\"}\n77777777-0000-4000-8000-000000000003 team true \u003cnull\u003e saas stripe valid=true {\"contact_email\":null,\"exp\":\"\\u003cper-run\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cper-run\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cper-run\\u003e\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"77777777-0000-4000-8000-000000000003\",\"tier\":\"team\"}\n77777777-0000-4000-8000-000000000004 enterprise true \u003cnull\u003e saas stripe valid=true {\"contact_email\":null,\"exp\":\"\\u003cper-run\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":true,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":true,\"custom_retention\":true,\"customer_push_ingest\":true,\"data_export\":true,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":true,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":true,\"priority_support\":true,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":true,\"sso_saml\":true,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":30,\"iat\":\"\\u003cper-run\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cper-run\\u003e\",\"limits\":{\"api_rate\":-1,\"backfill_days\":null,\"repos\":-1,\"users\":-1},\"org_name\":null,\"sub\":\"77777777-0000-4000-8000-000000000004\",\"tier\":\"enterprise\"}\n77777777-0000-4000-8000-000000000005 team true \u003cnull\u003e saas stripe valid=true {\"contact_email\":null,\"exp\":\"\\u003cper-run\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cper-run\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cper-run\\u003e\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"77777777-0000-4000-8000-000000000005\",\"tier\":\"team\"}\n77777777-0000-4000-8000-000000000006 team true \u003cnull\u003e saas stripe valid=true {\"contact_email\":null,\"exp\":\"\\u003cper-run\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cper-run\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cper-run\\u003e\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"77777777-0000-4000-8000-000000000006\",\"tier\":\"team\"}\n88888888-0000-4000-8000-000000000001 community false cus_s1 saas stripe valid=true {\"contact_email\":null,\"exp\":\"\\u003cper-run\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cper-run\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cper-run\\u003e\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"88888888-0000-4000-8000-000000000001\",\"tier\":\"team\"}\n88888888-0000-4000-8000-000000000002 community true cus_s2 saas stripe \u003cnull\u003e\n88888888-0000-4000-8000-000000000004 team true cus_s4 saas stripe valid=true {\"contact_email\":null,\"exp\":\"\\u003cper-run\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cper-run\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cper-run\\u003e\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"88888888-0000-4000-8000-000000000004\",\"tier\":\"team\"}\n88888888-0000-4000-8000-000000000005 community false 5 saas stripe \u003cnull\u003e\n88888888-0000-4000-8000-000000000006 team true None saas stripe \u003cnull\u003e\n88888888-0000-4000-8000-000000000007 community true cus_s7 saas stripe \u003cnull\u003e\n88888888-0000-4000-8000-00000000000a enterprise true \u003cnull\u003e saas manual \u003cnull\u003e\nf5fc5f0d-cbeb-5886-86ff-f6a51c89659f enterprise true \u003cnull\u003e saas stripe valid=true {\"contact_email\":null,\"exp\":\"\\u003cper-run\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":true,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":true,\"custom_retention\":true,\"customer_push_ingest\":true,\"data_export\":true,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":true,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":true,\"priority_support\":true,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":true,\"sso_saml\":true,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":30,\"iat\":\"\\u003cper-run\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cper-run\\u003e\",\"limits\":{\"api_rate\":-1,\"backfill_days\":null,\"repos\":-1,\"users\":-1},\"org_name\":null,\"sub\":\"f5fc5f0d-cbeb-5886-86ff-f6a51c89659f\",\"tier\":\"enterprise\"}"
+    },
+    "rows:org_licenses timestamps": {
+      "rows": "092d1323-14fb-5f19-b878-28bcca58f9d6true true true{}{}false true true\u003cnull\u003e | 1bdff33b-214e-5dbf-9424-b30e42a9a0adfalse true true{}{}false true true\u003cnull\u003e | 37aa5733-344b-54a7-9210-c911e4ccf37atrue true true{\"api_access\": true, \"sso_saml\": true, \"webhooks\": true}{}false true true\u003cnow\u003e | 77777777-0000-4000-8000-000000000001true true true{}{}true true true\u003cnull\u003e | 77777777-0000-4000-8000-000000000002true true true{}{}true true true\u003cnull\u003e | 77777777-0000-4000-8000-000000000003true true true{}{}true true true\u003cnull\u003e | 77777777-0000-4000-8000-000000000004true true true{}{}true true true\u003cnull\u003e | 77777777-0000-4000-8000-000000000005true true true{}{}true true true\u003cnull\u003e | 77777777-0000-4000-8000-000000000006true true true{}{}true true true\u003cnull\u003e | 88888888-0000-4000-8000-000000000001true true true{}{}true true true\u003cnull\u003e | 88888888-0000-4000-8000-000000000002false true true{}{}true true true\u003cnull\u003e | 88888888-0000-4000-8000-000000000004true true true{}{}true true true\u003cnull\u003e | 88888888-0000-4000-8000-000000000005false true true{}{}true true true\u003cnull\u003e | 88888888-0000-4000-8000-000000000006false true true{}{}true true true\u003cnow\u003e | 88888888-0000-4000-8000-000000000007false true true{}{}true true true\u003cnow\u003e | 88888888-0000-4000-8000-00000000000afalse true true{}{}true true true\u003cnull\u003e | f5fc5f0d-cbeb-5886-86ff-f6a51c89659ftrue true true{}{}true true true\u003cnull\u003e"
+    },
+    "rows:organizations": {
+      "rows": "092d1323-14fb-5f19-b878-28bcca58f9d6teamstripe | 1bdff33b-214e-5dbf-9424-b30e42a9a0adteammanual | 37aa5733-344b-54a7-9210-c911e4ccf37aenterprisestripe | 77777777-0000-4000-8000-000000000001enterprisestripe | 77777777-0000-4000-8000-000000000002teamstripe | 77777777-0000-4000-8000-000000000003teamstripe | 77777777-0000-4000-8000-000000000004enterprisestripe | 77777777-0000-4000-8000-000000000005teamstripe | 77777777-0000-4000-8000-000000000006teamstripe | 88888888-0000-4000-8000-000000000001communitystripe | 88888888-0000-4000-8000-000000000002communitystripe | 88888888-0000-4000-8000-000000000003teammanual | 88888888-0000-4000-8000-000000000004teamstripe | 88888888-0000-4000-8000-000000000005communitystripe | 88888888-0000-4000-8000-000000000006teamstripe | 88888888-0000-4000-8000-000000000007communitystripe | 88888888-0000-4000-8000-000000000008communitystripe | 88888888-0000-4000-8000-000000000009communitystripe | 88888888-0000-4000-8000-00000000000ateamstripe | aaaaaaaa-0000-4000-8000-000000000001communitystripe | aaaaaaaa-0000-4000-8000-000000000002communitystripe | f5fc5f0d-cbeb-5886-86ff-f6a51c89659fenterprisestripe"
+    },
+    "rows:refunds": {
+      "rows": "re_evt_1 ¦ aaaaaaaa-0000-4000-8000-000000000001 ¦ aaaaaaaa-0000-4000-8000-0000000000f1 ¦ \u003cnull\u003e ¦ ch_3UJQ5zEIXptJX86e016bIuyu ¦ pi_3UJQ5zEIXptJX86e0bWgVuAH ¦ 700 ¦ usd ¦ succeeded ¦ requested_by_customer ¦ first description ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ true ¦ \u003cnow\u003e ¦ true\nre_evt_2 ¦ aaaaaaaa-0000-4000-8000-000000000001 ¦ aaaaaaaa-0000-4000-8000-0000000000f1 ¦ \u003cnull\u003e ¦ ch_3UJQ5zEIXptJX86e016bIuyu ¦ \u003cnull\u003e ¦ 300 ¦ usd ¦ canceled ¦ requested_by_customer ¦ \u003cnull\u003e ¦ lost_or_stolen_card ¦ \u003cnull\u003e ¦ true ¦ \u003cnow\u003e ¦ true\nre_evt_3 ¦ aaaaaaaa-0000-4000-8000-000000000001 ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ ch_3UJQ5zEIXptJX86e016bIuyu ¦ pi_3UJQ5zEIXptJX86e0bWgVuAH ¦ 100 ¦ usd ¦ requires_action ¦ requested_by_customer ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ true ¦ \u003cnow\u003e ¦ true\nre_evt_4 ¦ aaaaaaaa-0000-4000-8000-000000000002 ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦  ¦ \u003cnull\u003e ¦ 0 ¦ usd ¦ pending ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ true ¦ \u003cnow\u003e ¦ true\nre_evt_list_1 ¦ aaaaaaaa-0000-4000-8000-000000000001 ¦ aaaaaaaa-0000-4000-8000-0000000000f1 ¦ \u003cnull\u003e ¦ ch_listed ¦ pi_listed ¦ 250 ¦ usd ¦ succeeded ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ true ¦ \u003cnow\u003e ¦ true\nre_seeded ¦ aaaaaaaa-0000-4000-8000-000000000002 ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ ch_listed ¦ pi_3UJQ5zEIXptJX86e0bWgVuAH ¦ 500 ¦ usd ¦ succeeded ¦ requested_by_customer ¦ stored description ¦ expired_or_canceled_card ¦ \u003cnull\u003e ¦ true ¦ 2020-01-01T00:00:00.000000 ¦ true"
+    },
+    "rows:subscription_events": {
+      "rows": "evt_1 ¦ sub_A ¦ customer.subscription.created ¦ \u003cnull\u003e ¦ active ¦ {\"id\": \"evt_1\", \"data\": {\"b\": 1, \"a\": [true, 2.50, \"\\u00e9\"]}} ¦ 2026-09-01T00:00:01.000000\nevt_2 ¦ sub_A2 ¦ customer.subscription.updated ¦ incomplete ¦ trialing ¦ {} ¦ 2026-09-10T00:00:01.000500\nevt_3 ¦ sub_A ¦ customer.subscription.updated ¦ active ¦ active ¦ null ¦ 2026-09-02T00:00:00.000000\nevt_4 ¦ sub_C ¦ customer.subscription.updated ¦ \u003cnull\u003e ¦ active ¦ {\"k\": 1} ¦ 2026-09-13T00:00:00.000000\nevt_s1_update ¦ sub_s1 ¦ customer.subscription.updated ¦ trialing ¦ active ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": {}, \"canceled_at\": true, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"current_period_end\": 1792833482, \"current_period_start\": \"2026-09-01T00:00:00Z\", \"customer\": \"cus_s1\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s1\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_ent_y\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"88888888-0000-4000-8000-000000000001\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"active\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": \"2026-09-30T12:00:00+05:30\", \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": \"not a date\"}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_s1_update\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.updated\"} ¦ \u003cnow\u003e\nevt_sub.created_active_(org_5) ¦ sub_s5 ¦ customer.subscription.created ¦ \u003cnull\u003e ¦ active ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": null, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": \"cus_s5\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s5\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_team_cfg\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"88888888-0000-4000-8000-000000000005\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"active\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": null, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.created_active_(org_5)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.created\"} ¦ \u003cnow\u003e\nevt_sub.created_customer_null,_fractional_trial_end,_empty-object_flag_(org_6) ¦ sub_s6 ¦ customer.subscription.created ¦ \u003cnull\u003e ¦ active ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": {}, \"canceled_at\": null, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": null, \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s6\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_team_cfg\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"88888888-0000-4000-8000-000000000006\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"active\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": 1790241482.25, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.created_customer_null,_fractional_trial_end,_empty-object_flag_(org_6)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.created\"} ¦ \u003cnow\u003e\nevt_sub.created_enterprise,_trialing_(org_1) ¦ sub_s1 ¦ customer.subscription.created ¦ \u003cnull\u003e ¦ trialing ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": null, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": \"cus_s1\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s1\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_ent_cfg\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"note\": \"\\u00e9 \\u2713 \\\"q\\\"\", \"org_id\": \"88888888-0000-4000-8000-000000000001\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"trialing\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": 1790241482.5, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": 1790241482}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.created_enterprise,_trialing_(org_1)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.created\"} ¦ \u003cnow\u003e\nevt_sub.created_incomplete_expired_(org_2) ¦ sub_s2 ¦ customer.subscription.created ¦ \u003cnull\u003e ¦ incomplete_expired ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": null, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": \"cus_s2\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s2\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_team_cfg\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"88888888-0000-4000-8000-000000000002\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"incomplete_expired\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": null, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.created_incomplete_expired_(org_2)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.created\"} ¦ \u003cnow\u003e\nevt_sub.created_manual_org_(org_3) ¦ sub_s3 ¦ customer.subscription.created ¦ \u003cnull\u003e ¦ active ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": null, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": \"cus_s3\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s3\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_ent_cfg\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"88888888-0000-4000-8000-000000000003\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"active\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": null, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.created_manual_org_(org_3)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.created\"} ¦ \u003cnow\u003e\nevt_sub.created_no_status,_braced_org,_bad_period_end_(org_7) ¦ sub_s7 ¦ customer.subscription.created ¦ \u003cnull\u003e ¦ incomplete ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": null, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"current_period_end\": \"2026-13-01\", \"customer\": \"cus_s7\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s7\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_seed_y\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"{88888888-0000-4000-8000-000000000007}\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"test_clock\": null, \"transfer_data\": null, \"trial_end\": null, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.created_no_status,_braced_org,_bad_period_end_(org_7)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.created\"} ¦ \u003cnow\u003e\nevt_sub.created_status_a_number_(org_7) ¦ sub_s7b ¦ customer.subscription.created ¦ \u003cnull\u003e ¦ 5 ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": null, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": \"cus_s7\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s7b\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_legacy_y\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"88888888-0000-4000-8000-000000000007\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": 5, \"test_clock\": null, \"transfer_data\": null, \"trial_end\": null, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.created_status_a_number_(org_7)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.created\"} ¦ \u003cnow\u003e\nevt_sub.deleted_again_(org_1) ¦ sub_s1 ¦ customer.subscription.deleted ¦ canceled ¦ canceled ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": 1790241600, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": \"cus_s1\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s1\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_ent_y\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"88888888-0000-4000-8000-000000000001\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"canceled\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": null, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.deleted_again_(org_1)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.deleted\"} ¦ \u003cnow\u003e\nevt_sub.deleted_canceled_(org_1) ¦ sub_s1 ¦ customer.subscription.deleted ¦ active ¦ canceled ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": 1790241600, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": \"cus_s1\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s1\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_ent_y\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"88888888-0000-4000-8000-000000000001\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"canceled\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": null, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.deleted_canceled_(org_1)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.deleted\"} ¦ \u003cnow\u003e\nevt_sub.deleted_manual_org_(org_3) ¦ sub_s3 ¦ customer.subscription.deleted ¦ active ¦ active ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": null, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": \"cus_s3\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s3\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_ent_cfg\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"88888888-0000-4000-8000-000000000003\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"active\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": null, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.deleted_manual_org_(org_3)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.deleted\"} ¦ \u003cnow\u003e\nevt_sub.updated_canceled,_customer_an_int_(org_5) ¦ sub_s5 ¦ customer.subscription.updated ¦ active ¦ canceled ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": null, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": 5, \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s5\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_team_cfg\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"88888888-0000-4000-8000-000000000005\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"canceled\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": null, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.updated_canceled,_customer_an_int_(org_5)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.updated\"} ¦ \u003cnow\u003e\nevt_sub.updated_manual_org_(org_3) ¦ sub_s3 ¦ customer.subscription.updated ¦ active ¦ active ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": null, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": \"cus_s3\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_s3\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_ent_cfg\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"88888888-0000-4000-8000-000000000003\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"active\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": null, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.updated_manual_org_(org_3)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.updated\"} ¦ \u003cnow\u003e\nevt_sub.updated_no_items_(org_A) ¦ sub_A2 ¦ customer.subscription.updated ¦ trialing ¦ active ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": null, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": \"cus_A\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_A2\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"37aa5733-344b-54a7-9210-c911e4ccf37a\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"active\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": null, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.updated_no_items_(org_A)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.updated\"} ¦ \u003cnow\u003e\nevt_sub.updated_unknown_price_keeps_the_plan_(org_A) ¦ sub_A ¦ customer.subscription.updated ¦ active ¦ past_due ¦ {\"api_version\": \"2026-02-25.clover\", \"created\": 1790241580, \"data\": {\"object\": {\"application\": null, \"application_fee_percent\": null, \"automatic_tax\": {\"disabled_reason\": null, \"enabled\": false, \"liability\": null}, \"billing_cycle_anchor\": 1790241482, \"billing_cycle_anchor_config\": null, \"billing_mode\": {\"flexible\": {\"proration_discounts\": \"included\"}, \"type\": \"flexible\", \"updated_at\": 1790241482}, \"billing_thresholds\": null, \"cancel_at\": null, \"cancel_at_period_end\": false, \"canceled_at\": null, \"cancellation_details\": {\"comment\": null, \"feedback\": null, \"feedback_option\": null, \"reason\": null}, \"collection_method\": \"charge_automatically\", \"created\": 1790241482, \"currency\": \"usd\", \"customer\": \"cus_A\", \"customer_account\": null, \"days_until_due\": null, \"default_payment_method\": null, \"default_source\": null, \"default_tax_rates\": [], \"description\": null, \"discounts\": [], \"ended_at\": null, \"id\": \"sub_A\", \"invoice_settings\": {\"account_tax_ids\": null, \"custom_fields\": null, \"description\": null, \"footer\": null, \"issuer\": {\"type\": \"self\"}}, \"items\": {\"data\": [{\"billing_thresholds\": null, \"created\": 1790241483, \"current_period_end\": 1792833482, \"current_period_start\": 1790241482, \"current_trial\": null, \"discounts\": [], \"id\": \"si_VJmLKiUpNjT3Dy\", \"metadata\": {}, \"object\": \"subscription_item\", \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"price\": {\"active\": true, \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"custom_unit_amount\": null, \"id\": \"price_nowhere\", \"livemode\": false, \"lookup_key\": null, \"metadata\": {}, \"nickname\": null, \"object\": \"price\", \"product\": \"prod_VJmL0WyVWsP847\", \"recurring\": {\"interval\": \"month\", \"interval_count\": 1, \"meter\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"tax_behavior\": \"unspecified\", \"tiers_mode\": null, \"transform_quantity\": null, \"type\": \"recurring\", \"unit_amount\": 2000, \"unit_amount_decimal\": \"2000\"}, \"quantity\": 1, \"subscription\": \"sub_1UJ8n0EIXptJX86ewrDPuKoH\", \"tax_rates\": []}], \"has_more\": false, \"object\": \"list\", \"total_count\": 1, \"url\": \"/v1/subscription_items?subscription=sub_1UJ8n0EIXptJX86ewrDPuKoH\"}, \"latest_invoice\": \"in_1UJ8n1EIXptJX86eB3Nn1ali\", \"livemode\": false, \"managed_payments\": {\"enabled\": false}, \"metadata\": {\"org_id\": \"37aa5733-344b-54a7-9210-c911e4ccf37a\"}, \"next_pending_invoice_item_invoice\": null, \"object\": \"subscription\", \"on_behalf_of\": null, \"pause_collection\": null, \"payment_settings\": {\"payment_method_options\": null, \"payment_method_types\": null, \"save_default_payment_method\": \"off\"}, \"pending_invoice_item_interval\": null, \"pending_setup_intent\": null, \"pending_update\": null, \"plan\": {\"active\": true, \"amount\": 2000, \"amount_decimal\": \"2000\", \"billing_scheme\": \"per_unit\", \"created\": 1790241476, \"currency\": \"usd\", \"id\": \"price_1UJ8muEIXptJX86eQcLmHo61\", \"interval\": \"month\", \"interval_count\": 1, \"livemode\": false, \"metadata\": {}, \"meter\": null, \"nickname\": null, \"object\": \"plan\", \"product\": \"prod_VJmL0WyVWsP847\", \"tiers_mode\": null, \"transform_usage\": null, \"trial_period_days\": null, \"usage_type\": \"licensed\"}, \"quantity\": 1, \"schedule\": null, \"start_date\": 1790241482, \"status\": \"past_due\", \"test_clock\": null, \"transfer_data\": null, \"trial_end\": null, \"trial_settings\": {\"end_behavior\": {\"billing_cycle_anchor\": \"now\", \"missing_payment_method\": \"create_invoice\"}}, \"trial_start\": null}, \"previous_attributes\": {\"cancel_at\": 1792833482, \"cancel_at_period_end\": true, \"canceled_at\": 1790241579, \"cancellation_details\": {\"reason\": \"cancellation_requested\"}}}, \"id\": \"evt_sub.updated_unknown_price_keeps_the_plan_(org_A)\", \"livemode\": false, \"object\": \"event\", \"pending_webhooks\": 0, \"request\": {\"id\": \"req_uiCc6iP7SG3Lbq\", \"idempotency_key\": null}, \"type\": \"customer.subscription.updated\"} ¦ \u003cnow\u003e"
+    },
+    "rows:subscriptions": {
+      "rows": "sub_A ¦ 37aa5733-344b-54a7-9210-c911e4ccf37a ¦ team ¦ \u003cnull\u003e ¦ cus_A ¦ past_due ¦ 2026-09-01T00:00:00.000000 ¦ \u003cnow\u003e ¦ false ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ {\"org_id\": \"37aa5733-344b-54a7-9210-c911e4ccf37a\"} ¦ 2026-09-01T00:00:00.000000 ¦ \u003cnow\u003e\nsub_A2 ¦ 37aa5733-344b-54a7-9210-c911e4ccf37a ¦ enterprise ¦ price_ent_y ¦ cus_A ¦ active ¦ 2026-09-09T22:00:00.000000 ¦ \u003cnow\u003e ¦ false ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ {\"org_id\": \"37aa5733-344b-54a7-9210-c911e4ccf37a\"} ¦ 2026-09-10T00:00:00.000000 ¦ \u003cnow\u003e\nsub_C ¦ 1bdff33b-214e-5dbf-9424-b30e42a9a0ad ¦ team ¦ \u003cnull\u003e ¦ cus_fail ¦ active ¦ 2026-08-01T00:00:00.000000 ¦ 2026-09-01T00:00:00.000000 ¦ true ¦ \u003cnull\u003e ¦ 2026-07-01T00:00:00.000000 ¦ 2026-07-15T00:00:00.000000 ¦ {} ¦ 2026-07-01T00:00:00.000000 ¦ 2026-09-13T00:00:00.000000\nsub_err ¦ 092d1323-14fb-5f19-b878-28bcca58f9d6 ¦ team ¦ \u003cnull\u003e ¦ cus_B ¦ past_due ¦ 2026-08-01T00:00:00.000000 ¦ 2026-09-01T00:00:00.000000 ¦ false ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ {} ¦ 2026-07-01T00:00:00.000000 ¦ 2026-08-13T00:00:00.000000\nsub_s1 ¦ 88888888-0000-4000-8000-000000000001 ¦ enterprise ¦ price_ent_y ¦ cus_s1 ¦ canceled ¦ 2026-09-01T00:00:00.000000 ¦ \u003cnow\u003e ¦ false ¦ 2026-09-24T09:20:00.000000 ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ {\"org_id\": \"88888888-0000-4000-8000-000000000001\"} ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nsub_s2 ¦ 88888888-0000-4000-8000-000000000002 ¦ team ¦ price_team_cfg ¦ cus_s2 ¦ incomplete_expired ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ false ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ {\"org_id\": \"88888888-0000-4000-8000-000000000002\"} ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nsub_s3 ¦ 88888888-0000-4000-8000-000000000003 ¦ enterprise ¦ price_ent_cfg ¦ cus_s3 ¦ active ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ false ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ {\"org_id\": \"88888888-0000-4000-8000-000000000003\"} ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nsub_s5 ¦ 88888888-0000-4000-8000-000000000005 ¦ team ¦ price_team_cfg ¦ 5 ¦ canceled ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ false ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ {\"org_id\": \"88888888-0000-4000-8000-000000000005\"} ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nsub_s6 ¦ 88888888-0000-4000-8000-000000000006 ¦ team ¦ price_team_cfg ¦ None ¦ active ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ true ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ 2026-09-24T09:18:02.250000 ¦ {\"org_id\": \"88888888-0000-4000-8000-000000000006\"} ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nsub_s7 ¦ 88888888-0000-4000-8000-000000000007 ¦ team ¦ price_seed_y ¦ cus_s7 ¦ incomplete ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ false ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ {\"org_id\": \"{88888888-0000-4000-8000-000000000007}\"} ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nsub_s7b ¦ 88888888-0000-4000-8000-000000000007 ¦ legacy ¦ price_legacy_y ¦ cus_s7 ¦ 5 ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ false ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ \u003cnull\u003e ¦ {\"org_id\": \"88888888-0000-4000-8000-000000000007\"} ¦ \u003cnow\u003e ¦ \u003cnow\u003e"
+    },
+    "rows:worker_job_outbox": {
+      "rows": "billing:subscription_cancelled:88888888-0000-4000-8000-000000000001:eadd68673cd19717fa6abb0096873c47860ba3985f5d189c558d32e588c141f4 ¦ operational.billing_notification ¦ 1 ¦ {\"domain\": {\"id\": \"\u003cnotification\u003e\", \"type\": \"billing_notification\"}, \"payload\": {\"notification_id\": \"\u003cnotification\u003e\"}, \"correlation_id\": \"billing-notification:\u003cnotification\u003e\", \"idempotency_key\": \"billing:subscription_cancelled:88888888-0000-4000-8000-000000000001:eadd68673cd19717fa6abb0096873c47860ba3985f5d189c558d32e588c141f4\", \"organization_id\": \"88888888-0000-4000-8000-000000000001\", \"contract_version\": 1} ¦ 71 ¦ webhooks ¦ 2 ¦ 4 ¦ pending ¦ 0 ¦ true ¦ true ¦ true ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nbilling:subscription_cancelled:88888888-0000-4000-8000-000000000003:938bc48536a7a57a004a3204882059951293434b5c0c66f73c9d52d00153abe4 ¦ operational.billing_notification ¦ 1 ¦ {\"domain\": {\"id\": \"\u003cnotification\u003e\", \"type\": \"billing_notification\"}, \"payload\": {\"notification_id\": \"\u003cnotification\u003e\"}, \"correlation_id\": \"billing-notification:\u003cnotification\u003e\", \"idempotency_key\": \"billing:subscription_cancelled:88888888-0000-4000-8000-000000000003:938bc48536a7a57a004a3204882059951293434b5c0c66f73c9d52d00153abe4\", \"organization_id\": \"88888888-0000-4000-8000-000000000003\", \"contract_version\": 1} ¦ 71 ¦ webhooks ¦ 2 ¦ 4 ¦ pending ¦ 0 ¦ true ¦ true ¦ true ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nbilling:subscription_cancelled:88888888-0000-4000-8000-000000000009:d133bfed9905b64f1704af88636ce7a82d13e0753a5acff48e0e01461ad21136 ¦ operational.billing_notification ¦ 1 ¦ {\"domain\": {\"id\": \"\u003cnotification\u003e\", \"type\": \"billing_notification\"}, \"payload\": {\"notification_id\": \"\u003cnotification\u003e\"}, \"correlation_id\": \"billing-notification:\u003cnotification\u003e\", \"idempotency_key\": \"billing:subscription_cancelled:88888888-0000-4000-8000-000000000009:d133bfed9905b64f1704af88636ce7a82d13e0753a5acff48e0e01461ad21136\", \"organization_id\": \"88888888-0000-4000-8000-000000000009\", \"contract_version\": 1} ¦ 71 ¦ webhooks ¦ 2 ¦ 4 ¦ pending ¦ 0 ¦ true ¦ true ¦ true ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nbilling:subscription_cancelled:88888888-0000-4000-8000-00000000000a:938bc48536a7a57a004a3204882059951293434b5c0c66f73c9d52d00153abe4 ¦ operational.billing_notification ¦ 1 ¦ {\"domain\": {\"id\": \"\u003cnotification\u003e\", \"type\": \"billing_notification\"}, \"payload\": {\"notification_id\": \"\u003cnotification\u003e\"}, \"correlation_id\": \"billing-notification:\u003cnotification\u003e\", \"idempotency_key\": \"billing:subscription_cancelled:88888888-0000-4000-8000-00000000000a:938bc48536a7a57a004a3204882059951293434b5c0c66f73c9d52d00153abe4\", \"organization_id\": \"88888888-0000-4000-8000-00000000000a\", \"contract_version\": 1} ¦ 71 ¦ webhooks ¦ 2 ¦ 4 ¦ pending ¦ 0 ¦ true ¦ true ¦ true ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nbilling:subscription_cancelled:\u003cid\u003e:d133bfed9905b64f1704af88636ce7a82d13e0753a5acff48e0e01461ad21136 ¦ operational.billing_notification ¦ 1 ¦ {\"domain\": {\"id\": \"\u003cnotification\u003e\", \"type\": \"billing_notification\"}, \"payload\": {\"notification_id\": \"\u003cnotification\u003e\"}, \"correlation_id\": \"billing-notification:\u003cnotification\u003e\", \"idempotency_key\": \"billing:subscription_cancelled:\u003cid\u003e:d133bfed9905b64f1704af88636ce7a82d13e0753a5acff48e0e01461ad21136\", \"organization_id\": \"\u003cid\u003e\", \"contract_version\": 1} ¦ 71 ¦ webhooks ¦ 2 ¦ 4 ¦ pending ¦ 0 ¦ true ¦ true ¦ true ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nbilling:subscription_changed:88888888-0000-4000-8000-000000000001:deb4e1f497344907165c24aebd04716cb3507ec4b0fd6e9b1f4492952e6e097e ¦ operational.billing_notification ¦ 1 ¦ {\"domain\": {\"id\": \"\u003cnotification\u003e\", \"type\": \"billing_notification\"}, \"payload\": {\"notification_id\": \"\u003cnotification\u003e\"}, \"correlation_id\": \"billing-notification:\u003cnotification\u003e\", \"idempotency_key\": \"billing:subscription_changed:88888888-0000-4000-8000-000000000001:deb4e1f497344907165c24aebd04716cb3507ec4b0fd6e9b1f4492952e6e097e\", \"organization_id\": \"88888888-0000-4000-8000-000000000001\", \"contract_version\": 1} ¦ 71 ¦ webhooks ¦ 2 ¦ 4 ¦ pending ¦ 0 ¦ true ¦ true ¦ true ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nbilling:subscription_changed:88888888-0000-4000-8000-000000000004:0646d65417bfabe46872d7d05c198fe6e30871045492f29e2fa9da93b93b0433 ¦ operational.billing_notification ¦ 1 ¦ {\"domain\": {\"id\": \"\u003cnotification\u003e\", \"type\": \"billing_notification\"}, \"payload\": {\"notification_id\": \"\u003cnotification\u003e\"}, \"correlation_id\": \"billing-notification:\u003cnotification\u003e\", \"idempotency_key\": \"billing:subscription_changed:88888888-0000-4000-8000-000000000004:0646d65417bfabe46872d7d05c198fe6e30871045492f29e2fa9da93b93b0433\", \"organization_id\": \"88888888-0000-4000-8000-000000000004\", \"contract_version\": 1} ¦ 71 ¦ webhooks ¦ 2 ¦ 4 ¦ pending ¦ 0 ¦ true ¦ true ¦ true ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nbilling:trial_expiring:88888888-0000-4000-8000-000000000008:\u003ctrial key\u003e ¦ operational.billing_notification ¦ 1 ¦ {\"domain\": {\"id\": \"\u003cnotification\u003e\", \"type\": \"billing_notification\"}, \"payload\": {\"notification_id\": \"\u003cnotification\u003e\"}, \"correlation_id\": \"billing-notification:\u003cnotification\u003e\", \"idempotency_key\": \"billing:trial_expiring:88888888-0000-4000-8000-000000000008:\u003ctrial key\u003e\", \"organization_id\": \"88888888-0000-4000-8000-000000000008\", \"contract_version\": 1} ¦ 71 ¦ webhooks ¦ 2 ¦ 4 ¦ pending ¦ 0 ¦ true ¦ true ¦ true ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nbilling:trial_expiring:88888888-0000-4000-8000-000000000008:\u003ctrial key\u003e ¦ operational.billing_notification ¦ 1 ¦ {\"domain\": {\"id\": \"\u003cnotification\u003e\", \"type\": \"billing_notification\"}, \"payload\": {\"notification_id\": \"\u003cnotification\u003e\"}, \"correlation_id\": \"billing-notification:\u003cnotification\u003e\", \"idempotency_key\": \"billing:trial_expiring:88888888-0000-4000-8000-000000000008:\u003ctrial key\u003e\", \"organization_id\": \"88888888-0000-4000-8000-000000000008\", \"contract_version\": 1} ¦ 71 ¦ webhooks ¦ 2 ¦ 4 ¦ pending ¦ 0 ¦ true ¦ true ¦ true ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nbilling:trial_expiring:88888888-0000-4000-8000-000000000008:\u003ctrial key\u003e ¦ operational.billing_notification ¦ 1 ¦ {\"domain\": {\"id\": \"\u003cnotification\u003e\", \"type\": \"billing_notification\"}, \"payload\": {\"notification_id\": \"\u003cnotification\u003e\"}, \"correlation_id\": \"billing-notification:\u003cnotification\u003e\", \"idempotency_key\": \"billing:trial_expiring:88888888-0000-4000-8000-000000000008:\u003ctrial key\u003e\", \"organization_id\": \"88888888-0000-4000-8000-000000000008\", \"contract_version\": 1} ¦ 71 ¦ webhooks ¦ 2 ¦ 4 ¦ pending ¦ 0 ¦ true ¦ true ¦ true ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ \u003cnow\u003e\nbilling:trial_expiring:88888888-0000-4000-8000-000000000008:\u003ctrial key\u003e ¦ operational.billing_notification ¦ 1 ¦ {\"domain\": {\"id\": \"\u003cnotification\u003e\", \"type\": \"billing_notification\"}, \"payload\": {\"notification_id\": \"\u003cnotification\u003e\"}, \"correlation_id\": \"billing-notification:\u003cnotification\u003e\", \"idempotency_key\": \"billing:trial_expiring:88888888-0000-4000-8000-000000000008:\u003ctrial key\u003e\", \"organization_id\": \"88888888-0000-4000-8000-000000000008\", \"contract_version\": 1} ¦ 71 ¦ webhooks ¦ 2 ¦ 4 ¦ pending ¦ 0 ¦ true ¦ true ¦ true ¦ \u003cnow\u003e ¦ \u003cnow\u003e ¦ \u003cnow\u003e"
+    },
+    "stripe_calls_py": {
+      "rows": "GET /v1/checkout/sessions/cs_team/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_ent/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_unknown/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_nullprice/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_noprice/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_team_then_ent/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_blank_then_ent/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_fail/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_empty/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions//line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_ent/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_team/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_team/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_team/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/checkout/sessions/cs_team/line_items | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key"
+    }
+  }
+}

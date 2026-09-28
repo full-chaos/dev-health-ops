@@ -251,6 +251,13 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, billing.Routes(billing.Deps{
 			Pool: deps.Pool, Guard: deps.Guard, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger,
 			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, StripeKey: deps.StripeSecretKey, Producer: deps.Producer,
+			// Threaded through like every other area's Now above (deps.Now nil
+			// in production defaults to time.Now, both here and inside
+			// billing.Deps itself); CHAOS-7032's frozen webhook goldens are the
+			// first caller that actually injects a fixed clock, so the Stripe
+			// signature timestamp check judges a replay at the instant it was
+			// recorded for, not the instant it happens to replay at.
+			Now: deps.Now,
 		})...)
 		routes = append(routes, admin.Routes(admin.Deps{
 			Pool:          deps.Pool,

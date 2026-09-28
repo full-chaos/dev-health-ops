@@ -1,0 +1,421 @@
+{
+  "header": {
+    "test": "TestInvoiceWebhookAppliesTestModeEvents",
+    "python_build": "c3a755abd3b30ba41625178c6bb00e1e2c219fcb",
+    "producer_digest": "593bfd8c0effcfa724b10a3b0693c70faec29674020088362a4af2ad1d85568a",
+    "recipe": "git worktree add --detach \u003cdir\u003e c3a755abd3b30ba41625178c6bb00e1e2c219fcb; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestInvoiceWebhookAppliesTestModeEvents$' ."
+  },
+  "requests": [
+    {
+      "name": "sub: created",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "ff3a6845deb421ef0fbfddb779045c58798de751b389b0cf10fbc06f66c2050a",
+      "request_headers_sha256": "469e77a2de1b319651038b13624b3eb8a0a743df5cfe244301687602d1e860a5",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "sub: finalized",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "c8cdc603874f2fed0dcb0ce70eed67a4a90cf55d4629f70f2b8c703cdf711891",
+      "request_headers_sha256": "bc30906dac24e653079631f59d28c64f3e4adf75b76463f278c6ca256134c352",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "sub: paid",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "7a541a07449e00c6aba6c02d87b6fad7461ac02794109fd1b930f1b3e0824a12",
+      "request_headers_sha256": "96eb7685c8e4117b0da7578d3aa2447a3532f2a3f02fced9a643095417aafb53",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "sub: paid redelivered",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "7a541a07449e00c6aba6c02d87b6fad7461ac02794109fd1b930f1b3e0824a12",
+      "request_headers_sha256": "96eb7685c8e4117b0da7578d3aa2447a3532f2a3f02fced9a643095417aafb53",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "sub: older update after paid",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "405004a4477d4a862322293d9a32603b71573171f4e95e3c06a611d8d4a7e491",
+      "request_headers_sha256": "919eca533785d9fb214d9b976ba74494bc5108c3380b25377740131f8aada3f7",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "metadata org: payment failed",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "3f11baceb296c535e82632f4ea34caf47b1e3d9c3e6421be0a553647539a3455",
+      "request_headers_sha256": "86058d778b73cc5f4c4d0cb87dc5773c87011f217b5969e41e7782e6bec41b6c",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "subscription metadata org: voided",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "23b3b1b20c20cdf817739fa0e053b88cc027714823dc2612260c5e0c3335c281",
+      "request_headers_sha256": "c10a2b06437f0034417d8cbe75ab77c598622478c192bd51956c629f602abc4f",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "customer license org: finalized",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "fb33b9cb9cc423810326e70ee25b87b8a34701c9e33f4b14024d49f57fd82080",
+      "request_headers_sha256": "23ac8413bb5b8b5af0fbc4383c565195749aa5e6e63be883f8965c574a64d942",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "unknown metadata org falls through to the customer",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "555367942c5b9d1940f174c269262e1ecb7c2bb85edefbbabb20e78c1d92da3e",
+      "request_headers_sha256": "0ce4610bb776874557e4ac9df74c47e6f022e8e0c5b7b047deef35c76b31b27e",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "uncollectible",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "35fa5841494c695229a2c4335b46674127b57684f86b223fbe3060fc0d5c7dbb",
+      "request_headers_sha256": "32d9ce14459f28bfeed096bc964f3fbeda61a7367907dbc4600276013a7c6ae0",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "uncollectible then paid",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "94de935c8eda2c3187e0de0ac0ad17de66bd0212d1944115e375f023d700d56f",
+      "request_headers_sha256": "7ef9cc1afeed1f9f7fabd0baa803a263dcfe748ae1aad6061b004c65fefcbe99",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "paid after void",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "63ca1e49420d997028ab9ecb10ef9c6c28379d1281121e30bd1bac04ee5f5fef",
+      "request_headers_sha256": "a46be5d4d464d0968c9863688d42ebe0e50bf0b96eab5a391a5b936c07a19fc8",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "metadata org: older open update after failure",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "80d372ff3ccf4b1f4df7260476469b3b5251f097e9711015637fd5ac426938c1",
+      "request_headers_sha256": "9e3ded37bb348f76fe91251188df6e8b711f9c49cea9a85a390816b3307becdb",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "metadata org: older draft after failure",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "b0353872bfe2544c96986a563538ebe6855ef3ee3404d667d3477b530d7923b7",
+      "request_headers_sha256": "6bb4538da1de08f3286f1cee74b489dcb919d7caff4122ea67fcf6527ab13306",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "payment failed on an uncollectible payload",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "7303bb395da8445ef608358231bd4f52d5034df0ba281a22d24810c81088915c",
+      "request_headers_sha256": "10b51380383a8f69bcd886df3044e9b9c99717f0441e2ad93034d2865f57f9c4",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "legacy top-level subscription",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "e7c49f669b082c118218a018d5c6ab0eb251c13ceac3294e81577a22a1ee3fde",
+      "request_headers_sha256": "44e127029a60d5d3101e9126e3852513502f2501bb2928aea4505b46973ef1f8",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "paid clears amount_remaining",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "77f8b7c3de91fb9e5c9998370aac14c5352853c428b12fc3694f05cae7e9a789",
+      "request_headers_sha256": "ae0f10e77552b4e6279d203fb2a52bd14d216bb51c9215a0bad4c832bbbaec46",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "voided with an open payload",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "9ca55d91860114ff31b6e4d94b09c45c77cc3769a380e8205f7c8a69b10d921f",
+      "request_headers_sha256": "8cdcc197c86cc0452ac0d72e59a98ef6440fdfc4c4e0f3d10c6b47edf2e7889b",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "amount_due beyond int4",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "6f6761ee3bfaadf94ed6a10d42a43240e80171e11f2a1d902182e3c87c3f28bf",
+      "request_headers_sha256": "a212e0868fa5de7af48962b8d6679b019b33872ea8b4c6ba7afc4b6f08666b0d",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "amount_paid beyond int4",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "c976b5b6c9c0ee0f0089f86cbf5b10b11ca493b23416b26489300bda619ccf5c",
+      "request_headers_sha256": "a26804f54c1638e0d6feb346f2e42af722b74f9ec2c8c8d113ef7c8a5c590459",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "amount_remaining beyond int4",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "13b0798216bf3f1d61df548ee4c367c1bf02203e0f44ca396b8ed5e4f76d574b",
+      "request_headers_sha256": "f1e94b4f67fe5bc1663c896b71a28773e20953a5a2ba39c546fb624e59d6f354",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "attempt_count beyond int4",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "6b04f49ddb4a031ceb01edd178e38fa6525fcd34da24e53a039c81b6f49643c3",
+      "request_headers_sha256": "9b8ccc1035ff88178d81a35ab3d99396df469709d01b560f7bd9177b24f366cb",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "line amount beyond int4",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "3fc6cc99616bf89754f5df042b70b541f644694f99f65140d3e138787d990bf5",
+      "request_headers_sha256": "a2f9cf0390c8ebe0410e8b450e81999fb7c3663f02d25d8871f9036a0ec7d60b",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "line quantity beyond int4",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "cc510d67f393e98c921ab174ac05a29703ed4d14f1df9222c39fb8f6acd37b7e",
+      "request_headers_sha256": "264b1a8d373263fb54f4e38ae355fa2f80c68e1237bc35b4a2868e818aafb42d",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "line negative amount beyond int4",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "358e718ffa429c58ccdcbdc70a166823a894aca884d80a317a7d293193249b60",
+      "request_headers_sha256": "bf8499eeaf639f2830611dc1d6c62d212ee2497e6d46ee8a447bbe2825a5d6fa",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "amount at the int4 limit",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "6fd60b674a705e2d6c6099ab393b15f39089e7576606ad4d55a1e2f462e74f26",
+      "request_headers_sha256": "222b75a1b1169dc3be27a40dff4b4f9530713cace3f0dc760337ad24c44b5b3a",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "failed, then paid",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "202d1d0c89b901559385f8fdf2e0353b784e9a97bc738be554b298315564a374",
+      "request_headers_sha256": "c5245b5ccea72d281eb72e486fe7b6d0241fa0002dd65274dc0516d49506345f",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "failed, then paid: paid",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "37f6234ea7f3cdcd3f390be18457e4bac0f163f10b56f24f249563e54239d5f7",
+      "request_headers_sha256": "a9aaf12e608463acee20f416c7fd243c9a8c67953d2a6eb1ff8c7d825494683a",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "lines beyond the event (has_more)",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "1ddd568c348644146c796d7109d1b2e9600490135ba5da700eadc7edaff0abb9",
+      "request_headers_sha256": "a056c1ff0ba4a42f46bf1bc99bf7a02449723790b93755d35eb4e6b7d4fc0647",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "no org",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "639aaacc2c0a7e546e0ba2c3ef4a25123a32c2003ad9ffa24a4f79742c2e07c1",
+      "request_headers_sha256": "0df9e2c10f8b4197626a4d7ef06fe8bdb0bdb10e0c3fdc98d09d707d0d1a23a3",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "org not a uuid",
+      "method": "POST",
+      "path": "/api/v1/billing/webhooks/stripe",
+      "body_sha256": "cb827adcc1bd613e92fb4797961c969fc74bc3c233a5e3fb174b82f9c583e53f",
+      "request_headers_sha256": "375bbd59113b759f25d2a21815f3ae7f4f1922b854919722cb24b700c2ca284e",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    }
+  ],
+  "rows": {
+    "invoice_count": {
+      "rows": "0"
+    },
+    "recorded_at": {
+      "rows": "2026-09-28T15:29:58.425730795Z"
+    }
+  }
+}

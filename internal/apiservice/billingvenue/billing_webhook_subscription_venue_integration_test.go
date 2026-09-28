@@ -78,7 +78,7 @@ func setPrice(object map[string]any, price any) {
 // shapes process_event and the handlers read (dates as numbers, strings,
 // bools and out of range; ids, customers, statuses and items of the wrong
 // type); the org_id shapes; and trial_will_end's trial_end shapes.
-func subscriptionRequests(t *testing.T, f billingFixture, event webhookEventFunc, signed func(string, []byte)) {
+func subscriptionRequests(t *testing.T, f billingFixture, event webhookEventFunc, signed func(string, []byte), now time.Time) {
 	t.Helper()
 	org := webhookSubOrgs
 	type fields map[string]any
@@ -221,7 +221,7 @@ func subscriptionRequests(t *testing.T, f billingFixture, event webhookEventFunc
 	trial := func(name string, trialEnd any, orgID any) {
 		sub(name, "customer.subscription.trial_will_end", "sub_t", with(metadata(orgID), fields{"trial_end": trialEnd}), nil)
 	}
-	soon := time.Now().Add(3*24*time.Hour + 12*time.Hour).Unix()
+	soon := now.Add(3*24*time.Hour + 12*time.Hour).Unix()
 	trial("trial: 3.5 days left (org 8)", soon, org[7])
 	trial("trial: float end (org 8)", 1790500000.9, org[7])
 	trial("trial: numeric string (org 8)", " 1790241482 ", org[7])

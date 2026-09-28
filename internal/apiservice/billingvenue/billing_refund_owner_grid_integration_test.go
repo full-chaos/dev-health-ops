@@ -48,6 +48,7 @@ const gridWaitingFormat = "dddddddd-0000-4000-8000-%012d"
 func TestRefundEventOwnershipGrid(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
+	golden := venueoracle.OpenGolden(t, webhookGoldenSpec(t.Name(), goldenDigest(t.Name())))
 	fake := newFakeStripe()
 	goStripe := httptest.NewServer(fake.plane("go"))
 	t.Cleanup(goStripe.Close)
@@ -76,7 +77,7 @@ func TestRefundEventOwnershipGrid(t *testing.T) {
 		}
 	}
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			for _, cell := range cells {
@@ -122,11 +123,16 @@ func TestRefundEventOwnershipGrid(t *testing.T) {
 		StripeSecretKey:    loaded.StripeSecretKey, APIBilling: loaded.APIBilling,
 		StripeWebhookSecret: loaded.StripeWebhookSecret, LicensePrivateKey: loaded.LicensePrivateKey,
 	}
-	base := startBillingVenueAPI(t, ctx, cfg, venue, goStripe.URL)
+	// Prime the golden's lifecycle (recordedAt needs at least one Python call
+	// first) so the webhook signatures below are stamped from the recorded
+	// clock, not the instant a later frozen replay happens to run at.
+	golden.Python(t, venue, []venueoracle.Request{})
+	goNow := recordedAt(t, golden, time.Now().UTC())
+	base := startBillingVenueAPI(t, ctx, cfg, venue, goStripe.URL, func() time.Time { return goNow })
 	orgA, orgB := seed.orgA.String(), seed.orgB.String()
 
 	// The event of a cell.
-	stamp := time.Now().Unix() + 300
+	stamp := goNow.Unix() + 300
 	request := func(cell gridCell) venueoracle.Request {
 		fixture := cell.event + ".json"
 		if cell.event == "refund.failed" {
@@ -170,7 +176,7 @@ func TestRefundEventOwnershipGrid(t *testing.T) {
 	for index, cell := range cells {
 		requests[index] = request(cell)
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 
 	counts := func() map[string]int64 { return decisionCounts(t) }
 
@@ -185,16 +191,11 @@ func TestRefundEventOwnershipGrid(t *testing.T) {
 		}
 		return "another invoice"
 	}
-	// outcome is what a plane holds for the cell: the row carrying the
+	// cellOutcome is what a plane holds for the cell: the row carrying the
 	// cell's Stripe refund id, as "org/invoice[+adopted]", or "none".
-	outcome := func(uri string, cell gridCell) string {
-		pool, err := pgxpool.New(ctx, uri)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer pool.Close()
+	cellOutcome := func(pool *pgxpool.Pool, cell gridCell) string {
 		var org, invoice, id string
-		err = pool.QueryRow(ctx, `SELECT org_id::text, coalesce(invoice_id::text, '-'), id::text FROM refunds WHERE stripe_refund_id = $1`, cell.refund).Scan(&org, &invoice, &id)
+		err := pool.QueryRow(ctx, `SELECT org_id::text, coalesce(invoice_id::text, '-'), id::text FROM refunds WHERE stripe_refund_id = $1`, cell.refund).Scan(&org, &invoice, &id)
 		if err != nil {
 			return "none"
 		}
@@ -203,6 +204,33 @@ func TestRefundEventOwnershipGrid(t *testing.T) {
 			text += "+adopted"
 		}
 		return text
+	}
+	// outcome reads the Go plane directly (always live). The Python plane's
+	// 180 outcomes are read as ONE frozen snapshot below (pyOutcome), not
+	// one golden row comparison per cell.
+	outcome := func(uri string, cell gridCell) string {
+		pool, err := pgxpool.New(ctx, uri)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		return cellOutcome(pool, cell)
+	}
+	pyOutcomeText := golden.InspectRows(t, "python_outcomes", func() string {
+		pool, err := pgxpool.New(ctx, pyURI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		lines := make([]string, len(cells))
+		for index, cell := range cells {
+			lines[index] = cellOutcome(pool, cell)
+		}
+		return strings.Join(lines, "\n")
+	})
+	pyOutcome := strings.Split(pyOutcomeText, "\n")
+	if len(pyOutcome) != len(cells) {
+		t.Fatalf("python outcomes: %d lines, want %d (one per cell)", len(pyOutcome), len(cells))
 	}
 
 	// The expectations, written from each side's rule, not from its code.
@@ -312,7 +340,7 @@ func TestRefundEventOwnershipGrid(t *testing.T) {
 		reasons[reason]++
 
 		wantPy := pythonWant(cell)
-		if have := outcome(pyURI, cell); have != wantPy {
+		if have := pyOutcome[cell.index]; have != wantPy {
 			mismatches = append(mismatches, fmt.Sprintf("%s: python recorded %q, want %q (status %d)", name, have, wantPy, python[cell.index].Status))
 		}
 		if wantGo != wantPy {
@@ -396,5 +424,10 @@ func TestRefundEventOwnershipGrid(t *testing.T) {
 	if agree == 0 {
 		t.Errorf("no cell held Go to Python: the differential part of the grid measured nothing")
 	}
+	// Every Python answer was inspected via pyOutcome (the row state), never
+	// compared with a Go one by Diff.
+	golden.Consumed(t, python...)
+	golden.SkipDiff(t)
 	venueoracle.WriteProof(t)
+	golden.Finish(t)
 }

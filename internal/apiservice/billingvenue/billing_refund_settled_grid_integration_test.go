@@ -33,6 +33,7 @@ import (
 func TestRefundEventSettledGrid(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	golden := venueoracle.OpenGolden(t, webhookGoldenSpec(t.Name(), goldenDigest(t.Name())))
 	fake := newFakeStripe()
 	goStripe := httptest.NewServer(fake.plane("go"))
 	t.Cleanup(goStripe.Close)
@@ -64,7 +65,7 @@ func TestRefundEventSettledGrid(t *testing.T) {
 	const storedReason = "lost_or_stolen_card"
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			for _, c := range cells {
@@ -95,9 +96,14 @@ func TestRefundEventSettledGrid(t *testing.T) {
 		StripeSecretKey:    loaded.StripeSecretKey, APIBilling: loaded.APIBilling,
 		StripeWebhookSecret: loaded.StripeWebhookSecret, LicensePrivateKey: loaded.LicensePrivateKey,
 	}
-	base := startBillingVenueAPI(t, ctx, cfg, venue, goStripe.URL)
+	// Prime the golden's lifecycle (recordedAt needs at least one Python call
+	// first) so the webhook signatures below are stamped from the recorded
+	// clock, not the instant a later frozen replay happens to run at.
+	golden.Python(t, venue, []venueoracle.Request{})
+	goNow := recordedAt(t, golden, time.Now().UTC())
+	base := startBillingVenueAPI(t, ctx, cfg, venue, goStripe.URL, func() time.Time { return goNow })
 
-	stamp := time.Now().Unix() + 300
+	stamp := goNow.Unix() + 300
 	requests := make([]venueoracle.Request, len(cells))
 	for index, c := range cells {
 		fixture := c.event + ".json"
@@ -127,21 +133,40 @@ func TestRefundEventSettledGrid(t *testing.T) {
 			Headers: map[string]string{"Stripe-Signature": webhookSignature(webhookVenueSecret, stamp, body), "Content-Type": "application/json"},
 			Body:    venueoracle.B64(string(body))}
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 
 	goURI, pyURI := venue.AdminURI(t, venue.GoDB), venue.AdminURI(t, venue.SourceDB)
-	outcome := func(uri string, c cell) string {
-		pool, err := pgxpool.New(ctx, uri)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer pool.Close()
+	cellOutcome := func(pool *pgxpool.Pool, c cell) string {
 		var status, failure string
 		var rows int
 		if err := pool.QueryRow(ctx, `SELECT count(*), coalesce(min(status), '-'), coalesce(min(coalesce(failure_reason, '<null>')), '-') FROM refunds WHERE stripe_refund_id = $1`, c.refund).Scan(&rows, &status, &failure); err != nil {
 			t.Fatal(err)
 		}
 		return fmt.Sprintf("%d row(s) %s/%s", rows, status, failure)
+	}
+	outcome := func(uri string, c cell) string {
+		pool, err := pgxpool.New(ctx, uri)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		return cellOutcome(pool, c)
+	}
+	pyOutcomeText := golden.InspectRows(t, "python_outcomes", func() string {
+		pool, err := pgxpool.New(ctx, pyURI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		lines := make([]string, len(cells))
+		for index, c := range cells {
+			lines[index] = cellOutcome(pool, c)
+		}
+		return strings.Join(lines, "\n")
+	})
+	pyOutcome := strings.Split(pyOutcomeText, "\n")
+	if len(pyOutcome) != len(cells) {
+		t.Fatalf("python outcomes: %d lines, want %d (one per cell)", len(pyOutcome), len(cells))
 	}
 	// Go: a settled status is never replaced by one that says it is not
 	// settled, and a recorded reason is never erased by an event without one.
@@ -201,7 +226,7 @@ func TestRefundEventSettledGrid(t *testing.T) {
 		if have, want := outcome(goURI, c), goWant(c); have != want {
 			t.Errorf("%s: go holds %q, want %q", name, have, want)
 		}
-		if have, want := outcome(pyURI, c), pythonWant(c); have != want {
+		if have, want := pyOutcome[c.index], pythonWant(c); have != want {
 			t.Errorf("%s: python holds %q, want %q (status %d)", name, have, want, python[c.index].Status)
 		}
 		if goWant(c) != pythonWant(c) {
@@ -212,5 +237,10 @@ func TestRefundEventSettledGrid(t *testing.T) {
 		t.Errorf("the grid holds %d cells, want 150", len(cells))
 	}
 	t.Logf("cells %d; go and python differ in %d (named: Stripe's own refund events applied, a settled status never reopened, a failure reason never erased)", len(cells), divergent)
+	// Every Python answer was inspected via pyOutcome (the row state), never
+	// compared with a Go one by Diff.
+	golden.Consumed(t, python...)
+	golden.SkipDiff(t)
 	venueoracle.WriteProof(t)
+	golden.Finish(t)
 }

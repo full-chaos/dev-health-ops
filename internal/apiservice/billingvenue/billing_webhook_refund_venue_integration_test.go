@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // webhookRefundOrgs are the refund event cases' own orgs, and
@@ -35,10 +37,19 @@ func refundSeed(t *testing.T, ctx context.Context, admin *pgxpool.Pool) {
 		webhookRefundInvoice, webhookRefundOrgs[0]); err != nil {
 		t.Fatal(err)
 	}
+	// created_at/updated_at are a fixed past literal, not now(): re_seeded is
+	// later UPDATED by the webhook events below, and under a frozen golden
+	// (CHAOS-7032) that update's own updated_at comes from the golden's
+	// RECORDED clock, which a replay run days or weeks later can precede a
+	// live now() taken at THIS seed call. A fixed past timestamp is safely
+	// before any clock (real or frozen) either plane will ever use, so
+	// updated_at >= created_at holds regardless of when a frozen replay
+	// happens to run -- the seed clock, not Go's update, is what a
+	// replay-time skew must not leak into this comparison.
 	if _, err := admin.Exec(ctx, `INSERT INTO refunds (id, org_id, invoice_id, stripe_refund_id, stripe_charge_id, stripe_payment_intent_id,
 		amount, currency, status, reason, description, metadata, created_at, updated_at) VALUES
 		(gen_random_uuid(), $1, NULL, 're_seeded', 'ch_seeded', 'pi_seeded', 500, 'usd', 'pending', 'duplicate', 'stored description', '{"kept": "no"}',
-		 now(), now())`, webhookRefundOrgs[1]); err != nil {
+		 '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z')`, webhookRefundOrgs[1]); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -193,10 +204,11 @@ func measureRefunds(t *testing.T, ctx context.Context, uri string) {
 // row an event wrote carries metadata on the Python plane, and the Go
 // plane keeps the event's own. When Python stores it too, the first check
 // fails and the divergence is gone.
-func refundMetadata(t *testing.T, ctx context.Context, pythonURI, goURI string) string {
+func refundMetadata(t *testing.T, ctx context.Context, golden *venueoracle.Golden, pythonURI, goURI string) string {
 	t.Helper()
 	const kept = `SELECT count(*) FILTER (WHERE metadata::text <> '{}')::text || ' of ' || count(*)::text FROM refunds WHERE stripe_refund_id LIKE 're_evt_%'`
-	python, goPlane := tableRows(t, ctx, pythonURI, kept), tableRows(t, ctx, goURI, kept)
+	python := golden.InspectRows(t, "refund_metadata_kept", func() string { return tableRows(t, ctx, pythonURI, kept) })
+	goPlane := tableRows(t, ctx, goURI, kept)
 	if python != "0 of 5" {
 		t.Errorf("python kept metadata on event-written refunds (%s): the divergence is gone, compare the column", python)
 	}

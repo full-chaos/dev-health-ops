@@ -488,6 +488,42 @@ func TestThePublicFrozenWorkflowEndToEnd(t *testing.T) {
 	golden.Finish(t)
 }
 
+// TestSkipDiffLetsAnAllConsumedGoldenReachFinish is the lifecycle a test that
+// never calls Diff needs (a named-Python-divergence check that only inspects
+// the Python plane's own answers and row state, never re-sends the same
+// requests to Go for comparison): Finish refuses before SkipDiff runs (state
+// is still "answers fetched", the same named error the fixed lifecycle gives
+// any other out-of-order call), and succeeds once every handed-out answer and
+// row snapshot was declared Consumed/InspectRows and SkipDiff ran. SkipDiff
+// does not relax the "every answer used" requirement: with one answer left
+// uninspected, Finish still refuses it.
+func TestSkipDiffLetsAnAllConsumedGoldenReachFinish(t *testing.T) {
+	t.Setenv(goldenUpdateEnv, "")
+	t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
+	requests := sampleRequests()
+	file := sampleGolden(requests)
+	file.Header.Test = t.Name()
+	path, digest := writeGoldenFile(t, t.TempDir(), file)
+	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+	answers := golden.Python(t, nil, requests)
+
+	if err := golden.stepErr("Finish", stateDiffed); err == nil || !strings.Contains(err.Error(), "Finish called when the golden is answers fetched") {
+		t.Fatalf("Finish before SkipDiff: %v", err)
+	}
+
+	golden.Consumed(t, answers[:1]...)
+	golden.SkipDiff(t)
+	if golden.state != stateDiffed {
+		t.Fatalf("state after SkipDiff = %v, want diffed", golden.state)
+	}
+	if err := golden.answersCompared(); err == nil || !strings.Contains(err.Error(), "neither compared") {
+		t.Fatalf("SkipDiff waived the still-uninspected second answer: %v", err)
+	}
+	golden.Consumed(t, answers[1:]...)
+	golden.InspectRows(t, "rows", func() string { t.Fatal("frozen replay must not read the source database"); return "" })
+	golden.Finish(t)
+}
+
 // handOut gives a golden two handed-out answers the way Python does.
 func handOut(t *testing.T) (*Golden, []Request, []Response) {
 	t.Helper()

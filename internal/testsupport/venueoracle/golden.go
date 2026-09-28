@@ -665,6 +665,20 @@ func (g *Golden) bindAnswers(requests []Request, answers []Response) error {
 // afterDiff records that Diff ran.
 func (g *Golden) afterDiff() { g.state = stateDiffed }
 
+// SkipDiff advances the lifecycle from Python to Finish for a test that never
+// calls venueoracle.Diff: every answer it fetched was declared inspected
+// (Consumed) instead of compared with a Go answer, because nothing in the
+// test re-sends the same requests to Go for a side-by-side comparison (for
+// example, a named-Python-divergence check that only asserts the Python
+// plane's own status codes and row count). Finish still requires every
+// answer and row snapshot handed out to have been used; SkipDiff only lifts
+// the "a Diff call happened" requirement, it does not relax that one.
+func (g *Golden) SkipDiff(t *testing.T) {
+	t.Helper()
+	g.beforeDiff(t)
+	g.afterDiff()
+}
+
 // Consumed declares that the test itself inspected these answers (for example a
 // /metrics scrape it reads a counter from), so they are not left uncompared:
 // Finish requires every answer handed out to have been either compared by Diff

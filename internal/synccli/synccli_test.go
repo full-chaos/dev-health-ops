@@ -363,6 +363,25 @@ func TestGitLabCatalogRefusalsRunNothing(t *testing.T) {
 	}
 }
 
+// The Linear catalog verb needs no --owner (the API key's workspace is the whole scope) and
+// refuses what Python's LinearClient.from_env() refuses: no token.
+func TestLinearCatalogRefusalsRunNothing(t *testing.T) {
+	env := validEnv()
+	delete(env, "LINEAR_API_KEY")
+	rec := &recorded{}
+	code, stdout, stderr := run(t, env, stubDeps(rec, failingClient{}, nil), "--provider", "linear", "--org", "o")
+	if code != cli.ExitFailure || !strings.Contains(stderr, "Linear API key required (set LINEAR_API_KEY)") || stdout != "" || rec.opened != 0 {
+		t.Errorf("no token: exit %d stdout %q stderr %q opened %d", code, stdout, stderr, rec.opened)
+	}
+	// Without ClickHouse the verb is refused (exit 3) before anything is read.
+	noCH := validEnv()
+	delete(noCH, "CLICKHOUSE_URI")
+	rec = &recorded{}
+	if code, _, stderr := run(t, noCH, stubDeps(rec, failingClient{}, nil), "--provider", "linear", "--org", "o", "--auth", "tok"); code != cli.ExitRefused || !strings.Contains(stderr, "CLICKHOUSE_URI") {
+		t.Errorf("no ClickHouse: exit %d %s", code, stderr)
+	}
+}
+
 // TestDBFlagIsAcceptedAndOverridesPostgresURI is the codex review r2 fix
 // proof: docs/reference/cli/index.md documents --db as a way to point `sync
 // teams --provider jira` at the domain database, but the verb's own flag set

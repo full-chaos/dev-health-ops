@@ -36,7 +36,7 @@ type teamCatalogLease struct{}
 func (teamCatalogLease) Assert(ctx context.Context) error { return ctx.Err() }
 
 // catalogProviders are the `--provider` values that run a catalog (jira runs Atlassian Teams).
-var catalogProviders = []string{"github", "gitlab"}
+var catalogProviders = []string{"github", "gitlab", "linear"}
 
 func isCatalogProvider(name string) bool {
 	for _, provider := range catalogProviders {
@@ -50,18 +50,30 @@ func isCatalogProvider(name string) bool {
 // catalogProviderSpec is the per-provider text Python's refusals use
 // (providers/teams.py): "--owner is required for <provider> provider
 // (<ownerNoun>)." and "<label> token required. Use --auth or set <tokenEnv>
-// env var." -- verified against both the github and gitlab branches, which
-// share this exact shape with only the provider name, the owner's noun and
-// the token env var spelled differently.
+// env var." -- verified against the github and gitlab branches, which share
+// this exact shape with only the provider name, the owner's noun and the
+// token env var spelled differently. Linear's branch (providers.teams.py,
+// LinearClient.from_env) needs neither an --owner (the token scopes the
+// whole workspace) nor an --auth override -- ownerNoun empty skips the owner
+// refusal, tokenMissingMsg overrides the generic token message with Python's
+// own wording exactly (LinearClient.from_env's ValueError text).
 type catalogProviderSpec struct {
 	label     string
 	ownerNoun string
 	tokenEnv  string
+	// tokenMissingMsg, when set, replaces the generic "<label> token
+	// required. Use --auth or set <tokenEnv> env var." message verbatim.
+	tokenMissingMsg string
 }
 
 var catalogProviderSpecs = map[string]catalogProviderSpec{
 	"github": {label: "GitHub", ownerNoun: "org name", tokenEnv: "GITHUB_TOKEN"},
 	"gitlab": {label: "GitLab", ownerNoun: "group path", tokenEnv: "GITLAB_TOKEN"},
+	// No --owner: python's linear branch scopes to the whole workspace via
+	// LinearClient.from_env(), never a group/org argument. --auth is accepted
+	// here as a Go-only convenience override of LINEAR_API_KEY (python's verb
+	// reads only the env var, a named divergence -- RISK-NOTES).
+	"linear": {label: "Linear", tokenEnv: "LINEAR_API_KEY", tokenMissingMsg: "Linear configuration error: Linear API key required (set LINEAR_API_KEY)"},
 }
 
 // catalogRequest is what the verb read from its flags and environment.
@@ -130,6 +142,26 @@ func buildCatalogCollector(env cli.Env, d deps, request catalogRequest, owner, t
 			Sink:    providersync.GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: teamCatalogLease{}},
 		}
 		return collector, credential, client, 0
+	case "linear":
+		// No group/org scoping: the API key's workspace is the whole scope,
+		// exactly as LinearClient.from_env() reads it.
+		config := map[string]string{}
+		// LINEAR_URL, the same "PROVIDER_URL" spelling GITHUB_URL/GITLAB_URL use.
+		// Python's client hardcodes LINEAR_API_URL with no override at all: a
+		// named difference, needed here only so a fake API is reachable in tests.
+		if value, _ := env.Lookup("LINEAR_URL"); strings.TrimSpace(value) != "" {
+			config["base_url"] = strings.TrimSpace(value)
+		}
+		credential := providerfoundation.NewCredential("linear", "cli", config,
+			map[string]secrets.Value{"api_key": secrets.NewValue(token)})
+		client, err := providerfoundation.NewLinearClient(credential, doer, providerfoundation.DefaultRetryPolicy(), teamCatalogLease{})
+		if err != nil {
+			return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitFailure, "client_invalid", "the Linear client could not be built")
+		}
+		collector := providersync.LinearTeamCatalogCollector{
+			Sink: providersync.LinearReferenceCatalogClickHouseEffects{Conn: conn, Lease: teamCatalogLease{}},
+		}
+		return collector, credential, client, 0
 	default:
 		return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitUsage, "unsupported_provider", "provider "+request.provider+" has no team catalog verb")
 	}
@@ -144,9 +176,9 @@ func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRe
 		return writeError(env.Stderr, cli.ExitUsage, "unsupported_provider", "provider "+request.provider+" has no team catalog verb")
 	}
 
-	// Python's own refusals, in its order (providers/teams.py, github/gitlab branches): all exit 1.
+	// Python's own refusals, in its order (providers/teams.py, github/gitlab/linear branches): all exit 1.
 	owner := strings.TrimSpace(request.owner)
-	if owner == "" {
+	if spec.ownerNoun != "" && owner == "" {
 		return writeError(env.Stderr, cli.ExitFailure, "owner_required", "--owner is required for "+request.provider+" provider ("+spec.ownerNoun+").")
 	}
 	token := request.auth
@@ -154,7 +186,11 @@ func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRe
 		token, _ = env.Lookup(spec.tokenEnv)
 	}
 	if token == "" {
-		return writeError(env.Stderr, cli.ExitFailure, "token_required", spec.label+" token required. Use --auth or set "+spec.tokenEnv+" env var.")
+		message := spec.tokenMissingMsg
+		if message == "" {
+			message = spec.label + " token required. Use --auth or set " + spec.tokenEnv + " env var."
+		}
+		return writeError(env.Stderr, cli.ExitFailure, "token_required", message)
 	}
 
 	conn, err := d.openStore(ctx, request.dsn)

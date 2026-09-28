@@ -26,7 +26,17 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from test_helm_routing_carry_hooks import _ENABLED, _CARRY, _jobs, _script
+# mypy has no path entry for this directory (pyproject.toml's mypy_path covers only
+# src/), so it cannot resolve a sibling test module by bare name the way pytest's own
+# rootdir-based sys.path insertion does at run time -- confirmed real at run time by
+# every test in this file passing. Narrowly ignored rather than widening mypy_path
+# repo-wide for one chart-hook test suite.
+from test_helm_routing_carry_hooks import (  # type: ignore[import-not-found]
+    _CARRY,
+    _ENABLED,
+    _jobs,
+    _script,
+)
 
 
 def _run_script(

@@ -23,7 +23,9 @@ _RELEASE = "routing-carry"
 _CARRY = f"{_RELEASE}-dev-health-routing-carry"
 _REPOINT = f"{_RELEASE}-dev-health-routing-repoint"
 
-pytestmark = pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
+pytestmark = pytest.mark.skipif(
+    shutil.which("helm") is None, reason="helm is not installed"
+)
 
 _PINNED_TOOLS_IMAGE = (
     "ghcr.io/full-chaos/dev-health-go-api-tools"
@@ -65,7 +67,11 @@ def _render_stderr(*sets: str, is_upgrade: bool = True) -> tuple[int, str]:
 
 
 def _jobs(*sets: str) -> dict[str, dict]:
-    return {doc["metadata"]["name"]: doc for doc in _render(*sets) if doc.get("kind") == "Job"}
+    return {
+        doc["metadata"]["name"]: doc
+        for doc in _render(*sets)
+        if doc.get("kind") == "Job"
+    }
 
 
 def _container(job: dict) -> dict:
@@ -146,14 +152,20 @@ def test_carry_is_pre_upgrade_only() -> None:
         "carry must never run on pre-install -- there is no live query-api to carry FROM "
         f"on a fresh install, got {events}"
     )
-    assert job["metadata"]["annotations"]["helm.sh/hook-delete-policy"] == "before-hook-creation"
+    assert (
+        job["metadata"]["annotations"]["helm.sh/hook-delete-policy"]
+        == "before-hook-creation"
+    )
 
 
 def test_repoint_is_post_upgrade_only() -> None:
     job = _jobs(*_ENABLED)[_REPOINT]
     events = job["metadata"]["annotations"]["helm.sh/hook"].split(",")
     assert events == ["post-upgrade"]
-    assert job["metadata"]["annotations"]["helm.sh/hook-delete-policy"] == "before-hook-creation"
+    assert (
+        job["metadata"]["annotations"]["helm.sh/hook-delete-policy"]
+        == "before-hook-creation"
+    )
 
 
 # --- image pin, same bar as every other hook image ---------------------------------------
@@ -275,7 +287,10 @@ def test_envelope_key_is_mounted_as_a_file_not_an_env_var() -> None:
         mount_names = {m["name"] for m in container.get("volumeMounts", [])}
         assert "envelope-key" in mount_names
         volumes = {v["name"]: v for v in job["spec"]["template"]["spec"]["volumes"]}
-        assert volumes["envelope-key"]["secret"]["items"][0]["key"] == "GO_API_ENVELOPE_PRIVATE_KEY"
+        assert (
+            volumes["envelope-key"]["secret"]["items"][0]["key"]
+            == "GO_API_ENVELOPE_PRIVATE_KEY"
+        )
 
 
 def test_postgres_uri_sourced_from_the_registry_role_secret() -> None:

@@ -31,18 +31,33 @@ from pathlib import Path
 
 import pytest
 
-from test_helm_routing_carry_hooks import _ENABLED, _CARRY, _REPOINT, _jobs, _script
+# mypy has no path entry for this directory (pyproject.toml's mypy_path covers only
+# src/), so it cannot resolve a sibling test module by bare name the way pytest's own
+# rootdir-based sys.path insertion does at run time -- confirmed real at run time by
+# every test in this file passing. Narrowly ignored rather than widening mypy_path
+# repo-wide for one chart-hook test suite.
+from test_helm_routing_carry_hooks import (  # type: ignore[import-not-found]
+    _CARRY,
+    _ENABLED,
+    _REPOINT,
+    _jobs,
+    _script,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-pytestmark = pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
+pytestmark = pytest.mark.skipif(
+    shutil.which("helm") is None, reason="helm is not installed"
+)
 
 
 @pytest.fixture(scope="module")
 def real_dho() -> Path:
     """Builds the real `dho` binary once for this module -- the CLI these hooks actually
     invoke in production, not a stand-in that always answers what a test plan says."""
-    scratch = os.environ.get("TMPDIR") or "/var/lib/oci-cache/lane-scratch/gwc-cut-hardening"
+    scratch = (
+        os.environ.get("TMPDIR") or "/var/lib/oci-cache/lane-scratch/gwc-cut-hardening"
+    )
     Path(scratch).mkdir(parents=True, exist_ok=True)
     binary = Path(tempfile.mkdtemp(dir=scratch, prefix="real-dho-")) / "dho"
     completed = subprocess.run(
@@ -51,7 +66,9 @@ def real_dho() -> Path:
         capture_output=True,
         text=True,
     )
-    assert completed.returncode == 0, f"building the real dho binary failed:\n{completed.stderr}"
+    assert completed.returncode == 0, (
+        f"building the real dho binary failed:\n{completed.stderr}"
+    )
     binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
     return binary
 
@@ -75,7 +92,9 @@ def _mint_stub(bin_dir: Path, real_dho: Path) -> None:
     stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
 
 
-def _run_real_script(job: dict, real_dho: Path, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+def _run_real_script(
+    job: dict, real_dho: Path, tmp_path: Path
+) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     _mint_stub(bin_dir, real_dho)
@@ -148,11 +167,21 @@ def test_pre_upgrade_repoint_before_retry_flags_parse_against_the_real_binary(
     real_bin.chmod(real_bin.stat().st_mode | stat.S_IEXEC)
     proc = subprocess.run(
         [
-            str(real_bin), "goapi", "routing", "repoint",
-            "-registry-url", "http://127.0.0.1:1/registry",
-            "-buildinfo-url", "http://127.0.0.1:1/buildinfo",
-            "-json", "-operations", "all-registered",
-            "-recorded-by", "test", "-review-evidence", "test",
+            str(real_bin),
+            "goapi",
+            "routing",
+            "repoint",
+            "-registry-url",
+            "http://127.0.0.1:1/registry",
+            "-buildinfo-url",
+            "http://127.0.0.1:1/buildinfo",
+            "-json",
+            "-operations",
+            "all-registered",
+            "-recorded-by",
+            "test",
+            "-review-evidence",
+            "test",
         ],
         capture_output=True,
         text=True,

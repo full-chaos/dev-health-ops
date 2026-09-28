@@ -117,24 +117,43 @@ for f in $R/_records/bigboy-$OLD8/pass-bigboy-corpus-admin7.sh; do [ -f $f ] && 
 # exact source `carry` is designed to read from (docs/contribute/architecture/go-api-wave-0-
 # proof-infrastructure.md, "When the schema digest moves"). `carry` itself refuses (exit 2) when
 # the live and target schema digests already agree -- the EXPECTED shape for an ordinary,
-# non-schema-changing roll, not a failure, so only that one named refusal text is read as a
-# pass here. One documented, real exception (rev196, both bigboy's own re-cut and the actual
-# prod roll, _records/bigboy-1b05473e/prod-rev196-step1.5-carry-lines.md's own ABORT RULE A):
-# a refusal naming "run repoint first" means the live rows lag the actually-running build (no
-# schema change involved at all) -- repoint against the same live process, then ONE retry of
-# carry; only a second refusal is fatal. Any other non-zero result aborts the cut before
-# migrate/up ever runs.
+# non-schema-changing roll, not a failure. One documented, real exception (rev196, both
+# bigboy's own re-cut and the actual prod roll, _records/bigboy-1b05473e/prod-rev196-step1.5-
+# carry-lines.md's own ABORT RULE A): a "stale build" refusal means the live rows lag the
+# actually-running build (no schema change involved at all) -- repoint against the same live
+# process, then ONE retry of carry; only a second refusal is fatal. Any other non-zero result
+# aborts the cut before migrate/up ever runs.
+#
+# D2828/D2829 (CHAOS-7022 r1 self-correction, CHAOS-7023/#3369 r1 P1): branching on carry's
+# human-readable TEXT was wrong TWICE, in two different ways -- first a hand-typed grep that
+# never matched the real Go string at all, then (once fixed to match) a second finding that
+# text was never a stable contract in the first place: it differs between the CLI's own early
+# preflight and the goapiproof package's differently-worded sentinel errors for the exact same
+# condition, and a caller has no way to know which layer's wording it is reading. Structural
+# fix: `carry -json` prints one `GOAPI_ROUTING_JSON {...}` line with a `reason` field from a
+# small, closed vocabulary ("carried", "digest_unchanged", "stale_build", "refused", "error"),
+# set at the Go call site that KNOWS why, not guessed from prose. Extracted with jq (already
+# used elsewhere in this script, host-side, after `docker compose run` returns -- no new
+# dependency), never grep on error text again.
 ROUTING_ORG=${ROUTING_ORG:-67f1add8-9fcb-4272-addb-044b70c442c8}  # the disposable fixture org, never the local org
-CARRY_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo"
+CARRY_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -json"
+carry_reason() {
+  # $1: the captured carry/repoint stdout+stderr blob. Prints the GOAPI_ROUTING_JSON line's
+  # `reason` field, or empty if the line is missing/unparseable -- never dies (a missing/
+  # malformed JSON line is itself meaningful: the caller below treats an empty reason as "not
+  # a case we recognize", the same conservative default text-matching always fell back to).
+  printf '%s\n' "$1" | grep '^GOAPI_ROUTING_JSON ' | sed 's/^GOAPI_ROUTING_JSON //' | jq -r '.reason // empty' 2>/dev/null
+}
 CARRY_OUT=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
   "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing carry $CARRY_ARGS -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll carry, cut $OLD8 -> $N8'" 2>&1)
 CARRY_RC=$?
 echo "$CARRY_OUT" > "$REC.routing-carry.out"
+CARRY_REASON=$(carry_reason "$CARRY_OUT")
 if [ $CARRY_RC -eq 0 ]; then
   st routing-carry 0
-elif echo "$CARRY_OUT" | grep -q "this binary's SDL is the one the deployed process already computes"; then
+elif [ "$CARRY_REASON" = "digest_unchanged" ]; then
   st routing-carry 0; echo "no schema-digest change this cut -- nothing to carry"
-elif echo "$CARRY_OUT" | grep -q "run repoint first"; then
+elif [ "$CARRY_REASON" = "stale_build" ]; then
   echo "pre-roll carry: rows lag the actually-running build (no schema change) -- repointing then retrying once"
   REPOINT_OUT=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
     "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing repoint $CARRY_ARGS -operations all-registered -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll repoint-before-retry, cut $OLD8 -> $N8'" 2>&1)
@@ -158,7 +177,7 @@ elif echo "$CARRY_OUT" | grep -q "run repoint first"; then
   fi
 else
   st routing-carry 1
-  echo "FAIL: pre-roll routing carry refused for a reason other than 'no schema change' or a stale build -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
+  echo "FAIL: pre-roll routing carry refused for a reason other than 'no schema change' or a stale build (reason=${CARRY_REASON:-unrecognized}) -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
   exit 1
 fi
 # CHAOS-6987 (D2728): --env-file is required from here on -- docker compose's default .env

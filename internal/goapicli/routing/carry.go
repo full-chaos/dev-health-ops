@@ -26,13 +26,63 @@ package routing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
+
+// carryResult is -json's output shape: one line, prefixed carryJSONPrefix, printed to
+// stdout on EVERY outcome (success or refusal) when -json is set.
+//
+// D2828/D2829 (CHAOS-7022 r1, CHAOS-7023 r1 P1): callers (bigboy-cut.sh, the Helm
+// pre-upgrade hook) used to branch on grepping this command's human-readable TEXT for
+// specific refusal wording -- twice wrong, in two different ways, because that text was
+// never a contract (it changed shape between the CLI's own early preflight and the
+// goapiproof package's differently-worded sentinel errors for the exact same condition,
+// and a caller had no way to know which layer's wording it was reading). Reason is a
+// SMALL, STABLE, CLOSED vocabulary a caller switches on -- never the prose, which is free
+// to change without notice.
+type carryResult struct {
+	// Reason is exactly one of: "carried" (success, including a run that carried zero
+	// eligible rows), "digest_unchanged" (Preflight 2: this binary's SDL is already live
+	// -- an ordinary, expected no-op on a non-schema-changing roll), "stale_build" (a row
+	// names a build the deployed process is not running -- the caller's cue to `repoint`
+	// then retry, the rev196 exception), "refused" (any OTHER refusal -- catalog/document
+	// load failure, an unreachable registry, an unresolvable operation filter, a
+	// goapiproof-level write refusal not covered above), or "error" (an internal defect
+	// in this command, never an operator-actionable state).
+	Reason       string `json:"reason"`
+	LiveDigest   string `json:"live_schema_digest,omitempty"`
+	TargetDigest string `json:"target_schema_digest,omitempty"`
+	Carried      int    `json:"carried,omitempty"`
+	Message      string `json:"message,omitempty"`
+}
+
+// carryJSONPrefix marks the one line of a -json run's stdout that is machine-readable --
+// every other line is the unchanged human-readable plan/summary text. A caller does
+// `grep '^`+carryJSONPrefix+`'` then strips the prefix before handing the rest to a JSON
+// parser, rather than requiring stdout to be JSON-only (which would have meant giving up
+// the operator-facing text this command already prints, or duplicating it inside the
+// JSON payload).
+const carryJSONPrefix = "GOAPI_ROUTING_JSON "
+
+func printCarryResult(w io.Writer, result carryResult) {
+	payload, err := json.Marshal(result)
+	if err != nil {
+		// Never silently drop the machine-readable line: a caller parsing for it and
+		// getting nothing is a false "digest_unchanged"/"carried" away from writing
+		// nothing when it should have aborted -- so a marshal failure (which can only
+		// happen here from a caller error, since carryResult's own fields are all
+		// plain strings/ints) is itself reported through the SAME channel.
+		payload, _ = json.Marshal(carryResult{Reason: "error", Message: "internal: could not encode the -json result: " + err.Error()})
+	}
+	fmt.Fprintf(w, "%s%s\n", carryJSONPrefix, payload)
+}
 
 // targetDocumentDigests computes what the image THIS binary was built
 // from registers, from its registered-document dump.
@@ -55,11 +105,11 @@ func targetDocumentDigests(path string) (map[string]string, error) {
 	return digests, nil
 }
 
-func runCarry(argv []string) error {
+func runCarry(argv []string) (err error) {
 	set := newVerbFlagSet("carry")
 	var common commonFlags
 	var registryURL, buildInfoURL, documentsPath, expectBuild string
-	var dryRun bool
+	var dryRun, jsonOut bool
 	set.StringVar(&registryURL, "registry-url", "", "GET /registry on the DEPLOYED (pre-roll) query-api -- the ONLY source of the live schema digest and of what is reachable now (falls back to "+queryAPIURLEnvVar+"+\"/registry\")")
 	set.StringVar(&buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the DEPLOYED query-api -- the build every carried row must already name (falls back to "+queryAPIURLEnvVar+"+\"/buildinfo\")")
 	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_routing_state")
@@ -70,7 +120,43 @@ func runCarry(argv []string) error {
 	set.StringVar(&common.reviewEvidence, "review-evidence", "", "WHY, in your own words, recorded on every row written (required)")
 	set.StringVar(&expectBuild, "expect-build", "", "optional CROSS-CHECK: fail if the deployed build is not this sha. Never the source of the value written")
 	set.BoolVar(&dryRun, "dry-run", false, "run every preflight, print the plan and write NOTHING")
+	set.BoolVar(&jsonOut, "json", false, "also print one machine-readable line to stdout, prefixed `"+carryJSONPrefix+"`, classifying the outcome by a stable `reason` field (\"carried\", \"digest_unchanged\", \"stale_build\", \"refused\", \"error\"). Callers branch on -json's `reason`, never on this command's human-readable text, which carries no stability contract")
 	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "bounds EACH HTTP request, the Postgres dial, and EACH database statement (server-side statement_timeout/lock_timeout) -- never the run as a whole")
+
+	// D2828/D2829: -json's reason is classified HERE, at the exact call site that knows
+	// WHY, not guessed afterward from err's text or type -- reason is set explicitly at
+	// the two sites that need a specific value (Preflight 2, the stale-build refusal);
+	// every other return falls through to the deferred default (err==nil -> "carried",
+	// errInternal -> "error", anything else -> "refused"). Deferred so EVERY return path
+	// -- including ones added later -- gets a JSON line without having to remember to
+	// call printCarryResult at each one.
+	var reason, liveDigest, targetDigest string
+	var carriedCount int
+	defer func() {
+		if !jsonOut {
+			return
+		}
+		if reason == "" {
+			switch {
+			case err == nil:
+				reason = "carried"
+			case errors.Is(err, errInternal):
+				reason = "error"
+			default:
+				reason = "refused"
+			}
+		}
+		result := carryResult{Reason: reason, LiveDigest: liveDigest, TargetDigest: targetDigest, Carried: carriedCount}
+		if err != nil {
+			// Same defense-in-depth as the command's other error-print sites (see
+			// credentialBoundary's own doc comment): refuse/internal already redact
+			// what they build, but this print applies it once more rather than
+			// trusting every possible error on every return path already did.
+			result.Message = redactCredentials(err.Error())
+		}
+		printCarryResult(stdout, result)
+	}()
+
 	if err := parseVerbFlags(set, argv); err != nil {
 		return err
 	}
@@ -139,10 +225,13 @@ func runCarry(argv []string) error {
 		return refuse("%s registers no operations -- there is nothing reachable to preserve", goapiproof.EndpointLabel(registryURL))
 	}
 
+	liveDigest, targetDigest = registry.SchemaDigest, localSchemaDigest()
+
 	// --- Preflight 2: the digests must DISAGREE, the inversion of
 	// `enable`'s own preflight 2. -------------------------------------
-	target := localSchemaDigest()
+	target := targetDigest
 	if registry.SchemaDigest == target {
+		reason = "digest_unchanged"
 		return refuse("this binary's SDL is the one the deployed process already computes (%s).\n"+
 			"  `carry` moves rows to a digest that is not live YET -- build it from the commit about to roll, or use `enable` if the roll has already happened.\n"+
 			"  See %s", target, runbook)
@@ -187,7 +276,16 @@ func runCarry(argv []string) error {
 	// beside the twelve that would have carried cleanly than on its own,
 	// and an operator deciding whether to roll needs both halves.
 	printCarryPlan(outcomes, registry.SchemaDigest, target, running, dryRun)
+	carriedCount = goapiproof.SummarizeCarry(outcomes).Carried
 	if carryErr != nil {
+		if errors.Is(carryErr, goapiproof.ErrCarryBuildNotRunning) {
+			// The rev196 exception, D2828/D2829's whole reason for a distinct
+			// reason value here: this is the ONE refusal a caller is meant to
+			// self-heal from (repoint, then retry), never treated the same as an
+			// unclassified refusal it should just abort on.
+			reason = "stale_build"
+			return refuse("%v", carryErr)
+		}
 		if errors.Is(carryErr, goapiproof.ErrCarryRequestRefused) {
 			return refuse("%v", carryErr)
 		}

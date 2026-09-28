@@ -73,15 +73,23 @@ def test_carry_never_hand_types_the_target_digest() -> None:
 
 
 def test_digest_unchanged_refusal_is_treated_as_pass() -> None:
-    """The digest-UNCHANGED path: carry's own 'digests already agree' refusal is a no-op, not a failure."""
+    """The digest-UNCHANGED path: carry's own 'digests already agree' refusal is a no-op, not
+    a failure.
+
+    D2828/D2829: branching on carry's raw error TEXT was replaced with `-json`'s `reason`
+    field (a small, closed vocabulary set at the Go call site that knows why -- never
+    guessed from prose, see carryResult's doc comment in internal/goapicli/routing/carry.go).
+    This test now asserts the SHELL branches on `$CARRY_REASON = "digest_unchanged"`, not on
+    any particular string carry happens to print -- test_bigboy_cut_carry_refusal_text_
+    behavior.py proves the REAL dho binary actually reports that reason for this case, end
+    to end, against a real fake registry server.
+    """
     lines = _lines()
     carry_at = _first(lines, "dho goapi routing carry")
     block = "\n".join(lines[carry_at : carry_at + 15])
-    assert (
-        "this binary's SDL is the one the deployed process already computes" in block
-    ), (
-        "the digest-unchanged refusal text (carry's own wording) must be matched explicitly, "
-        "not inferred from a bare exit code"
+    assert 'CARRY_REASON" = "digest_unchanged"' in block, (
+        "the digest-unchanged branch must key off -json's reason field, not off any "
+        "particular error text"
     )
     assert "st routing-carry 0" in block and "no schema-digest change" in block
 
@@ -103,13 +111,23 @@ def test_carry_refusal_for_any_other_reason_aborts_before_the_recreate() -> None
 
 def test_carry_has_the_repoint_then_retry_fallback() -> None:
     """The documented, real exception (rev196, both bigboy's re-cut and the actual prod
-    roll): a refusal naming 'run repoint first' triggers ONE repoint-then-retry before
-    anything is treated as fatal."""
+    roll): a refusal naming the stale-build reason triggers ONE repoint-then-retry before
+    anything is treated as fatal.
+
+    D2828/D2829: keyed off -json's `reason="stale_build"`, not off carry's raw error text
+    (which was ALSO wrong at one point -- see this file's own git history -- text was never
+    a stable contract to begin with). test_bigboy_cut_carry_refusal_text_behavior.py proves
+    this end to end: a real seeded row, a real dho binary, the stale-build refusal, the
+    repoint, and a real successful retry.
+    """
     lines = _lines()
     carry_at = _first(lines, "dho goapi routing carry")
     migrate_at = _first(lines, "--no-deps migrate", start=carry_at)
     block = "\n".join(lines[carry_at:migrate_at])
-    assert "run repoint first" in block
+    assert 'CARRY_REASON" = "stale_build"' in block, (
+        "the stale-build repoint-then-retry branch must key off -json's reason field, not "
+        "off any particular error text"
+    )
     assert block.count("dho goapi routing repoint") == 1, (
         "exactly one repoint call in the pre-roll carry block's fallback"
     )

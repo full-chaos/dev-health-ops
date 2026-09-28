@@ -17,6 +17,7 @@ package routing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,11 +26,33 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
-func runRepoint(argv []string) error {
+// repointResult is -json's output shape for `repoint`, the same mechanism carry.go's
+// carryResult provides -- see its doc comment for the reasoning (D2828/D2829). repoint's
+// own refusal vocabulary is flatter than carry's: it has no equivalent of "digest_unchanged"
+// or "stale_build" (nothing bigboy-cut.sh or the Helm hook currently branches on for
+// repoint), so Reason is one of "repointed" (success, including a dry run or a run that
+// repointed zero eligible rows), "refused" (any refusal), or "error" (an internal defect).
+type repointResult struct {
+	Reason  string `json:"reason"`
+	Message string `json:"message,omitempty"`
+}
+
+// repointJSONPrefix mirrors carryJSONPrefix -- see its doc comment.
+const repointJSONPrefix = "GOAPI_ROUTING_JSON "
+
+func printRepointResult(w interface{ Write([]byte) (int, error) }, result repointResult) {
+	payload, err := json.Marshal(result)
+	if err != nil {
+		payload, _ = json.Marshal(repointResult{Reason: "error", Message: "internal: could not encode the -json result: " + err.Error()})
+	}
+	fmt.Fprintf(w, "%s%s\n", repointJSONPrefix, payload)
+}
+
+func runRepoint(argv []string) (err error) {
 	set := newVerbFlagSet("repoint")
 	var common commonFlags
 	var registryURL, buildInfoURL, expectBuild, documentDigest string
-	var dryRun bool
+	var dryRun, jsonOut bool
 	set.StringVar(&registryURL, "registry-url", "", "GET /registry on the DEPLOYED query-api -- the only authority on which schema digest is live (falls back to "+queryAPIURLEnvVar+"+\"/registry\")")
 	set.StringVar(&buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the DEPLOYED query-api -- the ONLY source of the build every row is pointed at (falls back to "+queryAPIURLEnvVar+"+\"/buildinfo\")")
 	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_routing_state")
@@ -39,7 +62,27 @@ func runRepoint(argv []string) error {
 	set.StringVar(&expectBuild, "expect-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written")
 	set.StringVar(&documentDigest, "document", "", "narrow -operations (exactly one name) to the ONE row whose OWN document digest equals this -- the only way to re-point just a DOCUMENT_DRIFT row (as `status` names it) and leave a sibling catalog row untouched. Exact-match")
 	set.BoolVar(&dryRun, "dry-run", false, "report what would change and write NOTHING")
+	set.BoolVar(&jsonOut, "json", false, "also print one machine-readable line to stdout, prefixed `"+repointJSONPrefix+"`, classifying the outcome by a stable `reason` field (\"repointed\", \"refused\", \"error\")")
 	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "bounds EACH HTTP request, the Postgres dial, and EACH database statement (server-side statement_timeout/lock_timeout) -- never the run as a whole")
+
+	defer func() {
+		if !jsonOut {
+			return
+		}
+		reason := "repointed"
+		if err != nil {
+			reason = "refused"
+			if errors.Is(err, errInternal) {
+				reason = "error"
+			}
+		}
+		result := repointResult{Reason: reason}
+		if err != nil {
+			result.Message = redactCredentials(err.Error())
+		}
+		printRepointResult(stdout, result)
+	}()
+
 	if err := parseVerbFlags(set, argv); err != nil {
 		return err
 	}

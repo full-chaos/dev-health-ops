@@ -57,7 +57,9 @@ def test_repin_web_script_never_builds_on_the_host() -> None:
     assert "compose build" not in text and " --build" not in text, (
         "bigboy-repin-web.sh must never invoke a host build -- digest repin only"
     )
-    assert "imagetools inspect" in text, "the digest must be resolved via imagetools, never hand-typed"
+    assert "imagetools inspect" in text, (
+        "the digest must be resolved via imagetools, never hand-typed"
+    )
     assert "sha256:" not in text.split("imagetools inspect", 1)[0], (
         "no hand-typed digest before the first imagetools resolve"
     )

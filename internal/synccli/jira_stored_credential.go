@@ -47,7 +47,11 @@ var jiraTeamsTokenAliases = []string{"api_token", "apiToken", "token"}
 // via atlassianteams.ResolveOrganizationID (D2817/CHAOS-7020): the stored
 // config value is an OVERRIDE only now, never the sole path -- newResolver
 // builds the AGG gateway client that call needs (nil production default: a
-// real *graph.Client; tests inject a fake).
+// real *graph.Client; tests inject a fake). overrides carries the caller's
+// already-parsed ATLASSIAN_* environment: an explicit ATLASSIAN_ORGANIZATION_ID/
+// ATLASSIAN_CLOUD_ID is checked BEFORE any live resolution is attempted, not
+// only reapplied by the caller afterward -- a resolution failure must never
+// block an override the operator already supplied (P1, CHAOS-7020 r1).
 func resolveJiraStoredSettings(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -55,6 +59,7 @@ func resolveJiraStoredSettings(
 	doer providerfoundation.HTTPDoer,
 	newResolver func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.OrganizationResolver,
 	orgID string,
+	overrides envOverrides,
 ) (settings, error) {
 	if pool == nil {
 		return settings{}, errors.New(PostgresURIKey + " is not set: required to resolve the org's stored jira credential")
@@ -81,7 +86,18 @@ func resolveJiraStoredSettings(
 		return settings{}, fmt.Errorf("the stored jira credential's base url is not valid: %w", err)
 	}
 
+	// An explicit env override wins before any live resolution is even
+	// attempted (P1, CHAOS-7020 r1): resolveTeamsSettings applies
+	// overrides.cloudID/organizationID again below AFTER this function
+	// returns, but only on a SUCCESSFUL return -- a live resolution failure
+	// here used to return before the caller ever got a chance to apply the
+	// override that would have made the failure moot. Checking both here
+	// first means a documented override always works, never mind whether the
+	// network resolution it exists to bypass would have failed.
 	cloudID := strings.TrimSpace(credential.Config["atlassian_cloud_id"])
+	if cloudID == "" {
+		cloudID = strings.TrimSpace(overrides.cloudID)
+	}
 	if cloudID == "" {
 		cloudID, err = atlassianteams.ResolveCloudID(ctx, doer, tenant)
 		if err != nil {
@@ -107,6 +123,9 @@ func resolveJiraStoredSettings(
 	// the AGG tenantContexts query using the SAME stored credential, rather
 	// than refusing outright the way this verb always used to.
 	organizationID := strings.TrimSpace(credential.Config["atlassian_organization_id"])
+	if organizationID == "" {
+		organizationID = strings.TrimSpace(overrides.organizationID)
+	}
 	if organizationID == "" {
 		if newResolver == nil {
 			return settings{}, fmt.Errorf(

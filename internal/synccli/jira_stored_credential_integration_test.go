@@ -152,7 +152,7 @@ func TestResolveJiraStoredSettingsUsesTheStoredCredential(t *testing.T) {
 		t.Fatal("the resolver must not be called when the config already has an organization id")
 		return nil
 	}
-	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), tenantInfo.Client(), poisonResolver, orgID)
+	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), tenantInfo.Client(), poisonResolver, orgID, envOverrides{})
 	if err != nil {
 		t.Fatalf("resolveJiraStoredSettings: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestResolveJiraStoredSettingsRespectsAConfigCloudIDOverride(t *testing.T) {
 		t.Fatal("the resolver must not be called when the config already has an organization id")
 		return nil
 	}
-	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), tenantInfo.Client(), poisonResolver, orgID)
+	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), tenantInfo.Client(), poisonResolver, orgID, envOverrides{})
 	if err != nil {
 		t.Fatalf("resolveJiraStoredSettings: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestResolveJiraStoredSettingsResolvesTheOrganizationIDWhenNotConfigured(t *
 		return resolver
 	}
 
-	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, newResolver, orgID)
+	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, newResolver, orgID, envOverrides{})
 	if err != nil {
 		t.Fatalf("resolveJiraStoredSettings: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestResolveJiraStoredSettingsNamesTheFieldWhenResolutionFails(t *testing.T)
 		return resolver
 	}
 
-	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, newResolver, orgID)
+	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, newResolver, orgID, envOverrides{})
 	if err == nil {
 		t.Fatal("expected a refusal: resolving the organization id failed")
 	}
@@ -300,6 +300,53 @@ func TestResolveJiraStoredSettingsNamesTheFieldWhenResolutionFails(t *testing.T)
 	}
 	if !errors.Is(err, atlassianteams.ErrOrganizationPermission) {
 		t.Errorf("error does not wrap ErrOrganizationPermission: %v", err)
+	}
+}
+
+// TestResolveJiraStoredSettingsEnvOverrideBypassesAFailedResolution is the
+// r1 P1 guard-failing proof (codex, gpt-6-luna xhigh): with no config value
+// and a resolver that would fail exactly like
+// TestResolveJiraStoredSettingsNamesTheFieldWhenResolutionFails above, an
+// explicit ATLASSIAN_ORGANIZATION_ID must win BEFORE resolution is ever
+// attempted -- an operator who already supplied the documented override must
+// never be blocked by the AGG failure that override exists to bypass. Same
+// resolver-fails setup as the sibling test; the only difference is the env
+// override, and that alone must flip the outcome from refusal to success.
+func TestResolveJiraStoredSettingsEnvOverrideBypassesAFailedResolution(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = instance.Close(ctx) }()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applyRealSchema(t, ctx, pool)
+
+	const orgID = "org-under-test"
+	seedJiraCredential(t, ctx, pool, orgID,
+		map[string]string{"base_url": "https://acme.atlassian.net", "atlassian_cloud_id": "pinned-cloud-id"},
+		map[string]string{"email": "sync@example.test", "api_token": "s3cr3t-token"})
+
+	resolver := &fakeOrganizationResolver{err: atlassianteams.ErrOrganizationPermission}
+	newResolver := func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.OrganizationResolver {
+		return resolver
+	}
+
+	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, newResolver, orgID,
+		envOverrides{organizationID: "override-org-789"})
+	if err != nil {
+		t.Fatalf("resolveJiraStoredSettings: %v (the env override should have made resolution unnecessary)", err)
+	}
+	if settings.organizationID != "override-org-789" {
+		t.Errorf("organizationID = %q, want the env override value", settings.organizationID)
+	}
+	if resolver.calls != 0 {
+		t.Errorf("resolver called %d times, want 0 -- the override must win before resolution is ever attempted", resolver.calls)
 	}
 }
 
@@ -329,7 +376,7 @@ func TestResolveJiraStoredSettingsRefusesWithoutAnOrganizationIDWhenNoResolver(t
 		map[string]string{"base_url": "https://acme.atlassian.net", "atlassian_cloud_id": "pinned-cloud-id"},
 		map[string]string{"email": "sync@example.test", "api_token": "s3cr3t-token"})
 
-	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, nil, orgID)
+	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, nil, orgID, envOverrides{})
 	if err == nil {
 		t.Fatal("expected a refusal: no resolver is configured and the config has no atlassian_organization_id")
 	}
@@ -356,7 +403,7 @@ func TestResolveJiraStoredSettingsRefusesWithNoRow(t *testing.T) {
 	defer pool.Close()
 	applyRealSchema(t, ctx, pool)
 
-	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, nil, "org-with-no-integration")
+	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, nil, "org-with-no-integration", envOverrides{})
 	if err == nil {
 		t.Fatal("expected a refusal: no stored jira credential exists for this org")
 	}

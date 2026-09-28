@@ -387,7 +387,7 @@ func resolveTeamsSettings(ctx context.Context, env cli.Env, d deps, orgID string
 		if err != nil {
 			return settings{}, err
 		}
-		s, err = resolveJiraStoredSettings(ctx, pool, decryptor, d.doer, d.newOrganizationResolver, orgID)
+		s, err = resolveJiraStoredSettings(ctx, pool, decryptor, d.doer, d.newOrganizationResolver, orgID, overrides)
 		if err != nil {
 			return settings{}, err
 		}

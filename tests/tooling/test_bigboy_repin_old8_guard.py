@@ -33,7 +33,7 @@ def _first(lines: list[str], needle: str, *, start: int = 0) -> int:
 def test_old8_shape_is_checked_before_any_file_is_touched() -> None:
     lines = _lines()
     shape_at = _first(lines, "is not exactly 8 lowercase hex characters")
-    backup_at = _first(lines, "cp -n $OV $OV.bak-")
+    backup_at = _first(lines, 'cp -n "$OV" "$OV".bak-')
     mkdir_at = _first(lines, "mkdir -p")
     assert shape_at < backup_at, (
         f"the OLD8 shape guard (line {shape_at + 1}) must run before the first file write "

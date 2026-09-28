@@ -40,11 +40,6 @@ _IMAGES = (
     "dev-health-go-operator",
 )
 
-_SENTINEL = (
-    "cut start"  # printed by the script itself right after routing-carry succeeds is
-)
-# too late to build generically here (the script keeps going into migrate/up, which this test
-# does not stub) -- MIGRATE_MARKER below is what every case actually asserts on.
 _MIGRATE_MARKER = (
     "--no-deps migrate"  # the compose command line for the STEP right after the
 )

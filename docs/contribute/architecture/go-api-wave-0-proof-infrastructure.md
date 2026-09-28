@@ -688,6 +688,52 @@ appear here.
 | `sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e` | 2026-09-27 | removing the `Subscription` root type and the `MetricsUpdate`, `TaskStatus` and `SyncProgress` types from the SDL | superseded |
 | `sha256:d5ba09b1f460953482518ae4f5653ba6350b085bdc39621c5888756741118117` | this revision | CHAOS-6262, deleting the 8 `dev*` Ask Dev V1 GraphQL fields and their input/result types from the SDL | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
 
+### Automated in `bigboy-cut.sh` (CHAOS-7022): digest change = carry before swap; repoint after
+
+The rule above -- **carry BEFORE the roll, re-enable after** -- was, until CHAOS-7022, something
+an operator had to remember and run by hand. `ci/bigboy/bigboy-cut.sh` now has two STEPs that
+make it structural:
+
+- **`routing-carry`**, right after `repin` (so `venue-tools` already resolves to the round's NEW
+  tools image and computes the NEW schema digest from its own embedded SDL) and BEFORE
+  `migrate`/`up`/`up-workers` recreate `api`/`query-api`/`go-api` -- `query-api` at this point is
+  still the OLD, pre-roll, live process, exactly the source `carry` is designed to read from.
+  `carry` itself refuses (exit 2) when the live and target schema digests already agree -- the
+  expected shape for an ordinary, non-schema-changing roll, not a failure. The STEP does not
+  branch on refusal prose (D2828/D2829: text differs between the CLI's own preflight and
+  goapiproof's sentinel errors for the same condition, so branching on it was wrong twice).
+  `carry -json` instead prints one `GOAPI_ROUTING_JSON {...}` line with a `reason` field from a
+  small, closed vocabulary set at the Go call site that knows why: `carried` (success),
+  `digest_unchanged` (the expected no-op -- read as a pass), `stale_build` (rows lag the
+  actually-running build, no schema change -- the STEP repoints then retries carry once), or
+  `refused`/`error` (anything else -- always aborts). `bigboy-cut.sh`'s `carry_reason()` extracts
+  the field with `jq`, host-side, after `docker compose run` returns. Any reason other than
+  `digest_unchanged` or a successfully-retried `stale_build` aborts the cut before `migrate`/`up`
+  ever runs: **refuse-not-skip**, never a silent no-op.
+- **`routing-repoint`**, right after `routing-parity` (post-roll, against the newly-running
+  build), unconditionally on every cut, schema-change or not. Provenance-only -- it never touches
+  mode/reachability -- so it is safe to run every time, and it closes the OTHER gap this ticket
+  found: routing rows can lag the actually-running build after an ORDINARY roll too, with no
+  schema-digest change involved at all.
+
+**Worked example (rev196, the incident that opened this ticket, D2811):** bigboy's own re-cut
+(`_records/bigboy-1b05473e/graphql-prove-20260928T044400Z/`) and the real prod roll
+(`_records/deploy-196/README.md`) both hit the SAME shape at STEP 1.5/`routing-carry`:
+
+1. **Attempt 1 refused.** The live routing rows still named an OLDER build than what was
+   actually running (`4f014a9d9b`, from TWO rolls back -- rev195's own roll had never repointed
+   them, with no schema-digest change involved at all). `carry`'s refusal named it directly: the
+   deployed process is not running the build the rows claim.
+2. **Repoint, then retry.** A `repoint` against the same pre-roll live process corrected the
+   stale provenance (50/50 rows on prod) without touching reachability.
+3. **Attempt 2 carried cleanly.** `carried=50 unchanged=0 skipped=0 refused=0` -- readback at the
+   new digest confirmed all 50 rows present and UNPROVEN (as designed; `go-api-prove` re-proves
+   them against the new build after the roll).
+
+Full guarded lines: `_records/bigboy-1b05473e/prod-rev196-step1.5-carry-lines.md`. This is exactly
+the class of gap `routing-carry`'s "any other refusal aborts" branch and the unconditional
+`routing-repoint` STEP now cover automatically, on every cut.
+
 ## Tools pod (operator image)
 
 `ghcr.io/full-chaos/dev-health-go-api-tools` (`docker/go-api-tools.Dockerfile`)
@@ -698,11 +744,18 @@ documents dump generated from the SAME commit at build time
 (`/app/go-api/documents.json`), and the checked-in operation catalog at its
 `DefaultCatalogPath` relative to the image's working directory
 (`/app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json`) --
-`dho goapi routing`'s `-catalog` flag needs no override when run from
-there, and neither does `carry`'s `-documents` flag, whose default is that
-same baked-in dump — which is exactly what makes the image's own binary
-able to say which documents the deployment it was built from will
-register.
+`dho goapi routing`'s `-catalog` flag needs no override, and neither does
+`carry`'s `-documents` flag, whose default is that same baked-in dump,
+**when run from the image's own WORKDIR (`/app/go-api`)**. `bigboy-cut.sh`
+runs the tools image through `venue-tools`, whose compose service
+overrides `working_dir` to `/work` (a host-mounted scratch dir, always
+empty), so those relative defaults never resolve there -- `CARRY_ARGS`
+points `-catalog`/`-documents` at the same files by their absolute,
+image-baked path instead (still the tools image's own catalog/documents,
+never a separately fetched copy). `repoint` has no `-catalog`/`-documents`
+flags at all, so callers running under an overridden `working_dir` are
+unaffected for that verb. Either way, the image's own binary is what says
+which documents the deployment it was built from will register.
 
 The runtime base is a small Debian, not distroless: this image doubles as
 the operator's one-off Pod for running both binaries by hand, and a

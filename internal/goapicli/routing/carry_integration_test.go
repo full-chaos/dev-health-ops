@@ -341,6 +341,114 @@ func TestCarryTimeoutBoundsTheDatabaseWorkAndSaysNothingWasWritten(t *testing.T)
 	}
 }
 
+// --- D2828/D2829 (CHAOS-7022 r1, CHAOS-7023 r1 P1): -json's `reason` -------------------
+//
+// bigboy-cut.sh and the Helm pre-upgrade hook used to branch on grepping carry's
+// human-readable TEXT for specific refusal wording -- wrong twice, in two different ways
+// (see the commit history on both files). -json's `reason` field is the structural fix:
+// a small, closed, stable vocabulary a caller switches on, never prose. These three tests
+// pin the exact `reason` value for the three cases those callers branch on: digest
+// unchanged (an ordinary no-op), digest changed and carried (success), and a stale build
+// (the rev196 self-heal exception) -- run against the REAL CLI end to end, never a
+// hand-typed string.
+
+// extractCarryJSON finds carry's ONE machine-readable stdout line (prefixed
+// carryJSONPrefix) and decodes it -- t.Fatal if the line is missing (a caller parsing for
+// it and getting nothing is exactly the silent-misclassification failure mode this whole
+// mechanism exists to close).
+func extractCarryJSON(t *testing.T, out string) carryResult {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(line, carryJSONPrefix); ok {
+			var result carryResult
+			if err := json.Unmarshal([]byte(rest), &result); err != nil {
+				t.Fatalf("carry -json line did not decode: %v\nline: %s", err, rest)
+			}
+			return result
+		}
+	}
+	t.Fatalf("no %q line found in carry's stdout:\n%s", carryJSONPrefix, out)
+	return carryResult{}
+}
+
+func TestCarryJSONReasonIsDigestUnchangedWhenTheDeployedProcessAlreadyComputesThisDigest(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := carryTestDocumentDigest()
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	documentsPath := writeDocumentsDump(t, map[string]string{verbTestOperation: carryTestDocument})
+	t.Setenv(bearerEnvVar, verbTestBearer)
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+
+	out, _, err := captureVerb(t, carryArgs(server, dsn, catalogPath, documentsPath, "-json")...)
+	if err == nil {
+		t.Fatal("expected a digest-unchanged refusal")
+	}
+	result := extractCarryJSON(t, out)
+	if result.Reason != "digest_unchanged" {
+		t.Fatalf("reason = %q, want \"digest_unchanged\" (out:\n%s)", result.Reason, out)
+	}
+}
+
+func TestCarryJSONReasonIsCarriedOnSuccess(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := carryTestDocumentDigest()
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	documentsPath := writeDocumentsDump(t, map[string]string{verbTestOperation: carryTestDocument})
+	t.Setenv(bearerEnvVar, verbTestBearer)
+	server := startQueryAPI(t, carryDeployedSchemaDigest, map[string]string{verbTestOperation: digest})
+	seedLiveRow(t, dsn, digest, "canary")
+
+	out, _, err := captureVerb(t, carryArgs(server, dsn, catalogPath, documentsPath, "-json")...)
+	if err != nil {
+		t.Fatalf("carry: %v\n%s", err, out)
+	}
+	result := extractCarryJSON(t, out)
+	if result.Reason != "carried" {
+		t.Fatalf("reason = %q, want \"carried\" (out:\n%s)", result.Reason, out)
+	}
+	if result.Carried != 1 {
+		t.Fatalf("carried = %d, want 1 (out:\n%s)", result.Carried, out)
+	}
+}
+
+func TestCarryJSONReasonIsStaleBuildWhenARowNamesABuildNotRunning(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := carryTestDocumentDigest()
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	documentsPath := writeDocumentsDump(t, map[string]string{verbTestOperation: carryTestDocument})
+	t.Setenv(bearerEnvVar, verbTestBearer)
+
+	// A /buildinfo reporting a DIFFERENT running build than the seeded row's own
+	// candidate_build (verbTestBuild, seedLiveRow's hardcoded value) -- the row is
+	// "stale" against the live process, the exact shape `carry` refuses by name.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/registry", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"schema_digest": carryDeployedSchemaDigest,
+			"operations":    []map[string]string{{"operation": verbTestOperation, "document_digest": digest}},
+		})
+	})
+	mux.HandleFunc("/buildinfo", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		writeJSON(t, w, map[string]any{"commit": "0000000000000000000000000000000000000000", "modified": false, "version": "test", "build_time": "2026-09-10T00:00:00Z"})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	seedLiveRow(t, dsn, digest, "canary")
+
+	out, _, err := captureVerb(t, carryArgs(server, dsn, catalogPath, documentsPath, "-json")...)
+	if err == nil {
+		t.Fatal("expected a stale-build refusal")
+	}
+	result := extractCarryJSON(t, out)
+	if result.Reason != "stale_build" {
+		t.Fatalf("reason = %q, want \"stale_build\" (out:\n%s)", result.Reason, out)
+	}
+}
+
 // The WINDOW this ticket creates has a trap `carry` cannot close on its
 // own: `disable` writes at the digest ITS OWN binary computes, and run
 // from the tools image built for the commit about to roll that is the

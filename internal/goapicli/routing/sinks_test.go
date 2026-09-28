@@ -42,13 +42,17 @@ var sinkTable = map[string]struct {
 	count     int
 	why       string
 }{
-	"main.go:printError:.Error() [redacted]":  {treatRedacted, 1, "the command's one error print"},
-	"main.go:redacted:.Error() [redacted]":    {treatRedacted, 1, "the builders' redaction of an error's text"},
-	"main.go:redacted:.Error()":               {treatBuilder, 1, "the comparison in redacted() that decides whether the text changed"},
-	"main.go:refuse:fmt.Errorf":               {treatBuilder, 1, "refuse redacts what it builds"},
-	"main.go:internal:fmt.Errorf":             {treatBuilder, 1, "internal redacts what it builds"},
-	"status.go:runStatus:.Error() [redacted]": {treatRedacted, 3, "status's database errors (connect, census, classification)"},
-	"status.go:runStatus:.Error()":            {treatNotDatabase, 3, "the registry URL sanitizer, the catalog loader and the registry HTTP fetch: no database"},
+	"main.go:printError:.Error() [redacted]":    {treatRedacted, 1, "the command's one error print"},
+	"main.go:redacted:.Error() [redacted]":      {treatRedacted, 1, "the builders' redaction of an error's text"},
+	"main.go:redacted:.Error()":                 {treatBuilder, 1, "the comparison in redacted() that decides whether the text changed"},
+	"main.go:refuse:fmt.Errorf":                 {treatBuilder, 1, "refuse redacts what it builds"},
+	"main.go:internal:fmt.Errorf":               {treatBuilder, 1, "internal redacts what it builds"},
+	"status.go:runStatus:.Error() [redacted]":   {treatRedacted, 3, "status's database errors (connect, census, classification)"},
+	"carry.go:runCarry:.Error() [redacted]":     {treatRedacted, 1, "the -json result's Message field -- the same defense-in-depth redaction runCarry's other error-print sites apply"},
+	"carry.go:printCarryResult:.Error()":        {treatNotDatabase, 1, "a json.Marshal failure encoding carryResult's own string/int fields -- never a database error"},
+	"repoint.go:runRepoint:.Error() [redacted]": {treatRedacted, 1, "the -json result's Message field -- same defense-in-depth redaction as carry.go's"},
+	"repoint.go:printRepointResult:.Error()":    {treatNotDatabase, 1, "a json.Marshal failure encoding repointResult's own string fields -- never a database error"},
+	"status.go:runStatus:.Error()":              {treatNotDatabase, 3, "the registry URL sanitizer, the catalog loader and the registry HTTP fetch: no database"},
 }
 
 type sinkSite struct {

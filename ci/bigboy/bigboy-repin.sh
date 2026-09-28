@@ -5,7 +5,13 @@
 # declared COMPOSE_FILE set incl. the images overlay). No secrets touched.
 set -euo pipefail
 OLD8=${1:?old8}; NEW=${2:?new full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
-R=/home/ubuntu/devhealth; OV=$R/compose/compose.bigboy.images.yml
+# CHAOS-7022 D2895/D2886(2): same BIGBOY_ROOT root parameter as bigboy-cut.sh -- default is
+# byte-identical to the hardcoded path this script always used.
+R="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"; OV=$R/compose/compose.bigboy.images.yml
+echo "repin start root=$R old8=$OLD8 new=$NEW"
+for need in compose/compose.bigboy.images.yml _records; do
+  [ -e "$R/$need" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing $need -- refusing to run against a root that is not a real bigboy tree" >&2; exit 4; }
+done
 # CHAOS-7014 (D2801): a mistyped OLD8 (9 chars, "bd25cd0a9" instead of "bd25cd0a") once made the
 # repin's own cp of _records/bigboy-$OLD8/*.sh fail under set -euo pipefail BEFORE the sed rewrite
 # below ever ran -- $OV was backed up but never actually repointed, and every downstream STEP in
@@ -29,16 +35,16 @@ fi
 dig() { docker buildx imagetools inspect "ghcr.io/full-chaos/$1:sha-$S7" --format '{{json .Manifest}}' | jq -r .digest; }
 declare -A O N
 for i in dev-hops-api dev-health-go-dho dev-health-go-api-tools dev-health-go-operator; do
-  N[$i]=$(dig $i); [[ ${N[$i]} == sha256:* ]] || { echo "no image $i"; exit 3; }
-  O[$i]=$(grep -ohE "$i@sha256:[0-9a-f]{64}" $OV $R/_records/bigboy-$OLD8/*.sh 2>/dev/null | head -1 | cut -d@ -f2 || true)
+  N[$i]=$(dig "$i"); [[ ${N[$i]} == sha256:* ]] || { echo "no image $i"; exit 3; }
+  O[$i]=$(grep -ohE "$i@sha256:[0-9a-f]{64}" "$OV" "$R"/_records/bigboy-"$OLD8"/*.sh 2>/dev/null | head -1 | cut -d@ -f2 || true)
   echo "$i ${O[$i]:-none} -> ${N[$i]}"
 done
-cp -n $OV $OV.bak-$OLD8
-mkdir -p $R/_records/bigboy-$N8
-cp -n $R/_records/bigboy-$OLD8/*.sh $R/_records/bigboy-$N8/
+cp -n "$OV" "$OV".bak-"$OLD8"
+mkdir -p "$R"/_records/bigboy-"$N8"
+cp -n "$R"/_records/bigboy-"$OLD8"/*.sh "$R"/_records/bigboy-"$N8"/
 for i in "${!N[@]}"; do
   [[ -n ${O[$i]:-} ]] || continue
-  sed -i "s/${O[$i]#sha256:}/${N[$i]#sha256:}/g" $OV $R/_records/bigboy-$N8/*.sh
+  sed -i "s/${O[$i]#sha256:}/${N[$i]#sha256:}/g" "$OV" "$R"/_records/bigboy-"$N8"/*.sh
 done
 # Trap #421: a per-cut script can carry a LITERAL image@sha256 pinned two or more cuts back (never touched by
 # the exact-old-value sed above, since "old" here only ever means the IMMEDIATELY previous cut's digest) --
@@ -48,11 +54,11 @@ done
 # images to the NEW digest, by IMAGE NAME, not by matching a specific old value, so a multi-cut-stale literal
 # cannot survive a repin.
 for i in "${!N[@]}"; do
-  sed -i -E "s#($i@sha256:)[0-9a-f]{64}#\1${N[$i]#sha256:}#g" $R/_records/bigboy-$N8/*.sh
+  sed -i -E "s#($i@sha256:)[0-9a-f]{64}#\1${N[$i]#sha256:}#g" "$R"/_records/bigboy-"$N8"/*.sh
 done
 # STEP/B are DERIVED: run-rest-bigboy.sh reads sha.txt (Trap #328), nothing hand-typed in bigboy-rest-commands.sh
-printf "%s\n" "$NEW" > $R/_records/bigboy-$N8/sha.txt
+printf "%s\n" "$NEW" > "$R"/_records/bigboy-"$N8"/sha.txt
 # a re-pin from a dir whose rest-commands still carry literals gets them templated:
-sed -i -E "s/^STEP=.*/STEP=\${STEP:?STEP not exported}/; s/^B=[0-9a-f]{40}\$/B=\${B:?B not exported}/; s/^B_DHO=[0-9a-f]{40}\$/B_DHO=\${B:?B not exported}/" $R/_records/bigboy-$N8/bigboy-rest-commands.sh
-echo "pin: $NEW" > $R/_records/bigboy-$N8/pin.md
-grep -c "${N[dev-hops-api]#sha256:}" $OV
+sed -i -E "s/^STEP=.*/STEP=\${STEP:?STEP not exported}/; s/^B=[0-9a-f]{40}\$/B=\${B:?B not exported}/; s/^B_DHO=[0-9a-f]{40}\$/B_DHO=\${B:?B not exported}/" "$R"/_records/bigboy-"$N8"/bigboy-rest-commands.sh
+echo "pin: $NEW" > "$R"/_records/bigboy-"$N8"/pin.md
+grep -c "${N[dev-hops-api]#sha256:}" "$OV"

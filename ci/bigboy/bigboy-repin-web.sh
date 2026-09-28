@@ -6,7 +6,11 @@
 # cuts must not silently leave a stale build serving pages the backend underneath has already
 # changed shape for (the CHAOS-6262 web-path proof's first attempt hit exactly this).
 set -euo pipefail
-R=/home/ubuntu/devhealth; OV=$R/compose/compose.bigboy.images.yml
+# CHAOS-7022 D2895/D2886(2): same BIGBOY_ROOT root parameter as bigboy-cut.sh -- default is
+# byte-identical to the hardcoded path this script always used.
+R="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"; OV=$R/compose/compose.bigboy.images.yml
+echo "repin-web start root=$R"
+[ -e "$R/compose/compose.bigboy.images.yml" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing compose/compose.bigboy.images.yml -- refusing to run against a root that is not a real bigboy tree" >&2; exit 4; }
 
 WEB_SHA=$(gh api repos/full-chaos/dev-health-web/commits/main --jq .sha)
 [[ $WEB_SHA =~ ^[0-9a-f]{40}$ ]] || { echo "FAIL: could not resolve dev-health-web main HEAD sha (got '$WEB_SHA')"; exit 3; }

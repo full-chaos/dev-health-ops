@@ -49,8 +49,25 @@ target digest for a commit the actual roll never runs.
 
 Neither hook renders on pre-install: carry's whole premise is a live, already-running process
 to copy FROM, which does not exist on a fresh install.
+
+D2830 (#3369 collateral regression on P2-a): gating on `.Values.queryApi.enabled` ALONE
+(with no `.Release.IsUpgrade` check) meant this whole block -- Jobs AND the image-pin/
+mintOrg/lockstep `fail` checks -- rendered on ANY `helm template`/`helm install` with
+queryApi.enabled=true, including renders that only care about an unrelated resource (the
+query-api Deployment itself) and never set `migrations.hook.goApiRoutingTools.image`. A
+`fail` anywhere in any template aborts the WHOLE render, so those unrelated renders broke
+too. These Jobs are annotated pre-upgrade/post-upgrade ONLY -- Helm never creates or runs
+them during an install, matching the "neither hook renders on pre-install" premise above --
+so the pin check has no real subject to validate outside an upgrade either. Gating the
+block on `.Release.IsUpgrade` (Helm's own signal for "this is really an upgrade", set on a
+real `helm upgrade`, or on `helm template --is-upgrade` for a test that wants to exercise
+this path) scopes the check to renders where the hook Jobs will really render and run,
+without weakening it there: every render that sets `--is-upgrade` still gets the identical
+image-pin/mintOrg/lockstep validation as before -- see
+tests/workers/test_helm_routing_carry_hooks.py, whose `_render`/`_render_stderr` helpers
+now pass `--is-upgrade` for exactly this reason.
 */}}
-{{- if .Values.queryApi.enabled }}
+{{- if and .Values.queryApi.enabled .Release.IsUpgrade }}
 {{- $tools := .Values.migrations.hook.goApiRoutingTools }}
 {{- $toolsImage := $tools.image }}
 {{- $toolsPullPolicy := $tools.pullPolicy | default "IfNotPresent" }}

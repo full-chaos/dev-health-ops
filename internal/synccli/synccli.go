@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"atlassian/atlassian"
 	"atlassian/atlassian/graph"
@@ -35,8 +36,16 @@ import (
 )
 
 // Environment variable NAMES the verb reads; their values are never logged.
+// For --provider jira, these are an OPTIONAL OVERRIDE at most (D2770): the
+// canonical path resolves the org's stored jira integration credential --
+// the same one work-items sync and the worker's post-sync team_autoimport
+// job already use -- from Postgres (POSTGRES_URI). Every ATLASSIAN_* var
+// below is set only to override one field of that resolution (or, when ALL
+// of ATLASSIAN_EMAIL/API_TOKEN/JIRA_BASE_URL are set, to run fully
+// env-configured for an offline/test path with no stored credential at all).
 const (
 	ClickHouseURIKey  = "CLICKHOUSE_URI"
+	PostgresURIKey    = "POSTGRES_URI"
 	OrganizationIDKey = "ATLASSIAN_ORGANIZATION_ID"
 	CloudIDKey        = "ATLASSIAN_CLOUD_ID"
 	emailKey          = "ATLASSIAN_EMAIL"
@@ -50,10 +59,17 @@ const (
 		"Syncs the organization's Atlassian Teams into ClickHouse. With none of --structure,\n" +
 		"--members and --projects, all three are synced. Members and project links a team no longer has are\n" +
 		"retracted (closed); an empty result is refused, so a permissions problem retracts nothing, unless --allow-empty.\n\n" +
+		"--provider jira resolves the org's stored jira integration credential from Postgres\n" +
+		"(--db, else POSTGRES_URI or _FILE) by default -- the atlassian_organization_id (required) and\n" +
+		"atlassian_cloud_id (optional; else derived live from the tenant) come from that same\n" +
+		"integration's config. The environment below overrides individual fields, or (when\n" +
+		"ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN and ATLASSIAN_JIRA_BASE_URL are ALL set) replaces\n" +
+		"the stored credential entirely, for an offline/test path with no database at all:\n\n" +
 		"environment (names only):\n" +
 		"  CLICKHOUSE_URI (or _FILE)             ClickHouse DSN\n" +
-		"  ATLASSIAN_ORGANIZATION_ID             the Atlassian organization id\n" +
-		"  ATLASSIAN_CLOUD_ID                    the Atlassian cloud (site) id; else the subdomain of the Jira base URL\n" +
+		"  POSTGRES_URI (or _FILE)               the domain database the stored jira credential is read from\n" +
+		"  ATLASSIAN_ORGANIZATION_ID             overrides the stored atlassian_organization_id\n" +
+		"  ATLASSIAN_CLOUD_ID                    overrides the stored/derived atlassian cloud (site) id\n" +
 		"  ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN  gateway credentials (fallback JIRA_EMAIL, JIRA_API_TOKEN; _FILE accepted)\n" +
 		"  ATLASSIAN_JIRA_BASE_URL               the tenant URL (fallback JIRA_BASE_URL)\n"
 )
@@ -73,13 +89,21 @@ func Command() cli.Command {
 	}
 }
 
-// deps are the verb's two outside connections, replaceable in tests.
+// deps are the verb's outside connections, replaceable in tests.
 type deps struct {
 	newClient func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.Client
 	openStore func(ctx context.Context, dsn string) (driver.Conn, error)
 	now       func() time.Time
-	// doer is the HTTP client of a catalog provider (nil: a 45 s client); tests replace it.
+	// doer is the HTTP client of a catalog provider, and (for --provider
+	// jira) the stored-credential resolution's jira/tenant-info client (nil:
+	// a 45 s client); tests replace it.
 	doer providerfoundation.HTTPDoer
+	// openPostgres opens the domain database the stored jira credential is
+	// resolved from; tests replace it (no live Postgres in unit tests).
+	openPostgres func(ctx context.Context, dsn string) (*pgxpool.Pool, error)
+	// decryptor decrypts the resolved credential's ciphertext
+	// (SETTINGS_ENCRYPTION_KEY); tests replace it.
+	decryptor func(env cli.Env) (providerfoundation.CredentialDecryptor, error)
 }
 
 func defaultDeps() deps {
@@ -96,7 +120,15 @@ func defaultDeps() deps {
 		openStore: func(ctx context.Context, dsn string) (driver.Conn, error) {
 			return clickhousestore.Open(ctx, clickhousestore.DefaultConfig(dsn))
 		},
-		now: time.Now,
+		now:          time.Now,
+		openPostgres: openPostgresPool,
+		decryptor: func(env cli.Env) (providerfoundation.CredentialDecryptor, error) {
+			decryptor, err := settingsDecryptor(env)
+			if err != nil {
+				return nil, err
+			}
+			return decryptor, nil
+		},
 	}
 }
 
@@ -108,6 +140,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	owner := flags.String("owner", "", "the GitHub organization (github)")
 	auth := flags.String("auth", "", "the provider token (github; else GITHUB_TOKEN)")
 	org := flags.String("org", "", "the organization id the rows are written under")
+	db := flags.String("db", "", "the domain database DSN the stored jira credential is resolved from (jira; else "+PostgresURIKey+")")
 	structure := flags.Bool("structure", false, "sync the teams")
 	members := flags.Bool("members", false, "sync team memberships")
 	projects := flags.Bool("projects", false, "sync the projects each team works on")
@@ -153,7 +186,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 			structure: selections.Structure, members: selections.Members, dsn: dsn.Reveal(),
 		})
 	}
-	settings, err := readSettings(env.Lookup)
+	settings, err := resolveTeamsSettings(ctx, env, d, orgID, *db)
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitRefused, "configuration", err.Error())
 	}
@@ -220,7 +253,14 @@ func (s settings) redact(err error) error {
 	return secrets.NewBoundary(s.token).Redact(err)
 }
 
-func readSettings(lookup secrets.LookupEnv) (settings, error) {
+// envOverrides is what the ATLASSIAN_* environment carries for one run. Every
+// field is "" when unset -- unlike the old readSettings, nothing here is
+// required: resolveTeamsSettings decides what "complete" means.
+type envOverrides struct {
+	organizationID, cloudID, email, token, base string
+}
+
+func readEnvOverrides(lookup secrets.LookupEnv) (envOverrides, error) {
 	first := func(keys ...string) (string, error) {
 		for _, key := range keys {
 			value, ok, err := secrets.Resolve(key, lookup)
@@ -233,47 +273,43 @@ func readSettings(lookup secrets.LookupEnv) (settings, error) {
 		}
 		return "", nil
 	}
-	var s settings
+	var o envOverrides
 	var err error
-	if s.organizationID, err = first(OrganizationIDKey); err != nil {
-		return settings{}, err
+	if o.organizationID, err = first(OrganizationIDKey); err != nil {
+		return envOverrides{}, err
 	}
-	if s.email, err = first(emailKey, legacyEmailKey); err != nil {
-		return settings{}, err
+	if o.cloudID, err = first(CloudIDKey); err != nil {
+		return envOverrides{}, err
 	}
-	if s.token, err = first(apiTokenKey, legacyAPITokenKey); err != nil {
-		return settings{}, err
+	if o.email, err = first(emailKey, legacyEmailKey); err != nil {
+		return envOverrides{}, err
 	}
-	base, err := first(baseURLKey, legacyBaseURLKey)
-	if err != nil {
-		return settings{}, err
+	if o.token, err = first(apiTokenKey, legacyAPITokenKey); err != nil {
+		return envOverrides{}, err
 	}
-	if s.cloudID, err = first(CloudIDKey); err != nil {
-		return settings{}, err
+	if o.base, err = first(baseURLKey, legacyBaseURLKey); err != nil {
+		return envOverrides{}, err
 	}
-	var missing []string
-	if s.organizationID == "" {
-		missing = append(missing, OrganizationIDKey)
-	}
-	if s.email == "" {
-		missing = append(missing, emailKey)
-	}
-	if s.token == "" {
-		missing = append(missing, apiTokenKey)
-	}
-	if base == "" {
-		missing = append(missing, baseURLKey)
-	}
-	if len(missing) > 0 {
-		return settings{}, fmt.Errorf("required settings are not set: %s", strings.Join(missing, ", "))
-	}
-	tenant, err := normalizeBase(base)
+	return o, nil
+}
+
+// fullyConfigured reports whether the environment alone can run the verb
+// with no stored credential at all -- the offline/test path D2770 keeps.
+func (o envOverrides) fullyConfigured() bool {
+	return o.email != "" && o.token != "" && o.base != ""
+}
+
+// settingsFromEnv is the OLD readSettings' env-derivation, kept verbatim for
+// the fully-env-configured path: https-normalize the base URL, and derive
+// the cloud id from the tenant subdomain when not given explicitly (the
+// Python-integration-compatible approximation this path has always used).
+func settingsFromEnv(o envOverrides) (settings, error) {
+	tenant, err := normalizeBase(o.base)
 	if err != nil {
 		return settings{}, fmt.Errorf("%s is not a valid URL", baseURLKey)
 	}
-	s.gatewayURL = tenant.String() + gatewayPath
+	s := settings{organizationID: o.organizationID, cloudID: o.cloudID, email: o.email, token: o.token, gatewayURL: tenant.String() + gatewayPath}
 	if s.cloudID == "" {
-		// The Python integration derives the site from the tenant subdomain.
 		host := tenant.Hostname()
 		if i := strings.Index(host, "."); i > 0 {
 			s.cloudID = host[:i]
@@ -281,6 +317,86 @@ func readSettings(lookup secrets.LookupEnv) (settings, error) {
 	}
 	if s.cloudID == "" {
 		return settings{}, fmt.Errorf("%s is not set and the site cannot be derived from %s", CloudIDKey, baseURLKey)
+	}
+	if s.organizationID == "" {
+		return settings{}, fmt.Errorf("%s is not set", OrganizationIDKey)
+	}
+	return s, nil
+}
+
+// resolveTeamsSettings is the D2770 entry point: the stored jira integration
+// credential is canonical; the full ATLASSIAN_EMAIL/API_TOKEN/JIRA_BASE_URL
+// triple is an offline/test escape hatch with no database at all; either
+// way, ATLASSIAN_ORGANIZATION_ID/ATLASSIAN_CLOUD_ID individually override
+// whatever was resolved.
+func resolveTeamsSettings(ctx context.Context, env cli.Env, d deps, orgID string, dbFlag string) (settings, error) {
+	overrides, err := readEnvOverrides(env.Lookup)
+	if err != nil {
+		return settings{}, err
+	}
+	var s settings
+	if overrides.fullyConfigured() {
+		s, err = settingsFromEnv(overrides)
+		if err != nil {
+			return settings{}, err
+		}
+	} else {
+		if d.openPostgres == nil || d.decryptor == nil {
+			return settings{}, errors.New("no stored-credential resolution is configured")
+		}
+		// --db, like every sibling sync verb's own --db (internal/synccli/
+		// target.go's dbValue), wins over POSTGRES_URI when given.
+		pgDSNValue := strings.TrimSpace(dbFlag)
+		if pgDSNValue == "" {
+			pgDSN, configured, err := platformconfig.ResolveDSN(env.Lookup, PostgresURIKey, platformconfig.DomainDatabaseSpec)
+			if err != nil || !configured {
+				detail := PostgresURIKey + " is not set"
+				if err != nil {
+					detail = err.Error()
+				}
+				return settings{}, fmt.Errorf("%s (needed to resolve the stored jira credential; alternatively set %s, %s and %s together)", detail, emailKey, apiTokenKey, baseURLKey)
+			}
+			pgDSNValue = pgDSN.Reveal()
+		}
+		pool, err := d.openPostgres(ctx, pgDSNValue)
+		if err != nil {
+			// openPostgresPool (the default d.openPostgres) already redacts via
+			// pgstorage.Boundary before returning; wrap without redacting again.
+			return settings{}, fmt.Errorf("open postgres: %w", err)
+		}
+		defer pool.Close()
+		decryptor, err := d.decryptor(env)
+		if err != nil {
+			return settings{}, err
+		}
+		s, err = resolveJiraStoredSettings(ctx, pool, decryptor, d.doer, orgID)
+		if err != nil {
+			return settings{}, err
+		}
+	}
+	if overrides.organizationID != "" {
+		s.organizationID = overrides.organizationID
+	}
+	if overrides.cloudID != "" {
+		s.cloudID = overrides.cloudID
+	}
+	// Every ATLASSIAN_* field is documented as an INDIVIDUAL override on top
+	// of whichever settings source resolved (stored credential or the fully-
+	// env-configured offline path), not only the org/cloud id pair above --
+	// e.g. ATLASSIAN_API_TOKEN alone must override just the token, matching
+	// the stored credential's own email/base URL.
+	if overrides.email != "" {
+		s.email = overrides.email
+	}
+	if overrides.token != "" {
+		s.token = overrides.token
+	}
+	if overrides.base != "" {
+		tenant, err := normalizeBase(overrides.base)
+		if err != nil {
+			return settings{}, fmt.Errorf("%s is not a valid URL", baseURLKey)
+		}
+		s.gatewayURL = tenant.String() + gatewayPath
 	}
 	return s, nil
 }

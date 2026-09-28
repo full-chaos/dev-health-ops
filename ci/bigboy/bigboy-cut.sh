@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # bigboy-cut.sh <old8> <full new ops sha>  -- the whole bigboy phase of a group cut, sequential, logs to _records/bigboy-<new8>/cut.log.
-# waits for the CI-built images -> re-pin -> migrate -> recreate api/query-api/go-api -> hook check -> CH grants check -> PG grants read-back ->
-# receipt/admin/superadmin/REST(leg1+2)/admin corpus batches. Every step prints one `STEP <name> rc=<n>` line; nothing secret is printed.
+# waits for the CI-built images -> re-pin (ops images + web, CHAOS-7019) -> migrate -> recreate api/query-api/go-api/web ->
+# hook check -> CH grants check -> PG grants read-back -> receipt/admin/superadmin/REST(leg1+2)/admin corpus batches.
+# Every step prints one `STEP <name> rc=<n>` line; nothing secret is printed.
 set -u
 OLD8=${1:?old8}; NEW=${2:?full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}; R=/home/ubuntu/devhealth; REC=$R/_records/bigboy-$N8
 HERE=$(cd "$(dirname "$0")" && pwd)  # sibling scripts (this family) resolve from HERE, never a hardcoded _records path -- proves the tracked move actually runs, not just coexists with a synced _records copy
@@ -99,6 +100,14 @@ fi
 docker pull -q $BIGBOY_OPERATOR_IMAGE > /dev/null 2>&1; st operator-pull $?   # --no-build never pulls: the digest must be local before the recreate (rev 190 first run: "No such image")
 $HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; st repin $?
 [ -d $REC ] || { echo "no record dir"; exit 1; }
+# CHAOS-7019: `web` is a LOCAL BUILD service in the root compose.yml, unlike api/query-api/
+# go-api which the bigboy overlay pins to CI-built ghcr.io digests -- so a web-only merge (or a
+# web+ops merge landing together, like CHAOS-6262) left a stale host build silently serving
+# pages the backend underneath had already changed shape for. compose.bigboy.images.yml now
+# pins `web` by digest too (build: !reset null); this STEP repins it to the CI image for web's
+# OWN main branch HEAD, every cut, no host build, before `up` recreates it below.
+$HERE/bigboy-repin-web.sh > $REC.repin-web.out 2>&1; st repin-web $?
+
 for f in $R/_records/bigboy-$OLD8/pass-bigboy-corpus-admin7.sh; do [ -f $f ] && cp -n $f $REC/; done
 # CHAOS-6987 (D2728): --env-file is required from here on -- docker compose's default .env
 # auto-load only reads the PROJECT ROOT .env, never ops/.env, so a compose-level ${VAR}
@@ -106,7 +115,7 @@ for f in $R/_records/bigboy-$OLD8/pass-bigboy-corpus-admin7.sh; do [ -f $f ] && 
 # GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY}) silently resolves to a blank string with no
 # error -- caught live tonight when a first apply went out with an empty edge-JWT secret.
 docker compose --env-file ops/.env run --rm --no-deps migrate > $REC/migrate.out 2>&1; st migrate $?
-docker compose --env-file ops/.env up -d --no-deps --no-build api query-api go-api > $REC/up.out 2>&1; st up $?
+docker compose --env-file ops/.env up -d --no-deps --no-build api query-api go-api web > $REC/up.out 2>&1; st up $?   # CHAOS-7019: web recreated from its repinned digest here too, never a host build
 docker compose --env-file ops/.env up -d --no-deps --no-build go-worker go-worker-ops go-scheduler go-reconciler go-stream-ingest go-stream-external go-stream-pagerduty > $REC/up-workers.out 2>&1; rcw=$?; st up-workers $rcw; [ $rcw = 0 ] || { echo "ABORT: worker plane not recreated = INCOMPLETE pass (Trap #420)"; exit 1; }   # Trap #420: every plane from the cut's CI digests
 sleep 45; curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8093/ready | grep -q 200; st go-api-ready $?
 # R467: every path the router sends to a Go plane has a handler in the build just started (405/401 to a

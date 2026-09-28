@@ -2,7 +2,10 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
@@ -17,7 +20,7 @@ func TestRecommendations_OrgIDMismatchIsRefused(t *testing.T) {
 
 	ch := &scopeRecordingClient{}
 	_, err := (&Resolver{ClickHouse: ch}).Query().Recommendations(ctx, "foreign-org", "team-a", win)
-	if err == nil || err.Error() != "Access denied: cannot query org 'foreign-org'" {
+	if !recommendationsRefusedAs(err, "Access denied: cannot query org 'foreign-org'") {
 		t.Fatalf("err = %v, want Access denied: cannot query org 'foreign-org'", err)
 	}
 	if len(ch.calls) != 0 {
@@ -31,4 +34,11 @@ func TestRecommendations_OrgIDMismatchIsRefused(t *testing.T) {
 	if len(ch.calls) != 1 {
 		t.Fatalf("matching orgId: ClickHouse calls = %d, want 1", len(ch.calls))
 	}
+}
+
+// recommendationsRefusedAs reports whether err is a GraphQL error carrying exactly msg and
+// the AUTHORIZATION_ERROR code.
+func recommendationsRefusedAs(err error, msg string) bool {
+	var ge *gqlerror.Error
+	return errors.As(err, &ge) && ge.Message == msg && ge.Extensions["code"] == "AUTHORIZATION_ERROR"
 }

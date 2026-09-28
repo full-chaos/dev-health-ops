@@ -278,10 +278,25 @@ def test_envelope_key_is_mounted_as_a_file_not_an_env_var() -> None:
         assert volumes["envelope-key"]["secret"]["items"][0]["key"] == "GO_API_ENVELOPE_PRIVATE_KEY"
 
 
-def test_postgres_uri_sourced_from_the_pgbouncer_secret() -> None:
+def test_postgres_uri_sourced_from_the_registry_role_secret() -> None:
+    """D2831 (#3369 r2 P1, reproduced live: 'permission denied for table
+    go_api_routing_state'): the Go pgbouncer Secret's POSTGRES_URI is the
+    RIVER_DOMAIN_DATABASE_ROLE DSN -- values.yaml's own comment on
+    GO_API_REGISTRY_POSTGRES_URI says granting these tables to that role is
+    exactly what must NOT happen ("the shape of a prior multi-day outage").
+    These hooks must source POSTGRES_URI from the SAME Secret+key
+    query-api-deployment.yaml already uses for the role that owns the
+    registry tables, never the pgbouncer Secret."""
     jobs = _jobs(*_ENABLED)
     for job in (jobs[_CARRY], jobs[_REPOINT]):
         container = _container(job)
         pg = next(e for e in container["env"] if e["name"] == "POSTGRES_URI")
-        assert pg["valueFrom"]["secretKeyRef"]["key"] == "POSTGRES_URI"
-        assert "go-pgbouncer" in pg["valueFrom"]["secretKeyRef"]["name"]
+        assert pg["valueFrom"]["secretKeyRef"]["key"] == "GO_API_REGISTRY_POSTGRES_URI"
+        assert "go-pgbouncer" not in pg["valueFrom"]["secretKeyRef"]["name"]
+        # same Secret the envelope-key volume mounts from -- one shared Secret,
+        # not a second credential source.
+        volumes = {v["name"]: v for v in job["spec"]["template"]["spec"]["volumes"]}
+        assert (
+            pg["valueFrom"]["secretKeyRef"]["name"]
+            == volumes["envelope-key"]["secret"]["secretName"]
+        )

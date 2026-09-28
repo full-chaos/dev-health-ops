@@ -57,6 +57,26 @@ func testJiraCredential(config map[string]string) providerfoundation.Credential 
 	})
 }
 
+// fakeOrganizationResolver serves atlassianteams.ResolveOrganizationID a
+// canned Execute result or error, so these tests never call a live
+// Atlassian tenant.
+type fakeOrganizationResolver struct {
+	calls  int
+	result *atlassian.Result
+	err    error
+}
+
+func (f *fakeOrganizationResolver) Execute(context.Context, string, map[string]any, string, []string, int) (*atlassian.Result, error) {
+	f.calls++
+	return f.result, f.err
+}
+
+func fakeResolvedOrganizationID(orgID string) *atlassian.Result {
+	return &atlassian.Result{Data: map[string]any{
+		"tenantContexts": []any{map[string]any{"orgId": orgID, "cloudId": "resolved-cloud-id"}},
+	}}
+}
+
 // TestJiraCombinedCollectorWritesRealAtlassianTeamsWhenConfigured is the
 // D2770/CHAOS-7002 wiring proof the scribe's VET flagged: the AUTOMATIC path
 // (this collector, registered under "jira" in sync_dispatch.go's Native map)
@@ -138,22 +158,41 @@ func TestJiraCombinedCollectorWritesRealAtlassianTeamsWhenConfigured(t *testing.
 	}
 }
 
-// TestJiraCombinedCollectorSkipsAtlassianTeamsWhenNotConfigured is the
-// backward-compatibility guard: an org that has not set
-// atlassian_organization_id must be completely unaffected -- the real
-// Atlassian Teams client must never even be constructed.
-func TestJiraCombinedCollectorSkipsAtlassianTeamsWhenNotConfigured(t *testing.T) {
-	ctx := context.Background()
-	fake := &fakeProjectAsTeamCollector{result: providersync.TeamCatalogResult{TeamsWritten: 1}}
-	newClientCalled := false
-	collector := jiraCombinedTeamCatalogCollector{
-		ProjectAsTeam: fake,
-		Conn:          nil, // must never be dereferenced: no atlassian_organization_id means no Atlassian Teams attempt at all
-		NewClient: func(string, atlassian.AuthProvider) atlassianteams.Client {
-			newClientCalled = true
-			return oneAtlassianTeam{}
-		},
+// TestJiraCombinedCollectorResolvesOrganizationIDWhenNotConfigured is the
+// D2817/CHAOS-7020 proof on the AUTOMATIC path: an org whose stored jira
+// credential has no atlassian_organization_id (bigboy's exact shape, D2806)
+// still gets real ARI-shaped Atlassian Teams rows -- the collector resolves
+// the organization id live via the AGG gateway (faked here) using the same
+// credential, with no manual config step.
+func TestJiraCombinedCollectorResolvesOrganizationIDWhenNotConfigured(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	fake := &fakeProjectAsTeamCollector{result: providersync.TeamCatalogResult{TeamsWritten: 1}}
+	resolver := &fakeOrganizationResolver{result: fakeResolvedOrganizationID("resolved-org-456")}
+	collector := jiraCombinedTeamCatalogCollector{
+		ProjectAsTeam:           fake,
+		Conn:                    conn,
+		NewClient:               func(string, atlassian.AuthProvider) atlassianteams.Client { return oneAtlassianTeam{} },
+		NewOrganizationResolver: func(string, atlassian.AuthProvider) atlassianteams.OrganizationResolver { return resolver },
+	}
+	// No atlassian_organization_id and no atlassian_cloud_id: this test
+	// exercises resolution end to end, exactly bigboy's ef7c2457 shape.
 	credential := testJiraCredential(map[string]string{"base_url": "https://acme.atlassian.net"})
 	client, err := providerfoundation.NewJiraClient(credential, http.DefaultClient, providerfoundation.DefaultRetryPolicy(), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	if err != nil {
@@ -165,11 +204,85 @@ func TestJiraCombinedCollectorSkipsAtlassianTeamsWhenNotConfigured(t *testing.T)
 	if err != nil {
 		t.Fatalf("CollectTeamCatalog: %v", err)
 	}
+	if resolver.calls != 1 {
+		t.Errorf("organization id resolver called %d times, want 1", resolver.calls)
+	}
+	// 1 from the fake project-as-team leg + 1 real Atlassian team = 2.
+	if result.TeamsWritten != 2 {
+		t.Errorf("TeamsWritten = %d, want 2 (1 project-as-team + 1 resolved Atlassian team)", result.TeamsWritten)
+	}
+	var gotARITeams uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM teams FINAL WHERE org_id = 'org-under-test' AND provider = 'jira' AND startsWith(ifNull(native_team_key, ''), 'ari:cloud:identity::team/')").Scan(&gotARITeams); err != nil {
+		t.Fatal(err)
+	}
+	if gotARITeams != 1 {
+		t.Errorf("real Atlassian Teams rows written to ClickHouse = %d, want 1 -- resolution did not actually unblock the automatic path", gotARITeams)
+	}
+}
+
+// TestJiraCombinedCollectorDegradesNonStrictWhenOrganizationIDResolutionFails
+// is the guard-failing counterpart: when neither a config override nor
+// resolution produces an organization id (e.g. a permission problem), the
+// automatic post-sync path (non-strict) must degrade the same as any other
+// Atlassian Teams read failure -- log and keep the project-as-team result,
+// never lose it and never write a partial Atlassian Teams row.
+func TestJiraCombinedCollectorDegradesNonStrictWhenOrganizationIDResolutionFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	fake := &fakeProjectAsTeamCollector{result: providersync.TeamCatalogResult{TeamsWritten: 1}}
+	resolver := &fakeOrganizationResolver{err: atlassianteams.ErrOrganizationPermission}
+	newClientCalled := false
+	collector := jiraCombinedTeamCatalogCollector{
+		ProjectAsTeam: fake,
+		Conn:          conn,
+		NewClient: func(string, atlassian.AuthProvider) atlassianteams.Client {
+			newClientCalled = true
+			return oneAtlassianTeam{}
+		},
+		NewOrganizationResolver: func(string, atlassian.AuthProvider) atlassianteams.OrganizationResolver { return resolver },
+	}
+	credential := testJiraCredential(map[string]string{"base_url": "https://acme.atlassian.net", "atlassian_cloud_id": "pinned-cloud-id"})
+	client, err := providerfoundation.NewJiraClient(credential, http.DefaultClient, providerfoundation.DefaultRetryPolicy(), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := collector.CollectTeamCatalog(ctx,
+		providersync.TeamCatalogReference{OrgID: "org-under-test", SyncRunID: "run-1", IntegrationID: "integration-1"},
+		credential, client, providersync.TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CollectTeamCatalog: %v (non-strict must never propagate)", err)
+	}
+	if resolver.calls != 1 {
+		t.Errorf("organization id resolver called %d times, want 1", resolver.calls)
+	}
 	if newClientCalled {
-		t.Error("the Atlassian Teams client was built even though atlassian_organization_id was not configured")
+		t.Error("the Atlassian Teams client was built even though organization id resolution failed")
 	}
 	if result.TeamsWritten != 1 {
 		t.Errorf("TeamsWritten = %d, want 1 (unchanged project-as-team result)", result.TeamsWritten)
+	}
+	var gotARITeams uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM teams FINAL WHERE org_id = 'org-under-test' AND provider = 'jira' AND startsWith(ifNull(native_team_key, ''), 'ari:cloud:identity::team/')").Scan(&gotARITeams); err != nil {
+		t.Fatal(err)
+	}
+	if gotARITeams != 0 {
+		t.Errorf("Atlassian team rows written = %d, want 0 -- a failed resolution must never write a partial row", gotARITeams)
 	}
 }
 

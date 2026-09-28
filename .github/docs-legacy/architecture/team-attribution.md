@@ -130,7 +130,7 @@ stays a separate option"). Both live in ClickHouse under `provider = 'jira'`:
 
 | | Leg 1: Project-as-team | Leg 2: Atlassian Teams (real teams) |
 |---|---|---|
-| Written by | the Jira team catalog / auto-import -- always runs | `internal/atlassianteams`, run automatically as an additional step of the SAME jira team-catalog auto-import whenever the jira integration's `auto_import_teams` is on and its credential config carries `atlassian_organization_id` (org-opt-in; CHAOS-7002/D2770/D2778) -- also reachable standalone via `dho sync teams --provider jira` |
+| Written by | the Jira team catalog / auto-import -- always runs | `internal/atlassianteams`, run automatically as an additional step of the SAME jira team-catalog auto-import whenever the jira integration's `auto_import_teams` is on (CHAOS-7002/D2770/D2778) -- also reachable standalone via `dho sync teams --provider jira` |
 | `teams.id` | the Jira project key (`PLAT`) | the uuid of the team's ARI (`ari:cloud:identity::team/<uuid>`), `native_team_key` = the full ARI |
 | Members (`team_memberships`, `source = 'native'`) | the project lead only, 100/10 | every `TEAM_MEMBER` of the team from the Teamwork Graph (`member_id = jira:<lower(accountId)>`, the same id the auto-import uses), 100/10 |
 | Project ownership (`team_project_ownership`, `source = 'native'`) | the project itself, specificity 100, priority 10 | the team's active projects, **specificity 110, priority 10** |
@@ -151,6 +151,20 @@ either way.
 A future write-time toggle (skip the project-as-team leg entirely once an integration has Atlassian Teams
 configured) is a possible follow-up, not implemented -- D2778 records it as an option for chris to decide, not a
 default.
+
+**Organization id resolution (CHAOS-7020/D2817).** The Atlassian Teams leg needs an `atlassian_organization_id`
+the Teams API hard-requires alongside the cloud id; unlike the cloud id (auto-resolved live from the tenant's own
+`_edge/tenant_info` endpoint), the organization id has no such endpoint and was, until this change, a value only a
+human (an Atlassian org admin) could read off `admin.atlassian.com` and enter by hand -- the actual blocker that
+kept bigboy's own Atlassian Teams proof from ever writing real rows. `internal/atlassianteams.ResolveOrganizationID`
+closes that gap: the AGG (Atlassian GraphQL gateway) `tenantContexts(cloudIds: [...]) { orgId }` query, called with
+the SAME stored jira credential (email + API token) both legs already use, returns the cloud id's organization id
+directly -- no admin-scoped key, no new credential shape. The jira integration's `config.atlassian_organization_id`
+is now an OVERRIDE only: when set, it wins (validated on save as UUID- or ARI-shaped, `PATCH
+/api/v1/admin/credentials/jira/{name}`); when absent, both entry points (the CLI verb and the automatic post-sync
+path) resolve it live, once per run, and never persist it. A resolution failure (the tenant genuinely has no
+organization context, or the credential lacks permission) degrades the same as any other Atlassian Teams read
+failure on the automatic path: non-strict logs and keeps the project-as-team leg's result untouched.
 
 ### 0.3 Off-the-rails matrix (symptom → diagnosis → fix)
 

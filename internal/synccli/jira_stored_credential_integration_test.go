@@ -5,6 +5,7 @@ package synccli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"atlassian/atlassian"
+
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
@@ -22,6 +25,25 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
+
+// fakeOrganizationResolver serves ResolveOrganizationID a canned Execute
+// result or error, so these tests never call a live Atlassian tenant.
+type fakeOrganizationResolver struct {
+	calls  int
+	result *atlassian.Result
+	err    error
+}
+
+func (f *fakeOrganizationResolver) Execute(context.Context, string, map[string]any, string, []string, int) (*atlassian.Result, error) {
+	f.calls++
+	return f.result, f.err
+}
+
+func fakeResolvedOrganizationID(orgID string) *atlassian.Result {
+	return &atlassian.Result{Data: map[string]any{
+		"tenantContexts": []any{map[string]any{"orgId": orgID, "cloudId": "resolved-cloud-id"}},
+	}}
+}
 
 const (
 	testEncryptionKey  = "gwc-atlassian-teams-test-key"
@@ -126,7 +148,11 @@ func TestResolveJiraStoredSettingsUsesTheStoredCredential(t *testing.T) {
 		map[string]string{"base_url": tenantURL, "atlassian_organization_id": "atlassian-org-123"},
 		map[string]string{"email": "sync@example.test", "api_token": "s3cr3t-token"})
 
-	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), tenantInfo.Client(), orgID)
+	poisonResolver := func(string, atlassian.AuthProvider) atlassianteams.OrganizationResolver {
+		t.Fatal("the resolver must not be called when the config already has an organization id")
+		return nil
+	}
+	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), tenantInfo.Client(), poisonResolver, orgID)
 	if err != nil {
 		t.Fatalf("resolveJiraStoredSettings: %v", err)
 	}
@@ -174,7 +200,11 @@ func TestResolveJiraStoredSettingsRespectsAConfigCloudIDOverride(t *testing.T) {
 		map[string]string{"base_url": tenantInfo.URL, "atlassian_organization_id": "atlassian-org-123", "atlassian_cloud_id": "pinned-cloud-id"},
 		map[string]string{"email": "sync@example.test", "api_token": "s3cr3t-token"})
 
-	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), tenantInfo.Client(), orgID)
+	poisonResolver := func(string, atlassian.AuthProvider) atlassianteams.OrganizationResolver {
+		t.Fatal("the resolver must not be called when the config already has an organization id")
+		return nil
+	}
+	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), tenantInfo.Client(), poisonResolver, orgID)
 	if err != nil {
 		t.Fatalf("resolveJiraStoredSettings: %v", err)
 	}
@@ -186,13 +216,57 @@ func TestResolveJiraStoredSettingsRespectsAConfigCloudIDOverride(t *testing.T) {
 	}
 }
 
-// TestResolveJiraStoredSettingsRefusesWithoutAnOrganizationID plants exactly
-// the D2770 defect this guard exists to catch: a stored jira credential with
-// email/token/base_url (everything the OLD verb needed) but no
-// atlassian_organization_id -- proving the guard actually fires rather than
-// silently proceeding with an empty organization id the Teams API would
-// reject anyway.
-func TestResolveJiraStoredSettingsRefusesWithoutAnOrganizationID(t *testing.T) {
+// TestResolveJiraStoredSettingsResolvesTheOrganizationIDWhenNotConfigured is
+// the D2817/CHAOS-7020 proof: a stored jira credential with email/token/
+// base_url but no atlassian_organization_id no longer refuses outright --
+// it derives one live via the AGG gateway (faked here) using the same
+// credential, so a bigboy integration chris never manually configured still
+// gets real ARI-shaped rows.
+func TestResolveJiraStoredSettingsResolvesTheOrganizationIDWhenNotConfigured(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = instance.Close(ctx) }()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applyRealSchema(t, ctx, pool)
+
+	const orgID = "org-under-test"
+	// atlassian_cloud_id is pinned so this test exercises organization id
+	// resolution alone, with no live tenant_info call in the mix.
+	seedJiraCredential(t, ctx, pool, orgID,
+		map[string]string{"base_url": "https://acme.atlassian.net", "atlassian_cloud_id": "pinned-cloud-id"},
+		map[string]string{"email": "sync@example.test", "api_token": "s3cr3t-token"})
+
+	resolver := &fakeOrganizationResolver{result: fakeResolvedOrganizationID("resolved-org-456")}
+	newResolver := func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.OrganizationResolver {
+		return resolver
+	}
+
+	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, newResolver, orgID)
+	if err != nil {
+		t.Fatalf("resolveJiraStoredSettings: %v", err)
+	}
+	if settings.organizationID != "resolved-org-456" {
+		t.Errorf("organizationID = %q, want the resolved value", settings.organizationID)
+	}
+	if resolver.calls != 1 {
+		t.Errorf("resolver called %d times, want 1", resolver.calls)
+	}
+}
+
+// TestResolveJiraStoredSettingsNamesTheFieldWhenResolutionFails plants the
+// permission-denied case ResolveOrganizationID names: a stored jira
+// credential with no atlassian_organization_id whose resolution attempt
+// fails must still refuse by naming the field, not surface a bare gateway
+// error the caller has to decode.
+func TestResolveJiraStoredSettingsNamesTheFieldWhenResolutionFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -209,12 +283,55 @@ func TestResolveJiraStoredSettingsRefusesWithoutAnOrganizationID(t *testing.T) {
 
 	const orgID = "org-under-test"
 	seedJiraCredential(t, ctx, pool, orgID,
-		map[string]string{"base_url": "https://acme.atlassian.net"},
+		map[string]string{"base_url": "https://acme.atlassian.net", "atlassian_cloud_id": "pinned-cloud-id"},
 		map[string]string{"email": "sync@example.test", "api_token": "s3cr3t-token"})
 
-	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, orgID)
+	resolver := &fakeOrganizationResolver{err: atlassianteams.ErrOrganizationPermission}
+	newResolver := func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.OrganizationResolver {
+		return resolver
+	}
+
+	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, newResolver, orgID)
 	if err == nil {
-		t.Fatal("expected a refusal: the stored credential has no atlassian_organization_id")
+		t.Fatal("expected a refusal: resolving the organization id failed")
+	}
+	if !strings.Contains(err.Error(), "atlassian_organization_id") {
+		t.Errorf("error does not name the field: %v", err)
+	}
+	if !errors.Is(err, atlassianteams.ErrOrganizationPermission) {
+		t.Errorf("error does not wrap ErrOrganizationPermission: %v", err)
+	}
+}
+
+// TestResolveJiraStoredSettingsRefusesWithoutAnOrganizationIDWhenNoResolver
+// is the negative control for the guard itself: with no resolver configured
+// at all (the caller's own configuration error, distinct from a resolution
+// failure), the verb still refuses by naming the field rather than
+// proceeding with an empty organization id the Teams API would reject
+// anyway.
+func TestResolveJiraStoredSettingsRefusesWithoutAnOrganizationIDWhenNoResolver(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = instance.Close(ctx) }()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applyRealSchema(t, ctx, pool)
+
+	const orgID = "org-under-test"
+	seedJiraCredential(t, ctx, pool, orgID,
+		map[string]string{"base_url": "https://acme.atlassian.net", "atlassian_cloud_id": "pinned-cloud-id"},
+		map[string]string{"email": "sync@example.test", "api_token": "s3cr3t-token"})
+
+	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, nil, orgID)
+	if err == nil {
+		t.Fatal("expected a refusal: no resolver is configured and the config has no atlassian_organization_id")
 	}
 	if !strings.Contains(err.Error(), "atlassian_organization_id") {
 		t.Errorf("error does not name the missing field: %v", err)
@@ -239,7 +356,7 @@ func TestResolveJiraStoredSettingsRefusesWithNoRow(t *testing.T) {
 	defer pool.Close()
 	applyRealSchema(t, ctx, pool)
 
-	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, "org-with-no-integration")
+	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, nil, "org-with-no-integration")
 	if err == nil {
 		t.Fatal("expected a refusal: no stored jira credential exists for this org")
 	}

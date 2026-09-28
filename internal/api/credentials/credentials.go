@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -265,6 +267,41 @@ func (h handlers) get(w http.ResponseWriter, r *http.Request) {
 
 const pagerDutyDedicated = "Use the dedicated PagerDuty setup endpoints"
 
+// jiraOrganizationIDShape matches an Atlassian organization id: a bare UUID,
+// or the ARI Atlassian's own admin console/API also use
+// (ari:cloud:platform::org/<uuid>). CHAOS-7020: config.atlassian_organization_id
+// is an override on the credential otherwise resolved automatically
+// (internal/atlassianteams.ResolveOrganizationID) -- validated here, on save,
+// so a malformed override fails fast at the admin API instead of silently
+// downstream in an AGG GraphQL call.
+var jiraOrganizationIDShape = regexp.MustCompile(`(?i)^(ari:cloud:platform::org/)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// validateJiraConfig returns a non-empty detail when config carries a
+// non-empty atlassian_organization_id that isn't UUID/ARI-shaped. A missing
+// or empty value is valid (it just means "no override yet", or "clear the
+// override" on an update) -- only a malformed non-empty value is rejected.
+func validateJiraConfig(config *pyjson.Object) string {
+	if config == nil {
+		return ""
+	}
+	raw, ok := config.Get("atlassian_organization_id")
+	if !ok {
+		return ""
+	}
+	value, isString := raw.(string)
+	if !isString {
+		return "config.atlassian_organization_id must be a string"
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if !jiraOrganizationIDShape.MatchString(trimmed) {
+		return "config.atlassian_organization_id must be a UUID or an Atlassian ARI (ari:cloud:platform::org/<uuid>)"
+	}
+	return ""
+}
+
 // requiredDict is a required `dict[str, Any]` body field.
 func requiredDict(problems *pybody.Errors, object *pyjson.Object, name string) (*pyjson.Object, bool) {
 	raw, ok := object.Get(name)
@@ -348,6 +385,12 @@ func (h handlers) create(w http.ResponseWriter, r *http.Request) {
 	if provider == "pagerduty" {
 		policy.WriteDetail(w, http.StatusBadRequest, pagerDutyDedicated, nil)
 		return
+	}
+	if provider == "jira" && hasConfig {
+		if detail := validateJiraConfig(config); detail != "" {
+			policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
+			return
+		}
 	}
 	var configArg *pyjson.Object
 	if hasConfig {
@@ -472,6 +515,12 @@ func (h handlers) update(w http.ResponseWriter, r *http.Request) {
 	if provider == "pagerduty" {
 		policy.WriteDetail(w, http.StatusBadRequest, pagerDutyDedicated, nil)
 		return
+	}
+	if provider == "jira" && hasConfig {
+		if detail := validateJiraConfig(config); detail != "" {
+			policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
+			return
+		}
 	}
 	ctx := r.Context()
 	orgID := orgIDOf(ctx)

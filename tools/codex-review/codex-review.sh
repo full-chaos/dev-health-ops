@@ -398,6 +398,8 @@
 #   -e EFF    reasoning effort (default: $CODEX_REVIEW_EFFORT, else xhigh)
 #   -p FILE   prompt file (default: prompt.md in the lane worktree)
 #   -t SHA    tip to review (default: HEAD of the lane worktree)
+#   -b REF    base for the review patch (default: $CODEX_REVIEW_BASE, else origin/main);
+#             the patch is `git diff --stat BASE...TIP` + `git diff BASE...TIP` (v4.8.22)
 #   -o DIR    output dir for verdict/log (default: the lane worktree)
 #   -k        keep the review worktree afterwards (debugging)
 #   -U        allow an unpushed tip (NOT recommended; disables the safety net)
@@ -416,7 +418,89 @@
 
 set -euo pipefail
 
-VERSION="4.8.7"
+# v4.8.13 (team-lead spec, 09-06, two CF findings from a live v4.8.12 round):
+#   1. UV_CACHE_DIR was never bounded or granted a writable root at all, so a
+#      Python-touching round's `uv sync`/`uv run` failed inside workspace-write
+#      the same way an unbounded GOCACHE used to (v4.3/v4.4 history above) --
+#      RUVCACHE now follows the exact same shared-persistent-path-on-Linux,
+#      per-round-under-/tmp-on-macOS pattern as RGOCACHE/RGOMODCACHE, granted
+#      in the same writable_roots list, exported into the same D1 exec block.
+#   2. "codex exited 0 but wrote no verdict file" turned out to be a FALSE NO
+#      VERDICT on a live round: the reviewer had written a complete verdict,
+#      just not at the `-o` path -- traced to `-o "$V"` being handed to codex
+#      AFTER `cd "$RW"`, so a caller-relative `-o` (e.g. `-o .`) resolved
+#      against $RW, not the caller's own cwd. Fixed at the root (OUTDIR is
+#      now resolved to an absolute, physical path immediately after it is
+#      created, so $V/$L are absolute from that point on and a `cd` anywhere
+#      downstream cannot reinterpret them) AND with a fallback: before
+#      declaring NO VERDICT, search the still-alive review worktree for the
+#      expected verdict filename and, failing that, the newest post-launch
+#      `.md` file, and copy it to the expected path rather than losing a real
+#      verdict to a path mismatch.
+#   3. (from #2306 r1-v4) the exec-block counter that decides VOID IN FORM
+#      only matched Go verbs (`go test/run/build`), so a Python-only round
+#      that genuinely executed `pytest` (52/52), `uv run`, ruff and mypy was
+#      falsely declared void. The counter now also matches pytest/`uv
+#      run`/`.venv/bin/pytest`/ruff/mypy exec blocks, and VOID IN FORM fires
+#      only when BOTH families are zero. `\bpytest\b`/`\bruff\b`/`\bmypy\b`
+#      are WORD-BOUNDED (CF nit: unbounded, "truffle" would have counted as
+#      a `ruff` execution, widening the guard in the unsafe direction); `uv
+#      run` and `.venv/bin/pytest` stay unanchored substrings, matching the
+#      Go pattern's own tolerance, since neither is a single bare word a
+#      real identifier could contain as a false-positive substring.
+#   4. (from the SAME #2312 r1) VERDICT_RE falsely flagged "Verdict: request
+#      changes" as SUSPECT -- "request changes" is a real, complete
+#      NOT-CLEAN verdict, just not in the clean/not-clean/sound/block
+#      vocabulary. Added as its own alternative in the same regex.
+#   5. (CF required change on this same read) the verdict-fallback lookup's
+#      *.md fallback used `find | head -1` as "the newest" file -- find's
+#      output order is unspecified, so this could pick up any matching file,
+#      not the newest one, including a repo doc the reviewer merely edited
+#      while testing something unrelated. Now sorts by mtime (`-printf
+#      '%T@ %p' | sort -rn`) for a real newest-first order, AND validates
+#      every candidate's last non-blank line against VERDICT_RE (hoisted
+#      earlier in the script for this purpose) before ever copying it --
+#      a candidate that fails validation is never promoted to $V, only
+#      logged as a rejected candidate.
+# D1 exec block (the main `codex exec` invocation) is otherwise
+# byte-for-byte identical to v4.8.12: same model/effort defaults, same
+# GOFLAGS/GOMAXPROCS/GOCACHE/GOMODCACHE/GOTMPDIR/GOPATH/TMPDIR bounds, same
+# codegraph timeout shim -- UV_CACHE_DIR is an ADDITION to that block, not a
+# replacement of anything in it.
+# v4.8.14 (chris's ruling, 2026-09-06, verbatim: "we already proved it
+# wasn't useful to reviewers so it shouldn't be in the harness to index
+# it."): codegraph removed from the review harness entirely -- the shared
+# base-checkout mechanism (base-advance fetch/merge, `codegraph sync`, the
+# nested round-worktree trick), the codegraph timeout shim, and the prompt
+# text inviting a reviewer to run `codegraph explore` are all gone. Every
+# round now takes the plain per-$WT worktree-add path unconditionally, and
+# the round log prints an explicit `codegraph: disabled (chris 2026-09-06)`
+# marker where the old provenance fields used to be. Everything else in
+# this file -- the v4.8.13 UV_CACHE_DIR bound, verdict-fallback lookup, exec
+# counters, and "request changes" verdict phrasing -- is unchanged.
+# v4.8.15 (chris's ruling, 2026-09-06, verbatim: "it shouldn't be in the
+# harness to index it" -- absolute, covers a reviewer invoking codegraph on
+# its own initiative, not just the wrapper's own now-removed indexing
+# mechanism): adds a PATH-deny stub (a `codegraph` shadow binary that refuses
+# with a one-line message and exit 2) prepended to PATH in the same env
+# invocation that reaches codex exec, plus a pre-exec `rm -rf "$RW/.codegraph"`
+# so a stale index from an earlier round can't linger either. Everything else
+# is byte-identical to v4.8.14 (the base-checkout removal, the STANDING_RULES
+# rg-only wording, the UV_CACHE_DIR bound, verdict-fallback lookup, exec
+# counters, "request changes" phrasing).
+# v4.8.22 (CHAOS-6948): a round must be able to SEE the diff it certifies. Twice on
+# 2026-09-26 (#3277 r3, #3299 r1) the reviewer could not run `git diff`: the review
+# worktree's `.git` pointer targets a path the sandbox denies, so it reviewed by
+# reading files and said so honestly. Both rounds stood on executed tests, but a round
+# that cannot see the patch cannot certify the diff. The wrapper now (a) writes
+# `git diff --stat BASE...TIP` and `git diff BASE...TIP` to `.codex-review.patch` in
+# the review worktree BEFORE the sandbox starts (BASE from -b / CODEX_REVIEW_BASE,
+# default origin/main), (b) names that file in the prompt, and (c) marks the round
+# VOID IN FORM, in the wrapper log and inside the verdict file, when the log shows
+# neither a SUCCEEDED `git diff` exec block nor a SUCCEEDED read of that file (the
+# EXEC-CLASSIFY awk gained a fourth number). Everything else is byte-identical to
+# v4.8.21. tools/codex-review/test-exec-classify.sh pins the new rule.
+VERSION="4.8.22"
 
 warn() { printf 'codex-review: %s\n' "$*" >&2; }
 die()  { warn "$*"; exit 1; }
@@ -581,11 +665,11 @@ case "${1:-}" in
 esac
 
 WT="$PWD" NAME="" MODEL="${CODEX_REVIEW_MODEL:-gpt-5.6-luna}" EFF="${CODEX_REVIEW_EFFORT:-xhigh}"
-PROMPT="" TIP="" OUTDIR="" KEEP=0 ALLOW_UNPUSHED=0
-while getopts 'w:n:m:e:p:t:o:kU' f; do
+PROMPT="" TIP="" OUTDIR="" KEEP=0 ALLOW_UNPUSHED=0 BASE="${CODEX_REVIEW_BASE:-origin/main}"
+while getopts 'w:n:m:e:p:t:o:b:kU' f; do
   case "$f" in
     w) WT=$OPTARG ;; n) NAME=$OPTARG ;; m) MODEL=$OPTARG ;; e) EFF=$OPTARG ;;
-    p) PROMPT=$OPTARG ;; t) TIP=$OPTARG ;; o) OUTDIR=$OPTARG ;;
+    p) PROMPT=$OPTARG ;; t) TIP=$OPTARG ;; o) OUTDIR=$OPTARG ;; b) BASE=$OPTARG ;;
     k) KEEP=1 ;; U) ALLOW_UNPUSHED=1 ;;
     *) die "unknown flag" ;;
   esac
@@ -667,8 +751,28 @@ fi
 # hint about WHERE codex looked without this script re-deriving codex's
 # own auth-validity logic.
 CODEX_HOME_EFFECTIVE="${CODEX_HOME:-$HOME/.codex}"
-codex login status >/dev/null 2>&1 \
-  || die "codex reports not logged in (checked via 'codex login status', CODEX_HOME resolves to $CODEX_HOME_EFFECTIVE) -- refusing to launch a round that would fail mid-way with an HTTP 401 instead of failing loudly now. If this is bigboy, run under 'bash -lc' (so ~/.profile sets CODEX_HOME) or export CODEX_HOME=/home/ubuntu/agents/codex explicitly before retrying."
+# v4.8.18 (post-incident 23:41Z): this used to discard stderr entirely, so a
+# config-load failure (e.g. a `[permissions.*]` table with no
+# `default_permissions` in the file -- see the PERMISSIONS-PROFILE ARGS block
+# further below) surfaced as a misleading "not logged in", costing 25 minutes
+# to diagnose across three lanes. Capture and print codex's own stderr
+# verbatim, and label the failure by what it actually says, not by assumption.
+LOGIN_STATUS_OUT=$(codex login status 2>&1) || {
+  # v4.8.17/team-lead's incident used the exact string "config defines
+  # [permissions] profiles but does not set default_permissions" -- no
+  # "error"/"Error" substring in it at all, so a pattern requiring one (an
+  # earlier draft of this fix) would have MISSED it and kept mislabelling it
+  # as "not logged in". Flipped the default instead: classify as auth-related
+  # only when the message actually looks auth-shaped; anything else is
+  # reported as a config-class failure, verbatim, unclassified rather than
+  # guessed.
+  case "$LOGIN_STATUS_OUT" in
+    *[Nn]ot\ logged\ in*|*[Ll]og\ in*|*401*|*[Uu]nauthorized*|*auth.json*)
+      die "codex reports not logged in (checked via 'codex login status', CODEX_HOME resolves to $CODEX_HOME_EFFECTIVE) -- refusing to launch a round that would fail mid-way with an HTTP 401 instead of failing loudly now. codex said verbatim: $LOGIN_STATUS_OUT. If this is bigboy, run under 'bash -lc' (so ~/.profile sets CODEX_HOME) or export CODEX_HOME=/home/ubuntu/agents/codex explicitly before retrying." ;;
+    *)
+      die "codex login-status check failed at CODEX_HOME=$CODEX_HOME_EFFECTIVE in a way that does NOT read as an auth problem -- do not chase login/auth.json for this one, check the config instead. codex said verbatim: $LOGIN_STATUS_OUT" ;;
+  esac
+}
 PROMPT=${PROMPT:-$WT/prompt.md}
 OUTDIR=${OUTDIR:-$WT}
 # v4.8.4: OUTDIR (and the log dir, which is the same directory -- see V/L
@@ -677,6 +781,16 @@ OUTDIR=${OUTDIR:-$WT}
 # "No such file or directory" and no verdict at all. Create it now, abort
 # loudly if it cannot be created.
 mkdir -p "$OUTDIR" || die "cannot create output directory $OUTDIR"
+# v4.8.13 (CF finding, root cause of a live "false NO VERDICT"): a caller
+# passing a RELATIVE -o (e.g. `-o .`, seen in the wild) built $V/$L below as
+# relative paths. The main round subshell does `cd "$RW"` before invoking
+# codex with `-o "$V"` -- so a relative $V silently resolved against the
+# REVIEW WORKTREE, not the caller's cwd, and the verdict landed inside $RW
+# instead of at the intended output directory. Resolving OUTDIR to its
+# absolute, physical path HERE, once, immediately after it is guaranteed to
+# exist, makes every path built from it ($V, $L, the residue dir) immune to
+# any `cd` anywhere downstream.
+OUTDIR=$(cd "$OUTDIR" && pwd -P) || die "cannot resolve the physical path of output directory $OUTDIR"
 [ -s "$PROMPT" ] || die "prompt file $PROMPT missing or empty"
 
 TIP=${TIP:-$(git -C "$WT" rev-parse HEAD)}
@@ -860,6 +974,33 @@ fi
 mkdir -p "$RGOCACHE" || die "cannot create/find GOCACHE $RGOCACHE"
 mkdir -p "$RGOMODCACHE" || die "cannot create/find GOMODCACHE $RGOMODCACHE"
 
+# v4.8.13: UV_CACHE_DIR, bounded the same way as GOCACHE/GOMODCACHE above and
+# for the identical reason -- an unset UV_CACHE_DIR defaults to a path under
+# $HOME (~/.cache/uv), which workspace-write does not grant, so a
+# Python-touching round's `uv sync`/`uv run` failed with a cache-init error
+# the same shape as the pre-v4.3 GOCACHE failures. Same Linux-shared vs.
+# macOS-per-round split as its Go neighbours: a shared, persistent path on
+# bigboy (never per-lane/per-round -- this is a download cache, sharing it
+# across rounds is the point), a fresh per-round dir under /tmp on macOS.
+#
+# PATH VERIFIED EMPIRICALLY, not assumed (lane-scribe's correction stands:
+# the lane-scratch bind path does NOT double as a shared cache root by
+# convention the way it looks like it should). `/var/lib/oci-cache/uv-cache`
+# -- the name that would match go-build/go-mod's naming pattern -- does NOT
+# exist and `mkdir` on it is denied (`/var/lib/oci-cache` itself is
+# root:root 755; ubuntu cannot create new top-level entries in it, only use
+# ones that already exist). The real, already-live, already-populated uv
+# cache on this host is `/var/lib/oci-cache/uv` (singular, no `-cache`
+# suffix, confirmed ubuntu:ubuntu writable, confirmed it has uv's own
+# CACHEDIR.TAG/archive-v0/builds-v0/interpreter-v4/sdists-v9 layout already
+# in it) -- that is the correct default, not a guess from a naming pattern.
+if [ "$HOST_OS" = Linux ]; then
+  RUVCACHE="${CODEX_REVIEW_UV_CACHE_DIR:-${UV_CACHE_DIR:-/var/lib/oci-cache/uv}}"
+else
+  RUVCACHE="${CODEX_REVIEW_UV_CACHE_DIR:-/tmp/codex-review-uvcache-$LANE_KEY-$TS}"
+fi
+mkdir -p "$RUVCACHE" || die "cannot create/find UV_CACHE_DIR $RUVCACHE"
+
 # Resolve the bounds ONCE, into variables, so the warn line below reports
 # exactly what is applied. The first version re-evaluated the defaults inside
 # the warn string, which could drift from the values actually exported.
@@ -910,6 +1051,25 @@ RSANDBOX="${CODEX_REVIEW_SANDBOX:-read-only}"
 case "$RSANDBOX" in
   read-only | workspace-write) ;;
   *) die "CODEX_REVIEW_SANDBOX must be read-only or workspace-write, got '$RSANDBOX'" ;;
+esac
+
+# v4.8.18 (lane-review-perms, CHAOS pending): which codex ACCESS MECHANISM
+# this round uses. codex-review selects the per-round `[permissions.codex-
+# review]` profile (see further below), which allowlists /var/run/docker.sock
+# so the reviewer can run testcontainers-backed Go tests itself -- but that
+# mode ALSO opens full network egress as an unavoidable side effect (see the
+# KNOWN LIMITATION comment where it's built). legacy reproduces v4.8.17's
+# behavior (the old `-s "$RSANDBOX"` + `sandbox_workspace_write.writable_roots`
+# path, network stays closed) and is the DEFAULT (CF read, 2026-09-10: an
+# unset knob must never open egress by accident) -- codex-review is opt-in,
+# named explicitly by a caller that specifically needs docker for this round.
+# Permission profiles do NOT compose with sandbox_mode/sandbox_workspace_write
+# (codex's own doc) -- the two mechanisms are mutually exclusive per round,
+# never both emitted below.
+RPERMS="${CODEX_REVIEW_PERMS:-legacy}"
+case "$RPERMS" in
+  codex-review | legacy) ;;
+  *) die "CODEX_REVIEW_PERMS must be codex-review or legacy, got '$RPERMS'" ;;
 esac
 
 START_EPOCH=$(date +%s)   # bounds the session-transcript recovery search
@@ -1180,6 +1340,29 @@ rmdir "$RW"   # git worktree add wants to create it
 #
 # The reviewer choosing a different filename is not a failure mode we can
 # prevent, so it is one we survive: copy first, delete second.
+# v4.8.18 (team-lead, review-evidence loss): astra's mutation-sweep REPORT.md
+# lived at $RW/review-evidence/ and preserve_residue()'s git-status-driven
+# copy did not save it before cleanup() removed the worktree — the survivors
+# list became unrecoverable for that round. This is a separate, unconditional
+# copy (not gated on git status/ignore rules at all) run BEFORE the worktree
+# is touched, so a reviewer writing evidence there is never depending on
+# preserve_residue's git-aware logic to notice it.
+copy_review_evidence() {
+  local src="$RW/review-evidence"
+  local dest="$OUTDIR/$NAME-$TS-review-evidence"
+  if [ ! -d "$src" ]; then
+    warn "review-evidence: none"
+    return 0
+  fi
+  local n
+  n=$(find "$src" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if mkdir -p "$dest" 2>/dev/null && cp -R "$src/." "$dest/" 2>/dev/null; then
+    warn "review-evidence: copied $n files"
+  else
+    warn "review-evidence: FAILED to copy from $src to $dest — check $OUTDIR is writable, evidence may be lost once cleanup removes the worktree"
+  fi
+}
+
 preserve_residue() {
   local dest="$OUTDIR/$NAME-$TS-worktree-residue"
   local had=0 line status path orig
@@ -1334,7 +1517,13 @@ rm_rf_writable() {
 }
 
 cleanup() {
+  copy_review_evidence
   preserve_residue
+  # v4.8.18: explicit unlink, not left to the rm_rf_writable below alone --
+  # a symlink to real credentials sitting in a per-round scratch dir is worth
+  # removing on its own line, auditable independent of whatever else that
+  # rm -rf does or does not reach.
+  [ -n "${CODEX_HOME_ROUND:-}" ] && rm -f "$CODEX_HOME_ROUND/auth.json" 2>/dev/null
   rm_rf_writable "${RGOTMPDIR:-}"
   # RTMPDIR too, or every round leaves a /tmp/codex-review-gotmp-*-shell-*
   # behind.
@@ -1370,12 +1559,48 @@ cleanup() {
     fi
   fi
   if [ "$KEEP" -eq 1 ]; then warn "keeping review worktree $RW (-k)"; return; fi
-  git -C "$WT" worktree remove --force "$RW" 2>/dev/null \
+  # v4.8.14: $RW_REPO is always $WT now that codegraph's shared-base-checkout
+  # path is removed (see the v4.8.14 CODEGRAPH REMOVED note below) -- this
+  # $RW_REPO indirection and the OPS_BASE prune branch right after it are
+  # dead code kept byte-identical to v4.8.13 rather than torn out here, since
+  # neither does anything once RW_REPO can no longer differ from $WT.
+  git -C "${RW_REPO:-$WT}" worktree remove --force "$RW" 2>/dev/null \
     || warn "review worktree $RW not removed — remove it manually and check 'git worktree list'"
+  # CF requirement: prune $OPS_BASE's worktree registrations after remove
+  # too, not only before the next round's add -- closes the same stale-
+  # registration window for THIS round's own removal (e.g. a `remove
+  # --force` that removed the directory but left a dangling admin entry
+  # under some git version/interruption combination), rather than only
+  # ever cleaning it up as a side effect of the NEXT round starting.
+  if [ "${RW_REPO:-}" != "" ] && [ "$RW_REPO" != "$WT" ]; then
+    git -C "$RW_REPO" worktree prune 2>/dev/null \
+      || warn "cleanup: 'git worktree prune' on $RW_REPO failed (non-fatal)"
+  fi
 }
 trap cleanup EXIT
 
-git -C "$WT" worktree add --detach "$RW" "$TIP" >/dev/null || die "worktree add failed"
+# ---------------------------------------------------------------------------
+# v4.8.14 CODEGRAPH REMOVED FROM THE REVIEW HARNESS -- chris's ruling,
+# 2026-09-06, verbatim: "we already proved it wasn't useful to reviewers so
+# it shouldn't be in the harness to index it." This replaces the entire
+# v4.8.12 CODEGRAPH SHARED BASE CHECKOUT mechanism: there is no more shared
+# $OPS_BASE checkout read, fetched, or `codegraph sync`'d, and no round
+# worktree is ever nested inside one. Every round now takes the plain,
+# unconditional per-$WT worktree-add path below -- the same path v4.8.12
+# already fell back to on macOS, high load, or a missing/mismatched base
+# checkout. Because no round worktree is ever created nested inside a base
+# checkout any more, none can pick up a `.codegraph/` index via the
+# filesystem-nesting mechanism the old design depended on -- there is no
+# separate "prevent .codegraph" step needed here, removing the nesting
+# removes the only path that ever put one in a round's worktree.
+# $OPS_BASE and any `.codegraph` index still sitting on disk from v4.8.12
+# rounds are untouched by this wrapper going forward; this change only
+# stops NEW rounds from reading them.
+RW_REPO="$WT"
+
+if [ "$RW_REPO" = "$WT" ]; then
+  git -C "$WT" worktree add --detach "$RW" "$TIP" >/dev/null || die "worktree add failed"
+fi
 # v4.8.7 (confirmation-pass round #1 on this branch, P1, EXECUTED,
 # PRE-EXISTING pattern since v4.8.2, now closed at point of use): $RW is
 # `mktemp -d`'d, then `rmdir`'d a few lines above ("git worktree add wants
@@ -1391,7 +1616,13 @@ git -C "$WT" worktree add --detach "$RW" "$TIP" >/dev/null || die "worktree add 
 # after: not a symlink, and `git rev-parse --show-toplevel` from inside it
 # (git's OWN notion of where this worktree actually lives, not our own
 # assumption) resolves under the real lane-scratch parent.
-if [ "$HOST_OS" = Linux ]; then
+# v4.8.14: $RW_REPO can no longer be anything but $WT (codegraph's nested
+# base-checkout path, the only thing that ever set it otherwise, is gone --
+# see the v4.8.14 CODEGRAPH REMOVED note above), so this check now always
+# applies. Left as an explicit condition rather than unconditional, byte-
+# identical in shape to v4.8.13, to minimize the diff around dead-but-
+# harmless state.
+if [ "$HOST_OS" = Linux ] && [ "$RW_REPO" = "$WT" ]; then
   if [ -L "$RW" ]; then
     die "the review worktree $RW is a SYMLINK immediately after 'git worktree add' -- refusing to use it (this looks like a race, not an accident: a symlink was likely planted in the vacant slot between the earlier rmdir and this worktree add)"
   fi
@@ -1492,9 +1723,9 @@ elif [ -f "$RW/go.mod" ]; then
         set -euo pipefail
         mkdir -p "$1"
         go mod download all
-        go build -o "$1/" ./...
+        go build -o "$1/" ./... || go build ./...
         go vet ./...
-        go build -tags=integration -o "$1/" ./...
+        go build -tags=integration -o "$1/" ./... || go build -tags=integration ./...
         go vet -tags=integration ./...
         GOPROXY=off go test -count=1 -run "^\$" ./...
       ' _ "$WARM_OUT" ) >"$WARM_LOG" 2>&1 || WARM_RC=$?
@@ -1570,21 +1801,64 @@ cp "$PROMPT" "$RW/prompt.md"
 # write the command is one prompt away from running it, and the shared stack is
 # not this round's to touch. Appended rather than merged into the lane's text so
 # it cannot be edited out by a prompt author who did not think of it.
-cat >> "$RW/prompt.md" <<'STANDING_RULES'
+#
+# v4.8.8 (chris 09-05 13:23-13:26 PDT's exec-mandatory rewrite; CHAOS-5249 r1
+# incident): this block used to append the SAME "do not run go test/build...
+# regardless of whether the sandbox you are given would technically permit
+# it" text to EVERY round, with no check on $RSANDBOX -- so a round launched
+# under workspace-write, with a lane prompt explicitly requiring build/test/
+# coverage exec, was ALSO told by this wrapper-owned text to ignore its own
+# sandbox and refuse to execute anything. The reviewer followed the
+# wrapper's text over the lane's prompt (CHAOS-5249 r1: zero go test/build
+# exec blocks, a fabricated-sounding "standing read-only review policy"
+# citation that was in fact this exact appended paragraph). The shared-stack/
+# docker prohibition and the architecture-sensitivity note are UNCONDITIONAL
+# (correct under either sandbox mode) and stay identical either way; only the
+# go-test/build guidance now branches on the sandbox this round actually got.
+cat >> "$RW/prompt.md" <<'STANDING_RULES_HEADER'
 
 ---
 
 STANDING RULES FOR EVERY ROUND (appended by the wrapper; not optional):
+STANDING_RULES_HEADER
 
-READ-ONLY REVIEW POLICY (chris's ruling, 09-04): this round is a code-READING
-exercise, not a code-EXECUTING one. Do not run `go test`, `go build`, `go
-run`, `go vet`, or any other language build/test/run command, regardless of
-whether the sandbox you are given would technically permit it. Your exec
-blocks should be limited to inspection commands: `git`, `rg`/`grep`, `cat`,
-`sed`, `awk`, `ls`, `diff`, and similar read-only tools against the files
-already in this worktree. If verifying a claim genuinely requires executing
-code, name the specific proof you would need and label it ARGUED/unrun in
-your verdict -- do not run it yourself in this round, even if you could.
+# v4.8.18 (lane-review-perms): docker is available to the reviewer under
+# codex-review+workspace-write (the permissions profile allowlists
+# /var/run/docker.sock) -- the old blanket "never run docker" text is now
+# FALSE in that mode and would make the reviewer refuse a container-backed
+# proof it can actually run. Every other mode (legacy, or read-only under
+# either RPERMS) keeps the original prohibition unchanged. Unquoted heredoc
+# on purpose: the round's own label value is spliced in literally so the
+# reviewer gets a copy-pasteable `--label` flag, not a shell variable it
+# cannot resolve inside the sandbox.
+if [ "$RPERMS" = "codex-review" ] && [ "$RSANDBOX" = "workspace-write" ]; then
+  cat >> "$RW/prompt.md" <<DOCKER_RULES_AVAILABLE
+
+Docker IS available to you in this round, via /var/run/docker.sock -- run the
+\`-tags=integration\` Go tests and any container-backed pytest yourself. Do not
+report a container-backed check as ARGUED/unrun just because it needs a
+container; if a testcontainers run fails to start a container, that is a
+finding about the harness -- report it verbatim, never invent what it would
+have printed.
+
+The shared compose project (\`dev-health\`) and any container NOT labelled
+\`codex-review-round=$NAME-$TS\` are OFF LIMITS: never \`docker exec\`/\`stop\`/
+\`rm\`/\`compose\` against them, never connect to their ports -- they belong to
+other people's work in flight and touching them can destroy their state.
+Every container YOU start carries \`--label codex-review-round=$NAME-$TS\`
+(this exact value, also in \$CODEX_REVIEW_ROUND_LABEL). Never run \`docker
+system prune\`, \`builder prune\`, or \`image prune\` -- these are host-wide and
+would destroy other lanes' state, not just yours.
+
+Network egress is open in this round; do not fetch anything not required by
+the tests.
+
+Pass any database DSN or credential (including a throwaway per-round test
+password) via an environment variable, never inline in a command string --
+the same rule as never putting a secret in argv applies here too.
+DOCKER_RULES_AVAILABLE
+else
+  cat >> "$RW/prompt.md" <<'DOCKER_RULES_PROHIBITED'
 
 Never run docker or compose commands, and never connect to a running service.
 The shared stack (containers named `dev-health-*`, the shared compose project,
@@ -1600,6 +1874,10 @@ verdict. What is never acceptable is writing down what such a command WOULD
 have printed. An unrun check reported as a quoted result is the one failure
 this wrapper exists to prevent, and "I could not run it here, it needs bigboy"
 costs you nothing.
+DOCKER_RULES_PROHIBITED
+fi
+
+cat >> "$RW/prompt.md" <<'STANDING_RULES_SHARED'
 
 Architecture-sensitive checks (NaN sign bits, FMA/fused-multiply-add results,
 float formatting, anything whose answer can differ per CPU) are verified in CI,
@@ -1609,27 +1887,61 @@ passes on arm64 while the x86 case it was meant to catch is still broken
 (CHAOS-4818 / #2142's NaN sign-bit reds appeared ONLY in CI). A green from the
 wrong architecture is worse than no green, because it is indistinguishable
 from a real one in your verdict. Say the check is CI-only and move on.
+STANDING_RULES_SHARED
 
-The next two paragraphs are LEGACY and apply only on a round where an
-operator has explicitly opted this round into `workspace-write` (the READ-ONLY
-REVIEW POLICY above governs the default): if that is not this round, running
-`go test` is out of scope regardless of what the sandbox would technically
-allow, and you should not attempt it.
+if [ "$RSANDBOX" = "workspace-write" ]; then
+  cat >> "$RW/prompt.md" <<'STANDING_RULES_EXEC'
 
-If `go test` is unavailable to you in this sandbox for any reason (module
-download blocked, a denied cache path, anything else), say so explicitly and
-in those words -- "go test unavailable" -- and label every remaining claim
-in your verdict EXECUTED or ARGUED, so a reader can tell a run result from a
-source-trace inference at a glance.
+EXEC-MANDATORY REVIEW POLICY: this round IS opted into workspace-write; the
+read-only policy does not apply. Execution is REQUIRED, not optional,
+before you report any finding:
 
-If a `go test`/`go run`/`go build` fails with `creating work dir: ... mkdir
+1. `go build ./... && go vet ./... && go vet -tags=integration ./...` for
+   the packages your prompt names (or the whole repo, only if your prompt
+   says a deletion/whole-tree-safe change makes that correct).
+2. Run the changed packages' own tests WITH `-coverprofile`, then
+   `go tool cover -func` on the result -- read the coverage, do not just
+   run the tests and stop.
+3. Callers evidence for every changed function via `rg` (paste the command
+   and the hits). Inspect every OTHER site of the same shape across the
+   WHOLE PACKAGE (or repo, via `rg`) -- a defect shape found once is swept
+   to every other instance yourself, in this same round, not left for a
+   later pass.
+Never run a whole-tree test pattern (`go test ./...`, `./internal/...`)
+regardless of what your prompt asks for -- name packages explicitly; if a
+wider run seems genuinely necessary, say so and stop rather than running
+it.
+
+Severity is evidence-defined: P1 = you EXECUTED a repro on the live code
+path and OBSERVED the defect, command and output both pasted -- no repro
+attempt means it cannot be P1. P2 = a plausible defect you tried to
+reproduce and could not -- paste what you ran and why it didn't reproduce.
+P3 = nit/style/test-strength, no repro expected. Verdict is CLEAN unless at
+least one P1 is found; a P2/P3 alone never blocks.
+
+If `go test`/`go run`/`go build` fails with `creating work dir: ... mkdir
 ...: operation not permitted`, RETRY IT EXACTLY ONCE before concluding go is
-unavailable. Measured directly (two lanes, macOS read-only sandbox): the
-FIRST invocation in a round can hit this even though GOTMPDIR/GOCACHE are
-correctly pointed at a writable path, and an immediate retry with no other
-change succeeds a few seconds later. One retry only -- if it fails a second
-time, that is a real "go test unavailable", not a hiccup, and you say so.
-STANDING_RULES
+unavailable -- the first invocation in a round can hit this even with
+GOTMPDIR/GOCACHE correctly pointed at a writable path, and an immediate
+retry with no other change often succeeds. One retry only -- if it fails a
+second time, that is a real "go test unavailable", not a hiccup, and you
+say so, labelling every remaining claim EXECUTED or ARGUED so a reader can
+tell a run result from a source-trace inference at a glance.
+STANDING_RULES_EXEC
+else
+  cat >> "$RW/prompt.md" <<'STANDING_RULES_READONLY'
+
+READ-ONLY REVIEW POLICY (chris's ruling, 09-04): this round is a code-READING
+exercise, not a code-EXECUTING one. Do not run `go test`, `go build`, `go
+run`, `go vet`, or any other language build/test/run command, regardless of
+whether the sandbox you are given would technically permit it. Your exec
+blocks should be limited to inspection commands: `git`, `rg`/`grep`, `cat`,
+`sed`, `awk`, `ls`, `diff`, and similar read-only tools against the files
+already in this worktree. If verifying a claim genuinely requires executing
+code, name the specific proof you would need and label it ARGUED/unrun in
+your verdict -- do not run it yourself in this round, even if you could.
+STANDING_RULES_READONLY
+fi
 # Second heredoc, UNQUOTED delimiter on purpose: this one interpolates the
 # round's actual RGOMODCACHE/HOME paths at generation time, so the reviewer
 # gets literal, copy-pasteable paths rather than shell variables it would
@@ -1682,6 +1994,21 @@ This round's own module cache -- already warmed and offline-resolve-proven
 (via \`GOPROXY=off go test -count=1 -run '^\$' ./...\`) before you started --
 is at $RGOMODCACHE. $MODCACHE_FALLBACK_LINE
 PROMPT_MODCACHE_INFO
+elif [ "$RSANDBOX" = "workspace-write" ]; then
+  # v4.8.10 (lane-5045-testops-dup peer read, EXECUTED/reproduced): this
+  # branch used to say "regardless" of the READ-ONLY REVIEW POLICY unconditionally,
+  # even though that policy no longer applies under workspace-write (this same
+  # CHAOS-5249 shape, in a second spot the v4.8.8 split didn't touch). Under
+  # workspace-write, execution is still REQUIRED (STANDING_RULES_EXEC) --
+  # a cold cache is a warning about speed/flakiness, not a license to skip.
+  cat >> "$RW/prompt.md" <<PROMPT_MODCACHE_INFO
+
+No Go module cache was warmed for this round ($WARM_SKIP_REASON) -- do not
+assume \`go test\`/\`go build\` will succeed, or succeed quickly, on the first
+try. This does NOT excuse you from executing (see STANDING_RULES_EXEC above,
+which still applies): retry once on a transient failure, and if a module is
+genuinely missing offline, say so explicitly and name it.
+PROMPT_MODCACHE_INFO
 else
   cat >> "$RW/prompt.md" <<PROMPT_MODCACHE_INFO
 
@@ -1695,8 +2022,54 @@ for aux in .codex-review-context.md LEDGER.md; do
   [ -f "$WT/$aux" ] && cp "$WT/$aux" "$RW/$aux"
 done
 
+# v4.8.22 (CHAOS-6948): the review patch, written by the wrapper (outside the sandbox,
+# where git works) into the review worktree, and named in the prompt. A failure to
+# produce it is loud in the log and the prompt says so; the VOID IN FORM rule below
+# then requires a successful `git diff` exec from the reviewer instead.
+# REVIEW-PATCH-BEGIN
+REVIEW_PATCH_NAME=".codex-review.patch"
+REVIEW_PATCH="$RW/$REVIEW_PATCH_NAME"
+REVIEW_PATCH_STATUS="unavailable"
+if BASE_SHA=$(git -C "$WT" rev-parse --verify --quiet "$BASE^{commit}") \
+   && { git -C "$WT" diff --no-color --stat "$BASE_SHA...$TIP"; printf '\n'; git -C "$WT" diff --no-color "$BASE_SHA...$TIP"; } > "$REVIEW_PATCH" 2>"$REVIEW_PATCH.err"; then
+  REVIEW_PATCH_STATUS="written"
+  rm -f "$REVIEW_PATCH.err"
+  REVIEW_PATCH_BYTES=$(wc -c < "$REVIEW_PATCH" | tr -d ' ')
+  warn "review patch: $REVIEW_PATCH_NAME written ($REVIEW_PATCH_BYTES bytes, base=$BASE $BASE_SHA ... tip=$TIP)"
+  printf 'review-patch: file=%s bytes=%s base=%s tip=%s\n' "$REVIEW_PATCH_NAME" "$REVIEW_PATCH_BYTES" "$BASE_SHA" "$TIP" >> "$L"
+  cat >> "$RW/prompt.md" <<PROMPT_REVIEW_PATCH
+
+THE DIFF UNDER REVIEW is written to \`$REVIEW_PATCH_NAME\` in your working directory:
+\`git diff --stat $BASE...$TIP\` first, then the full unified diff. Read it (for
+example \`sed -n '1,200p' $REVIEW_PATCH_NAME\`): \`git diff\` may be denied by the
+sandbox in this worktree. A round whose log shows neither a successful \`git diff\` nor
+a read of this file is stamped VOID IN FORM, because it cannot certify a diff it did
+not see.
+PROMPT_REVIEW_PATCH
+else
+  rm -f "$REVIEW_PATCH"
+  warn "review patch: NOT written (base '$BASE' unresolvable or git diff failed: $(tr '\n' ' ' < "$REVIEW_PATCH.err" 2>/dev/null | cut -c1-200)); the round must run \`git diff\` itself or be stamped VOID IN FORM"
+  printf 'review-patch: unavailable base=%s tip=%s\n' "$BASE" "$TIP" >> "$L"
+  rm -f "$REVIEW_PATCH.err"
+  cat >> "$RW/prompt.md" <<PROMPT_REVIEW_PATCH
+
+No review patch file could be written for this round (base $BASE). Run
+\`git diff $BASE...$TIP\` yourself; a round whose log shows no successful \`git diff\`
+is stamped VOID IN FORM.
+PROMPT_REVIEW_PATCH
+fi
+# REVIEW-PATCH-END
+
 warn "round $NAME-$TS: model=$MODEL effort=$EFF tip=$TIP review-worktree=$RW"
-warn "go bounds: GOFLAGS=$RGOFLAGS GOMAXPROCS=$RGOMAXPROCS GOCACHE=$RGOCACHE GOMODCACHE=$RGOMODCACHE GOTMPDIR=$RGOTMPDIR GOPATH=$RGOPATH TMPDIR=$RTMPDIR sandbox=$RSANDBOX"
+# v4.8.14: codegraph removed from the harness (chris's ruling, 09-06) -- the
+# provenance line no longer carries a codegraph-mode/base-checkout-sha pair
+# (v4.8.12's CF requirement, now moot since no base checkout is ever read),
+# just the worktree and reviewed tip, plus an explicit disabled marker so a
+# post-round read of this log never mistakes a pre-v4.8.14 log's absence of
+# this marker for THIS round having skipped codegraph by accident.
+printf 'review-target: worktree=%s tip=%s\n' "$RW" "$TIP" >> "$L"
+printf 'codegraph: disabled (chris 2026-09-06)\n' >> "$L"
+warn "go bounds: GOFLAGS=$RGOFLAGS GOMAXPROCS=$RGOMAXPROCS GOCACHE=$RGOCACHE GOMODCACHE=$RGOMODCACHE GOTMPDIR=$RGOTMPDIR GOPATH=$RGOPATH UV_CACHE_DIR=$RUVCACHE TMPDIR=$RTMPDIR sandbox=$RSANDBOX perms=$RPERMS"
 # NO PREDICTION ABOUT WHAT THE SANDBOX CAN DO.
 #
 # An earlier draft printed "sandbox=read-only: NOTHING is writable, so
@@ -1751,7 +2124,7 @@ RC=0
 # GOMAXPROCS=11 and an invented variable all arrived intact. The `env` prefix
 # works; adding the flags would have been an unreviewed change fixing nothing.
 SANDBOX_ARGS=()
-if [ "$RSANDBOX" = "workspace-write" ]; then
+if [ "$RPERMS" = "legacy" ] && [ "$RSANDBOX" = "workspace-write" ]; then
   # DEFENSIVE, and deliberately not claimed as load-bearing by default.
   #
   # Measured: `workspace-write` already makes $TMPDIR writable, and both
@@ -1770,7 +2143,285 @@ if [ "$RSANDBOX" = "workspace-write" ]; then
   # RGOPATH added v4.8.4, same reasoning as its neighbours: redundant under
   # the default /tmp location, load-bearing the moment CODEX_REVIEW_GOPATH
   # points somewhere else.
-  SANDBOX_ARGS+=(-c "sandbox_workspace_write.writable_roots=[\"$RGOCACHE\",\"$RGOMODCACHE\",\"$RGOTMPDIR\",\"$RGOPATH\"]")
+  # RUVCACHE added v4.8.13, same reasoning as its Go neighbours.
+  SANDBOX_ARGS+=(-c "sandbox_workspace_write.writable_roots=[\"$RGOCACHE\",\"$RGOMODCACHE\",\"$RGOTMPDIR\",\"$RGOPATH\",\"$RUVCACHE\"]")
+fi
+
+# v4.8.18 PERMISSIONS-PROFILE ARGS (codex-review mode only).
+#
+# REVISED (team-lead, post-incident 23:41Z): the FIRST version of this block
+# assumed a static `[permissions.codex-review]` table appended to the SHARED
+# ~/.codex/config.toml, selected per round via `-c default_permissions=...`.
+# That broke codex 0.153.4 host-wide the moment the table existed WITHOUT the
+# file itself also setting `default_permissions` -- codex refuses to load
+# ANY config that defines a `[permissions.*]` table unless that same file
+# also names one via `default_permissions`, and a `-c` override supplied at
+# invocation time does not satisfy this check (it appears to validate the
+# FILE before CLI overrides are merged in). Three lanes' rounds failed
+# immediately, misreported by this wrapper's own preflight as "not logged
+# in" (see the login-status fix further up). Shared config.toml is rolled
+# back and must never carry a `[permissions.*]` table again.
+#
+# Fix: a PER-ROUND, throwaway CODEX_HOME under this round's own RGOTMPDIR
+# (removed by cleanup()'s unconditional `rm_rf_writable "$RGOTMPDIR"` --
+# never a shared or long-lived location). Its config.toml is the real one,
+# copied verbatim, PLUS `default_permissions = "codex-review"` prepended as
+# the file's very first line (TOML scopes a bare `key = value` to whatever
+# `[table]` header precedes it in the file -- appending it at the END would
+# silently bind it to the last `[table]` in the real config instead of the
+# root, exactly the class of mistake that is invisible until parsed; proven
+# with `python3 -c "import tomllib; ..."` before this shipped: appended-last
+# parses as `permissions.codex-review.network.unix_sockets.default_permissions`,
+# prepended-first parses as the real root key), PLUS the
+# `[permissions.codex-review]` table appended at the end (table headers are
+# self-scoping regardless of position). auth.json is a READ-ONLY SYMLINK into
+# this per-round home, never copied (never risk two writable copies of
+# credentials) -- removed explicitly in cleanup() before its parent dir is
+# rm -rf'd, not left to the directory removal alone. `[permissions]` never
+# touches the real ~/.codex.
+#
+# read-only rounds under this mode need none of this: `-c
+# default_permissions=":read-only"` is a codex BUILT-IN, requires no
+# `[permissions]` table in any config file at all (verified against the
+# clean, rolled-back shared config), so it's a plain per-invocation `-c`
+# override same as before -- docker access is only ever granted alongside
+# execution anyway.
+#
+# 🛑 KNOWN LIMITATION, chris ruling 2026-09-10 (Option A, accepted): codex
+# 0.153.4's `network.unix_sockets` allowlist is INERT while
+# `[permissions.codex-review.network].enabled = false` -- docker.sock is
+# unreachable no matter what path/write grants are added (measured: resolved
+# `/run/docker.sock`, both paths together, and a `filesystem write` grant on
+# the socket path all fail identically, the last one crashing bwrap outright
+# -- it tries to `mkdir` the socket path as a bind-mount target). Setting
+# `enabled = true` makes the docker.sock allow work, but ALSO opens full
+# network egress with NO domain filtering: an explicit `domains."x"="deny"`
+# entry, and even a totally unlisted domain, both connect successfully.
+# Root cause: domain allow/deny is gated on the `network_proxy` feature,
+# EXPERIMENTAL and OFF by default (`codex features list`) -- turning it ON
+# fixes domain deny-by-default but BREAKS the docker.sock allow entry (back
+# to permission denied) -- the two mechanisms do not compose in this
+# experimental state. No config was found that gets both docker access and
+# domain deny-by-default at once. Chris's ruling: accept open egress for
+# codex-review rounds to get docker; `network_proxy` stays OFF; re-evaluate
+# once codex ships a stable proxy that composes with the socket allowlist.
+#
+# 🛑 CF read, accepted as part of the same ruling: docker.sock IS root on
+# this host. Every filesystem `deny` entry below is therefore advisory, not
+# a hard boundary -- a reviewer that runs `docker run -v /:/host ...` reads
+# and writes the whole filesystem through that mount, ops/web/acr/credential
+# denies included, regardless of anything in this profile. The prompt's OFF
+# LIMITS line (dev-health project, other lanes' containers) is the only
+# guard against that; this profile does not and cannot enforce it.
+SFLAG_ARGS=()
+PERMS_ARGS=()
+CODEXHOME_ENV_ARGS=()
+CODEX_HOME_ROUND=""
+if [ "$RPERMS" = "legacy" ]; then
+  # legacy mode still selects the sandbox via `-s`, byte-for-byte v4.8.17.
+  SFLAG_ARGS+=(-s "$RSANDBOX")
+elif [ "$RSANDBOX" != "workspace-write" ]; then
+  PERMS_ARGS+=(-c 'default_permissions=":read-only"')
+else
+  CODEX_HOME_REAL="${CODEX_HOME:-$HOME/.codex}"
+  [ -f "$CODEX_HOME_REAL/config.toml" ] || die "codex-review permissions mode needs a real config.toml at $CODEX_HOME_REAL/config.toml to build the per-round CODEX_HOME from -- none found"
+  CODEX_HOME_ROUND="$RGOTMPDIR/codex-home"
+  mkdir -m 700 -p "$CODEX_HOME_ROUND" || die "cannot create per-round CODEX_HOME at $CODEX_HOME_ROUND"
+  {
+    printf 'default_permissions = "codex-review"\n'
+    cat "$CODEX_HOME_REAL/config.toml"
+    # v4.8.18 (dry-run 1 attempt 1, 00:31:42Z): codex rejected a bare
+    # `"**/.env"` key under `[permissions.codex-review.filesystem]` outright
+    # at config-load time -- "filesystem path `**/.env` must be absolute, use
+    # `~/...`, or start with `:`" -- an unanchored glob is not a valid
+    # filesystem-map key on its own. `~/...` and absolute paths (the other
+    # deny entries below, unaffected) are fine as direct keys; a
+    # workspace-relative glob has to live under the special `:workspace_roots`
+    # sub-table instead.
+    #
+    # v4.8.18 (dry-run 1 attempt 2, 00:36:17Z): a `**` glob on an ABSOLUTE
+    # deny path is worse than invalid -- it LOADS, then dies at session start
+    # inside bubblewrap: "unreadable glob expansion for /home/ubuntu/devhealth/
+    # ops matched more than 8192 paths" (bwrap materialises each filesystem
+    # rule as an individual bind-mount, and the ops checkout alone blows the
+    # 8192-mount cap). Fix: deny the DIRECTORY itself, no `**` -- one mount,
+    # denies the whole subtree ("deny wins over an equally-specific ancestor
+    # rule" per the doc; a bare dir key is not "equally specific" as a
+    # sibling grant, it just recurses). Measured live (`codex exec ... "run:
+    # echo ok"`, real bwrap session, not just `login status`): bare dir keys
+    # -> exec succeeds; `**`-suffixed absolute keys -> the 8192-path death
+    # above.
+    printf '\n[permissions.codex-review]\nextends = ":workspace"\n\n[permissions.codex-review.filesystem]\n'
+    # glob_scan_max_depth: the ":workspace_roots" `**` globs below (small,
+    # single-repo worktrees, team-lead-approved as safe) otherwise print a
+    # "non-macOS sandboxing does not support unbounded ** natively" warning
+    # on every round -- harmless (exec still succeeds) but noisy in every
+    # log; capping the scan depth silences it. Measured: 8 clears the warning
+    # against this worktree shape.
+    printf 'glob_scan_max_depth = 8\n'
+    # v4.8.18 (team-lead, second CF pass): asked to deny the WHOLE real
+    # `~/.codex`. MEASURED and REVERTED: `~/.codex` is a symlink to
+    # `~/agents/codex`, which is not just credential/session data -- it's
+    # also codex's OWN INSTALLED BINARY
+    # (`~/agents/codex/packages/standalone/releases/.../bin/codex`). Denying
+    # the whole real directory broke codex outright ("bwrap: execvp
+    # .../bin/codex: Permission denied" -- codex re-execs its own installed
+    # binary building the sandboxed session, so that path must stay
+    # readable+executable). A more-specific `"~/.codex/packages" = "read"`
+    # override did NOT fix it either (still the same execvp denial) -- this
+    # schema's `read` does not appear to imply execute. Fell back to naming
+    # the actual sensitive files instead of the whole tree: `auth.json` (the
+    # credential), `sessions/` and `history.jsonl`/`session_index.jsonl`
+    # (past conversation content -- privacy, not an impersonation vector
+    # like gh/git-creds, but denied anyway since the round has no legitimate
+    # reason to read past sessions). Everything else under `~/.codex`
+    # (config.toml, the sqlite state/memory/queue/log DBs, `packages/`)
+    # stays readable -- the sandboxed reviewer's own CODEX_HOME is
+    # CODEX_HOME_ROUND regardless, so it has no NORMAL path that reads any
+    # of this; these four entries close the abnormal one.
+    printf '"~/.codex/auth.json" = "deny"\n"~/.codex/sessions" = "deny"\n"~/.codex/history.jsonl" = "deny"\n"~/.codex/session_index.jsonl" = "deny"\n'
+    printf '"~/.ssh" = "deny"\n"~/.gnupg" = "deny"\n'
+    printf '"/home/ubuntu/devhealth/ops" = "deny"\n"/home/ubuntu/devhealth/web" = "deny"\n"/home/ubuntu/devhealth/acr" = "deny"\n'
+    # CF read finding (BLOCKING, P1, caught before install): with network
+    # open (this mode's own limitation, see above), any OTHER credential
+    # store on this host is now reachable by the reviewer over that network
+    # -- not just the codex/ssh/gnupg set the first draft denied. `gh CLI`
+    # credentials specifically let a reviewer run `gh pr merge/comment/api`
+    # AS CHRIS. Deny every credential store this host actually has, same
+    # bare-path-no-glob shape as the entries above.
+    printf '"~/.config/gh" = "deny"\n"~/.netrc" = "deny"\n"~/.git-credentials" = "deny"\n'
+    printf '"~/.docker" = "deny"\n"~/.kube" = "deny"\n"~/.oci" = "deny"\n"~/.aws" = "deny"\n"~/.config/gcloud" = "deny"\n'
+    # v4.8.18 (team-lead's broader ~/.config sweep, second CF pass): denied
+    # by NAME after actually enumerating this host's ~/.config -- not a
+    # guess. `~/.config/git`'s `[credential] helper` line points AT gh
+    # (`!/usr/bin/gh auth git-credential`), so it's credential-adjacent even
+    # though it holds no secret itself; `~/.config/k9s` is kube-adjacent
+    # (cached contexts/exec-plugin auth); the two chrome-for-testing profile
+    # dirs are e2e browser profiles that can carry cookies/saved site auth
+    # from whatever a test run last logged into. Also denying this host's
+    # OTHER agent credential stores, found the same way, not documented
+    # anywhere else this profile would otherwise know to avoid: `~/.claude`
+    # and `~/agents/claude` both carry a live `.credentials.json`
+    # (Claude Code's own OAuth token).
+    #
+    # NOT denying `~/agents/codex` (measured, reverted): `~/.codex` is a
+    # SYMLINK to it, but `~/agents/codex` is not just credential/session
+    # data -- it's also codex's OWN INSTALLED BINARY
+    # (`~/agents/codex/packages/standalone/releases/.../bin/codex`). Denying
+    # the real directory broke codex outright: "bwrap: execvp
+    # .../bin/codex: Permission denied" -- codex re-execs its own installed
+    # binary as part of building the sandboxed session, so that path must
+    # stay readable+executable for codex to start AT ALL under this
+    # profile, regardless of anything else. The `~/.codex` symlink deny
+    # above is what actually matters for credentials: the sandboxed
+    # reviewer's own CODEX_HOME is CODEX_HOME_ROUND (this per-round,
+    # already-composed home), never the real one -- it has no legitimate
+    # reason to read `~/.codex` OR `~/agents/codex` by any path, credential
+    # or binary, during normal operation.
+    printf '"~/.config/git" = "deny"\n"~/.config/k9s" = "deny"\n'
+    printf '"~/.config/google-chrome-for-testing" = "deny"\n"~/.config/google-chrome-for-testing-headless" = "deny"\n'
+    printf '"~/.claude" = "deny"\n"~/agents/claude" = "deny"\n'
+    # ABSOLUTE paths only, direct keys under [...filesystem] -- must come
+    # BEFORE the ":workspace_roots" sub-table opens below, or TOML scopes
+    # them into that sub-table instead of the table these keys are meant for
+    # (the exact class of ordering mistake the default_permissions comment
+    # above already warns about, just one level deeper).
+    for _p in "$RGOCACHE" "$RGOMODCACHE" "$RGOTMPDIR" "$RGOPATH" "$RUVCACHE" "$RTMPDIR"; do
+      printf '"%s" = "write"\n' "$_p"
+    done
+    printf '\n[permissions.codex-review.filesystem.":workspace_roots"]\n"**/.env" = "deny"\n"**/env.local" = "deny"\n'
+    # See the KNOWN LIMITATION comment above where RPERMS branches:
+    # enabled=true is REQUIRED for the unix_sockets allow below to take
+    # effect at all (chris ruling 2026-09-10, Option A) -- it also opens
+    # full network egress for this round (domain filtering needs the
+    # experimental, disabled network_proxy feature, which breaks this
+    # allow entry when turned on). dangerously_allow_all_unix_sockets stays
+    # false -- true reaches every socket on the host, not just docker.sock.
+    printf '\n[permissions.codex-review.network]\nenabled = true\ndangerously_allow_all_unix_sockets = false\n\n[permissions.codex-review.network.unix_sockets]\n"/var/run/docker.sock" = "allow"\n'
+  } > "$CODEX_HOME_ROUND/config.toml" || die "cannot write $CODEX_HOME_ROUND/config.toml"
+  chmod 600 "$CODEX_HOME_ROUND/config.toml"
+  python3 -c "import tomllib,sys; d=tomllib.load(open(sys.argv[1],'rb')); assert d.get('default_permissions')=='codex-review', d.get('default_permissions'); assert 'codex-review' in d.get('permissions',{})" "$CODEX_HOME_ROUND/config.toml" \
+    || die "per-round CODEX_HOME config.toml at $CODEX_HOME_ROUND/config.toml failed its own TOML/key sanity check -- refusing to launch codex against a config that might not mean what this wrapper intended"
+  ln -s "$CODEX_HOME_REAL/auth.json" "$CODEX_HOME_ROUND/auth.json" || die "cannot symlink auth.json into per-round CODEX_HOME"
+  # Same flipped classification as the base preflight above: only call it
+  # "not logged in" when the text actually says so; anything else is this
+  # per-round config's own fault, not the real ~/.codex credentials'.
+  _login_out=$(CODEX_HOME="$CODEX_HOME_ROUND" codex login status 2>&1) || {
+    case "$_login_out" in
+      *[Nn]ot\ logged\ in*|*[Ll]og\ in*|*401*|*[Uu]nauthorized*|*auth.json*)
+        die "per-round CODEX_HOME reports not logged in -- CODEX_HOME=$CODEX_HOME_ROUND (the auth.json symlink may be stale or the real ~/.codex/auth.json invalid). codex said verbatim: $_login_out" ;;
+      *)
+        die "per-round CODEX_HOME config failed to load (NOT an auth problem -- the composed config.toml at $CODEX_HOME_ROUND/config.toml is at fault, not real ~/.codex credentials). codex said verbatim: $_login_out" ;;
+    esac
+  }
+  CODEXHOME_ENV_ARGS+=(CODEX_HOME="$CODEX_HOME_ROUND")
+  # CF read ASK, REVISED (team-lead, second pass): with the `-s
+  # workspace-write` cmdline flag gone in this mode (SFLAG_ARGS stays empty
+  # -- see above), CF's own /proc-based round-proof reader has nothing on
+  # the command line to hash any more. `profile_sha` names the ACTUAL
+  # composed config.toml's own hash (not just a mode label) so a reader can
+  # verify exactly which deny/write rules this specific round ran under,
+  # the same way a wrapper sha already lets a reader verify which CODE ran.
+  PROFILE_SHA=$(sha256sum "$CODEX_HOME_ROUND/config.toml" | cut -d' ' -f1)
+  PROOF_LINE="perms: mode=codex-review codex_home=$CODEX_HOME_ROUND profile_sha=$PROFILE_SHA"
+  printf '%s\n' "$PROOF_LINE" >> "$L"
+  # Reviewer's testcontainers/go-test env. DOCKER_HOST left unset
+  # deliberately -- the round reaches the root socket via the profile's
+  # unix_sockets allowlist, not a remapped endpoint. RYUK disabled because
+  # this wrapper's own pre/post label-based reap (below) is the cleanup
+  # mechanism, not the ryuk sidecar container (which would itself need a
+  # separate docker.sock grant this profile does not extend to it).
+  #
+  # KNOWN GAP (dry-run 1, 01:22:05Z): TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX
+  # only redirects testcontainers-go's OWN pulls -- a reviewer typing a raw
+  # `docker run <image>` still hits Docker Hub directly (dry-run 1's
+  # `docker run --rm hello-world` pulled from Hub, not the oci-cache mirror).
+  # Accepted as-is: the mandated proof commands are `go test -tags=integration`
+  # (which DOES honor the prefix) and the prompt tells the reviewer to run
+  # the actual test suite, not hand-roll `docker run` calls -- but if a
+  # reviewer ever does invoke `docker run` directly, expect a Hub pull, not
+  # a mirror hit.
+  #
+  # KNOWN GAP (dry-run 2, 01:25:12Z): the reviewer's own `bash -lc` line put
+  # the testcontainer DSN password directly in argv (`DEV_HEALTH_TEST_
+  # CLICKHOUSE_DSN='clickhouse://worker_test:worker_test_password@...'`).
+  # Harmless in that round (throwaway per-round creds, container torn down
+  # at test end) but the SAME class of leak Trap #121 exists to stop --
+  # prompt-of-record guidance should tell reviewers to pass DSNs via env,
+  # never inline in the command string, even for throwaway scratch creds.
+  #
+  # ACCEPTED (dry-run 2, same round): `uv sync --all-extras --dev
+  # --no-install-project` ran inside the sandbox over the now-open network
+  # (to fix a missing `sqlalchemy` before a Python-side check) -- expected
+  # and accepted under the Option A open-egress ruling above (R87), not a
+  # new gap, noted here for the record.
+  CODEXHOME_ENV_ARGS+=(
+    TESTCONTAINERS_RYUK_DISABLED=true
+    TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX="${CODEX_REVIEW_HUB_PREFIX:-ghcr.io/full-chaos}"
+    CODEX_REVIEW_ROUND_LABEL="$NAME-$TS"
+  )
+fi
+DOCKER_ENABLED=0
+[ "$RPERMS" = "codex-review" ] && [ "$RSANDBOX" = "workspace-write" ] && DOCKER_ENABLED=1
+
+# v4.8.18 PRE-ROUND REAP: containers labelled codex-review-round from a
+# killed/superseded round (Trap #7, CORE R76 rule #7) leak otherwise -- reap
+# anything older than 2h before this round claims the label namespace. Never
+# touches a container without the label; never touches `dev-health` (no
+# filter on that project name here at all).
+if [ "$DOCKER_ENABLED" -eq 1 ]; then
+  _stale=$(docker ps -aq --filter 'label=codex-review-round' --filter 'status=exited' 2>/dev/null || true)
+  if [ -n "$_stale" ]; then
+    _now_epoch=$(date +%s)
+    for _cid in $_stale; do
+      _started=$(docker inspect -f '{{.State.StartedAt}}' "$_cid" 2>/dev/null || true)
+      [ -z "$_started" ] && continue
+      _started_epoch=$(date -d "$_started" +%s 2>/dev/null || echo "$_now_epoch")
+      if [ $((_now_epoch - _started_epoch)) -gt 7200 ]; then
+        docker rm -f "$_cid" >/dev/null 2>&1 || true
+      fi
+    done
+  fi
 fi
 # ROUND PROVENANCE. Written BEFORE codex runs.
 #
@@ -1802,25 +2453,139 @@ printf 'round-provenance: %s\n' "$PROV" >> "$L"
 # stderr, which nobody keeps. The log recorded the failures and not the
 # configuration that caused them, so the two could not be correlated after the
 # fact without the operator's terminal scrollback.
-printf 'round-bounds: GOFLAGS=%s GOMAXPROCS=%s GOCACHE=%s GOMODCACHE=%s GOTMPDIR=%s GOPATH=%s TMPDIR=%s sandbox=%s\n' \
-  "$RGOFLAGS" "$RGOMAXPROCS" "$RGOCACHE" "$RGOMODCACHE" "$RGOTMPDIR" "$RGOPATH" "$RTMPDIR" "$RSANDBOX" >> "$L"
+printf 'round-bounds: GOFLAGS=%s GOMAXPROCS=%s GOCACHE=%s GOMODCACHE=%s GOTMPDIR=%s GOPATH=%s UV_CACHE_DIR=%s TMPDIR=%s sandbox=%s perms=%s\n' \
+  "$RGOFLAGS" "$RGOMAXPROCS" "$RGOCACHE" "$RGOMODCACHE" "$RGOTMPDIR" "$RGOPATH" "$RUVCACHE" "$RTMPDIR" "$RSANDBOX" "$RPERMS" >> "$L"
 warn "round-provenance: $PROV"
+
+# v4.8.15 CODEGRAPH PATH DENY -- chris's ruling is absolute: "it shouldn't be
+# in the harness to index it" covers a reviewer choosing to invoke codegraph
+# on its own, not just the wrapper's own removed base-checkout mechanism.
+# v4.8.14 stopped the WRAPPER from indexing; a reviewer running `codegraph
+# orient`/`symbols`/`refs`/`callers` on its own initiative still indexes on
+# bigboy -- confirmed LIVE (lane-local-stack's v4.8.14 dry-run on #2312
+# produced a real .codegraph/ dir in the round worktree this way, unprompted,
+# despite the prompt no longer mentioning codegraph at all). Two-part fix:
+# (1) a per-round stub directory, prepended to PATH in the SAME env
+# invocation that already reaches codex exec's real environment (same
+# enforcement-in-the-environment pattern as the Go bounds and the old
+# codegraph timeout shim this replaces), shadows the real `codegraph` binary
+# with a one-line refusal; (2) any `.codegraph` dir already present in the
+# round worktree is deleted before codex starts, so a stale one from an
+# earlier interrupted round can't linger either.
+#
+# v4.8.17 (CHAOS-5374, root-caused 09-06): the v4.8.15 PATH stub above is NOT
+# effective inside `codex exec`, because codex wraps every shell tool call in
+# `bash -lc '...'`, a LOGIN shell that re-sources /etc/profile ->
+# /etc/profile.d/oci-worker-path.sh, which unconditionally re-prepends
+# $HOME/.local/bin -- where the REAL codegraph symlink lives -- ahead of
+# whatever PATH the env invocation below supplied. Measured: `env
+# PATH="$CODEGRAPH_DENY_DIR:$PATH" bash -lc 'codegraph --version'` prints the
+# real 1.6.0 build, the stub never runs. Fixed with two independent layers,
+# both carried the same way the Go bounds already are -- as extra vars in the
+# SAME env invocation that reaches codex exec, no shared/system file touched:
+#   1. BASH_FUNC_codegraph%%, a bash-exported SHELL FUNCTION. Bash's command
+#      lookup checks shell functions before searching PATH, so this wins over
+#      the real binary regardless of what any profile script does to PATH --
+#      profile.d only ever touches the PATH variable, never shell functions.
+#      Proven empirically to survive both a login `bash -lc` AND a bash -lc
+#      spawned from within another bash -lc (mimicking codex's one-exec-block-
+#      per-command-string pattern), because BASH_FUNC_* is an ordinary
+#      environment variable and is therefore inherited by every descendant
+#      process the same way GOCACHE etc. already are -- nothing re-imports or
+#      clears it. This is the primary layer: it defends the common case, a
+#      bare `codegraph ...` invocation.
+#   2. BASH_ENV, pointed at a scratch file (under the same
+#      CODEGRAPH_DENY_DIR) that unconditionally re-prepends
+#      $CODEGRAPH_DENY_DIR onto PATH. Measured on this host's bash
+#      (5.2.21): a login `bash -lc 'CMD'` sources BASH_ENV AFTER /etc/profile
+#      and /etc/profile.d, so this re-prepend lands last and wins the PATH
+#      race even against oci-worker-path.sh. This is belt-and-braces for the
+#      one gap layer 1 cannot close: `command codegraph ...` or `\codegraph`
+#      explicitly bypass shell-function lookup and fall through to a plain
+#      PATH search, which layer 2 still catches.
+# Neither layer defends an absolute-path invocation
+# ($HOME/.codegraph/versions/*/bin/codegraph or the symlink path) -- that gap
+# pre-dates this fix (v4.8.15 had it too, PATH shadowing never covers
+# absolute paths) and is out of scope for CHAOS-5374, which is about the
+# by-name deny being bypassable, not about closing every possible path a
+# reviewer could type.
+CODEGRAPH_DENY_DIR="$RGOTMPDIR/codegraph-deny"
+mkdir -p "$CODEGRAPH_DENY_DIR" || die "cannot create codegraph-deny stub dir $CODEGRAPH_DENY_DIR"
+cat > "$CODEGRAPH_DENY_DIR/codegraph" <<'CODEGRAPH_DENY'
+#!/usr/bin/env bash
+echo "codegraph is disabled in bigboy review rounds (chris 2026-09-06); use rg" >&2
+exit 2
+CODEGRAPH_DENY
+chmod +x "$CODEGRAPH_DENY_DIR/codegraph" || die "cannot make codegraph-deny stub executable"
+# v4.8.17: BASH_ENV target -- re-prepends the stub dir on every login-shell
+# `bash -lc` codex spawns, AFTER /etc/profile.d has already run, closing the
+# `command codegraph`/backslash-escape gap the exported function (below)
+# cannot close.
+CODEGRAPH_BASH_ENV="$CODEGRAPH_DENY_DIR/bash_env.sh"
+# UNCONDITIONAL prepend, deliberately not guarded by a "not already present"
+# check: a guard that skips when the dir already appears ANYWHERE in PATH
+# (e.g. from the outer env invocation's own PATH= below) does not guarantee
+# it is FIRST -- measured live: with a "skip if present" guard, the dir sat
+# behind three profile.d-reasserted /home/ubuntu/.local/bin entries and the
+# real binary won again. A stray duplicate entry from re-prepending every
+# time is harmless; losing the race is not.
+cat > "$CODEGRAPH_BASH_ENV" <<BASHENV
+PATH="$CODEGRAPH_DENY_DIR:\$PATH"
+export PATH
+BASHENV
+# v4.8.17: the exported shell FUNCTION -- wins over PATH lookup entirely for
+# a bare `codegraph` invocation, so it is not exposed to the profile.d
+# re-prepend race at all. Built as a plain shell variable first (not inlined
+# into the env invocation below) so the function body is defined in exactly
+# one place.
+CODEGRAPH_DENY_FUNC='() { echo "codegraph is disabled in bigboy review rounds (chris 2026-09-06); use rg" >&2; return 2; }'
+printf 'codegraph-deny: stub=%s bash_env=%s func=exported\n' "$CODEGRAPH_DENY_DIR" "$CODEGRAPH_BASH_ENV" >> "$L"
+rm -rf "$RW/.codegraph" 2>/dev/null || true
 
 # NOTE THE APPEND. This redirect was `> "$L"`; it MUST stay `>>` now, or codex
 # truncates the provenance line written immediately above and the log silently
 # reverts to having no provenance at all -- which reads as LOCAL, the safe
 # default, so nothing would ever look broken.
+#
+# CF read finding: `env` without `-i` inherits the REST of this wrapper's own
+# environment by default, not just the VAR=val list below -- if GH_TOKEN or
+# GITHUB_TOKEN happen to be set in whatever shell launched this wrapper (none
+# are on this host today), they would reach the round unfiltered, and under
+# codex-review mode's open network that IS reachable by the reviewer over
+# the GitHub API. `-u` strips them explicitly regardless of mode, not
+# conditioned on RPERMS -- harmless when they were never set, load-bearing
+# the day something upstream starts exporting one.
 ( cd "$RW" && env \
+    -u GH_TOKEN -u GITHUB_TOKEN -u OPENAI_API_KEY -u OPENAI_BASE_URL -u OPENAI_ORG_ID \
+    PATH="$CODEGRAPH_DENY_DIR:$PATH" \
+    BASH_ENV="$CODEGRAPH_BASH_ENV" \
+    "BASH_FUNC_codegraph%%=$CODEGRAPH_DENY_FUNC" \
     GOFLAGS="$RGOFLAGS" \
     GOMAXPROCS="$RGOMAXPROCS" \
     GOCACHE="$RGOCACHE" \
     GOMODCACHE="$RGOMODCACHE" \
     GOTMPDIR="$RGOTMPDIR" \
     GOPATH="$RGOPATH" \
+    UV_CACHE_DIR="$RUVCACHE" \
     TMPDIR="$RTMPDIR" \
-    codex exec -m "$MODEL" -c "model_reasoning_effort=\"$EFF\"" \
+    ${CODEXHOME_ENV_ARGS[@]+"${CODEXHOME_ENV_ARGS[@]}"} \
+    codex --no-daemon exec -m "$MODEL" -c "model_reasoning_effort=\"$EFF\"" \
     ${SANDBOX_ARGS[@]+"${SANDBOX_ARGS[@]}"} \
-    -s "$RSANDBOX" -C "$RW" -o "$V" - < prompt.md ) >> "$L" 2>&1 || RC=$?
+    ${PERMS_ARGS[@]+"${PERMS_ARGS[@]}"} \
+    ${SFLAG_ARGS[@]+"${SFLAG_ARGS[@]}"} \
+    -C "$RW" -o "$V" - < prompt.md ) >> "$L" 2>&1 || RC=$?
+
+# v4.8.18 POST-ROUND DOCKER TEARDOWN: runs regardless of $RC (a failed round
+# can still have started containers). Only ever touches containers carrying
+# THIS round's own label value -- never `dev-health`, never any other lane's
+# `codex-review-round=<other>` containers.
+if [ "$DOCKER_ENABLED" -eq 1 ]; then
+  _before=$(docker ps -aq --filter "label=codex-review-round=$NAME-$TS" 2>/dev/null | wc -l | tr -d ' ')
+  docker ps -aq --filter "label=codex-review-round=$NAME-$TS" 2>/dev/null | xargs -r docker rm -f >/dev/null 2>&1 || true
+  _after=$(docker ps -aq --filter "label=codex-review-round=$NAME-$TS" 2>/dev/null | wc -l | tr -d ' ')
+  printf 'docker: profile=codex-review socket=allow containers_before=%s containers_after=%s leaked=%s\n' \
+    "$_before" "$_after" "$_after" >> "$L"
+fi
 
 # POST-ROUND MEASUREMENT. codex logs every real command as an `exec` block, so
 # this counts what the round actually did instead of guessing what it could do.
@@ -1851,8 +2616,172 @@ warn "round-provenance: $PROV"
 #      to run at all.
 # Verified under `set -euo pipefail` on a zero-exec log AND on a 32-block log.
 EXEC_BLOCKS=$(grep -c '^exec$' "$L" 2>/dev/null || true); EXEC_BLOCKS=${EXEC_BLOCKS:-0}
-GO_EXECS=$(grep -A1 '^exec$' "$L" 2>/dev/null | grep -cE 'go (test|run|build)' || true); GO_EXECS=${GO_EXECS:-0}
-warn "round recorded $EXEC_BLOCKS exec block(s) ($GO_EXECS go test/run/build)"
+# v4.8.21 (CHAOS-6906, Trap #419): GO_EXECS, PY_EXECS and BLOCKED_HITS come from ONE
+# awk pass that reads each exec block's WHOLE command body. The old counters looked at
+# `grep -A1 '^exec$'`, i.e. only the first command line, so a reviewer that ran a
+# multi-line `bash -lc` script (go build/vet/test on line 15) counted as 0 and the
+# round was stamped VOID IN FORM although it had executed (#3276 r1: 39 blocks, 9 go
+# test/run/build, 3 python, old GO_EXECS=0). The classifier below is the text between
+# the EXEC-CLASSIFY markers; tools/codex-review/test-exec-classify.sh extracts and
+# runs exactly that text against fixtures.
+BLOCKED_PAT='operation not permitted|cannot create entries|failed to initialize build cache|Read-only file system'
+EXEC_CLASSIFY_AWK=$(cat <<'AWK'
+# EXEC-CLASSIFY-BEGIN
+# Classifies every exec block of a codex round log by scanning its WHOLE command
+# body, not only its first line. codex wraps each command in `/bin/bash -lc '...'`
+# and a reviewer often runs a multi-line script, so `go test`/`pytest`/... sit on a
+# later line (#3276 r1: 39 exec blocks, every go build/vet/test on a body line, the
+# leading-line-only counter said 0 and stamped the round VOID IN FORM, Trap #419).
+#
+# A block is `exec`, the command line(s), a status line (` succeeded|failed|exited N
+# in <n>ms`), then the command's output, up to the next `exec`. The first command
+# line keeps the old permissive match (the verb anywhere on it, as `bash -lc 'cd x &&
+# go test'` needs); later lines match only where a command can stand (line start or
+# after && || ; |, past VAR=val / time / env prefixes), so a string that merely
+# mentions `go test` is not a run.
+#
+# Prints "<go blocks> <py blocks> <go blocks that FAILED and whose output shows the
+# sandbox refusing a path the wrapper configured> <diff-seen blocks>".
+#
+# v4.8.22 (CHAOS-6948): the fourth number counts blocks that SUCCEEDED and either ran
+# `git diff` (a command segment starting `git [-C dir] diff`) or read the review patch
+# (PATCH_NAME, e.g. .codex-review.patch, named on the command line of a segment that
+# starts with a reading verb). A FAILED `git diff` (the denied-worktree case that
+# motivated this) and a failed read do not count. PATCH_NAME empty: only `git diff`.
+function norm(s) {
+  sub(/^[ \t(]+/, "", s)
+  while (match(s, /^[A-Za-z_][A-Za-z0-9_]*=[^ \t]*[ \t]+/)) s = substr(s, RLENGTH + 1)
+  while (match(s, /^(time|env|exec|command|nice|sudo)[ \t]+/)) s = substr(s, RLENGTH + 1)
+  return s
+}
+function seg_go(s) { return s ~ /^([^ \t]*\/)?go[ \t]+(test|run|build)([^A-Za-z0-9_]|$)/ }
+function seg_py(s) {
+  return s ~ /^([^ \t]*\/)?(pytest|ruff|mypy|python3|python|shellcheck)([^A-Za-z0-9_]|$)/ ||
+         s ~ /^uv run([^A-Za-z0-9_]|$)/ ||
+         s ~ /^(bash|sh)[ \t]+(-[nx][ \t]+)*[^'";|&<>]*\.sh([^A-Za-z0-9_]|$)/
+}
+function first_go(s) { return s ~ /go (test|run|build)/ }
+function first_py(s) {
+  return s ~ /(^|[^A-Za-z0-9_])(pytest|ruff|mypy|python3|python|shellcheck|py_compile)([^A-Za-z0-9_]|$)/ ||
+         s ~ /uv run|\.venv\/bin\/pytest/ ||
+         s ~ /(^|[^A-Za-z0-9_])(bash|sh) +(-[nx] +)*[^'";|&<>]*\.sh([^A-Za-z0-9_]|$)/
+}
+function first_diff(s) { return s ~ /(^|[^A-Za-z0-9_])git[ \t]+(-C[ \t]+[^ \t]+[ \t]+)?diff([^A-Za-z0-9_-]|$)/ }
+function first_read(s) { return PATCH_NAME != "" && index(s, PATCH_NAME) > 0 && s ~ /(^|[^A-Za-z0-9_])(cat|sed|head|tail|less|more|rg|grep|awk|nl|bat)[ \t]/ }
+function seg_gitdiff(s) { return s ~ /^([^ \t]*\/)?git[ \t]+(-C[ \t]+[^ \t]+[ \t]+)?diff([^A-Za-z0-9_-]|$)/ }
+function seg_read(s) { return PATCH_NAME != "" && index(s, PATCH_NAME) > 0 && s ~ /^([^ \t]*\/)?(cat|sed|head|tail|less|more|rg|grep|awk|nl|bat)[ \t]/ }
+function flush() {
+  if (!in_block) return
+  if (ok && (is_diff || is_read)) diffs++
+  gos += is_go; pys += is_py
+  if (is_go && failed && blocked) hits++
+  in_block = 0
+}
+/^exec$/ { flush(); in_block = 1; phase = "cmd"; ncmd = 0; is_go = 0; is_py = 0; is_diff = 0; is_read = 0; ok = 0; failed = 0; blocked = 0; next }
+in_block && phase == "cmd" {
+  if ($0 ~ /^ *(succeeded|failed|exited [0-9]+) in [0-9]+ms/) { failed = ($0 ~ /^ *failed in/); ok = ($0 ~ /^ *succeeded in/); phase = "out"; next }
+  ncmd++
+  if (ncmd == 1) {
+    if (first_go($0)) is_go = 1
+    if (first_py($0)) is_py = 1
+    if (first_diff($0)) is_diff = 1
+    if (first_read($0)) is_read = 1
+  }
+  line = $0
+  gsub(/&&|\|\||;|\||\$\(|`/, "\n", line)
+  n = split(line, segs, "\n")
+  for (i = 1; i <= n; i++) {
+    seg = norm(segs[i])
+    if (seg_go(seg)) is_go = 1
+    if (seg_py(seg)) is_py = 1
+    if (seg_gitdiff(seg)) is_diff = 1
+    if (seg_read(seg)) is_read = 1
+  }
+  next
+}
+in_block && phase == "out" && $0 ~ BLOCKED_PAT { blocked = 1 }
+END { flush(); print gos + 0, pys + 0, hits + 0, diffs + 0 }
+# EXEC-CLASSIFY-END
+AWK
+)
+EXEC_CLASSIFY=$(awk -v BLOCKED_PAT="$BLOCKED_PAT" -v PATCH_NAME="${REVIEW_PATCH_NAME:-}" "$EXEC_CLASSIFY_AWK" "$L" 2>/dev/null || true)
+if [ -z "$EXEC_CLASSIFY" ]; then
+  # The measurement did not happen: say so, and fall back to the old first-line
+  # counters rather than reading a silent zero as "nothing executed".
+  warn "EXEC CLASSIFIER PRODUCED NO OUTPUT: falling back to the first-line counters (v4.8.20 behaviour); a multi-line script can be undercounted"
+  GO_EXECS=$(grep -A1 '^exec$' "$L" 2>/dev/null | grep -cE 'go (test|run|build)' || true); GO_EXECS=${GO_EXECS:-0}
+  PY_EXECS=0
+  BLOCKED_HITS=0
+  DIFF_SEEN=1  # unmeasured: never stamp VOID on a measurement that did not happen
+else
+  read -r GO_EXECS PY_EXECS BLOCKED_HITS DIFF_SEEN <<<"$EXEC_CLASSIFY"
+fi
+# v4.8.13 (team-lead spec, from #2306 r1-v4): the counter above only matched
+# Go verbs, so a Python-only diff's round -- reviewer ran `pytest` (52/52),
+# `uv run`, ruff, mypy -- was falsely declared "VOID IN FORM: 0 go
+# test/run/build exec blocks" despite genuinely having executed the evidence
+# it cited. Same unanchored-substring shape as the Go pattern above (matches
+# regardless of a leading backtick or path prefix, e.g. a fenced ```pytest```
+# block or `.venv/bin/pytest` both contain the bare substring already).
+# v4.8.13 (CF nit on the same round): bare `ruff`/`mypy`/`pytest` need word
+# boundaries -- "truffle" contains `ruff`, and an unbounded match widens
+# VOID IN FORM's guard in the UNSAFE direction (a false PY_EXECS hit could
+# mask a round that genuinely executed nothing). `\b` is a GNU grep
+# extension; confirmed on bigboy's actual grep (GNU grep 3.11) -- this
+# wrapper is Linux-only, so no portability concern. `.venv/bin/pytest` still
+# matches `\bpytest\b`: `/` is a non-word character, so the boundary exists
+# right before `pytest` same as at a plain word start.
+# v4.8.16 (CHAOS-5346, team-lead spec): same false-VOID shape as v4.8.13's
+# fix, one layer down -- a round whose diff is shell-only or plain-Python
+# (no pytest/uv/ruff/mypy, no go verbs at all) genuinely executed real
+# commands (`bash`/`sh` SCRIPT invocations, `python3`, `python`,
+# `shellcheck`, `py_compile`) but was still stamped VOID IN FORM, because
+# neither counter recognised those verbs (ops #2330 confirm, acr #465).
+# Added to PY_EXECS rather than a new category, since the message text
+# below already reads as "the non-Go-verb bucket" and a third bucket would
+# need its own wiring through EXECUTED_EXECS/warn/VOID-IN-FORM for no
+# discriminating benefit.
+#
+# `bash`/`sh` are DELIBERATELY NOT bare `\b`-bounded verbs like the other
+# four -- codex wraps EVERY exec block in `/bin/bash -lc '...'`, so a bare
+# `\bbash\b` matches 100% of exec lines regardless of what runs inside the
+# quotes (measured: a real Go-only round, chaos-5319-2327-r1c, went from
+# PY_EXECS=0 to 48/48 exec blocks -- every single one -- with a bare
+# `\bbash\b`/`\bsh\b`, which makes EXECUTED_EXECS effectively always nonzero
+# whenever EXEC_BLOCKS>0 and guts VOID-IN-FORM's whole purpose). Root cause
+# of #2330's own false VOID was different and narrower: the executed
+# evidence was `bash scripts/battery/fetch_modules.sh` SCRIPT invocations
+# (rc=17/rc=19 controls), not the wrapper. The pattern below matches only a
+# script INVOCATION -- `bash`/`sh`, optional `-n`/`-x` flags, then a path
+# ending `.sh` -- which the wrapper's own `/bin/bash -lc '` can never
+# satisfy (no `.sh` token appears before the opening quote). Covers `bash
+# x.sh`, `bash -n x.sh`, `PATH=... bash scripts/y.sh`. A `cat x.sh`/`rg
+# ... x.sh` reference is NOT preceded by `bash`/`sh` + whitespace, so it
+# does not match. `python -m py_compile` is covered by the bare
+# `\bpy_compile\b` match (the substring appears verbatim regardless of
+# invocation form); `\bpython\b` additionally matches inside `python3` at
+# the boundary before the digit (word chars include digits, so `\bpython\b`
+# does NOT match the "python" in "python3" -- that is covered by the
+# separate `\bpython3\b` alternative).
+EXECUTED_EXECS=$((GO_EXECS + PY_EXECS))
+warn "round recorded $EXEC_BLOCKS exec block(s) ($GO_EXECS go test/run/build, $PY_EXECS pytest/uv run/ruff/mypy/bash-or-sh-script/python/shellcheck/py_compile)"
+
+if [ "${DIFF_SEEN:-0}" -eq 0 ]; then
+  warn "VOID IN FORM: the log shows no successful \`git diff\` exec and no successful read of ${REVIEW_PATCH_NAME:-the review patch} (review patch: $REVIEW_PATCH_STATUS) -- the round did not see the diff it certifies; do not ledger this verdict, relaunch or escalate"
+fi
+
+# v4.8.8: under workspace-write the round was explicitly told execution is
+# REQUIRED (STANDING_RULES_EXEC above) -- a zero here is not "reasoned, not
+# executed" the way a read-only round's zero would be, it is the round
+# disobeying its own mandatory instructions (CHAOS-5249 r1: exactly this,
+# caused by a wrapper-owned paragraph that has since been fixed, not by the
+# reviewer choosing to skip it -- but the check stays regardless of cause,
+# since a future round could skip it for a different reason). Printed ABOVE
+# the verdict so it cannot be missed by a reader who only reads the last
+# line.
+if [ "$RSANDBOX" = "workspace-write" ] && [ "$EXECUTED_EXECS" -eq 0 ]; then
+  warn "VOID IN FORM: reviewer executed nothing (workspace-write round, 0 go test/run/build and 0 pytest/uv run/ruff/mypy/bash/sh/python/shellcheck/py_compile exec blocks) -- do not ledger this verdict as executed evidence; relaunch or escalate"
+fi
 
 # HARNESS-BLOCKED DETECTION (lane-4441).
 #
@@ -1883,21 +2812,8 @@ warn "round recorded $EXEC_BLOCKS exec block(s) ($GO_EXECS go test/run/build)"
 # that broke the command. A go/test invocation that truly cannot write still
 # reports ` failed in`, so gating on that keeps the real signal (v4.3/v4.8's
 # denied-GOCACHE cases) while dropping this one.
-BLOCKED_PAT='operation not permitted|cannot create entries|failed to initialize build cache|Read-only file system'
-BLOCKED_HITS=$(awk -v pat="$BLOCKED_PAT" '
-  function flush() { if (in_block && is_go && failed && blocked) hits++ }
-  /^exec$/ { flush(); in_block=1; is_go=0; failed=0; blocked=0; want_cmd=1; want_status=0; next }
-  in_block && want_cmd {
-    if ($0 ~ /go (test|run|build)/) is_go=1
-    want_cmd=0; want_status=1; next
-  }
-  in_block && want_status {
-    if ($0 ~ /^ *failed in/) failed=1
-    want_status=0; next
-  }
-  in_block && $0 ~ pat { blocked=1 }
-  END { flush(); print hits+0 }
-' "$L" 2>/dev/null || true)
+# BLOCKED_HITS (go test/run/build blocks that FAILED with the sandbox refusing a path
+# the wrapper configured) is computed by the classifier above, over the whole body.
 BLOCKED_HITS=${BLOCKED_HITS:-0}
 if [ "$BLOCKED_HITS" -gt 0 ]; then
   warn "HARNESS WARNING: $BLOCKED_HITS go test/run/build exec block(s) FAILED with the"
@@ -1921,7 +2837,83 @@ HEAD_AFTER=$(git -C "$WT" rev-parse HEAD)
 # (codex rc=N)` is deliberately NOT shaped like the real `VERDICT=<path>`
 # line below, so the two cannot be confused by a naive grep.
 [ "$RC" -eq 0 ] || { warn "codex exited rc=$RC — read $L"; printf 'NO VERDICT (codex rc=%s)\n' "$RC"; exit "$RC"; }
-[ -s "$V" ] || die "codex exited 0 but wrote no verdict file — treat as NO VERDICT, re-run; log: $L"
+# v4.8.13 verdict-fallback lookup (CF finding, live v4.8.12 round): before
+# this used to `die` unconditionally the instant $V was empty. On that round
+# codex had written a COMPLETE verdict, just not at $V -- root-caused above
+# to a relative -o resolving against $RW after the `cd`, now fixed at the
+# source (OUTDIR is absolute from the point it is set). This lookup is the
+# belt to that braces: if some other path ever puts codex's actual output
+# somewhere other than $V again, search the review worktree -- still alive
+# here, not yet cleaned up -- for the expected filename first, then for the
+# newest .md file created since this round's own launch, before declaring a
+# real verdict lost to a path mismatch.
+#
+# VERDICT_RE is hoisted here from its historical definition point further
+# below (see the big comment block down there for the regex's full
+# rationale/history) SPECIFICALLY so this lookup can use it -- CF REQUIRED
+# CHANGE: a candidate is copied to $V ONLY if its own last non-blank line
+# validates against this same rule. Without that check, a fallback could
+# promote an unrelated .md the reviewer merely touched while testing (a repo
+# doc it edited, a scratch note) into the verdict path, which is worse than
+# declaring NO VERDICT: a wrong file that LOOKS like a verdict is silently
+# ledgered as one.
+VERDICT_RE='^[[:space:]]*#{0,6}[[:space:]]*\**[[:space:]]*(verdict[[:space:]]*:)?[[:space:]]*\**[[:space:]]*((not[[:space:]]+)?(clean|sound)|block|request(s|ed)?[[:space:]]+changes?)([^[:alnum:]].*)?$'
+if [ ! -s "$V" ]; then
+  V_FALLBACK=""
+  V_FALLBACK_REJECTED=""
+  # validate_fallback_candidate: accepts only a candidate whose last
+  # non-blank line matches VERDICT_RE. A candidate that fails this is NEVER
+  # copied -- it is recorded (V_FALLBACK_REJECTED) so the eventual NO VERDICT
+  # die below can name what was looked at and rejected, rather than looking
+  # like nothing was tried at all.
+  validate_fallback_candidate() {
+    local candidate="$1"
+    [ -n "$candidate" ] && [ -s "$candidate" ] || return 1
+    local last_line
+    last_line=$(grep -v '^[[:space:]]*$' "$candidate" | tail -1)
+    if printf '%s' "$last_line" | grep -Eqi "$VERDICT_RE"; then
+      return 0
+    fi
+    V_FALLBACK_REJECTED="${V_FALLBACK_REJECTED:+$V_FALLBACK_REJECTED, }$candidate"
+    return 1
+  }
+  # Exact-filename match ANYWHERE under $RW (not just at its root) --
+  # unchanged search scope from the original version, mtime-sorted newest
+  # first and validated in that order, same as the *.md fallback below, in
+  # the rare case more than one file shares the expected basename.
+  while IFS= read -r candidate; do
+    if validate_fallback_candidate "$candidate"; then
+      V_FALLBACK="$candidate"
+      break
+    fi
+  done < <(find "$RW" -type f -name "$(basename "$V")" -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | cut -d' ' -f2-)
+  if [ -z "$V_FALLBACK" ]; then
+    # v4.8.13 CF REQUIRED CHANGE: `find | head -1` is NOT "the newest" --
+    # find's output order is unspecified, so the old form could pick up any
+    # matching file, including one the reviewer merely edited while testing
+    # something unrelated. Sort by mtime descending (`%T@`, GNU find, this
+    # wrapper is Linux-only per the codex-review skill's Mac-freeze rule) and
+    # take the true newest, THEN validate every candidate in that order
+    # rather than trusting the first one found.
+    while IFS= read -r candidate; do
+      if validate_fallback_candidate "$candidate"; then
+        V_FALLBACK="$candidate"
+        break
+      fi
+    done < <(find "$RW" -type f -name '*.md' -newermt "@$START_EPOCH" -printf '%T@ %p\n' 2>/dev/null \
+      | sort -rn | cut -d' ' -f2-)
+  fi
+  if [ -n "$V_FALLBACK" ]; then
+    warn "verdict-fallback: nothing at the expected -o path ($V), but found $V_FALLBACK inside the review worktree with a validated verdict line -- copying it to the expected path instead of declaring NO VERDICT"
+    printf 'verdict-fallback: found=%s expected=%s\n' "$V_FALLBACK" "$V" >> "$L"
+    cp "$V_FALLBACK" "$V" || die "verdict-fallback found $V_FALLBACK but could not copy it to $V"
+  elif [ -n "$V_FALLBACK_REJECTED" ]; then
+    printf 'verdict-fallback: rejected candidate(s) with no validated verdict line: %s\n' "$V_FALLBACK_REJECTED" >> "$L"
+    warn "verdict-fallback: considered but REJECTED (no validated verdict line): $V_FALLBACK_REJECTED"
+  fi
+fi
+[ -s "$V" ] || die "codex exited 0 but wrote no verdict file (checked -o path and searched the review worktree) — treat as NO VERDICT, re-run; log: $L"
 
 # CITATION NORMALIZATION (v4.8.1, CHAOS-4757 round 2179).
 #
@@ -1962,6 +2954,42 @@ for prefix in "${RW_PREFIXES[@]}"; do
   rm -f "$V_NORM.bak"
 done
 mv "$V_NORM" "$V"
+
+# v4.8.9: the summary-only VOID IN FORM warn() above (right after codex exec)
+# is easy to miss -- a reader who opens only $V never sees it. Team-lead spec:
+# the line must ALSO land inside the verdict file itself, immediately above
+# the verdict line, not just in the wrapper's own stderr/log. Insert it here,
+# after $V is finalized (post citation-normalization) so the insertion survives
+# the RW-prefix rewrite above instead of being clobbered by it.
+if [ "$RSANDBOX" = "workspace-write" ] && [ "$EXECUTED_EXECS" -eq 0 ]; then
+  VOID_LINE="VOID IN FORM: reviewer executed nothing under workspace-write (0 go test/run/build and 0 pytest/uv run/ruff/mypy exec blocks) -- do not ledger this verdict as executed evidence; relaunch or escalate."
+  LAST_NONBLANK=$(grep -vn '^[[:space:]]*$' "$V" | tail -1 | cut -d: -f1)
+  if [ -n "$LAST_NONBLANK" ]; then
+    awk -v n="$LAST_NONBLANK" -v line="$VOID_LINE" 'NR==n{print line} {print}' "$V" > "$V.voidfix.tmp" && mv "$V.voidfix.tmp" "$V"
+  else
+    printf '%s\n' "$VOID_LINE" >> "$V"
+  fi
+  warn "VOID IN FORM line inserted into $V, immediately above its last non-blank line"
+fi
+
+# v4.8.22: same insertion for the diff-visibility rule.
+if [ "${DIFF_SEEN:-0}" -eq 0 ]; then
+  VOID_LINE="VOID IN FORM: the round did not see the diff (no successful git diff exec and no read of ${REVIEW_PATCH_NAME:-the review patch} in its log) -- do not ledger this verdict as a review of the diff; relaunch or escalate."
+  LAST_NONBLANK=$(grep -vn '^[[:space:]]*$' "$V" | tail -1 | cut -d: -f1)
+  if [ -n "$LAST_NONBLANK" ]; then
+    awk -v n="$LAST_NONBLANK" -v line="$VOID_LINE" 'NR==n{print line} {print}' "$V" > "$V.voiddiff.tmp" && mv "$V.voiddiff.tmp" "$V"
+  else
+    printf '%s\n' "$VOID_LINE" >> "$V"
+  fi
+  warn "VOID IN FORM (diff not seen) line inserted into $V, immediately above its last non-blank line"
+fi
+
+# CF read ASK: same PROOF_LINE written to $L above, also placed at the very
+# TOP of the verdict file so a reader of $V alone (not $L) still gets it.
+if [ -n "${PROOF_LINE:-}" ]; then
+  { printf '%s\n\n' "$PROOF_LINE"; cat "$V"; } > "$V.prooffix.tmp" && mv "$V.prooffix.tmp" "$V"
+  warn "proof line inserted at the top of $V"
+fi
 
 # A non-empty verdict is not a verdict. The lost CF round wrote one line naming a
 # file inside the review worktree, which `test -s` accepted and cleanup then
@@ -2020,7 +3048,20 @@ fi
 # which is a format both of us have used.
 #
 # Measured: 8 legitimate formats match, 5 prefix-of-longer-word cases rejected.
-VERDICT_RE='^[[:space:]]*#{0,6}[[:space:]]*\**[[:space:]]*(verdict[[:space:]]*:)?[[:space:]]*\**[[:space:]]*((not[[:space:]]+)?(clean|sound)|block)([^[:alnum:]].*)?$'
+#
+# v4.8.13 (team-lead spec, from #2312 r1): "Verdict: request changes" was
+# flagged SUSPECT even though it is a real, complete, non-clean verdict --
+# the reviewer used "request changes" (a legitimate NOT-CLEAN synonym, and a
+# term of art from PR review generally) instead of the canonical
+# clean/not-clean/sound/block vocabulary. Added as its own alternative,
+# same word-boundary tail as every other branch.
+#
+# VERDICT_RE itself is now set ONCE, earlier in the script (right before the
+# verdict-fallback lookup, v4.8.13 CF requirement) -- that lookup must
+# validate a fallback candidate's last line against the SAME rule this check
+# uses, or a rejected-by-this-check file could still have been accepted by
+# the fallback moments earlier. Not reassigned here; this comment block
+# documents the value's history at the point it is actually consumed.
 VLAST=$(grep -v '^[[:space:]]*$' "$V" | tail -1)
 if grep -Eqi "$VERDICT_RE" "$V"; then
   # A verdict exists somewhere. Only note it if it is not the closing line.
@@ -2032,7 +3073,7 @@ elif ! printf '%s' "$VLAST" \
      | grep -Eqi "$VERDICT_RE"; then
   warn "SUSPECT VERDICT: $V contains NO verdict line anywhere:"
   warn "  ${VLAST:0:120}"
-  warn "codex -o is --output-last-message: it OVERWRITES that file with the reviewer's FINAL REPLY at exit. If the prompt asked for a report written to a file, the report was clobbered by the sign-off. The reviewer's final reply must BE the report, ending with a verdict line (CLEAN | NOT CLEAN | BLOCK)."
+  warn "codex -o is --output-last-message: it OVERWRITES that file with the reviewer's FINAL REPLY at exit. If the prompt asked for a report written to a file, the report was clobbered by the sign-off. The reviewer's final reply must BE the report, ending with a verdict line (CLEAN | NOT CLEAN | BLOCK | REQUEST CHANGES)."
   RESIDUE_DIR="$OUTDIR/$NAME-$TS-worktree-residue"
   if [ -d "$RESIDUE_DIR" ]; then
     warn "RECOVERY paths -- residue dir: $RESIDUE_DIR"
@@ -2072,7 +3113,7 @@ if [ "$RW_LEAKED" -eq 1 ]; then
   RESIDUE_DIR="$OUTDIR/$NAME-$TS-worktree-residue"
   RESIDUE_HAS_FINDINGS=0
   if [ -d "$RESIDUE_DIR" ] && find "$RESIDUE_DIR" -type f \
-       ! -name 'prompt.md' ! -name '.codex-review-context.md' ! -name 'LEDGER.md' \
+       ! -name 'prompt.md' ! -name '.codex-review-context.md' ! -name 'LEDGER.md' ! -name '.codex-review.patch' \
        -print -quit 2>/dev/null | grep -q .; then
     RESIDUE_HAS_FINDINGS=1
   fi

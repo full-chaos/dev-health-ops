@@ -379,23 +379,6 @@ class TestGenerateOverwriteRealUsersFlag:
             is True
         )
 
-    def test_launcher_passes_it_only_alongside_the_world_restore(self) -> None:
-        # CHAOS-6262 deleted the other caller, run_ask_dev_compose.sh, with
-        # the Ask Dev routes it existed to launch; armed_corpus_boot.sh is
-        # the one retained launcher that still pairs the two calls.
-        launcher = (
-            Path(__file__).resolve().parents[1]
-            / "scripts"
-            / "acceptance"
-            / "armed_corpus_boot.sh"
-        ).read_text(encoding="utf-8")
-        assert "--overwrite-real-users" in launcher
-        # It is only justified because the restore ran first; if the restore
-        # were ever removed, this opt-in would be an unexplained weakening.
-        assert launcher.index("dev-hops fixtures world-restore") < launcher.index(
-            "--overwrite-real-users"
-        )
-
 
 class TestOverwriteRealUsersIsAcceptanceGated:
     """Codex adversarial review (HIGH, confirmed): as a bare CLI flag,

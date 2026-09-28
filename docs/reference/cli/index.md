@@ -626,7 +626,9 @@ dev-hops fixtures world-restore --manifest .../world.json \
   --snapshot tests/acceptance/world/ask-dev-world.v1/snapshot
 ```
 
-In practice you never run these by hand: `scripts/acceptance/mint_ask_dev_world_snapshot.sh` performs the whole mint (steps 1–3 plus `--mint-digest`), and `scripts/acceptance/run_ask_dev_compose.sh` runs the restore on every acceptance boot.
+CHAOS-6262 deleted the two launcher scripts that used to wrap these steps
+(`run_ask_dev_compose.sh`, then `mint_ask_dev_world_snapshot.sh` -- CHAOS-7034); run the
+three `dev-hops fixtures` commands above directly.
 
 `world-restore` is INSERT-only and issues no DDL. It refuses, before writing anything, unless `ENVIRONMENT=acceptance` **and** every table its snapshot carries is empty in the target — a real dev or production database always has organizations and commits, so it always fails that check. There is no `--force`. After restoring it verifies two things and exits non-zero on either: the per-table row-count delta it produced must equal the delta the original generation produced (which catches a table the snapshot missed), and the recomputed `WORLD_DIGEST` must equal the pinned one.
 

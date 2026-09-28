@@ -38,8 +38,15 @@ _ENABLED = (
 )
 
 
-def _render(*sets: str) -> list[dict]:
+def _render(*sets: str, is_upgrade: bool = True) -> list[dict]:
+    # D2830: these two hook Jobs are pre-upgrade/post-upgrade ONLY -- Helm never creates or
+    # runs them on an install, so the chart now gates the whole block (Jobs + the image-pin/
+    # mintOrg/lockstep checks) on `.Release.IsUpgrade`, not `queryApi.enabled` alone.
+    # `--is-upgrade` simulates a real `helm upgrade` so this suite keeps exercising that
+    # gated block; default True since every existing test here means to.
     argv = ["helm", "template", _RELEASE, str(_CHART)]
+    if is_upgrade:
+        argv.append("--is-upgrade")
     for item in sets:
         argv += ["--set", item]
     completed = subprocess.run(argv, capture_output=True, text=True)
@@ -47,8 +54,10 @@ def _render(*sets: str) -> list[dict]:
     return [doc for doc in yaml.safe_load_all(completed.stdout) if doc]
 
 
-def _render_stderr(*sets: str) -> tuple[int, str]:
+def _render_stderr(*sets: str, is_upgrade: bool = True) -> tuple[int, str]:
     argv = ["helm", "template", _RELEASE, str(_CHART)]
+    if is_upgrade:
+        argv.append("--is-upgrade")
     for item in sets:
         argv += ["--set", item]
     completed = subprocess.run(argv, capture_output=True, text=True)
@@ -103,6 +112,28 @@ def test_present_with_no_dedicated_enable_flag() -> None:
     jobs = _jobs(*_ENABLED)
     assert _CARRY in jobs
     assert _REPOINT in jobs
+
+
+def test_absent_and_no_pin_failure_on_an_install_shape_render() -> None:
+    """D2830 (#3369 collateral regression): these two Jobs are pre-upgrade/post-upgrade
+    ONLY -- Helm never creates or runs them on an install, so an install-shape render
+    (no `--is-upgrade`, matching real `helm install` and any OTHER chart test that renders
+    with queryApi.enabled=true for an unrelated reason, e.g. deploy/helm/dev-health's own
+    query_api_subcommand_test.go) must not even evaluate the image-pin/mintOrg/lockstep
+    `fail` checks -- not just omit the Jobs. Before this fix, `queryApi.enabled=true` alone
+    (with no `migrations.hook.goApiRoutingTools.image` set) failed the WHOLE render with
+    'is not a pinned image', breaking every other chart test that happened to also set
+    queryApi.enabled=true."""
+    completed = subprocess.run(
+        ["helm", "template", _RELEASE, str(_CHART), "--set", "queryApi.enabled=true"],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    docs = [doc for doc in yaml.safe_load_all(completed.stdout) if doc]
+    job_names = {doc["metadata"]["name"] for doc in docs if doc.get("kind") == "Job"}
+    assert _CARRY not in job_names
+    assert _REPOINT not in job_names
 
 
 # --- hook lifecycle: pre-upgrade for carry, post-upgrade for repoint, never pre-install -----

@@ -119,7 +119,19 @@ type openAICompatibleReadinessProber struct {
 }
 
 func newOpenAICompatibleReadinessProber() *openAICompatibleReadinessProber {
-	return &openAICompatibleReadinessProber{client: &http.Client{Timeout: 30 * time.Second}}
+	return &openAICompatibleReadinessProber{client: &http.Client{
+		Timeout: 30 * time.Second,
+		// Codex r1 P1 (CHAOS-6976): Python's hardened client
+		// (llm/providers/_http.py's make_hardened_*_client) sets
+		// follow_redirects=False unconditionally -- this route validated the
+		// saved base_url (SSRF-checked) but a redirect response is NOT the
+		// validated destination and must never be followed automatically,
+		// or a validated public host can 3xx this prober to an internal
+		// target. ErrUseLastResponse returns the redirect response itself
+		// (its non-2xx status) to the caller instead of following it, the
+		// Go equivalent of httpx's follow_redirects=False.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}}
 }
 
 // chatMessage is one element of the wire "messages" array
@@ -246,6 +258,15 @@ func newProviderFailure(code string) *providerFailure { return &providerFailure{
 func classifyHTTPFailure(status int, body []byte) *providerFailure {
 	lower := strings.ToLower(string(body))
 	switch {
+	// Codex r1 P1 (CHAOS-6976): errors.py's classify_provider_error checks
+	// quota exhaustion FIRST, before every other branch including auth and
+	// rate-limit -- a 429 carrying "insufficient_quota"/"current quota" is
+	// LLMAuthError (-> provider_not_configured), never rate_limited, even
+	// though 429 is also this function's own rate-limit status code below.
+	// This case must stay ordered before the 401/429 cases or a quota 429
+	// is misclassified as an ordinary transient rate limit.
+	case strings.Contains(lower, "insufficient_quota") || strings.Contains(lower, "current quota"):
+		return newProviderFailure(errCodeProviderNotConfigured)
 	case status == 401 || strings.Contains(lower, "invalid_api_key") || strings.Contains(lower, "authentication"):
 		return newProviderFailure(errCodeProviderNotConfigured)
 	case strings.Contains(lower, "model_not_found") || strings.Contains(lower, "model not found") || strings.Contains(lower, "model does not exist"):
@@ -279,9 +300,61 @@ func classifyTransportFailure(err error) *providerFailure {
 	return newProviderFailure(errCodeProviderUnavailable)
 }
 
-// doCompletion posts one chat/completions request and returns the parsed
-// response, or a classified providerFailure.
+// maxProbeAttempts is the openai Python SDK's default retry budget
+// (max_retries=2, so 3 total attempts) -- codex r1 P1 (CHAOS-6976): a
+// single transient failure (a 500, a rate limit, a timeout) must not
+// immediately fail the whole preflight when Python's client would have
+// retried and likely succeeded.
+const maxProbeAttempts = 3
+
+// isRetryableFailureCode is the SDK's retryable class, narrowed to the
+// safe_error_codes this port can produce: a 5xx/timeout/transport failure
+// (provider_unavailable, timeout) and a rate limit (429, rate_limited) are
+// retried; a permanent/config/contract failure (bad credentials, an
+// unsupported model, a malformed request or response, a sequential-tool
+// violation, output exhaustion) is not -- retrying those would only waste
+// the same outcome three times.
+func isRetryableFailureCode(code string) bool {
+	switch code {
+	case errCodeProviderUnavailable, errCodeRateLimited, errCodeTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// doCompletion retries doCompletionOnce up to maxProbeAttempts times on a
+// retryable failure, with a short linear backoff between attempts
+// (bounded by the context deadline/cancellation, never Python's exact
+// jittered-exponential timing -- the finding this fixes is about retry
+// COUNT, not backoff shape).
 func (p *openAICompatibleReadinessProber) doCompletion(
+	ctx context.Context, baseURL, apiKey string, req chatCompletionRequest,
+) (*chatCompletionResponse, *providerFailure) {
+	var lastFailure *providerFailure
+	for attempt := 0; attempt < maxProbeAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, classifyTransportFailure(ctx.Err())
+			case <-time.After(time.Duration(attempt) * 200 * time.Millisecond):
+			}
+		}
+		resp, failure := p.doCompletionOnce(ctx, baseURL, apiKey, req)
+		if failure == nil {
+			return resp, nil
+		}
+		lastFailure = failure
+		if !isRetryableFailureCode(failure.code) {
+			return nil, failure
+		}
+	}
+	return nil, lastFailure
+}
+
+// doCompletionOnce posts one chat/completions request and returns the
+// parsed response, or a classified providerFailure.
+func (p *openAICompatibleReadinessProber) doCompletionOnce(
 	ctx context.Context, baseURL, apiKey string, req chatCompletionRequest,
 ) (*chatCompletionResponse, *providerFailure) {
 	body, err := json.Marshal(req)
@@ -468,6 +541,15 @@ func normalizeRound2Decision(choice chatChoice) *providerFailure {
 	if err := json.Unmarshal([]byte(*choice.Message.Content), &payload); err != nil {
 		return newProviderFailure(errCodeInvalidResponse)
 	}
+	// Codex r1 P1 (CHAOS-6976): openai_compatible.py's
+	// _validate_envelope_fields rejects a payload whose field set is
+	// anything OTHER than the compact {"kind","value"} pair or the full
+	// 9-field DECISION_FIELDS set -- an extra/unexpected top-level key
+	// (e.g. a provider echoing a stray field) must fail here, not be
+	// silently ignored by only reading "kind" and "value" off the map.
+	if !isDecisionFieldSet(payload) {
+		return newProviderFailure(errCodeInvalidResponse)
+	}
 	if payload["kind"] != "final_answer" {
 		return newProviderFailure(errCodeInvalidResponse)
 	}
@@ -479,6 +561,37 @@ func normalizeRound2Decision(choice chatChoice) *providerFailure {
 		return newProviderFailure(errCodeInvalidResponse)
 	}
 	return nil
+}
+
+// decisionCompactFields and decisionFullFields are openai_compatible.py's
+// _validate_envelope_fields({"kind","value"}) and _DECISION_FIELDS
+// (openai_compatible.py:57-67: kind, tool_id, arguments, call_id, value,
+// prompt, candidates, code, message).
+var (
+	decisionCompactFields = map[string]struct{}{"kind": {}, "value": {}}
+	decisionFullFields    = map[string]struct{}{
+		"kind": {}, "tool_id": {}, "arguments": {}, "call_id": {}, "value": {},
+		"prompt": {}, "candidates": {}, "code": {}, "message": {},
+	}
+)
+
+// isDecisionFieldSet is _validate_envelope_fields: payload's key set must
+// equal EXACTLY one of the two field sets above, nothing else (an extra or
+// missing key fails it either way).
+func isDecisionFieldSet(payload map[string]any) bool {
+	return fieldSetEquals(payload, decisionCompactFields) || fieldSetEquals(payload, decisionFullFields)
+}
+
+func fieldSetEquals(payload map[string]any, want map[string]struct{}) bool {
+	if len(payload) != len(want) {
+		return false
+	}
+	for key := range payload {
+		if _, ok := want[key]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func ptrString(s string) *string { return &s }

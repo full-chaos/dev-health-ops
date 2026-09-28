@@ -2542,7 +2542,11 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// One posture check per process: it proves the role in the background from here
 	// on, and both the combined check and the per-class probes read its last answer.
 	posture := queryAPIPostureCheck(getenv, pgPool)
-	handler, proofHandler, registryHandler := newQueryHandler(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv)
+	handler, proofHandler, registryHandler, err := newQueryHandler(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv)
+	if err != nil {
+		pgPool.Close()
+		return queryRouteHandlers{}, nil, nil, err
+	}
 	handlers := queryRouteHandlers{
 		Query:     handler,
 		Proof:     proofHandler,
@@ -2845,7 +2849,18 @@ func mountedRouteLogMessage(digestByOperation map[string]string) string {
 	)
 }
 
-func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string, getenv getenvFunc) (http.HandlerFunc, http.HandlerFunc, http.HandlerFunc) {
+func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string, getenv getenvFunc) (http.HandlerFunc, http.HandlerFunc, http.HandlerFunc, error) {
+	// CHAOS-6263 PR (a): /query's edge-access-token carrier, built once
+	// here (not per-request) and threaded into every authenticateInternalRequest
+	// call this handler makes. (nil, nil, nil) when GO_API_EDGE_JWT_SECRET is
+	// unset -- same opt-out contract as buildEdgeVerifierFromEnv; an error
+	// here means the secret IS set but malformed, which is a hard config
+	// failure this function refuses to start behind, same discipline as
+	// the envelope verifier's own JWKS check in buildQueryRoute.
+	edgeAuth, edgeStore, err := buildQueryEdgeAuthenticatorFromEnv(getenv, pgPool)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("query-api: edge authenticator: %w", err)
+	}
 	// digestByOperation is this route's registered-document inventory:
 	// operation name -> the sha256 digest of that operation's registered
 	// document text. CHAOS-4369 Wave 3 generalizes what Wave 1/2 hardcoded
@@ -2969,9 +2984,9 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		proofMux.Register(operation, gqlHandler)
 	}
 
-	return newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier, true),
-		newDocumentDispatchHandler(getenv, proofMux, operationByDigest, verifier, false),
-		registryHandler
+	return newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier, edgeAuth, edgeStore, true),
+		newDocumentDispatchHandler(getenv, proofMux, operationByDigest, verifier, edgeAuth, edgeStore, false),
+		registryHandler, nil
 }
 
 // newGraphQLServer is the gqlgen server every registered operation runs on:
@@ -3045,7 +3060,7 @@ func withMutationLocation(ctx context.Context, presented *gqlerror.Error) *gqler
 // registered document itself (digest.DocumentKind), after the request is
 // authenticated and resolved to a registered operation, and before the Mux is
 // reached, so no switch state can let a write through this door.
-func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, servesMutations bool) http.HandlerFunc {
+func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, servesMutations bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -3100,7 +3115,7 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 		// 500 are documented above as Python-edge behaviour that precedes this
 		// route; the malformed-JSON 400 keeps its old position and is NOT
 		// verified against Python's order.
-		claims, ok := authenticateInternalRequest(w, r, verifier)
+		claims, ok := authenticateInternalRequest(w, r, verifier, edgeAuth, edgeStore)
 		if !ok {
 			return
 		}

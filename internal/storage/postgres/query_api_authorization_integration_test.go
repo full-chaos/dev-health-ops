@@ -20,6 +20,50 @@ import (
 
 const queryAPIAuthorizationRole = "devhealth_query_api_authorization_test"
 
+// createQueryAPIColumnScopedStandins is the ColumnScoped counterpart of this
+// file's own "CREATE TABLE IF NOT EXISTS public.<table> (id uuid PRIMARY
+// KEY)" stand-in loop for RequiredTables (CHAOS-6263 PR (a), D2910): a
+// column-scoped grant's to_regclass guard silently skips a table that does
+// not exist, so a fixture that never creates users/memberships/
+// impersonation_sessions would apply NO grant at all for them and then
+// fail its own readiness precondition ("lacks SELECT on column ..."). One
+// stand-in table per distinct table name, with every declared column
+// present (arbitrary type: only the column's EXISTENCE matters for a
+// GRANT/REVOKE (col) statement to succeed, never its type).
+func createQueryAPIColumnScopedStandins(ctx context.Context, t *testing.T, admin *pgxpool.Pool) {
+	t.Helper()
+	columnsByTable := map[string][]string{}
+	var order []string
+	for _, column := range QueryAPIPosture().ColumnScoped {
+		if _, seen := columnsByTable[column.TableName]; !seen {
+			order = append(order, column.TableName)
+		}
+		columnsByTable[column.TableName] = append(columnsByTable[column.TableName], column.ColumnName)
+	}
+	for _, table := range order {
+		defs := make([]string, 0, len(columnsByTable[table]))
+		for _, col := range columnsByTable[table] {
+			defs = append(defs, col+" text")
+		}
+		stmt := "CREATE TABLE IF NOT EXISTS public." + table + " (" + strings.Join(defs, ", ") + ")"
+		if _, err := admin.Exec(ctx, stmt); err != nil {
+			t.Fatalf("column-scoped stand-in %s: %v", table, err)
+		}
+		// Some fixtures (e.g. startGrantHarness's reconciliationTables) already
+		// create this table with a narrower shape before this helper runs, so
+		// CREATE TABLE IF NOT EXISTS above silently no-ops against it. Backfill
+		// every required column with ALTER TABLE ADD COLUMN IF NOT EXISTS so this
+		// helper is idempotent whether the table is absent, already full-shaped,
+		// or pre-existing-but-narrower.
+		for _, col := range columnsByTable[table] {
+			alterStmt := "ALTER TABLE public." + table + " ADD COLUMN IF NOT EXISTS " + col + " text"
+			if _, err := admin.Exec(ctx, alterStmt); err != nil {
+				t.Fatalf("column-scoped stand-in backfill %s.%s: %v", table, col, err)
+			}
+		}
+	}
+}
+
 // queryAPIFixture starts one Postgres with stand-ins for every table the
 // query-api manifest names plus an unrelated one. Each test then makes as many
 // plain login roles as it needs with newRole: USAGE on public and nothing else,
@@ -54,6 +98,7 @@ func startQueryAPIFixture(t *testing.T) *queryAPIFixture {
 			t.Fatalf("stand-in %s: %v", table.TableName, err)
 		}
 	}
+	createQueryAPIColumnScopedStandins(ctx, t, admin)
 	if _, err := admin.Exec(ctx, "CREATE TABLE IF NOT EXISTS unrelated_read_table (id uuid PRIMARY KEY)"); err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +135,15 @@ func grantQueryAPIManifest(t *testing.T, ctx context.Context, admin *pgxpool.Poo
 			if _, err := admin.Exec(ctx, "GRANT "+privilege+" ON "+table.TableName+" TO "+role); err != nil {
 				t.Fatalf("grant %s on %s: %v", privilege, table.TableName, err)
 			}
+		}
+	}
+	// Column-scoped grants (CHAOS-6263 PR (a), D2910) -- see
+	// createQueryAPIColumnScopedStandins for why the stand-in table must
+	// also exist before this GRANT can succeed.
+	for _, column := range QueryAPIPosture().ColumnScoped {
+		grant := "GRANT " + column.Privilege + " (" + column.ColumnName + ") ON " + column.TableName + " TO " + role
+		if _, err := admin.Exec(ctx, grant); err != nil {
+			t.Fatalf("grant %s (%s) on %s: %v", column.Privilege, column.ColumnName, column.TableName, err)
 		}
 	}
 }
@@ -288,6 +342,7 @@ func TestQueryAPIRoleEndToEndThroughTheMigrateLeg(t *testing.T) {
 			t.Fatalf("stand-in %s: %v", table.TableName, err)
 		}
 	}
+	createQueryAPIColumnScopedStandins(ctx, t, admin)
 	for _, statement := range []string{
 		"CREATE ROLE " + role + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + password + "'",
 		"GRANT CONNECT ON DATABASE " + dbName + " TO " + role,
@@ -313,9 +368,15 @@ func TestQueryAPIRoleEndToEndThroughTheMigrateLeg(t *testing.T) {
 		grants = append(grants, riverstore.TableGrant{TableName: table.TableName,
 			AllowInsert: table.AllowInsert, AllowUpdate: table.AllowUpdate, AllowDelete: table.AllowDelete})
 	}
+	columnGrants := make([]riverstore.ColumnGrant, 0)
+	for _, column := range QueryAPIPosture().ColumnScoped {
+		columnGrants = append(columnGrants, riverstore.ColumnGrant{
+			TableName: column.TableName, ColumnName: column.ColumnName, Privilege: column.Privilege,
+		})
+	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema: grantSchema, DomainRole: roles.domain, QueueRole: roles.queue,
-		QueryAPIRole: role, QueryAPIGrants: grants,
+		QueryAPIRole: role, QueryAPIGrants: grants, QueryAPIColumnGrants: columnGrants,
 	}); err != nil {
 		t.Fatalf("ApplyPinnedMigrations with the query-api leg: %v", err)
 	}

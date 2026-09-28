@@ -10,6 +10,7 @@ package pgseed
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -111,11 +112,48 @@ func SetFeatureFlag(ctx context.Context, t testing.TB, pool *pgxpool.Pool, id, k
 	FeatureFlag(ctx, t, pool, id, key, minTier, enabled)
 }
 
-// User inserts an active local user (email derived from the id).
+// User inserts an active local user (email derived from the id). is_active
+// defaults true, is_superuser false, token_version 0 (users.py's own column
+// defaults) -- use SetUserState to change any of them.
 func User(ctx context.Context, t testing.TB, pool *pgxpool.Pool, id string) {
 	t.Helper()
 	exec(ctx, t, pool, "user", `
 INSERT INTO users (id, email, created_at, updated_at) VALUES ($1::uuid, $1::text || '@example.test', now(), now())`, id)
+}
+
+// SetUserState updates an EXISTING user's is_active/is_superuser/
+// token_version -- the three columns internal/api/policy.Authenticator.
+// Authenticate reads live per request (CHAOS-6263 PR (a)), never trusting
+// them from the caller's token.
+func SetUserState(ctx context.Context, t testing.TB, pool *pgxpool.Pool, id string, isActive, isSuperuser bool, tokenVersion int) {
+	t.Helper()
+	exec(ctx, t, pool, "user state", `
+UPDATE users SET is_active = $2, is_superuser = $3, token_version = $4 WHERE id = $1::uuid`,
+		id, isActive, isSuperuser, tokenVersion)
+}
+
+// Membership inserts a memberships row linking an existing user to an
+// existing org with role -- users.py's Membership model. id is the
+// membership row's own uuid (memberships has no default id-generation this
+// raw INSERT can rely on; the model's default=uuid.uuid4 runs in the
+// Python app layer, never in the database).
+func Membership(ctx context.Context, t testing.TB, pool *pgxpool.Pool, id, userID, orgID, role string) {
+	t.Helper()
+	exec(ctx, t, pool, "membership", `
+INSERT INTO memberships (id, user_id, org_id, role, created_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4, now())`, id, userID, orgID, role)
+}
+
+// ImpersonationSession inserts an impersonation_sessions row -- users.py's
+// ImpersonationSession model. endedAt nil means the session is still
+// active (internal/api/policy.PGStore.ActiveImpersonation's own WHERE
+// clause: ended_at IS NULL AND expires_at > now()).
+func ImpersonationSession(ctx context.Context, t testing.TB, pool *pgxpool.Pool, id, adminUserID, targetUserID, targetOrgID, targetRole string, expiresAt time.Time, endedAt *time.Time) {
+	t.Helper()
+	exec(ctx, t, pool, "impersonation session", `
+INSERT INTO impersonation_sessions (id, admin_user_id, target_user_id, target_org_id, target_role, created_at, expires_at, ended_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, now(), $6, $7)`,
+		id, adminUserID, targetUserID, targetOrgID, targetRole, expiresAt, endedAt)
 }
 
 // DevConversation inserts an Ask Dev conversation (retention 30 days, empty scope) for an

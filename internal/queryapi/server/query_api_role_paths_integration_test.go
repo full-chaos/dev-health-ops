@@ -13,9 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
@@ -56,6 +58,80 @@ func TestQueryAPIRoleServesEveryPostgresPathItReaches(t *testing.T) {
 	fixture.driveEveryPath(t, ctx, pool)
 	if err := postgresstore.CheckQueryAPIAuthorization(ctx, pool, fixture.role, "river"); err != nil {
 		t.Fatalf("the role stopped satisfying the posture after serving: %v", err)
+	}
+}
+
+// TestQueryAPIRoleCannotReadColumnsOutsideItsGrant is D2910's explicit
+// requirement: least privilege means a column-scoped table's OTHER
+// columns -- users.password_hash above all -- must be unreachable as the
+// restricted role, not merely undeclared. Column-level grants are additive
+// (there is no "REVOKE ALL" equivalent to prove a negative against), so
+// this asserts the negative directly: SELECT on a column this role was
+// never granted fails with a real Postgres permission denial.
+func TestQueryAPIRoleCannotReadColumnsOutsideItsGrant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIRoleFixture(t, ctx)
+
+	for _, column := range []string{"password_hash", "username", "full_name", "avatar_url", "auth_provider_id"} {
+		var value any
+		err := fixture.rolePool.QueryRow(ctx, "SELECT "+column+" FROM users WHERE id = $1", uuid.MustParse(pathsAdminUser)).Scan(&value)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+			t.Errorf("SELECT users.%s as the restricted role: got %v, want a 42501 permission denial", column, err)
+		}
+	}
+
+	// The columns this role SHOULD hold must still work -- a test that
+	// only proves the negative could pass on a role denied everything.
+	var isActive bool
+	if err := fixture.rolePool.QueryRow(ctx, "SELECT is_active FROM users WHERE id = $1", uuid.MustParse(pathsAdminUser)).Scan(&isActive); err != nil {
+		t.Errorf("SELECT users.is_active (a granted column) as the restricted role: %v", err)
+	}
+}
+
+// TestQueryAPIRoleDriverObservesAMissingColumnGrant is
+// TestQueryAPIRoleDriverObservesAMissingGrant's column-scoped counterpart
+// (D2910): withhold each declared column SELECT in turn and confirm the
+// specific policy call that reads it fails with a permission denial
+// naming that column's table.
+func TestQueryAPIRoleDriverObservesAMissingColumnGrant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIRoleFixture(t, ctx)
+	policyStore := policy.PGStore{Pool: fixture.rolePool}
+
+	probe := func() error {
+		if _, _, err := policyStore.UserState(ctx, uuid.MustParse(pathsAdminUser)); err != nil {
+			return err
+		}
+		if _, err := policyStore.IsMember(ctx, uuid.MustParse(pathsAdminUser), uuid.MustParse(pathsOrg)); err != nil {
+			return err
+		}
+		if _, err := policyStore.ActiveImpersonation(ctx, uuid.MustParse(pathsAdminUser)); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	for _, column := range postgresstore.QueryAPIPosture().ColumnScoped {
+		revoke := "REVOKE SELECT (" + column.ColumnName + ") ON public." + column.TableName + " FROM " + fixture.role
+		if _, err := fixture.admin.Exec(ctx, revoke); err != nil {
+			t.Fatalf("%s: %v", revoke, err)
+		}
+		err := probe()
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" || !strings.Contains(pgErr.Message, column.TableName) {
+			t.Errorf("with SELECT on %s.%s withheld, probe = %v, want a 42501 permission denial naming %s",
+				column.TableName, column.ColumnName, err, column.TableName)
+		}
+		grant := "GRANT SELECT (" + column.ColumnName + ") ON public." + column.TableName + " TO " + fixture.role
+		if _, err := fixture.admin.Exec(ctx, grant); err != nil {
+			t.Fatalf("%s: %v", grant, err)
+		}
+		if err := probe(); err != nil {
+			t.Fatalf("after restoring %s.%s, probe still fails: %v", column.TableName, column.ColumnName, err)
+		}
 	}
 }
 
@@ -114,6 +190,17 @@ const (
 	pathsSchema   = "paths-schema-digest"
 	pathsDocument = "paths-document-digest"
 	pathsOp       = "pathsOperation"
+
+	// CHAOS-6263 PR (a): the identity fixtures /query's edge-carrier path
+	// reads (internal/api/policy.PGStore) -- an active superuser (also the
+	// impersonation session's admin), the org they are really a member of,
+	// and a target user/org for the impersonation session.
+	pathsAdminUser         = "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b"
+	pathsTargetUser        = "0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c"
+	pathsTargetOrg         = "0d0d0d0d-0d0d-4d0d-8d0d-0d0d0d0d0d0d"
+	pathsMembershipID      = "0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e"
+	pathsImpersonationID   = "0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f"
+	pathsAdminTokenVersion = 3
 )
 
 func startQueryAPIRoleFixture(t *testing.T, ctx context.Context) *queryAPIRoleFixture {
@@ -173,9 +260,15 @@ func startQueryAPIRoleFixture(t *testing.T, ctx context.Context) *queryAPIRoleFi
 		grants = append(grants, riverstore.TableGrant{TableName: table.TableName,
 			AllowInsert: table.AllowInsert, AllowUpdate: table.AllowUpdate, AllowDelete: table.AllowDelete})
 	}
+	columnGrants := make([]riverstore.ColumnGrant, 0)
+	for _, column := range postgresstore.QueryAPIPosture().ColumnScoped {
+		columnGrants = append(columnGrants, riverstore.ColumnGrant{
+			TableName: column.TableName, ColumnName: column.ColumnName, Privilege: column.Privilege,
+		})
+	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema: "river", DomainRole: domain, QueueRole: queue,
-		QueryAPIRole: role, QueryAPIGrants: grants,
+		QueryAPIRole: role, QueryAPIGrants: grants, QueryAPIColumnGrants: columnGrants,
 	}); err != nil {
 		t.Fatalf("ApplyPinnedMigrations with the query-api leg: %v", err)
 	}
@@ -191,6 +284,17 @@ func startQueryAPIRoleFixture(t *testing.T, ctx context.Context) *queryAPIRoleFi
 	pgseed.OrgLicense(ctx, t, admin, pathsOrg, "enterprise", "{}")
 	pgseed.Setting(ctx, t, admin, pathsOrg, "llm", "provider", "openai", false)
 	pgseed.RoutingState(ctx, t, admin, pathsSchema, pathsDocument, pathsOp, "primary")
+
+	// CHAOS-6263 PR (a): identity fixtures for /query's edge-carrier
+	// PGStore reads (see the consts' own doc comment).
+	pgseed.Org(ctx, t, admin, pathsTargetOrg, "enterprise")
+	pgseed.User(ctx, t, admin, pathsAdminUser)
+	pgseed.SetUserState(ctx, t, admin, pathsAdminUser, true, true, pathsAdminTokenVersion)
+	pgseed.User(ctx, t, admin, pathsTargetUser)
+	pgseed.Membership(ctx, t, admin, pathsMembershipID, pathsAdminUser, pathsOrg, "member")
+	pgseed.ImpersonationSession(ctx, t, admin, pathsImpersonationID, pathsAdminUser, pathsTargetUser, pathsTargetOrg, "member",
+		time.Now().Add(time.Hour), nil)
+
 	return &queryAPIRoleFixture{admin: admin, rolePool: rolePool, role: role, org: pathsOrg}
 }
 
@@ -292,6 +396,27 @@ VALUES (gen_random_uuid(), $1, 'paths connector' || $2::text, 'github', '[]'::js
 	fail("producttelemetry.LoadOrgNames", err)
 	_, err = llmorgsettings.Store{Pool: pool}.ResolveUsableProvider(ctx, f.org)
 	fail("llmorgsettings.ResolveUsableProvider", err)
+
+	// CHAOS-6263 PR (a): /query's edge-carrier PGStore reads, driven AS THE
+	// RESTRICTED ROLE (pool), against internal/api/policy.PGStore directly
+	// -- the same store buildQueryEdgeAuthenticatorFromEnv constructs, not
+	// a second reimplementation.
+	policyStore := policy.PGStore{Pool: pool}
+	state, found, err := policyStore.UserState(ctx, uuid.MustParse(pathsAdminUser))
+	fail("policy.UserState", err)
+	if err == nil && (!found || !state.IsActive || !state.IsSuperuser || state.TokenVersion != pathsAdminTokenVersion) {
+		fail("policy.UserState", fmt.Errorf("unexpected state: found=%v state=%+v", found, state))
+	}
+	isMember, err := policyStore.IsMember(ctx, uuid.MustParse(pathsAdminUser), uuid.MustParse(pathsOrg))
+	fail("policy.IsMember", err)
+	if err == nil && !isMember {
+		fail("policy.IsMember", errors.New("expected the seeded membership row, found none"))
+	}
+	session, err := policyStore.ActiveImpersonation(ctx, uuid.MustParse(pathsAdminUser))
+	fail("policy.ActiveImpersonation", err)
+	if err == nil && session == nil {
+		fail("policy.ActiveImpersonation", errors.New("expected the seeded active impersonation session, found none"))
+	}
 	return failures
 }
 

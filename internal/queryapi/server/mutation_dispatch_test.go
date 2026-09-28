@@ -43,7 +43,7 @@ func mdHandler(t *testing.T, servesMutations bool) (http.HandlerFunc, *int) {
 		digestHex(mdQuery): "q", digestHex(mdMutation): "m",
 		digestHex(mdSubscription): "s", digestHex(mdUnparseable): "u",
 	}
-	return newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, servesMutations), executed
+	return newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, nil, nil, servesMutations), executed
 }
 
 func mdPost(t *testing.T, handler http.HandlerFunc, document string, authenticated bool) int {
@@ -117,7 +117,7 @@ func TestNewQueryHandlerPairTreatsARegisteredMutationDifferently(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	serve, proof, _ := newQueryHandler(nil, pool, verifier, "schema-digest", os.Getenv)
+	serve, proof, _, _ := newQueryHandler(nil, pool, verifier, "schema-digest", os.Getenv)
 
 	for _, tc := range []struct {
 		name         string

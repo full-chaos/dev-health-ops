@@ -32,8 +32,27 @@ func TestQueryAPIPostureIsPinned(t *testing.T) {
 	if !reflect.DeepEqual(got.RequiredTables, want) {
 		t.Fatalf("query-api posture tables = %+v, want %+v", got.RequiredTables, want)
 	}
-	if len(got.ColumnScoped) != 0 || len(got.RequiredSequences) != 0 {
-		t.Fatalf("the query-api posture declares only table privileges: %+v", got)
+	wantColumns := []ColumnPrivilege{
+		{"users", "id", "SELECT"},
+		{"users", "is_active", "SELECT"},
+		{"users", "is_superuser", "SELECT"},
+		{"users", "token_version", "SELECT"},
+		{"users", "email", "SELECT"},
+		{"memberships", "user_id", "SELECT"},
+		{"memberships", "org_id", "SELECT"},
+		{"impersonation_sessions", "id", "SELECT"},
+		{"impersonation_sessions", "admin_user_id", "SELECT"},
+		{"impersonation_sessions", "target_user_id", "SELECT"},
+		{"impersonation_sessions", "target_org_id", "SELECT"},
+		{"impersonation_sessions", "target_role", "SELECT"},
+		{"impersonation_sessions", "expires_at", "SELECT"},
+		{"impersonation_sessions", "ended_at", "SELECT"},
+	}
+	if !reflect.DeepEqual(got.ColumnScoped, wantColumns) {
+		t.Fatalf("query-api posture columns = %+v, want %+v", got.ColumnScoped, wantColumns)
+	}
+	if len(got.RequiredSequences) != 0 {
+		t.Fatalf("the query-api posture declares no sequences: %+v", got)
 	}
 }
 

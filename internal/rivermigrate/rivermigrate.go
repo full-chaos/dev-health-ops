@@ -208,7 +208,7 @@ func Execute(
 		apiRole = value
 	}
 	apiTableGrants, apiColumnGrants, apiSequences := postureGrants(postgresstore.APIPosture())
-	queryAPIRole, queryAPIGrants := queryAPILeg(lookup)
+	queryAPIRole, queryAPIGrants, queryAPIColumnGrants := queryAPILeg(lookup)
 	// CHAOS-5437: postureManifestDigest is the SAME value every go-* runtime
 	// binary recomputes at startup (postgres.PostureManifestDigest()) --
 	// stamping it here is what lets each of them prove, without a live
@@ -243,6 +243,7 @@ func Execute(
 		APISequences:            apiSequences,
 		QueryAPIRole:            queryAPIRole,
 		QueryAPIGrants:          queryAPIGrants,
+		QueryAPIColumnGrants:    queryAPIColumnGrants,
 		PostureManifestDigest:   postureManifestDigest,
 		PostureManifestBuildID:  migrateBuildID,
 		NativeRiverRoutes:       nativeRoutes,
@@ -428,13 +429,13 @@ func coordinatorGrants() ([]riverstore.TableGrant, []riverstore.ColumnGrant, []s
 // nothing changes. When it names a role that exists, the migration applies the
 // full manifest postgres.QueryAPIPosture() declares (REVOKE ALL then GRANT) --
 // see riverstore.MigrationOptions.QueryAPIRole for what it refuses.
-func queryAPILeg(lookup func(string) (string, bool)) (string, []riverstore.TableGrant) {
+func queryAPILeg(lookup func(string) (string, bool)) (string, []riverstore.TableGrant, []riverstore.ColumnGrant) {
 	value, _ := lookup("QUERY_API_DATABASE_ROLE")
 	if strings.TrimSpace(value) == "" {
-		return "", nil
+		return "", nil, nil
 	}
-	grants, _, _ := postureGrants(postgresstore.QueryAPIPosture())
-	return value, grants
+	grants, columns, _ := postureGrants(postgresstore.QueryAPIPosture())
+	return value, grants, columns
 }
 
 // postureGrants converts one role's declared posture into the migration's

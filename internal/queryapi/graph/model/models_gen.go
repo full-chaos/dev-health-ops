@@ -754,6 +754,11 @@ type FlowMatrixRequestInput struct {
 type FlowMatrixResult struct {
 	Nodes []SankeyNode `json:"nodes"`
 	Edges []SankeyEdge `json:"edges"`
+	// Non-null only when the underlying ClickHouse execution failed and
+	//   was swallowed to an empty nodes/edges result (Python-parity
+	//   behaviour, analytics.py:959-961) -- CHAOS-7092: the caller must be
+	//   able to tell a genuinely empty result apart from a degraded one.
+	DegradedReason *string `json:"degradedReason,omitempty"`
 }
 
 type Freshness struct {

@@ -333,6 +333,12 @@ func TestResolve_FlowMatrix_RealClientShape_BatchUseInvestmentTrueDoesNotReject(
 	if len(result.FlowMatrix.Nodes) == 0 {
 		t.Fatal("expected a real node from the investment source, got none -- either the query never fired or it fell back to the swallowed-error empty path")
 	}
+	// CHAOS-7092 negative control: a genuinely successful result must NOT
+	// carry a degradedReason -- proving the field is additive-only and
+	// does not leak into the unaffected path.
+	if result.FlowMatrix.DegradedReason != nil {
+		t.Fatalf("DegradedReason = %q on a genuinely successful result, want nil", *result.FlowMatrix.DegradedReason)
+	}
 }
 
 func TestResolve_HappyPath_TimeseriesAndBreakdown(t *testing.T) {
@@ -470,6 +476,21 @@ func TestResolve_FlowMatrix_ExecuteFailureSwallowsToEmpty(t *testing.T) {
 	}
 	if result.FlowMatrix == nil {
 		t.Fatal("expected a non-nil (degraded-empty) FlowMatrixResult")
+	}
+	// CHAOS-7092 (MCP request E3): this is the exact defect the ticket's
+	// acceptance test describes -- before this field existed, this
+	// assertion could not be written at all, and the swallowed-error
+	// result was byte-identical to a genuinely empty org (this test's
+	// own prior doc comment on FlowMatrix's degradation-reporting sibling
+	// says as much). DegradedReason is the caller-visible signal; the
+	// telemetry span/counter recordDegradation already fires is a
+	// SEPARATE, operator-only signal this test does not duplicate.
+	if result.FlowMatrix.DegradedReason == nil {
+		t.Fatal("expected FlowMatrixResult.DegradedReason to be set on a swallowed execution failure -- " +
+			"the caller cannot tell this apart from a genuinely empty result otherwise (CHAOS-7092)")
+	}
+	if *result.FlowMatrix.DegradedReason != FlowMatrixExecutionFailedReason {
+		t.Fatalf("DegradedReason = %q, want %q", *result.FlowMatrix.DegradedReason, FlowMatrixExecutionFailedReason)
 	}
 }
 

@@ -24,9 +24,23 @@ const (
 	existingProjectKeysQuery = "SELECT id, project_keys FROM teams FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND id IN {team_ids:Array(String)}"
 )
 
-// Result counts what a write retracted: rows of members or project links that
-// an Atlassian team had before and this snapshot no longer has.
+// Result counts what a write did: what it actually persisted, after the
+// team_sync_policies / manual-membership-conflict guards (sync_guards.go)
+// may have left some of the incoming rows untouched, and what it retracted
+// (rows of members or project links that an Atlassian team had before and
+// this snapshot no longer has).
 type Result struct {
+	// TeamsWritten/TeamKeys/MembershipsWritten/MembersWritten/
+	// OwnershipWritten count only rows this call actually persisted -- never
+	// the caller's pre-guard collected snapshot, which can be larger once a
+	// sync_policy or membership-conflict guard skips a row. TeamKeys holds
+	// each written team's native_team_key (the full Atlassian ARI), the same
+	// column a readback verifier checks -- never the bare TeamRow.ID.
+	TeamsWritten       int
+	TeamKeys           []string
+	MembershipsWritten int
+	MembersWritten     int
+	OwnershipWritten   int
 	ExpiredMemberships int
 	ExpiredOwnership   int
 	// DeactivatedTeams counts catalog rows of Atlassian teams the snapshot no
@@ -80,10 +94,46 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 			return result, fmt.Errorf("read the teams the snapshot no longer has: %w", err)
 		}
 	}
+	now := time.Time{}
+	for _, team := range rows.Teams {
+		now = team.UpdatedAt
+		break
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	// The two guards below scope EXACTLY like every other native collector's
+	// own wrapper (jira_team_catalog_guards.go): the sync-policy guard only
+	// ever filters the `teams` write (it runs against the FULL, unfiltered
+	// rows.Teams computed above, so a guard-skipped team is never mistaken
+	// by teamsInScope/planDeactivations for one the snapshot stopped
+	// reporting); the membership-conflict guard runs before planMemberships
+	// so a dropped conflicting row is retracted the same way any other
+	// disappeared membership is.
+	teamsToWrite := rows.Teams
+	if selections.Structure && len(rows.Teams) > 0 {
+		if teamsToWrite, err = filterTeamsBySyncPolicy(ctx, conn, orgID, rows.Teams, now); err != nil {
+			return result, fmt.Errorf("apply team sync policy guard: %w", err)
+		}
+	}
+	freshMemberships := rows.Memberships
+	if selections.Members {
+		observedTeamIDs := make([]string, 0, len(rows.Teams))
+		for _, team := range rows.Teams {
+			if team.IsActive != 0 {
+				observedTeamIDs = append(observedTeamIDs, team.ID)
+			}
+		}
+		if freshMemberships, err = filterMembershipsByManualConflict(ctx, conn, orgID, rows.Memberships, observedTeamIDs, now); err != nil {
+			return result, fmt.Errorf("apply team membership conflict guard: %w", err)
+		}
+	}
+
 	var memberships []MembershipRow
 	var expiredMemberships []openMembership
 	if selections.Members {
-		if memberships, expiredMemberships, err = planMemberships(ctx, conn, orgID, scope, rows.Memberships); err != nil {
+		if memberships, expiredMemberships, err = planMemberships(ctx, conn, orgID, scope, freshMemberships); err != nil {
 			return result, fmt.Errorf("read current team memberships: %w", err)
 		}
 	}
@@ -93,14 +143,6 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 		if ownership, expiredOwnership, err = planOwnership(ctx, conn, orgID, scope, rows.Ownership); err != nil {
 			return result, fmt.Errorf("read current team project ownership: %w", err)
 		}
-	}
-	now := time.Time{}
-	for _, team := range rows.Teams {
-		now = team.UpdatedAt
-		break
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
 	}
 	var done []string
 	fail := func(stage string, err error) (Result, error) {
@@ -113,6 +155,8 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 		if err := writeMemberships(ctx, conn, orgID, memberships, expiredMemberships, now); err != nil {
 			return fail("write team memberships", err)
 		}
+		result.MembershipsWritten = len(memberships)
+		result.MembersWritten = distinctAtlassianMembers(memberships)
 		result.ExpiredMemberships = len(expiredMemberships)
 		done = append(done, "team memberships")
 	}
@@ -120,12 +164,18 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 		if err := writeOwnership(ctx, conn, orgID, ownership, expiredOwnership, now); err != nil {
 			return fail("write team project ownership", err)
 		}
+		result.OwnershipWritten = len(ownership)
 		result.ExpiredOwnership = len(expiredOwnership)
 		done = append(done, "team project ownership")
 	}
-	if selections.Structure && (len(rows.Teams) > 0 || len(deactivate) > 0) {
-		if err := writeTeams(ctx, conn, orgID, rows.Teams, deactivate, now, !selections.Projects); err != nil {
+	if selections.Structure && (len(teamsToWrite) > 0 || len(deactivate) > 0) {
+		if err := writeTeams(ctx, conn, orgID, teamsToWrite, deactivate, now, !selections.Projects); err != nil {
 			return fail("write teams", err)
+		}
+		result.TeamsWritten = len(teamsToWrite)
+		result.TeamKeys = make([]string, 0, len(teamsToWrite))
+		for _, team := range teamsToWrite {
+			result.TeamKeys = append(result.TeamKeys, team.NativeTeamKey)
 		}
 		result.DeactivatedTeams = len(deactivate)
 	}

@@ -373,6 +373,24 @@ func resolveTeamsSettings(ctx context.Context, env cli.Env, d deps, orgID string
 	if overrides.cloudID != "" {
 		s.cloudID = overrides.cloudID
 	}
+	// Every ATLASSIAN_* field is documented as an INDIVIDUAL override on top
+	// of whichever settings source resolved (stored credential or the fully-
+	// env-configured offline path), not only the org/cloud id pair above --
+	// e.g. ATLASSIAN_API_TOKEN alone must override just the token, matching
+	// the stored credential's own email/base URL.
+	if overrides.email != "" {
+		s.email = overrides.email
+	}
+	if overrides.token != "" {
+		s.token = overrides.token
+	}
+	if overrides.base != "" {
+		tenant, err := normalizeBase(overrides.base)
+		if err != nil {
+			return settings{}, fmt.Errorf("%s is not a valid URL", baseURLKey)
+		}
+		s.gatewayURL = tenant.String() + gatewayPath
+	}
 	return s, nil
 }
 

@@ -81,11 +81,13 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 	if err != nil {
 		return result, err
 	}
-	// A skipped or nothing-selected project-as-team walk means either the
-	// walk found nothing to do, or something is already wrong with this
-	// jira credential/connectivity -- either way, layering more calls under
-	// the same credential is not worth the risk here.
-	if result.Skipped || !selections.Any() {
+	// The two legs are INDEPENDENT (D2778): a Skipped project-as-team walk
+	// (e.g. a transient Jira REST failure) must never suppress the real
+	// Atlassian Teams leg, which authenticates and reads through its own
+	// client/gateway and has no dependency on the project-as-team walk
+	// having succeeded. Only "nothing selected" (nothing for either leg to
+	// do) short-circuits here.
+	if !selections.Any() {
 		return result, nil
 	}
 	organizationID := strings.TrimSpace(credential.Config["atlassian_organization_id"])
@@ -98,24 +100,23 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 			return result, err
 		}
 		// Non-strict (post-sync dispatch): the project-as-team write above
-		// already succeeded and must not be undone by an Atlassian Teams
-		// failure -- log and keep that result, mirroring every other
-		// collector's non-strict walk-failure discipline in this package.
+		// already succeeded (or was itself skipped) and must not be undone
+		// by an Atlassian Teams failure -- log and keep that result,
+		// mirroring every other collector's non-strict walk-failure
+		// discipline in this package.
 		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "error", err)
 		return result, nil
 	}
-	result.TeamsWritten += len(atlassianResult.Rows.Teams)
-	result.MembershipsWritten += len(atlassianResult.Rows.Memberships)
-	result.OwnershipWritten += len(atlassianResult.Rows.Ownership)
-	result.MembersWritten += len(distinctAtlassianTeamsMembers(atlassianResult.Rows.Memberships))
-	for _, team := range atlassianResult.Rows.Teams {
-		result.TeamKeys = append(result.TeamKeys, team.ID)
-	}
+	// Every count/key below comes from atlassianteams.Write's own Result --
+	// what it actually persisted after its sync_policy/membership-conflict
+	// guards, keyed by native_team_key (the ARI ClickHouse stores), never
+	// the pre-guard collected snapshot or the bare TeamRow.ID.
+	result.TeamsWritten += atlassianResult.TeamsWritten
+	result.MembershipsWritten += atlassianResult.MembershipsWritten
+	result.OwnershipWritten += atlassianResult.OwnershipWritten
+	result.MembersWritten += atlassianResult.MembersWritten
+	result.TeamKeys = append(result.TeamKeys, atlassianResult.TeamKeys...)
 	return result, nil
-}
-
-type atlassianTeamsCollected struct {
-	Rows atlassianteams.Rows
 }
 
 func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
@@ -126,13 +127,13 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	selections providersync.TeamCatalogSelections,
 	normalizedAt time.Time,
 	organizationID string,
-) (atlassianTeamsCollected, error) {
+) (atlassianteams.Result, error) {
 	if collector.Conn == nil {
-		return atlassianTeamsCollected{}, providersync.ErrInvalidConfiguration
+		return atlassianteams.Result{}, providersync.ErrInvalidConfiguration
 	}
 	tenant, err := normalizeAtlassianTenantURL(client.BaseURL.String())
 	if err != nil {
-		return atlassianTeamsCollected{}, err
+		return atlassianteams.Result{}, err
 	}
 	cloudID := strings.TrimSpace(credential.Config["atlassian_cloud_id"])
 	doer := collector.Doer
@@ -142,7 +143,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	if cloudID == "" {
 		cloudID, err = atlassianteams.ResolveCloudID(ctx, doer, tenant)
 		if err != nil {
-			return atlassianTeamsCollected{}, err
+			return atlassianteams.Result{}, err
 		}
 	}
 	email, _ := credential.Secret("email")
@@ -154,18 +155,19 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 		}
 	}
 	if !email.Configured() || token == "" {
-		return atlassianTeamsCollected{}, providersync.ErrInvalidConfiguration
+		return atlassianteams.Result{}, providersync.ErrInvalidConfiguration
 	}
 	gatewayClient := collector.newClient(tenant.String()+"/gateway/api", atlassian.BasicAPITokenAuth{Email: email.Reveal(), Token: token})
+	atlassianSelections := atlassianteams.Selections{
+		Structure: selections.Teams, Members: selections.Members, Projects: selections.Projects,
+	}
 	rows, err := atlassianteams.Collect(ctx, gatewayClient, atlassianteams.Params{
 		OrgID: ref.OrgID, OrganizationID: organizationID, SiteID: cloudID,
-		Selections: atlassianteams.Selections{
-			Structure: selections.Teams, Members: selections.Members, Projects: selections.Projects,
-		},
-		Now: normalizedAt,
+		Selections: atlassianSelections,
+		Now:        normalizedAt,
 	})
 	if err != nil {
-		return atlassianTeamsCollected{}, err
+		return atlassianteams.Result{}, err
 	}
 	if len(rows.Teams) == 0 {
 		// An empty Atlassian Teams answer is far more often a permissions or
@@ -175,26 +177,9 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 		// rather than retracting the project-as-team fallback's members and
 		// links -- Write's own retraction logic only ever acts on the
 		// Atlassian-ARI-keyed rows it owns, never on project-as-team rows.
-		return atlassianTeamsCollected{}, nil
+		return atlassianteams.Result{}, nil
 	}
-	if _, err := atlassianteams.Write(ctx, collector.Conn, ref.OrgID, rows, atlassianteams.Selections{
-		Structure: selections.Teams, Members: selections.Members, Projects: selections.Projects,
-	}); err != nil {
-		return atlassianTeamsCollected{}, err
-	}
-	return atlassianTeamsCollected{Rows: rows}, nil
-}
-
-func distinctAtlassianTeamsMembers(memberships []atlassianteams.MembershipRow) []string {
-	seen := make(map[string]struct{}, len(memberships))
-	for _, membership := range memberships {
-		seen[membership.MemberID] = struct{}{}
-	}
-	out := make([]string, 0, len(seen))
-	for member := range seen {
-		out = append(out, member)
-	}
-	return out
+	return atlassianteams.Write(ctx, collector.Conn, ref.OrgID, rows, atlassianSelections)
 }
 
 // normalizeAtlassianTenantURL forces https and strips to scheme+host,

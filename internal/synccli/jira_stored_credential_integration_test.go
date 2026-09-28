@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -241,5 +242,66 @@ func TestResolveJiraStoredSettingsRefusesWithNoRow(t *testing.T) {
 	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, "org-with-no-integration")
 	if err == nil {
 		t.Fatal("expected a refusal: no stored jira credential exists for this org")
+	}
+}
+
+// TestResolveTeamsSettingsHonorsAnIndividualTokenOverride is the codex review
+// r1 fix proof (finding #6): resolveTeamsSettings documents every ATLASSIAN_*
+// field as an INDIVIDUAL override on top of the stored credential, not only
+// the organization/cloud id pair -- setting ATLASSIAN_API_TOKEN alone (never
+// enough to satisfy the fully-env-configured offline path, so this still
+// resolves the stored credential first) must override just the token, not be
+// silently ignored in favor of the stored one.
+func TestResolveTeamsSettingsHonorsAnIndividualTokenOverride(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = instance.Close(ctx) }()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applyRealSchema(t, ctx, pool)
+
+	const orgID = "org-under-test"
+	seedJiraCredential(t, ctx, pool, orgID,
+		map[string]string{"base_url": "https://acme.atlassian.net", "atlassian_organization_id": "atlassian-org-123", "atlassian_cloud_id": "pinned-cloud-id"},
+		map[string]string{"email": "sync@example.test", "api_token": "stored-token"})
+
+	d := deps{
+		openPostgres: func(ctx context.Context, dsn string) (*pgxpool.Pool, error) { return pool, nil },
+		decryptor:    func(cli.Env) (providerfoundation.CredentialDecryptor, error) { return testDecryptor(), nil },
+		doer:         http.DefaultClient,
+	}
+	env := cli.Env{Lookup: func(key string) (string, bool) {
+		switch key {
+		case "ATLASSIAN_API_TOKEN":
+			return "overridden-token", true
+		case PostgresURIKey:
+			// d.openPostgres below ignores this value and hands back the
+			// already-open test pool; a placeholder just has to satisfy
+			// resolveTeamsSettings' "is it configured at all" check.
+			return "postgres://ignored", true
+		}
+		return "", false
+	}}
+	settings, err := resolveTeamsSettings(ctx, env, d, orgID)
+	if err != nil {
+		t.Fatalf("resolveTeamsSettings: %v", err)
+	}
+	if settings.token != "overridden-token" {
+		t.Errorf("token = %q, want the ATLASSIAN_API_TOKEN override, not the stored token", settings.token)
+	}
+	// Every other field must still come from the stored credential --
+	// setting one override must not disturb the rest.
+	if settings.email != "sync@example.test" {
+		t.Errorf("email = %q, want the stored value (untouched by the token override)", settings.email)
+	}
+	if settings.organizationID != "atlassian-org-123" || settings.cloudID != "pinned-cloud-id" {
+		t.Errorf("organizationID/cloudID = %q/%q, want the stored values", settings.organizationID, settings.cloudID)
 	}
 }

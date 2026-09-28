@@ -688,6 +688,45 @@ appear here.
 | `sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e` | 2026-09-27 | removing the `Subscription` root type and the `MetricsUpdate`, `TaskStatus` and `SyncProgress` types from the SDL | superseded |
 | `sha256:d5ba09b1f460953482518ae4f5653ba6350b085bdc39621c5888756741118117` | this revision | CHAOS-6262, deleting the 8 `dev*` Ask Dev V1 GraphQL fields and their input/result types from the SDL | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
 
+### Automated in `bigboy-cut.sh` (CHAOS-7022): digest change = carry before swap; repoint after
+
+The rule above -- **carry BEFORE the roll, re-enable after** -- was, until CHAOS-7022, something
+an operator had to remember and run by hand. `ci/bigboy/bigboy-cut.sh` now has two STEPs that
+make it structural:
+
+- **`routing-carry`**, right after `repin` (so `venue-tools` already resolves to the round's NEW
+  tools image and computes the NEW schema digest from its own embedded SDL) and BEFORE
+  `migrate`/`up`/`up-workers` recreate `api`/`query-api`/`go-api` -- `query-api` at this point is
+  still the OLD, pre-roll, live process, exactly the source `carry` is designed to read from.
+  `carry` itself refuses (exit 2) when the live and target schema digests already agree -- the
+  expected shape for an ordinary, non-schema-changing roll, not a failure, so the STEP reads that
+  one named refusal text (`this binary's SDL is the one the deployed process already computes`)
+  as a pass. Any OTHER refusal aborts the cut before `migrate`/`up` ever runs: **refuse-not-skip**,
+  never a silent no-op.
+- **`routing-repoint`**, right after `routing-parity` (post-roll, against the newly-running
+  build), unconditionally on every cut, schema-change or not. Provenance-only -- it never touches
+  mode/reachability -- so it is safe to run every time, and it closes the OTHER gap this ticket
+  found: routing rows can lag the actually-running build after an ORDINARY roll too, with no
+  schema-digest change involved at all.
+
+**Worked example (rev196, the incident that opened this ticket, D2811):** bigboy's own re-cut
+(`_records/bigboy-1b05473e/graphql-prove-20260928T044400Z/`) and the real prod roll
+(`_records/deploy-196/README.md`) both hit the SAME shape at STEP 1.5/`routing-carry`:
+
+1. **Attempt 1 refused.** The live routing rows still named an OLDER build than what was
+   actually running (`4f014a9d9b`, from TWO rolls back -- rev195's own roll had never repointed
+   them, with no schema-digest change involved at all). `carry`'s refusal named it directly: the
+   deployed process is not running the build the rows claim.
+2. **Repoint, then retry.** A `repoint` against the same pre-roll live process corrected the
+   stale provenance (50/50 rows on prod) without touching reachability.
+3. **Attempt 2 carried cleanly.** `carried=50 unchanged=0 skipped=0 refused=0` -- readback at the
+   new digest confirmed all 50 rows present and UNPROVEN (as designed; `go-api-prove` re-proves
+   them against the new build after the roll).
+
+Full guarded lines: `_records/bigboy-1b05473e/prod-rev196-step1.5-carry-lines.md`. This is exactly
+the class of gap `routing-carry`'s "any other refusal aborts" branch and the unconditional
+`routing-repoint` STEP now cover automatically, on every cut.
+
 ## Tools pod (operator image)
 
 `ghcr.io/full-chaos/dev-health-go-api-tools` (`docker/go-api-tools.Dockerfile`)

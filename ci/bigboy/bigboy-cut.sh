@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # bigboy-cut.sh <old8> <full new ops sha>  -- the whole bigboy phase of a group cut, sequential, logs to _records/bigboy-<new8>/cut.log.
-# waits for the CI-built images -> re-pin (ops images + web, CHAOS-7019) -> migrate -> recreate api/query-api/go-api/web ->
-# hook check -> CH grants check -> PG grants read-back -> receipt/admin/superadmin/REST(leg1+2)/admin corpus batches.
-# Every step prints one `STEP <name> rc=<n>` line; nothing secret is printed.
+# waits for the CI-built images -> re-pin (ops images + web, CHAOS-7019) -> pre-roll routing carry
+# (CHAOS-7022, refuse-not-skip) -> migrate -> recreate api/query-api/go-api/web -> hook check ->
+# CH grants check -> PG grants read-back -> post-cut routing repoint (CHAOS-7022, every cut) ->
+# receipt/admin/superadmin/REST(leg1+2)/admin corpus batches. Every step prints one `STEP <name> rc=<n>` line; nothing secret is printed.
 set -u
 OLD8=${1:?old8}; NEW=${2:?full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}; R=/home/ubuntu/devhealth; REC=$R/_records/bigboy-$N8
 HERE=$(cd "$(dirname "$0")" && pwd)  # sibling scripts (this family) resolve from HERE, never a hardcoded _records path -- proves the tracked move actually runs, not just coexists with a synced _records copy
@@ -109,6 +110,29 @@ $HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; st repin $?
 $HERE/bigboy-repin-web.sh > $REC.repin-web.out 2>&1; st repin-web $?
 
 for f in $R/_records/bigboy-$OLD8/pass-bigboy-corpus-admin7.sh; do [ -f $f ] && cp -n $f $REC/; done
+# CHAOS-7022 (D2804/D2811): pre-roll routing carry, refuse-not-skip. Runs HERE -- after repin
+# (compose/compose.bigboy.images.yml already names the round's NEW tools image, so venue-tools
+# computes the NEW schema digest from its own embedded SDL) but BEFORE migrate/up/up-workers
+# recreate api/query-api/go-api, while query-api is still the OLD, pre-roll, live process: the
+# exact source `carry` is designed to read from (docs/contribute/architecture/go-api-wave-0-
+# proof-infrastructure.md, "When the schema digest moves"). `carry` itself refuses (exit 2) when
+# the live and target schema digests already agree -- the EXPECTED shape for an ordinary,
+# non-schema-changing roll, not a failure, so only that one named refusal text is read as a
+# pass here. Any other non-zero result aborts the cut before migrate/up ever runs.
+ROUTING_ORG=${ROUTING_ORG:-67f1add8-9fcb-4272-addb-044b70c442c8}  # the disposable fixture org, never the local org
+CARRY_OUT=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
+  "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing carry -registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll carry, cut $OLD8 -> $N8'" 2>&1)
+CARRY_RC=$?
+echo "$CARRY_OUT" > $REC.routing-carry.out
+if [ $CARRY_RC -eq 0 ]; then
+  st routing-carry 0
+elif echo "$CARRY_OUT" | grep -q "this binary's SDL is the one the deployed process already computes"; then
+  st routing-carry 0; echo "no schema-digest change this cut -- nothing to carry"
+else
+  st routing-carry 1
+  echo "FAIL: pre-roll routing carry refused for a reason other than 'no schema change' -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
+  exit 1
+fi
 # CHAOS-6987 (D2728): --env-file is required from here on -- docker compose's default .env
 # auto-load only reads the PROJECT ROOT .env, never ops/.env, so a compose-level ${VAR}
 # substitution referencing a var that ONLY lives in ops/.env (e.g. query-api's
@@ -143,6 +167,13 @@ else
 fi
 vt "dho goapi routing status -json $ROUTING_ARGS" > "$REC.routing-status.json" 2>/dev/null
 python3 "$HERE/check-routing-parity.py" "$HERE/routing-ops.txt" "$REC.routing-status.json"; st routing-parity $?
+# CHAOS-7022 (D2811 addendum): repoint after EVERY cut, schema-change or not -- routing rows must
+# never lag the actually-running build by more than one cut (the rev195->rev196 prod gap: rows
+# still named the build from two rolls back, with no schema change involved at all). Provenance
+# only -- repoint never touches mode/reachability (docs/contribute/architecture/go-api-wave-0-
+# proof-infrastructure.md's "repoint" section), so it is safe unconditionally, every cut.
+vt "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing repoint -registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -operations all-registered -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: post-cut repoint, cut $OLD8 -> $N8'" > "$REC.routing-repoint.out" 2>&1
+st routing-repoint $?
 # proof tokens are 12 h: RE-MINT at every cut (rev 188: an expired token silently refused 65 REST entries, runbook step 9)
 for b in bootstrap-admin-proof.sh bootstrap-superadmin-proof.sh; do bash $R/_records/bigboy-1152962/$b > $REC/$b.out 2>&1; st $b $?; done
 $HERE/bigboy-log-checks.sh $REC > $REC/log-checks.out 2>&1; st log-checks $?; tail -6 $REC/log-checks.out

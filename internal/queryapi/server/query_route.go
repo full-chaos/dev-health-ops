@@ -303,6 +303,174 @@ const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!
   }
 }`
 
+// registeredHomeDocument is CHAOS-6084/CHAOS-7042's registered document
+// for the home operation -- NOT "sourced from the real client file"
+// like every document above: CHAOS-6084's caller check found zero web
+// callers of this GraphQL field (web reads the same data through the
+// REST twin instead -- home_route.go's GET/POST route -- not through
+// GraphQL), so there is no real client file to source it from. This
+// text is AUTHORED instead,
+// with its selection set derived exhaustively from the schema's own
+// type declarations (contracts/graphql/v1/schema.graphql: HomeResult,
+// Freshness, HomeFreshnessSource, Coverage, MetricDelta, SparkPoint,
+// ReworkThemeAllocation, SummarySentence, HomeTileEntry, HomeTile,
+// ConstraintCard, ConstraintEvidence, EventItem, HealthState, HomeSignal,
+// ScopeEntityRef, HomeLimitingFactor, HomeDataConfidence -- every field
+// each type declares, not a hand-picked subset), formatted to match
+// this file's other entries' urql-print convention (multi-line,
+// `__typename` on every object selection). Because no real urql call
+// site exists to capture a wire fixture from, this document has no
+// query_route_wire_capture_test.go counterpart the way every "sourced
+// from a real client file" document above does -- see that test file's
+// header comment for why a captured fixture is normally the evidence
+// bar. query_route_integration_test.go's
+// TestHomeRoute_ReachableOnlyWhenSwitchEnabled proves an in-process
+// request built from THIS EXACT constant reaches queryResolver.Home
+// (routing/auth gating only -- it does not assert response content),
+// and registered_home_document_schema_parity_test.go's
+// TestRegisteredHomeDocumentSelectsEveryHomeResultField is the content
+// side: it fails the moment this constant's selection set falls behind
+// what contracts/graphql/v1/schema.graphql's HomeResult (recursively)
+// declares -- the exact defect class CHAOS-7070 r1 found (see the
+// comment below).
+//
+// CHAOS-7070 r1 (2026-09-28): the first cut of this PR grew HomeResult's
+// SDL and homeResultFromResponse's mapping to the full home payload but
+// left THIS constant selecting only the pre-existing 3 fields
+// (freshness/deltas/reworkThemeAllocation) -- every new field the SDL
+// and the resolver now support (summary/tiles/constraint/events/
+// healthState/signals/limitingFactor/dataConfidence,
+// freshness.latestSuccessfulSyncAt, freshness.sources) was therefore
+// UNREACHABLE through /query: operationForDocument matches by exact
+// document digest (see that function below), so any client selecting a
+// new field got a 404 digest-miss even though queryResolver.Home mapped
+// it correctly. Proven with an executed repro, not argued. Fixed by
+// growing this selection set to the same exhaustive-per-type standard
+// the rest of this constant's own doc comment already claims.
+const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput) {
+  home(orgId: $orgId, filters: $filters) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      spark {
+        ts
+        value
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredWorkGraphEdgesDocument is CHAOS-4352 Wave 4 Lane A's
 // (CHAOS-4504) registered document for the workGraphEdges operation --
 // same "registered documents only" contract, same "sourced from the real

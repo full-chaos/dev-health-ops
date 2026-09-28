@@ -246,10 +246,23 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 	// Leaf paths with the same shape on both sides -- REST's snake_case
 	// against GraphQL's camelCase equivalent, per the mapping table sent
 	// to gwc-web-graphql for CHAOS-7064.
+	// CHAOS-7070 r1 P3: this list used to be a hand-picked subset (missed
+	// signals.title/metric/direction/severity/category, two coverage
+	// values, and three limiting-factor fields) -- proven by the
+	// reviewer dropping the HomeSignal.Title mapping and watching this
+	// test still pass. It is now every leaf field either fixture object
+	// (home.Response's top-level Freshness/Summary/Constraint/Events/
+	// HealthState/Signals/LimitingFactor/DataConfidence) declares,
+	// checked against home/response.go's own json tags on the REST
+	// side. freshness.sources and tiles are intentionally absent here --
+	// they are the two declared dict->list shape differences, asserted
+	// separately below by the code that already existed for them.
 	leafPaths := [][2]string{
 		{"freshness.last_ingested_at", "freshness.lastIngestedAt"},
 		{"freshness.latest_successful_sync_at", "freshness.latestSuccessfulSyncAt"},
 		{"freshness.coverage.repos_covered_pct", "freshness.coverage.reposCoveredPct"},
+		{"freshness.coverage.prs_linked_to_issues_pct", "freshness.coverage.prsLinkedToIssuesPct"},
+		{"freshness.coverage.issues_with_cycle_states_pct", "freshness.coverage.issuesWithCycleStatesPct"},
 		{"summary.0.id", "summary.0.id"},
 		{"summary.0.text", "summary.0.text"},
 		{"summary.0.evidence_link", "summary.0.evidenceLink"},
@@ -267,18 +280,32 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 		{"health_state.summary", "healthState.summary"},
 		{"health_state.as_of", "healthState.asOf"},
 		{"signals.0.id", "signals.0.id"},
+		{"signals.0.title", "signals.0.title"},
+		{"signals.0.metric", "signals.0.metric"},
 		{"signals.0.current_value", "signals.0.currentValue"},
 		{"signals.0.prior_value", "signals.0.priorValue"},
 		{"signals.0.delta", "signals.0.delta"},
+		{"signals.0.direction", "signals.0.direction"},
+		{"signals.0.severity", "signals.0.severity"},
+		{"signals.0.confidence", "signals.0.confidence"},
 		{"signals.0.affected_scope", "signals.0.affectedScope"},
 		{"signals.0.evidence_count", "signals.0.evidenceCount"},
 		{"signals.0.why_it_matters", "signals.0.whyItMatters"},
 		{"signals.0.recommended_action", "signals.0.recommendedAction"},
 		{"signals.0.evidence_ref", "signals.0.evidenceRef"},
+		{"signals.0.category", "signals.0.category"},
 		{"signals.0.scope_entity.id", "signals.0.scopeEntity.id"},
 		{"signals.0.scope_entity.display_name", "signals.0.scopeEntity.displayName"},
+		{"signals.1.title", "signals.1.title"},
+		{"signals.1.metric", "signals.1.metric"},
+		{"signals.1.direction", "signals.1.direction"},
+		{"signals.1.severity", "signals.1.severity"},
+		{"signals.1.category", "signals.1.category"},
 		{"signals.1.scope_entity", "signals.1.scopeEntity"},
 		{"limiting_factor.claim", "limitingFactor.claim"},
+		{"limiting_factor.why_it_matters", "limitingFactor.whyItMatters"},
+		{"limiting_factor.recommended_action", "limitingFactor.recommendedAction"},
+		{"limiting_factor.confidence", "limitingFactor.confidence"},
 		{"limiting_factor.evidence_ref", "limitingFactor.evidenceRef"},
 		{"data_confidence.level", "dataConfidence.level"},
 		{"data_confidence.coverage_pct", "dataConfidence.coveragePct"},

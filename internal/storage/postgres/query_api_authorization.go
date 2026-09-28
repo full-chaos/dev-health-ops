@@ -37,14 +37,27 @@ import (
 //   - org_licenses, feature_flags, org_feature_overrides: the BYO-LLM feature
 //     gate.
 //   - settings: the org's BYO-LLM settings rows.
-//   - users, memberships, impersonation_sessions (CHAOS-6263 PR (a)): /query's
-//     edge-access-token carrier reuses internal/api/policy.Authenticator (and
-//     its PGStore) to resolve is_active/is_superuser/token_version live per
-//     request (never trusting those three from the token, same as go-api's own
-//     REST plane and Python's authenticate_access_token), an IsMember check for
-//     the token's own claimed org, and an ActiveImpersonation lookup for a
-//     superuser caller. All three reads only -- this role never writes an
-//     identity table.
+//   - users, memberships, impersonation_sessions (CHAOS-6263 PR (a), D2910):
+//     /query's edge-access-token carrier reuses internal/api/policy.
+//     Authenticator (and its PGStore) to resolve is_active/is_superuser/
+//     token_version live per request (never trusting those three from the
+//     token, same as go-api's own REST plane and Python's
+//     authenticate_access_token), an IsMember check for the token's own
+//     claimed org, and an ActiveImpersonation lookup for a superuser caller.
+//     COLUMN-SCOPED, not table-wide (see ColumnScoped below): users holds
+//     password_hash/MFA-adjacent columns this role must never read.
+//     Exact columns, cited from the queries themselves
+//     (internal/api/policy/store.go):
+//   - UserState (:45, query :49): users.id (WHERE), .is_active,
+//     .is_superuser, .token_version.
+//   - IsMember (:65, query :68): memberships.user_id, .org_id.
+//   - ActiveImpersonation (:82, query :84-90): impersonation_sessions
+//     .id, .admin_user_id, .target_user_id, .target_org_id,
+//     .target_role, .expires_at, .ended_at (all WHERE/SELECT columns
+//     of that query), plus users.id and users.email via its `JOIN
+//     users u ON u.id = s.target_user_id` -- id is already granted for
+//     UserState above; email is column-scoped here too, additively.
+//     All three reads only -- this role never writes an identity table.
 //
 // Writes (the five saved-report GraphQL mutations, CHAOS-6098):
 //   - saved_reports: create and clone insert, update updates, delete deletes.
@@ -82,9 +95,22 @@ func queryAPIPosture() RolePosture {
 			{"feature_flags", false, false, false},
 			{"org_feature_overrides", false, false, false},
 			{"settings", false, false, false},
-			{"users", false, false, false},
-			{"memberships", false, false, false},
-			{"impersonation_sessions", false, false, false},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"users", "id", "SELECT"},
+			{"users", "is_active", "SELECT"},
+			{"users", "is_superuser", "SELECT"},
+			{"users", "token_version", "SELECT"},
+			{"users", "email", "SELECT"},
+			{"memberships", "user_id", "SELECT"},
+			{"memberships", "org_id", "SELECT"},
+			{"impersonation_sessions", "id", "SELECT"},
+			{"impersonation_sessions", "admin_user_id", "SELECT"},
+			{"impersonation_sessions", "target_user_id", "SELECT"},
+			{"impersonation_sessions", "target_org_id", "SELECT"},
+			{"impersonation_sessions", "target_role", "SELECT"},
+			{"impersonation_sessions", "expires_at", "SELECT"},
+			{"impersonation_sessions", "ended_at", "SELECT"},
 		},
 	}
 }
@@ -209,6 +235,18 @@ func diffQueryAPIGrants(database string, posture RolePosture, grants []roleacl.G
 			allowed[key("relation", object, privilege)] = struct{}{}
 			required[key("relation", object, privilege)] = privilege + " on relation " + object
 		}
+	}
+	// Column-scoped grants (CHAOS-6263 PR (a), D2910): this function's own
+	// enumeration-based comparison had no column form before this PR --
+	// domain/api/coordinator roles' posture uses the live has_column_privilege
+	// query in CheckRolePosture instead, a different mechanism this
+	// role's checker does not share. roleacl.Enumerate's column rows key
+	// Object as "schema.table.column" (roleacl.go's format('%I.%I.%I', ...)),
+	// matching queryAPIGrantStatements' own GRANT SELECT (col) statements.
+	for _, column := range posture.ColumnScoped {
+		object := "public." + column.TableName + "." + column.ColumnName
+		allowed[key("column", object, column.Privilege)] = struct{}{}
+		required[key("column", object, column.Privilege)] = column.Privilege + " on column " + object
 	}
 	held := map[string]struct{}{}
 	for _, grant := range grants {

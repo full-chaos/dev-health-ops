@@ -129,6 +129,15 @@ type MigrationOptions struct {
 	// readiness check asserts.
 	QueryAPIRole   string
 	QueryAPIGrants []TableGrant
+	// QueryAPIColumnGrants is the column-scoped half of the query-api
+	// role's posture (CHAOS-6263 PR (a), D2910): least-privilege access to
+	// a table that also holds columns query-api must never read (users
+	// holds password_hash/MFA secrets alongside is_active/is_superuser/
+	// token_version). Optional even when QueryAPIRole is set -- a posture
+	// with no column-scoped privileges is legitimate, same as
+	// APIColumnGrants; what is NOT legitimate is supplying it without a
+	// role, rejected alongside QueryAPIGrants for the same reason.
+	QueryAPIColumnGrants []ColumnGrant
 	// PostureManifestDigest is the sha256 hex digest CHAOS-5437's lockstep
 	// guard stamps into worker_posture_manifest_applied on every run
 	// (postgres.PostureManifestDigest() -- injected the same way
@@ -611,7 +620,7 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 // of their own: this leg's REVOKE ALL and GRANT would overwrite theirs.
 func validateQueryAPIOptions(options MigrationOptions) error {
 	if options.QueryAPIRole == "" {
-		if len(options.QueryAPIGrants) != 0 {
+		if len(options.QueryAPIGrants) != 0 || len(options.QueryAPIColumnGrants) != 0 {
 			return ErrMigrationConfiguration
 		}
 		return nil
@@ -626,7 +635,7 @@ func validateQueryAPIOptions(options MigrationOptions) error {
 	if len(options.QueryAPIGrants) == 0 {
 		return ErrMigrationConfiguration
 	}
-	return validateGrantSet(options.QueryAPIGrants, nil, nil)
+	return validateGrantSet(options.QueryAPIGrants, options.QueryAPIColumnGrants, nil)
 }
 
 func validateCoordinatorOptions(options MigrationOptions) error {
@@ -768,7 +777,7 @@ func resolveQueryAPIRole(
 			options.Logger.WarnContext(ctx, "query-api Postgres role does not exist; query-api grants skipped",
 				"query_api_role", options.QueryAPIRole)
 		}
-		options.QueryAPIRole, options.QueryAPIGrants = "", nil
+		options.QueryAPIRole, options.QueryAPIGrants, options.QueryAPIColumnGrants = "", nil, nil
 		return options, nil
 	}
 	if !eligible || migrationRole == options.QueryAPIRole {
@@ -1060,6 +1069,22 @@ func queryAPIGrantStatements(options MigrationOptions) []string {
 		statements = append(statements,
 			"DO $$ BEGIN IF to_regclass('public."+grant.TableName+"') IS NOT NULL THEN GRANT "+
 				privileges+" ON TABLE "+pgx.Identifier{"public", grant.TableName}.Sanitize()+
+				" TO "+role+"; END IF; END $$",
+		)
+	}
+	// Column-scoped grants (CHAOS-6263 PR (a), D2910): the exact columns a
+	// least-privilege table needs, never the whole table -- same emission
+	// shape postureGrantStatements uses for the coordinator/api roles
+	// (one statement per (table, column, privilege), guarded by
+	// to_regclass), copied here rather than shared because this role's
+	// REVOKE half is dynamic (roleacl.Enumerate at run time, see this
+	// function's own doc comment), not the static REVOKE ALL
+	// postureGrantStatements always emits first.
+	for _, grant := range options.QueryAPIColumnGrants {
+		statements = append(statements,
+			"DO $$ BEGIN IF to_regclass('public."+grant.TableName+"') IS NOT NULL THEN GRANT "+
+				grant.Privilege+" ("+pgx.Identifier{grant.ColumnName}.Sanitize()+
+				") ON TABLE "+pgx.Identifier{"public", grant.TableName}.Sanitize()+
 				" TO "+role+"; END IF; END $$",
 		)
 	}

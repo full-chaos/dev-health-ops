@@ -26,9 +26,15 @@ func applyQueryAPILeg(ctx context.Context, admin *pgxpool.Pool, domain, queue, r
 		grants = append(grants, riverstore.TableGrant{TableName: table.TableName,
 			AllowInsert: table.AllowInsert, AllowUpdate: table.AllowUpdate, AllowDelete: table.AllowDelete})
 	}
+	columnGrants := make([]riverstore.ColumnGrant, 0)
+	for _, column := range QueryAPIPosture().ColumnScoped {
+		columnGrants = append(columnGrants, riverstore.ColumnGrant{
+			TableName: column.TableName, ColumnName: column.ColumnName, Privilege: column.Privilege,
+		})
+	}
 	return riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema: grantSchema, DomainRole: domain, QueueRole: queue,
-		QueryAPIRole: role, QueryAPIGrants: grants,
+		QueryAPIRole: role, QueryAPIGrants: grants, QueryAPIColumnGrants: columnGrants,
 	})
 }
 
@@ -253,6 +259,7 @@ func TestQueryAPIMigrateLegLeavesTheRoleExactlyOnTheManifest(t *testing.T) {
 			t.Fatalf("stand-in %s: %v", table.TableName, err)
 		}
 	}
+	createQueryAPIColumnScopedStandins(ctx, t, admin)
 	role := roles.domain + "_x"
 	if len(role) > 60 {
 		role = role[:60]
@@ -437,6 +444,7 @@ func TestQueryAPIMigrateLegLeavesPublicGrantsAndTheCheckNamesThem(t *testing.T) 
 			t.Fatalf("stand-in %s: %v", table.TableName, err)
 		}
 	}
+	createQueryAPIColumnScopedStandins(ctx, t, admin)
 	role := roles.domain + "_p"
 	if len(role) > 60 {
 		role = role[:60]

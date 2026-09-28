@@ -61,6 +61,80 @@ func TestQueryAPIRoleServesEveryPostgresPathItReaches(t *testing.T) {
 	}
 }
 
+// TestQueryAPIRoleCannotReadColumnsOutsideItsGrant is D2910's explicit
+// requirement: least privilege means a column-scoped table's OTHER
+// columns -- users.password_hash above all -- must be unreachable as the
+// restricted role, not merely undeclared. Column-level grants are additive
+// (there is no "REVOKE ALL" equivalent to prove a negative against), so
+// this asserts the negative directly: SELECT on a column this role was
+// never granted fails with a real Postgres permission denial.
+func TestQueryAPIRoleCannotReadColumnsOutsideItsGrant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIRoleFixture(t, ctx)
+
+	for _, column := range []string{"password_hash", "username", "full_name", "avatar_url", "auth_provider_id"} {
+		var value any
+		err := fixture.rolePool.QueryRow(ctx, "SELECT "+column+" FROM users WHERE id = $1", uuid.MustParse(pathsAdminUser)).Scan(&value)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+			t.Errorf("SELECT users.%s as the restricted role: got %v, want a 42501 permission denial", column, err)
+		}
+	}
+
+	// The columns this role SHOULD hold must still work -- a test that
+	// only proves the negative could pass on a role denied everything.
+	var isActive bool
+	if err := fixture.rolePool.QueryRow(ctx, "SELECT is_active FROM users WHERE id = $1", uuid.MustParse(pathsAdminUser)).Scan(&isActive); err != nil {
+		t.Errorf("SELECT users.is_active (a granted column) as the restricted role: %v", err)
+	}
+}
+
+// TestQueryAPIRoleDriverObservesAMissingColumnGrant is
+// TestQueryAPIRoleDriverObservesAMissingGrant's column-scoped counterpart
+// (D2910): withhold each declared column SELECT in turn and confirm the
+// specific policy call that reads it fails with a permission denial
+// naming that column's table.
+func TestQueryAPIRoleDriverObservesAMissingColumnGrant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIRoleFixture(t, ctx)
+	policyStore := policy.PGStore{Pool: fixture.rolePool}
+
+	probe := func() error {
+		if _, _, err := policyStore.UserState(ctx, uuid.MustParse(pathsAdminUser)); err != nil {
+			return err
+		}
+		if _, err := policyStore.IsMember(ctx, uuid.MustParse(pathsAdminUser), uuid.MustParse(pathsOrg)); err != nil {
+			return err
+		}
+		if _, err := policyStore.ActiveImpersonation(ctx, uuid.MustParse(pathsAdminUser)); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	for _, column := range postgresstore.QueryAPIPosture().ColumnScoped {
+		revoke := "REVOKE SELECT (" + column.ColumnName + ") ON public." + column.TableName + " FROM " + fixture.role
+		if _, err := fixture.admin.Exec(ctx, revoke); err != nil {
+			t.Fatalf("%s: %v", revoke, err)
+		}
+		err := probe()
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" || !strings.Contains(pgErr.Message, column.TableName) {
+			t.Errorf("with SELECT on %s.%s withheld, probe = %v, want a 42501 permission denial naming %s",
+				column.TableName, column.ColumnName, err, column.TableName)
+		}
+		grant := "GRANT SELECT (" + column.ColumnName + ") ON public." + column.TableName + " TO " + fixture.role
+		if _, err := fixture.admin.Exec(ctx, grant); err != nil {
+			t.Fatalf("%s: %v", grant, err)
+		}
+		if err := probe(); err != nil {
+			t.Fatalf("after restoring %s.%s, probe still fails: %v", column.TableName, column.ColumnName, err)
+		}
+	}
+}
+
 // The driver above is only worth anything if it can fail. Withhold each
 // declared SELECT in turn (one role each would be slow; one relation at a time
 // on one role is enough) and the driver must report a permission denial for the
@@ -186,9 +260,15 @@ func startQueryAPIRoleFixture(t *testing.T, ctx context.Context) *queryAPIRoleFi
 		grants = append(grants, riverstore.TableGrant{TableName: table.TableName,
 			AllowInsert: table.AllowInsert, AllowUpdate: table.AllowUpdate, AllowDelete: table.AllowDelete})
 	}
+	columnGrants := make([]riverstore.ColumnGrant, 0)
+	for _, column := range postgresstore.QueryAPIPosture().ColumnScoped {
+		columnGrants = append(columnGrants, riverstore.ColumnGrant{
+			TableName: column.TableName, ColumnName: column.ColumnName, Privilege: column.Privilege,
+		})
+	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema: "river", DomainRole: domain, QueueRole: queue,
-		QueryAPIRole: role, QueryAPIGrants: grants,
+		QueryAPIRole: role, QueryAPIGrants: grants, QueryAPIColumnGrants: columnGrants,
 	}); err != nil {
 		t.Fatalf("ApplyPinnedMigrations with the query-api leg: %v", err)
 	}

@@ -120,15 +120,22 @@ func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *p
 	if user.IsSuperuser {
 		session, sessionErr := edgeStore.ActiveImpersonation(ctx, user.ID)
 		if sessionErr != nil {
-			// Fail OPEN on this one check only -- Scope.Impersonation's own
-			// precedent (scope.go): a session-lookup failure means "not
-			// impersonating", logged, never a 401 over a single degraded
-			// read. is_active/is_superuser/token_version above already
-			// failed CLOSED; this is the one live check that does not,
-			// matching go-api's existing behaviour exactly.
-			log.Printf("query-api: edge impersonation lookup failed, treating as not impersonating: user_id=%s path=%s request_id=%s",
-				user.UserID, r.URL.Path, envelopeRequestID(r))
-		} else if session != nil {
+			// FAIL CLOSED (D2919 condition 2, reversing this file's own
+			// earlier draft): a superuser who IS impersonating must never
+			// be served as the plain, non-impersonated principal during a
+			// database fault -- that would let them pass a
+			// "not-impersonating" gate (e.g. RequirePlatformAdmin) exactly
+			// while genuinely impersonating. Every live check on this path
+			// fails closed; this is not the one exception. (go-api's own
+			// Scope.Impersonation, scope.go, DOES fail open on this same
+			// lookup today -- reported to team-lead as a separate finding,
+			// D2919 condition 2's own instruction: not copied here.)
+			log.Printf("query-api: internal request refused: reason=edge_impersonation_lookup_failed carrier=edge path=%s request_id=%s",
+				r.URL.Path, envelopeRequestID(r))
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return authctx.Claims{}, false
+		}
+		if session != nil {
 			orgID = session.TargetOrgID.String()
 			impersonationActive = true
 		}

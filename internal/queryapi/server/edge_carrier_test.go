@@ -329,12 +329,16 @@ func TestEdgeCarrier_StoreUnavailableIsRefused(t *testing.T) {
 	}
 }
 
-// TestEdgeCarrier_ImpersonationLookupFailureFailsOpenOnThatOneCheck mirrors
-// Scope.Impersonation's own documented precedent (scope.go): a session
-// LOOKUP failure (not a UserState failure) means "not impersonating",
-// logged, and the request still proceeds under the caller's own identity --
-// distinguishing this from every other live check, which fails closed.
-func TestEdgeCarrier_ImpersonationLookupFailureFailsOpenOnThatOneCheck(t *testing.T) {
+// TestEdgeCarrier_ImpersonationLookupFailureFailsClosed (D2919 condition 2,
+// reversing this test's own earlier "fails open" version): a session
+// LOOKUP failure for a superuser caller must refuse the request outright,
+// never serve it as the plain non-impersonated principal -- a superuser
+// who genuinely IS impersonating would otherwise pass a "not
+// impersonating" gate (RequirePlatformAdmin) during exactly the database
+// fault that hid it. go-api's own Scope.Impersonation (scope.go) fails
+// open on this same lookup today; that is a documented, reported
+// difference (D2919), not copied here.
+func TestEdgeCarrier_ImpersonationLookupFailureFailsClosed(t *testing.T) {
 	store := &fakeEdgeStore{
 		states:     map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
 		found:      map[uuid.UUID]bool{ecUser: true},
@@ -346,11 +350,11 @@ func TestEdgeCarrier_ImpersonationLookupFailureFailsOpenOnThatOneCheck(t *testin
 	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
 
 	rec := ecPost(handler, token)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("got %d, want 200 (impersonation-lookup failure fails open to 'not impersonating'), body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("got %d, want 401 (an impersonation-lookup failure must refuse, never serve as the non-impersonated principal), body=%s", rec.Code, rec.Body.String())
 	}
-	if len(*seen) != 1 || (*seen)[0].ImpersonationActive {
-		t.Fatalf("claims = %+v, want ImpersonationActive=false", *seen)
+	if len(*seen) != 0 {
+		t.Fatalf("resolver ran %d times for a failed impersonation lookup, want 0", len(*seen))
 	}
 }
 

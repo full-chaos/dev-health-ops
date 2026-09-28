@@ -56,22 +56,27 @@ func newExecutableSchemaHandler() http.Handler {
 	return server
 }
 
-// newListenerServers builds the public server and, when internalAddr is set,
-// the internal one over the same handler (CHAOS-6780). The public server
-// deletes the X-DH-Internal-* identity headers before any handler sees them;
-// only the internal server, on a port no Ingress routes to, marks requests as
+// newListenerServers builds the public server over publicBase and, when
+// internalAddr is set, the internal one over internalBase (CHAOS-6780,
+// route sets split CHAOS-7078 groundwork): the two bases are DIFFERENT
+// values now -- internalBase may serve routes publicBase does not, so a
+// route mounted only for the internal listener genuinely does not exist on
+// the public one, rather than existing on both and relying on the identity
+// middleware alone to keep it unreachable. The public server still deletes
+// the X-DH-Internal-* identity headers before any handler sees them; only
+// the internal server, on a port no Ingress routes to, marks requests as
 // allowed to carry them. internalAddr empty = no internal server (nil): the
-// headers are honoured nowhere.
-func newListenerServers(publicAddr, internalAddr string, base http.Handler) (public, internal *http.Server) {
+// headers are honoured nowhere, and internalBase is never served.
+func newListenerServers(publicAddr, internalAddr string, publicBase, internalBase http.Handler) (public, internal *http.Server) {
 	public = &http.Server{
 		Addr:              publicAddr,
-		Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.Public(base)),
+		Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.Public(publicBase)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	if internalAddr != "" {
 		internal = &http.Server{
 			Addr:              internalAddr,
-			Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.Internal(base)),
+			Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.Internal(internalBase)),
 			ReadHeaderTimeout: 5 * time.Second,
 		}
 	}
@@ -190,8 +195,21 @@ func mountQueryRoute(mux *http.ServeMux, query http.HandlerFunc) {
 // routes opened.
 type Plane struct {
 	// Handler is the mux of every mounted route, with the response-model marker.
-	// The listeners (Listeners) add the identity middleware around it.
+	// The listeners (Listeners) add the identity middleware around it. Served
+	// on BOTH listeners -- this field's route set is the public one and must
+	// stay exactly what it always was; a route only the internal listener
+	// should serve belongs on InternalHandler, never here.
 	Handler http.Handler
+	// InternalHandler serves the internal listener ONLY (CHAOS-7078
+	// groundwork for CHAOS-7096's /query/proof-write and CHAOS-7085's MCP
+	// caller-class routes): every route Handler serves, reached by falling
+	// through to it, PLUS whatever route a future mount registers here
+	// directly (which then takes precedence over the fallthrough for its own
+	// pattern, ServeMux's ordinary most-specific-match rule). Build sets
+	// this to a mux with nothing of its own mounted yet, so today it is
+	// behaviourally identical to Handler; the public listener never sees
+	// this value.
+	InternalHandler http.Handler
 	// Ready is nil when /query is not configured (nothing to check, see
 	// ReadinessCheck) and otherwise the live dependency check.
 	Ready func(context.Context) error
@@ -739,5 +757,15 @@ func Build(get func(string) string) (*Plane, error) {
 		writeRESTError(w, r, "api_v1", "", http.StatusNotFound, "Not Found")
 	})
 
-	return &Plane{Handler: markResponseModelRoutes(mux), Ready: ready, Probes: probes, Close: closeAll}, nil
+	handler := markResponseModelRoutes(mux)
+	// CHAOS-7078 groundwork: nothing is mounted on internalMux directly yet
+	// (that is CHAOS-7096's job), so falling through to handler for every
+	// path makes it behaviourally identical to Handler today -- the
+	// separation exists so a future direct registration here (a route ONLY
+	// the internal listener serves) never needs the public mux touched, and
+	// so it structurally CANNOT be reachable through the public listener,
+	// which is built from Handler and never sees internalMux at all.
+	internalMux := http.NewServeMux()
+	internalMux.Handle("/", handler)
+	return &Plane{Handler: handler, InternalHandler: internalMux, Ready: ready, Probes: probes, Close: closeAll}, nil
 }

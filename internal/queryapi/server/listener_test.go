@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -79,8 +81,9 @@ func TestListenerFailsStartWhenTheAddressIsTaken(t *testing.T) {
 	}
 }
 
-// Both listeners share the plane's handler but differ in identity handling (CHAOS-6780): the
-// public one strips X-DH-Internal-* headers before any handler, the internal one alone honours them.
+// The two listeners are built from different Plane fields (Handler / InternalHandler,
+// CHAOS-7078) and differ in identity handling (CHAOS-6780): the public one strips
+// X-DH-Internal-* headers before any handler, the internal one alone honours them.
 func TestInternalListenerExistsOnlyWhenItsAddressIsSet(t *testing.T) {
 	plane := listenerPlane(t)
 	defer plane.Close()
@@ -90,6 +93,68 @@ func TestInternalListenerExistsOnlyWhenItsAddressIsSet(t *testing.T) {
 	}
 	if public.Name() == internal.Name() {
 		t.Fatalf("both listeners are named %q", public.Name())
+	}
+}
+
+// CHAOS-7078: a route mounted only on Plane.InternalHandler must be reachable through the
+// internal listener and NOT EXIST on the public one -- proved structurally, by which
+// listener served the request, never by the X-DH-Internal-* header presence (a future
+// route on this mux, e.g. CHAOS-7096's /query/proof-write, gets this for free). The
+// existing, shared route set (proved here with the Wave-0 catch-all's custom 404 body,
+// distinguishable from Go's plain-text default) must still be reachable through BOTH
+// listeners, unchanged, via InternalHandler's fallthrough to Handler.
+func TestInternalOnlyRouteExistsOnlyOnTheInternalListener(t *testing.T) {
+	plane := listenerPlane(t)
+	defer plane.Close()
+	internalMux, ok := plane.InternalHandler.(*http.ServeMux)
+	if !ok {
+		t.Fatalf("Plane.InternalHandler is a %T, want *http.ServeMux", plane.InternalHandler)
+	}
+	internalMux.HandleFunc("/internal-only-probe", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
+	ctx := context.Background()
+	if err := public.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer public.Shutdown(ctx)
+	if err := internal.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer internal.Shutdown(ctx)
+
+	get := func(addr, path string) (int, string) {
+		resp, err := http.Get("http://" + addr + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, string(body)
+	}
+
+	if code, _ := get(internal.Address(), "/internal-only-probe"); code != http.StatusTeapot {
+		t.Fatalf("internal listener + internal-only route: %d, want 418", code)
+	}
+	// Plain 404, not the custom catch-all body checked below: this path is genuinely
+	// unregistered on the public mux, not merely answering the same status by chance.
+	if code, body := get(public.Address(), "/internal-only-probe"); code != http.StatusNotFound || strings.Contains(body, "Not Found") {
+		t.Fatalf("public listener + internal-only route: %d %q, want a plain 404 (must not exist there)", code, body)
+	}
+	// The shared route set (the Wave-0 catch-all) is unchanged on both: still reachable,
+	// still the SAME custom-404 handler, via InternalHandler's fallthrough on the internal
+	// side -- the exact JSON body distinguishes "this handler ran" from "no route matched".
+	const wantBody = `{"detail":"Not Found"}` + "\n"
+	if code, body := get(public.Address(), "/api/v1/not-a-route"); code != http.StatusNotFound || body != wantBody {
+		t.Fatalf("public listener + shared route: %d %q, want 404 %q", code, body, wantBody)
+	}
+	if code, body := get(internal.Address(), "/api/v1/not-a-route"); code != http.StatusNotFound || body != wantBody {
+		t.Fatalf("internal listener + shared route: %d %q, want 404 %q", code, body, wantBody)
 	}
 }
 

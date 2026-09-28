@@ -395,7 +395,7 @@ func iaInternalCtx(ctx context.Context) context.Context {
 func TestIdentityHeadersAreHonouredOnlyOnTheInternalListener(t *testing.T) {
 	verifier, priv := iaVerifier(t)
 	handler, seen := iaDispatch(t, verifier)
-	public, internal := newListenerServers("127.0.0.1:0", "127.0.0.1:0", handler)
+	public, internal := newListenerServers("127.0.0.1:0", "127.0.0.1:0", handler, handler)
 	if internal == nil {
 		t.Fatal("no internal server built although an internal address was given")
 	}
@@ -457,7 +457,7 @@ func TestIdentityHeadersAreHonouredOnlyOnTheInternalListener(t *testing.T) {
 
 // Unset internal address = no internal server = headers honoured nowhere.
 func TestNoInternalListenerWhenTheAddressIsUnset(t *testing.T) {
-	public, internal := newListenerServers("127.0.0.1:0", "", http.NotFoundHandler())
+	public, internal := newListenerServers("127.0.0.1:0", "", http.NotFoundHandler(), http.NotFoundHandler())
 	if internal != nil || public == nil {
 		t.Fatalf("public=%v internal=%v, want a public server only", public, internal)
 	}

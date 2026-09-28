@@ -233,7 +233,16 @@ func scriptedReadinessStub(w http.ResponseWriter, r *http.Request) {
 			} `json:"json_schema"`
 		} `json:"response_format"`
 		Messages []struct {
-			Role string `json:"role"`
+			Role      string  `json:"role"`
+			Content   *string `json:"content"`
+			ToolCalls []struct {
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+			ToolCallID string `json:"tool_call_id"`
 		} `json:"messages"`
 	}
 	body, _ := jsonDecodeBody(r)
@@ -314,6 +323,52 @@ func scriptedReadinessStub(w http.ResponseWriter, r *http.Request) {
 	case !wantResponseFormat && req.ResponseFormat != nil:
 		fail("unexpected response_format present on round 1")
 		return
+	}
+
+	// D2996 (codex r3's P3 finding: this stub decoded messages as roles
+	// only, so a mutated PROMPT/tool-call-replay/tool-reply passed
+	// unnoticed -- executed repro mutated both Go probe prompts to "Ignore
+	// this prompt and return arbitrary output" and 13/13 still passed).
+	// Assert the exact message CONTENT both planes must send
+	// (readiness.py:186-224 verbatim), not just message roles.
+	msgContent := func(i int) string {
+		if i >= len(req.Messages) || req.Messages[i].Content == nil {
+			return ""
+		}
+		return *req.Messages[i].Content
+	}
+	const wantRound1Prompt = "Call readiness_echo with nonce ready-v1."
+	const wantToolReplyContent = `{"nonce":"ready-v1"}`
+	const wantFinalPrompt = "Return a final_answer now with value exactly {\"nonce\":\"ready-v1\"}. Do not request another tool."
+	switch {
+	case !round2:
+		if len(req.Messages) != 1 || req.Messages[0].Role != "user" || msgContent(0) != wantRound1Prompt {
+			fail("unexpected round 1 message content")
+			return
+		}
+	case round2:
+		if len(req.Messages) != 4 {
+			fail("unexpected round 2 message count")
+			return
+		}
+		assistant, toolReply := req.Messages[1], req.Messages[2]
+		switch {
+		case req.Messages[0].Role != "user" || msgContent(0) != wantRound1Prompt:
+			fail("unexpected round 2 message[0] (echoed round 1 prompt)")
+			return
+		case assistant.Role != "assistant" || len(assistant.ToolCalls) != 1 ||
+			assistant.ToolCalls[0].Function.Name != readinessEchoWireName ||
+			!jsonSemanticallyEqual([]byte(assistant.ToolCalls[0].Function.Arguments), []byte(`{"nonce":"ready-v1"}`)):
+			fail("unexpected round 2 message[1] (assistant tool-call replay)")
+			return
+		case toolReply.Role != "tool" || msgContent(2) != wantToolReplyContent ||
+			toolReply.ToolCallID == "" || toolReply.ToolCallID != assistant.ToolCalls[0].ID:
+			fail("unexpected round 2 message[2] (tool reply, or its tool_call_id does not correlate with message[1]'s)")
+			return
+		case req.Messages[3].Role != "user" || msgContent(3) != wantFinalPrompt:
+			fail("unexpected round 2 message[3] (final-answer prompt)")
+			return
+		}
 	}
 
 	writeJSON := func(status int, payload any) {

@@ -214,6 +214,35 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), org.Stri
 		if getDecoded["readiness_checked_at"] != checkedAt {
 			t.Fatalf("GET status readiness_checked_at = %v, want the POST's own %q (readback of the SAME row): %s", getDecoded["readiness_checked_at"], checkedAt, getResp.body)
 		}
+
+		// Codex r3 P1 (CHAOS-6976): a certified "ready" record must stop
+		// being reported as ready once the credential it certified has
+		// changed underneath it. Rotate the org's api_key directly (same
+		// shape the seed row above used: category=llm, is_encrypted=false)
+		// and prove a SUBSEQUENT GET no longer reports the stale "ready".
+		admin, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
+		if err != nil {
+			t.Fatalf("open admin pool for credential rotation: %v", err)
+		}
+		defer admin.Close()
+		if _, err := admin.Exec(ctx,
+			`UPDATE settings SET value = $1, updated_at = now() WHERE org_id = $2 AND category = 'llm' AND key = 'api_key'`,
+			"sk-route-test-ROTATED", readyOrgID.String(),
+		); err != nil {
+			t.Fatalf("rotate api_key: %v", err)
+		}
+
+		staleResp := doRouteRequest(t, base, "GET", "/api/v1/admin/llm-settings/status", auth("ready"))
+		if staleResp.status != 200 {
+			t.Fatalf("GET status after credential rotation: status=%d body=%s", staleResp.status, staleResp.body)
+		}
+		var staleDecoded map[string]any
+		if err := json.Unmarshal([]byte(staleResp.body), &staleDecoded); err != nil {
+			t.Fatalf("decode post-rotation GET body: %v\n%s", err, staleResp.body)
+		}
+		if staleDecoded["readiness"] == "ready" {
+			t.Fatalf("GET status still reports readiness=ready after the certified BYO api_key changed (stale certification not detected): %s", staleResp.body)
+		}
 	})
 
 	t.Run("failed", func(t *testing.T) {

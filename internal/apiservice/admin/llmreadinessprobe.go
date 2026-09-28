@@ -142,6 +142,22 @@ func newOpenAICompatibleReadinessProber(doer providerfoundation.HTTPDoer) *openA
 		// (its non-2xx status) to the caller instead of following it, the
 		// Go equivalent of httpx's follow_redirects=False.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		// Codex r3 P1 (CHAOS-6976): the SAME hardened client sets
+		// trust_env=False alongside follow_redirects=False (_http.py:9-11)
+		// -- httpx's trust_env controls whether it honors ambient
+		// HTTP_PROXY/HTTPS_PROXY/NO_PROXY env vars. Go's zero-value
+		// Transport (what an http.Client with no Transport set falls back
+		// to, http.DefaultTransport) DOES honor them via
+		// http.ProxyFromEnvironment. ValidateBaseURLChecked deliberately
+		// treats an unresolvable hostname as NOT an SSRF target (this
+		// route's own network call is the only thing that would actually
+		// resolve/reach it) -- but a configured operator proxy has its own
+		// DNS/network view and can resolve or reach a hostname the
+		// application's own resolver could not, silently reopening the
+		// exact class of target the SSRF gate exists to keep unreachable.
+		// Proxy: nil is Go's trust_env=False: no proxy is ever consulted,
+		// env-configured or otherwise.
+		Transport: &http.Transport{Proxy: nil},
 	}}
 }
 

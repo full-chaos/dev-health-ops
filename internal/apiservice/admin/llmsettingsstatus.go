@@ -293,16 +293,39 @@ func (h *handlers) llmSettingsStatusResponse(ctx context.Context, orgID string) 
 	var readinessCheckedAt *string
 	var readinessFailureReason *string
 	if record != nil {
-		if dt, ok := pytime.FromISOFormat(record.CheckedAt); ok {
-			formatted := pytime.Pydantic(dt)
-			readinessCheckedAt = &formatted
+		// Codex r3 P1 (CHAOS-6976): a certification is only trustworthy
+		// against the BYO config it was actually run against. Recompute the
+		// CURRENT fingerprint (same defaulting postLLMSettingsReadiness
+		// applies: an empty provider resolves to "openai") and compare --
+		// executed repro was POST readiness (certify) -> PUT settings with a
+		// new api_key -> GET status, which without this check still
+		// reported the OLD certification's "ready" for a credential that
+		// was never actually probed. A mismatch falls back to
+		// "never_checked" (never a fabricated "stale" third state -- that
+		// full currency/role-combine state machine is CHAOS-6252b, not
+		// reproduced here per this file's own doc comment above) so a
+		// stale certification is never displayed as current.
+		cfg, cfgErr := h.loadReadinessBYOConfig(ctx, orgID)
+		if cfgErr != nil {
+			return nil, cfgErr
 		}
-		if record.Outcome == readinessOutcomeReady {
-			readiness = "ready"
-		} else {
-			readiness = "failed"
-			message := readinessSafeFailureMessage(record.SafeErrorCode)
-			readinessFailureReason = &message
+		resolvedProvider := cfg.provider
+		if resolvedProvider == "" {
+			resolvedProvider = "openai"
+		}
+		currentFingerprint := readinessFingerprint(resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey)
+		if currentFingerprint == record.Fingerprint {
+			if dt, ok := pytime.FromISOFormat(record.CheckedAt); ok {
+				formatted := pytime.Pydantic(dt)
+				readinessCheckedAt = &formatted
+			}
+			if record.Outcome == readinessOutcomeReady {
+				readiness = "ready"
+			} else {
+				readiness = "failed"
+				message := readinessSafeFailureMessage(record.SafeErrorCode)
+				readinessFailureReason = &message
+			}
 		}
 	}
 

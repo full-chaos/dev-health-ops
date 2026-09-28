@@ -244,6 +244,35 @@ func TestReadinessProbeRetriesATransientFailure(t *testing.T) {
 	}
 }
 
+// TestReadinessProbeNeverConsultsAmbientProxy is codex r3's P1 (CHAOS-6976):
+// Python's hardened client sets trust_env=False alongside
+// follow_redirects=False (_http.py:9-19, the SAME client the r1 redirect
+// fix ported half of). ValidateBaseURLChecked deliberately treats an
+// unresolvable hostname as NOT an SSRF target -- the application's own
+// resolver cannot reach it -- but an ambient HTTP_PROXY/HTTPS_PROXY has its
+// own network view and can resolve or reach a target the application
+// itself could not, reopening exactly the class of target the SSRF gate
+// exists to keep unreachable. This proves the prober's client never
+// consults one, matching Proxy: nil in newOpenAICompatibleReadinessProber.
+func TestReadinessProbeNeverConsultsAmbientProxy(t *testing.T) {
+	var proxyHits int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&proxyHits, 1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+
+	t.Setenv("HTTPS_PROXY", proxy.URL)
+	t.Setenv("HTTP_PROXY", proxy.URL)
+
+	prober := newOpenAICompatibleReadinessProber(nil)
+	_, _ = prober.probe(context.Background(), "openai", "scripted-ready", "https://example.invalid/v1", "test-key")
+
+	if hits := atomic.LoadInt32(&proxyHits); hits != 0 {
+		t.Fatalf("prober consulted the ambient proxy %d time(s), want 0 (trust_env=False parity)", hits)
+	}
+}
+
 // TestReadinessMessagesMatchPython pins the two 404 message literals to
 // production_runtime.py's resolve_byo_certification_provider (settings.py:
 // 352-466's DevRuntimeUnavailable.safe_message, surfaced as the HTTPException

@@ -15,6 +15,7 @@
 package recommendations
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -134,6 +135,14 @@ func parseEvidence(ctx context.Context, raw string) []model.EvidenceRef {
 	}
 	var out []model.EvidenceRef
 	for _, raw := range items {
+		// json.Unmarshal of a JSON null into a struct succeeds with zero
+		// values; Python skips every non-dict entry, so a null must be
+		// skipped here too, never surfaced as a zero-valued evidence row.
+		if string(bytes.TrimSpace(raw)) == "null" {
+			slog.WarnContext(ctx, "query-api: recommendations evidence entry is null, skipping",
+				"operation", "recommendations")
+			continue
+		}
 		var item evidenceItem
 		if err := json.Unmarshal(raw, &item); err != nil {
 			slog.WarnContext(ctx, "query-api: recommendations evidence entry malformed, skipping",

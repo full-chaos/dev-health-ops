@@ -247,3 +247,17 @@ func TestWindowToDates_CapsReadAtTodayPlusOne(t *testing.T) {
 		t.Errorf("cycle: got start=%v end=%v, want today-28d/today+1", start, end)
 	}
 }
+
+// A JSON null entry inside an otherwise-valid evidence array must be
+// skipped, as Python's _parse_evidence skips every non-dict entry -- never
+// surfaced as a zero-valued evidence row (json.Unmarshal of null into a
+// struct succeeds with zero values).
+func TestParseEvidence_NullEntryIsSkipped(t *testing.T) {
+	got := parseEvidence(context.Background(), `[null,{"team_id":"team-alpha","metric_table":"work_item_metrics_daily","field":"wip_count","window_start":"2026-04-01","window_end":"2026-04-07","value":14.0}]`)
+	if len(got) != 1 || got[0].Field != "wip_count" {
+		t.Errorf("evidence = %+v, want exactly the one real entry", got)
+	}
+	if only := parseEvidence(context.Background(), `[null]`); len(only) != 0 {
+		t.Errorf("[null] evidence = %+v, want none", only)
+	}
+}

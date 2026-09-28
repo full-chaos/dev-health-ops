@@ -86,11 +86,29 @@ func TestResolve_SeededRealClickHouse(t *testing.T) {
 		(team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, evidence_json, computed_at) VALUES
 		('team-a', '` + orgID + `', 'rule-old', '2025-01-01', '2025-01-08', true, 'warning', 'too old', 'too old', 'too old', '[]', toDateTime64('` + tNew + `',3))`)
 
+	// Same team, DIFFERENT org: must never surface for orgID -- proves the
+	// outer/inner org_id predicate (the P3 org-scope guard: removing it
+	// makes this row appear).
+	exec(`INSERT INTO recommendations_daily
+		(team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, evidence_json, computed_at) VALUES
+		('team-a', 'other-org-it', 'rule-foreign', '2026-04-01', '2026-04-07', true, 'critical', 'foreign org', 'foreign org', 'foreign org', '[]', toDateTime64('` + tNew + `',3))`)
+
+	// Ordering guard: ORDER BY latest_window_end DESC, rule_id. rule-3 ties
+	// rule-1 on window_end (tie broken by rule_id, so after rule-1); rule-0
+	// has an earlier window_end (so LAST although its id sorts first).
+	exec(`INSERT INTO recommendations_daily
+		(team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, evidence_json, computed_at) VALUES
+		('team-a', '` + orgID + `', 'rule-3', '2026-04-01', '2026-04-07', true, 'warning', 'tie', 'tie', 'tie', '[]', toDateTime64('` + tNew + `',3)),
+		('team-a', '` + orgID + `', 'rule-0', '2026-03-25', '2026-04-03', true, 'warning', 'earlier', 'earlier', 'earlier', '[]', toDateTime64('` + tNew + `',3))`)
+
 	now := time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC)
 	got := Resolve(ctx, client, orgID, "team-a", model.WindowInput{Value: 4, Unit: model.WindowUnitWeek}, now)
 
-	if len(got) != 1 {
-		t.Fatalf("Resolve returned %d recommendations, want 1: %+v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("Resolve returned %d recommendations, want 3 (rule-1, rule-3, rule-0): %+v", len(got), got)
+	}
+	if got[0].RuleID != "rule-1" || got[1].RuleID != "rule-3" || got[2].RuleID != "rule-0" {
+		t.Errorf("order = %s,%s,%s; want rule-1,rule-3,rule-0 (window_end DESC, then rule_id)", got[0].RuleID, got[1].RuleID, got[2].RuleID)
 	}
 	rec := got[0]
 	if rec.RuleID != "rule-1" {

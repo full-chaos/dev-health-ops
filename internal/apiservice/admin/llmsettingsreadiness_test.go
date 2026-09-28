@@ -148,7 +148,7 @@ func TestReadinessProbeDoesNotFollowRedirects(t *testing.T) {
 	}))
 	defer public.Close()
 
-	prober := newOpenAICompatibleReadinessProber()
+	prober := newOpenAICompatibleReadinessProber(nil)
 	outcome, safeErrorCode := prober.probe(context.Background(), "openai", "scripted-redirect", public.URL, "test-key")
 
 	if atomic.LoadInt32(&privateHits) != 0 {
@@ -178,7 +178,7 @@ func TestReadinessProbeRejectsExtraEnvelopeField(t *testing.T) {
 	}))
 	defer server.Close()
 
-	prober := newOpenAICompatibleReadinessProber()
+	prober := newOpenAICompatibleReadinessProber(nil)
 	outcome, safeErrorCode := prober.probe(context.Background(), "openai", "scripted-extra-field", server.URL, "test-key")
 
 	if outcome != readinessOutcomeFailed {
@@ -201,7 +201,7 @@ func TestReadinessProbeClassifiesQuotaExhaustionNotRateLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	prober := newOpenAICompatibleReadinessProber()
+	prober := newOpenAICompatibleReadinessProber(nil)
 	outcome, safeErrorCode := prober.probe(context.Background(), "openai", "scripted-quota", server.URL, "test-key")
 
 	if outcome != readinessOutcomeFailed {
@@ -233,7 +233,7 @@ func TestReadinessProbeRetriesATransientFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	prober := newOpenAICompatibleReadinessProber()
+	prober := newOpenAICompatibleReadinessProber(nil)
 	outcome, safeErrorCode := prober.probe(context.Background(), "openai", "scripted-transient-then-ready", server.URL, "test-key")
 
 	if outcome != readinessOutcomeReady {

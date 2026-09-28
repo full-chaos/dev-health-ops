@@ -112,10 +112,6 @@ func (h *handlers) loadReadinessBYOConfig(ctx context.Context, orgID string) (re
 	return cfg, nil
 }
 
-// agentReadinessProber is swappable in tests; production wiring is set in
-// deps.go / defaulted lazily here when nil.
-var newDefaultReadinessProber = func() readinessProber { return newOpenAICompatibleReadinessProber() }
-
 // postLLMSettingsReadiness is run_llm_settings_readiness.
 func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -165,7 +161,11 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	prober := newDefaultReadinessProber()
+	// h.upstreamDoer is Deps.HTTPDoer AS GIVEN (nil in production; a route
+	// success-path test sets it via adminDepsExtra) -- same injection point
+	// pagerduty_oauth_callback.go's calls already use, see
+	// newOpenAICompatibleReadinessProber's own doc comment.
+	var prober readinessProber = newOpenAICompatibleReadinessProber(h.upstreamDoer)
 	outcome, safeErrorCode := prober.probe(ctx, resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey)
 
 	record := agentReadinessRecord{

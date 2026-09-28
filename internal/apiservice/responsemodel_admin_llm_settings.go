@@ -5,11 +5,12 @@ package apiservice
 // longer conflicts with every other route PR. See responsemodel_register.go.
 func init() {
 	registerResponseModelRoutes(map[string]bool{
-		"DELETE /api/v1/admin/llm-settings":     true,
-		"GET /api/v1/admin/llm-settings":        true,
-		"GET /api/v1/admin/llm-settings/budget": true,
-		"GET /api/v1/admin/llm-settings/spend":  true,
-		"GET /api/v1/admin/llm-settings/status": true,
-		"PUT /api/v1/admin/llm-settings":        true,
+		"DELETE /api/v1/admin/llm-settings":         true,
+		"GET /api/v1/admin/llm-settings":            true,
+		"GET /api/v1/admin/llm-settings/budget":     true,
+		"GET /api/v1/admin/llm-settings/spend":      true,
+		"GET /api/v1/admin/llm-settings/status":     true,
+		"POST /api/v1/admin/llm-settings/readiness": true,
+		"PUT /api/v1/admin/llm-settings":            true,
 	})
 }

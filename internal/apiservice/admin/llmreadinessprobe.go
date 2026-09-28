@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 // This file is a SMALL, PURPOSE-BUILT OpenAI Chat Completions client for
@@ -115,10 +117,19 @@ type readinessProber interface {
 // openai_compatible.py's build_completion_request/decide/_normalize_response
 // for exactly this probe's fixed inputs.
 type openAICompatibleReadinessProber struct {
-	client *http.Client
+	client providerfoundation.HTTPDoer
 }
 
-func newOpenAICompatibleReadinessProber() *openAICompatibleReadinessProber {
+// newOpenAICompatibleReadinessProber follows the SAME doer-or-default shape
+// as pagerduty_oauth_callback.go's pagerDutyClient: a non-nil doer (a
+// route's Deps.HTTPDoer test override, threaded through as
+// handlers.upstreamDoer -- see postLLMSettingsReadiness) is honored
+// verbatim, so a route-level success-path test can inject a fake transport
+// without a real network call; nil builds the real hardened client.
+func newOpenAICompatibleReadinessProber(doer providerfoundation.HTTPDoer) *openAICompatibleReadinessProber {
+	if doer != nil {
+		return &openAICompatibleReadinessProber{client: doer}
+	}
 	return &openAICompatibleReadinessProber{client: &http.Client{
 		Timeout: 30 * time.Second,
 		// Codex r1 P1 (CHAOS-6976): Python's hardened client

@@ -2169,6 +2169,29 @@ const registeredProductTelemetryPlatformDashboardDocument = `query ProductTeleme
   }
 }`
 
+// registeredWorkItemTeamAttributionsDocument is the registered document
+// for the `workItemTeamAttributions` operation (CHAOS-7066). Not a
+// captured real web query -- same CHAOS-7042/7065 precedent: no web
+// caller today, so this is hand-written against the published SDL,
+// selecting every field model.WorkItemTeamAttribution carries.
+const registeredWorkItemTeamAttributionsDocument = `query WorkItemTeamAttributions($orgId: String!, $workItemIds: [String!], $teamId: String) {
+  workItemTeamAttributions(
+    orgId: $orgId
+    workItemIds: $workItemIds
+    teamId: $teamId
+  ) {
+    workItemId
+    provider
+    teamId
+    teamName
+    source
+    confidence
+    isPrimary
+    evidence
+    __typename
+  }
+}`
+
 // digestHex is a thin wrapper over the ONE canonical document-digest
 // algorithm (CHAOS-4696): sha256(strings.TrimSpace(text)), hex-encoded,
 // now shared code in internal/queryapi/digest so
@@ -2881,6 +2904,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiAttributedPrs":                   digestHex(registeredAiAttributedPrsDocument),
 		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
 		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
+		"workItemTeamAttributions":          digestHex(registeredWorkItemTeamAttributionsDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a

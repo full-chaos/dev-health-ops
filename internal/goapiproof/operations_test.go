@@ -44,6 +44,7 @@ var registeredOperations = []string{
 	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "testOpsTest", "featureFlagTimeseries",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 	"workUnitTeamAttributions",
+	"workItemTeamAttributions",
 }
 
 func TestAssertCoverageAcceptsTheRegisteredSet(t *testing.T) {
@@ -138,6 +139,9 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"workGraphFlow":       true,
 
 		"workUnitTeamAttributions": true,
+		// Same reasoning as workUnitTeamAttributions immediately above --
+		// an unknown work item id, no date range in the SDL at all.
+		"workItemTeamAttributions": true,
 
 		// The saved-report mutations take no window; the runner refuses them
 		// (RefusalNotAQueryDocument) before sending.

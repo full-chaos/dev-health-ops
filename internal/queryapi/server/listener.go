@@ -18,6 +18,13 @@ type Listener struct {
 	name   string
 	server *http.Server
 	errors chan error
+	// allowedPeers, when non-empty, restricts Start's listener to accepting
+	// only a connection whose remote address falls inside one of these
+	// CIDRs (D2953) -- checked at accept time, before any handler runs.
+	// Empty (the common case: the public listener, or an internal listener
+	// with no configured allowlist) accepts every peer, exactly as before
+	// this field existed.
+	allowedPeers []*net.IPNet
 
 	mu       sync.RWMutex
 	listener net.Listener
@@ -37,6 +44,7 @@ func (l *Listener) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen for %s: %w", l.name, err)
 	}
+	listener = newAllowlistListener(listener, l.allowedPeers)
 	l.listener = listener
 	l.server.BaseContext = func(net.Listener) context.Context { return ctx }
 	log.Printf("query-api: %s listening on %s", l.name, listener.Addr())
@@ -85,7 +93,15 @@ func (l *Listener) Address() string {
 //
 // extra, when non-nil, answers the paths it declares (the one-release operator
 // compatibility routes, OperatorCompat) and everything else goes to the plane's routes.
-func Listeners(publicAddr, internalAddr string, plane *Plane, extra http.Handler) (public, internal *Listener) {
+//
+// internalAllowedPeers (D2953), when non-empty, restricts the internal listener to
+// accepting a connection only from a peer address inside one of these CIDRs -- see
+// peerallowlist.go. Empty means no restriction beyond whatever network segmentation
+// already exists (a NetworkPolicy in prod), and Listeners logs that choice once,
+// loudly, rather than silently: an internal listener with an open bind on every
+// interface and no peer check is the exact gap D2953 was raised for. Ignored when
+// internalAddr is empty (there is no internal listener to restrict).
+func Listeners(publicAddr, internalAddr string, plane *Plane, extra http.Handler, internalAllowedPeers []*net.IPNet) (public, internal *Listener) {
 	base := plane.Handler
 	if extra != nil {
 		mux := http.NewServeMux()
@@ -98,7 +114,10 @@ func Listeners(publicAddr, internalAddr string, plane *Plane, extra http.Handler
 	publicServer, internalServer := newListenerServers(publicAddr, internalAddr, base)
 	public = &Listener{name: "query-http", server: publicServer, errors: make(chan error, 1)}
 	if internalServer != nil {
-		internal = &Listener{name: "query-internal-http", server: internalServer, errors: make(chan error, 1)}
+		if len(internalAllowedPeers) == 0 {
+			log.Print("query-api: the internal listener has no peer allowlist (QUERY_API_INTERNAL_ALLOWED_CIDRS unset) -- every peer that can reach the port is accepted; prod relies on its NetworkPolicy for this boundary")
+		}
+		internal = &Listener{name: "query-internal-http", server: internalServer, errors: make(chan error, 1), allowedPeers: internalAllowedPeers}
 	}
 	return public, internal
 }

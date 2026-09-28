@@ -115,8 +115,8 @@ func TestListenersCompatRoutesSitBesideThePlane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	with, _ := Listeners("127.0.0.1:0", "", plane, OperatorCompat(registry, operator, "dev-health-query-api"))
-	without, _ := Listeners("127.0.0.1:0", "", plane, nil)
+	with, _ := Listeners("127.0.0.1:0", "", plane, OperatorCompat(registry, operator, "dev-health-query-api"), nil)
+	without, _ := Listeners("127.0.0.1:0", "", plane, nil, nil)
 	status := func(l *Listener, path string) int {
 		rec := httptest.NewRecorder()
 		l.server.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))

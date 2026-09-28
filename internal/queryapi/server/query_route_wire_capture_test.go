@@ -144,6 +144,53 @@ func TestRegisteredPrDetailDocument_MatchesCapturedWireFixture(t *testing.T) {
 	}
 }
 
+// TestRegisteredHomeDocument_MatchesCapturedWireFixture is CHAOS-7070 r1's
+// fix for its own P1 finding: registeredHomeDocument was authored by
+// hand from the schema instead of registered as HOME_QUERY's real wire
+// form (CHAOS-7064's real caller of this field, now that one exists --
+// unlike every OTHER document above, home had none when it was first
+// registered, CHAOS-6084's own doc comment on the const explains why).
+// This test proves the const against a fixture captured the same way
+// pr_captured.graphql above was (wireForm(HOME_QUERY) via tsx, real
+// pinned @urql/core, see testdata/wire_capture/README.md's "home"
+// section) -- not against the const's own claim about itself, and not
+// against a hand-rederivation from the schema, which is exactly the
+// mistake this fixes.
+func TestRegisteredHomeDocument_MatchesCapturedWireFixture(t *testing.T) {
+	captured, err := os.ReadFile("testdata/wire_capture/home_captured.graphql")
+	if err != nil {
+		t.Fatalf("read captured wire fixture: %v", err)
+	}
+
+	gotDigest := digestHex(string(captured))
+	wantDigest := digestHex(registeredHomeDocument)
+
+	if gotDigest != wantDigest {
+		t.Fatalf(
+			"registeredHomeDocument digest %s does NOT match the digest of a REAL captured request (%s) -- "+
+				"a real client's home request would 404 against this route (CHAOS-7070 r1 P1 defect class). "+
+				"captured fixture:\n%s\n\nregistered const:\n%s",
+			wantDigest, gotDigest, string(captured), registeredHomeDocument,
+		)
+	}
+
+	// Negative control, same discipline as the featureFlags/
+	// featureFlagEvents tests above: the captured fixture must differ
+	// from the raw, unprinted HOME_QUERY source text's digest, proving
+	// this test can tell real wire bytes (with urql's __typename
+	// injection) apart from a source-copied guess -- not just that they
+	// currently happen to agree.
+	const rawSourceDigestHome = "d4bb71ec7a9f667b5801fb23487bc3479628a11695eafa0e85507ae43c12a04b"
+	if gotDigest == rawSourceDigestHome {
+		t.Fatalf(
+			"captured wire fixture digests to the RAW SOURCE TEXT digest (%s) -- "+
+				"the capture mechanism is not observing urql's real print()+__typename transforms; "+
+				"this test would pass even if the underlying defect returned",
+			rawSourceDigestHome,
+		)
+	}
+}
+
 // TestRegisteredCapturedDocuments_MatchCapturedWireFixtures proves each
 // registered security document digests to the wire-form text produced by
 // the web repo's own wire-parity tooling, so a real client's request is

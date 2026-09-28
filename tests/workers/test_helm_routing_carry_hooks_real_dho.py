@@ -22,7 +22,6 @@ proving the CHART's assumption about that contract has not drifted from it.
 
 from __future__ import annotations
 
-import os
 import shutil
 import stat
 import subprocess
@@ -54,12 +53,14 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(scope="module")
 def real_dho() -> Path:
     """Builds the real `dho` binary once for this module -- the CLI these hooks actually
-    invoke in production, not a stand-in that always answers what a test plan says."""
-    scratch = (
-        os.environ.get("TMPDIR") or "/var/lib/oci-cache/lane-scratch/gwc-cut-hardening"
-    )
-    Path(scratch).mkdir(parents=True, exist_ok=True)
-    binary = Path(tempfile.mkdtemp(dir=scratch, prefix="real-dho-")) / "dho"
+    invoke in production, not a stand-in that always answers what a test plan says.
+
+    tempfile.mkdtemp with no `dir=` already resolves TMPDIR/TEMP/TMP portably and falls
+    back to a real, writable system temp dir on whatever host runs this -- a hardcoded
+    bigboy-specific fallback path here (this module's own earlier draft) is exactly what
+    breaks hosted CI runners, which have no /var/lib/oci-cache and no permission to
+    create it (PermissionError: [Errno 13], caught live on #3384's own hosted CI run)."""
+    binary = Path(tempfile.mkdtemp(prefix="real-dho-")) / "dho"
     completed = subprocess.run(
         ["go", "build", "-o", str(binary), "./cmd/dho"],
         cwd=_REPO_ROOT,

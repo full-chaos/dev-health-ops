@@ -111,6 +111,10 @@
     "digest": "77c998975b27c6d14f0927c167464edaa01d702a3b1960b7a2f5bfd746f213c2"
   },
   {
+    "operation": "home",
+    "digest": "2bd50388e039e38e4693df598d475923b5ac7f8da930d69f5d4db6f5f2f6898c"
+  },
+  {
     "operation": "hotspots",
     "digest": "6ccfcc785f38dc4a2d3ef5c9bdc2a00e76c02ccf58d11fd1198d2d321165e781"
   },

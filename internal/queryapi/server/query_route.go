@@ -303,6 +303,64 @@ const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!
   }
 }`
 
+// registeredHomeDocument is CHAOS-6084/CHAOS-7042's registered document
+// for the home operation -- NOT "sourced from the real client file"
+// like every document above: CHAOS-6084's caller check found zero web
+// callers of this GraphQL field (web reads the same data through the
+// REST twin instead -- home_route.go's GET/POST route -- not through
+// GraphQL), so there is no real client file to source it from. This
+// text is AUTHORED instead,
+// with its selection set derived exhaustively from the schema's own
+// type declarations (contracts/graphql/v1/schema.graphql: HomeResult,
+// Freshness, Coverage, MetricDelta, SparkPoint, ReworkThemeAllocation --
+// every field each type declares, not a hand-picked subset), formatted
+// to match this file's other entries' urql-print convention (multi-line,
+// `__typename` on every object selection). Because no real urql call
+// site exists to capture a wire fixture from, this document has no
+// query_route_wire_capture_test.go counterpart the way every "sourced
+// from a real client file" document above does -- see that test file's
+// header comment for why a captured fixture is normally the evidence
+// bar, and home_route_document_test.go for what proves this one instead
+// (an in-process request built from THIS EXACT constant reaches
+// queryResolver.Home).
+const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput) {
+  home(orgId: $orgId, filters: $filters) {
+    freshness {
+      lastIngestedAt
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      spark {
+        ts
+        value
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredWorkGraphEdgesDocument is CHAOS-4352 Wave 4 Lane A's
 // (CHAOS-4504) registered document for the workGraphEdges operation --
 // same "registered documents only" contract, same "sourced from the real
@@ -2817,6 +2875,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"complexityTimeseries":              digestHex(registeredComplexityTimeseriesDocument),
 		"hotspots":                          digestHex(registeredHotspotsDocument),
 		"operatingReview":                   digestHex(registeredOperatingReviewDocument),
+		"home":                              digestHex(registeredHomeDocument),
 		"releaseImpact":                     digestHex(registeredReleaseImpactDocument),
 		"workGraphEdges":                    digestHex(registeredWorkGraphEdgesDocument),
 		"workGraphFlow":                     digestHex(registeredWorkGraphFlowDocument),

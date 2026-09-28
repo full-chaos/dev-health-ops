@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/experiments"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/featureflags"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/hotspots"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/operatingreview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/producttelemetry"
@@ -261,9 +262,31 @@ func (r *queryResolver) ProductTelemetryPlatformDashboard(ctx context.Context, i
 	return platform.Assemble(names), nil
 }
 
-// Home is the resolver for the home field.
+// Home is the resolver for the home field (CHAOS-6084 / CHAOS-7042).
+// This field has zero web callers (CHAOS-6084's caller check); the data
+// this ported is the same already golden-parity-proven home.BuildResponse
+// GET/POST /api/v1/home uses, NOT resolve_home's own dead computation --
+// see home_translate.go's doc comment for why. Authorization mirrors
+// resolve_home's ACTUAL behavior (require_org_id: raise if the envelope
+// carries no org, else always use the authorized org, never the orgId
+// argument) via requestOrg, the same helper WorkGraphEdges documents this
+// convention with above.
 func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.FilterInput) (*model.HomeResult, error) {
-	panic(fmt.Errorf("not implemented: Home - home"))
+	authorizedOrgID, err := requestOrg(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	pgClient, ok := r.Postgres.(home.PGQueryClient)
+	if !ok {
+		return nil, fmt.Errorf("home: postgres client does not support QueryRow")
+	}
+
+	resp, err := home.BuildResponse(ctx, r.ClickHouse, pgClient, authorizedOrgID, homeFiltersFromGraphQL(filters), time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("home: %w", err)
+	}
+	return homeResultFromResponse(resp), nil
 }
 
 // WorkGraphEdges is the resolver for the workGraphEdges field (CHAOS-4352

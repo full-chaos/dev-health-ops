@@ -59,6 +59,9 @@ const (
 		"Syncs the organization's Atlassian Teams into ClickHouse. With none of --structure,\n" +
 		"--members and --projects, all three are synced. Members and project links a team no longer has are\n" +
 		"retracted (closed); an empty result is refused, so a permissions problem retracts nothing, unless --allow-empty.\n\n" +
+		"--provider github|gitlab --org <org-id> --owner <org-or-group> [--auth <token>] runs that\n" +
+		"provider's own team catalog instead of Atlassian Teams; see docs/reference/cli/index.md for\n" +
+		"its exact flags, refusals and env vars, which differ per provider.\n\n" +
 		"--provider jira resolves the org's stored jira integration credential from Postgres\n" +
 		"(--db, else POSTGRES_URI or _FILE) by default -- the atlassian_organization_id (required) and\n" +
 		"atlassian_cloud_id (optional; else derived live from the tenant) come from that same\n" +
@@ -144,7 +147,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	structure := flags.Bool("structure", false, "sync the teams")
 	members := flags.Bool("members", false, "sync team memberships")
 	projects := flags.Bool("projects", false, "sync the projects each team works on")
-	allowEmpty := flags.Bool("allow-empty", false, "accept an organization with no Atlassian teams (retracts every member and link)")
+	allowEmpty := flags.Bool("allow-empty", false, "accept an empty result (jira: retracts every member and link; github/gitlab/linear: exit 0 instead of refusing)")
 	if err := flags.Parse(env.Args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return cli.ExitOK

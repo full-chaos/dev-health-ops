@@ -177,10 +177,16 @@ func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRe
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "sync_failed", redact(err))
 	}
-	// An empty catalog is a provider that returned no teams. A team the catalog found but did not
-	// write (its sync policy leaves it untouched, or its changes were staged for review) is not
-	// empty; teams the catalog could not confirm the rosters of are a failure, not an empty answer.
-	found := result.TeamsWritten + result.TeamsSkippedPolicy + result.TeamsStagedForReview
+	// An empty catalog is a provider that returned no teams AND wrote nothing else. A team the
+	// catalog found but did not write (its sync policy leaves it untouched, or its changes were
+	// staged for review) is not empty; teams the catalog could not confirm the rosters of are a
+	// failure, not an empty answer. A selective run (e.g. --members alone, with --structure off)
+	// can commit real membership/ownership/project rows while TeamsWritten stays zero (no Teams
+	// row was ever in scope) -- counting only team-shaped outcomes here reported that write as an
+	// empty sync (codex r1, CHAOS-6907: an executed `--members`-only run committed a membership
+	// row and still exited 1 with "No teams found/generated").
+	found := result.TeamsWritten + result.TeamsSkippedPolicy + result.TeamsStagedForReview +
+		result.MembershipsWritten + result.OwnershipWritten + result.ProjectsWritten
 	if result.RosterPreservationFailed && result.TeamsWritten == 0 {
 		return writeError(env.Stderr, cli.ExitFailure, "roster_unconfirmed",
 			"the current team rosters could not be confirmed, so no team row was written this run")

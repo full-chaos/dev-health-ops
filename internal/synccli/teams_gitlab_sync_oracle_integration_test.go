@@ -22,6 +22,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -122,19 +125,33 @@ func (f *fakeGitLab) handle(w http.ResponseWriter, r *http.Request) {
 		writeGitLabJSON(w, status, map[string]any{"message": "injected failure"})
 		return
 	}
+	// codex r1, CHAOS-6907 (P2): a group's sub-resources are reachable by BOTH
+	// the group's numeric id and its full path -- real GitLab accepts either
+	// as the ":id" segment. The Go catalog requests them by path
+	// (providerRelativePath(..., group.FullPath)); python-gitlab's bound
+	// sub-managers (group.members, group.subgroups) always request them by
+	// the group's numeric id instead (an executed client trace confirmed
+	// "/api/v4/groups/1/members", never "/api/v4/groups/acme/members"). The
+	// fake originally recognized only the path form, so every python-gitlab
+	// request 404'd while the Go client's own (path-form) request succeeded.
 	groupBase := "/api/v4/groups/" + url.PathEscape(f.group.FullPath)
+	groupByID := fmt.Sprintf("/api/v4/groups/%d", f.group.ID)
+	isGroupRoot := path == groupBase || path == groupByID
+	hasSuffix := func(suffix string) bool {
+		return path == groupBase+suffix || path == groupByID+suffix
+	}
 	switch {
-	case path == groupBase:
+	case isGroupRoot:
 		writeGitLabJSON(w, http.StatusOK, f.groupJSON())
-	case path == groupBase+"/subgroups":
+	case hasSuffix("/subgroups"):
 		writeGitLabJSON(w, http.StatusOK, []any{})
-	case path == groupBase+"/projects":
+	case hasSuffix("/projects"):
 		items := make([]any, 0, len(f.projects))
 		for _, p := range f.projects {
 			items = append(items, f.projectJSON(p))
 		}
 		writeGitLabJSON(w, http.StatusOK, items)
-	case path == groupBase+"/members":
+	case hasSuffix("/members"):
 		items := make([]any, 0, len(f.group.Members))
 		for _, username := range f.group.Members {
 			items = append(items, f.memberJSON(username))
@@ -210,12 +227,18 @@ type gitlabScenario struct {
 	owner    string
 	token    string
 	envToken string
-	group    fakeGitLabGroup
-	projects []fakeGitLabProject
-	users    map[string]string
-	prepare  func(o *teamsOracle, fake *fakeGitLab)
-	extra    []string
-	failPath map[string]int
+	// serverToken, when set, is the token the fake actually requires --
+	// distinct from token/envToken (what the client sends). Needed for a
+	// genuine rejected-token scenario: leaving it unset made the fake accept
+	// whatever token the client happened to send, so "a rejected token"
+	// never actually rejected anything (codex r1, CHAOS-6907, P2).
+	serverToken string
+	group       fakeGitLabGroup
+	projects    []fakeGitLabProject
+	users       map[string]string
+	prepare     func(o *teamsOracle, fake *fakeGitLab)
+	extra       []string
+	failPath    map[string]int
 	// wantExit is the exit code both planes must end with.
 	wantExit int
 	// wantRows is how many teams both planes must have written.
@@ -229,7 +252,15 @@ type gitlabScenario struct {
 	after     func(t *testing.T, o *teamsOracle, fake *fakeGitLab, sc *gitlabScenario, run gitlabRun, python, goRows []map[string]string)
 }
 
-func (sc *gitlabScenario) wantToken() string { return strings.TrimPrefix(sc.token, "env:") }
+// wantToken is the token the fake actually requires: serverToken when the
+// scenario sets one (a genuine mismatch case), else the token the client
+// itself sends.
+func (sc *gitlabScenario) wantToken() string {
+	if sc.serverToken != "" {
+		return sc.serverToken
+	}
+	return strings.TrimPrefix(sc.token, "env:")
+}
 
 // gitlabTeamsRule is teamsRule's gitlab-shaped counterpart: what one column of
 // `teams` must hold, given the scenario's fake group. Every column of the real
@@ -482,13 +513,16 @@ func TestSyncTeamsGitLabVenueOracleMatchesThePythonProducer(t *testing.T) {
 			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, users: map[string]string{"alice": ""}},
 		{name: "--auth wins over GITLAB_TOKEN", owner: "acme", token: "tok", envToken: "not-the-token", wantExit: 0, wantRows: 1,
 			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, users: map[string]string{"alice": ""}},
-		{name: "a rejected token", owner: "acme", token: "wrong", wantExit: 1, wantRows: 0,
+		{name: "a rejected token", owner: "acme", token: "wrong", serverToken: "tok", wantExit: 1, wantRows: 0,
 			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}},
 		{name: "an unknown group", owner: "nope", token: "tok", wantExit: 1, wantRows: 0,
 			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}},
 		{name: "a member roster that cannot be read stops the run", owner: "acme", token: "tok", wantExit: 1, wantRows: 0,
-			group:    fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}},
-			failPath: map[string]int{"/api/v4/groups/acme/members": 500}},
+			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}},
+			// Go requests /members by path; python-gitlab's bound group.members
+			// manager requests it by the group's numeric id (id=1) -- both must
+			// fail for both planes to stop on this.
+			failPath: map[string]int{"/api/v4/groups/acme/members": 500, "/api/v4/groups/1/members": 500}},
 	}
 	for _, sc := range scenarios {
 		t.Run(sc.name, func(t *testing.T) {
@@ -505,3 +539,73 @@ func TestSyncTeamsGitLabVenueOracleMatchesThePythonProducer(t *testing.T) {
 // (python: "gl:" + the group's own path; go: "gl:" + full_path) is proven in
 // internal/providersync/gitlab_team_catalog_subgroup_id_test.go, next to
 // gitlabTeamID itself.
+
+// TestMembersOnlyGitLabRunIsNotReportedEmpty is the codex r1 regression proof
+// (CHAOS-6907, P1): `--members` alone (no --structure) selects Members but not
+// Teams, so the catalog writes real team_memberships rows while TeamsWritten
+// stays zero -- the empty-result check (runCatalogTeams, teamscatalog.go)
+// used to count only team-shaped outcomes, so this exact run committed a
+// membership row and still exited 1 with "No teams found/generated." No
+// python or venue oracle needed: this is Go-only CLI behavior (python's `sync
+// teams` argparse has no --structure/--members/--projects flags at all), so
+// it runs on every `-tags=integration` pass, not gated behind
+// DEV_HEALTH_LIVE_PYTHON_ORACLES.
+func TestMembersOnlyGitLabRunIsNotReportedEmpty(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	fake := newFakeGitLab(t)
+	fake.set("tok", fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, nil, map[string]string{"alice": "alice@example.com"})
+
+	var stdout, stderr strings.Builder
+	d := defaultDeps()
+	d.now = func() time.Time { return time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC) }
+	d.doer = http.DefaultClient
+	d.openStore = func(context.Context, string) (driver.Conn, error) { return &keepOpen{conn}, nil }
+	args := []string{"--provider", "gitlab", "--org", "org-1", "--owner", "acme", "--auth", "tok", "--members"}
+	env := map[string]string{"CLICKHOUSE_URI": instance.URI, "GITLAB_URL": fake.base()}
+	lookup := func(key string) (string, bool) { v, ok := env[key]; return v, ok }
+	code := runTeams(ctx, cli.Env{Args: args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr}, d)
+	if code != cli.ExitOK {
+		t.Fatalf("--members alone: exit %d (want 0), stderr %s", code, stderr.String())
+	}
+	rows, err := conn.Query(ctx, "SELECT count() FROM team_memberships FINAL WHERE org_id = ?", "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var membershipCount uint64
+	if rows.Next() {
+		if err := rows.Scan(&membershipCount); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if membershipCount == 0 {
+		t.Fatalf("expected a real team_memberships row to have been written, got %d", membershipCount)
+	}
+	teamRows, err := conn.Query(ctx, "SELECT count() FROM teams FINAL WHERE org_id = ?", "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer teamRows.Close()
+	var teamCount uint64
+	if teamRows.Next() {
+		if err := teamRows.Scan(&teamCount); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if teamCount != 0 {
+		t.Fatalf("--structure was not selected: expected 0 teams rows, got %d", teamCount)
+	}
+}

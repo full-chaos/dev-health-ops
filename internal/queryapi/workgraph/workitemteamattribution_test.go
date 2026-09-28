@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
@@ -257,6 +259,18 @@ func TestResolveWorkItemTeamAttributions_QueryIsOrgScopedFinalAndBounded(t *test
 	if strings.Contains(snapshot, "team_id = {team_id:String}") {
 		t.Errorf("snapshot subquery must not filter by team_id; got:\n%s", snapshot)
 	}
+	// Org scope must hold in BOTH the outer WHERE and the snapshot
+	// subquery (removing either leaks another org's rows), and the order
+	// must be exactly work_item_id, is_primary DESC, source.
+	if got := strings.Count(sql, "org_id = {org_id:String}"); got != 2 {
+		t.Errorf("org predicate appears %d times, want 2 (outer WHERE + snapshot subquery); got:\n%s", got, sql)
+	}
+	if !strings.Contains(sql, "WHERE org_id = {org_id:String}") {
+		t.Errorf("outer WHERE must start with the org predicate; got:\n%s", sql)
+	}
+	if !strings.Contains(sql, "ORDER BY work_item_id, is_primary DESC, source\n") {
+		t.Errorf("ORDER BY must be exactly work_item_id, is_primary DESC, source; got:\n%s", sql)
+	}
 	foundOrgID := false
 	for _, b := range client.lastParams {
 		if b.Name == "org_id" && b.Value == "test-org" {
@@ -426,5 +440,62 @@ func TestDefaultRecordWorkItemTeamAttributionsTruncation_LogsAndIncrementsCounte
 	}
 	if record["org_id"] != "org1" || record["limit"] != float64(5000) {
 		t.Fatalf("log fields = %+v, want org_id=org1 limit=5000", record)
+	}
+}
+
+// workItemTruncationCounter returns the cumulative value of the shared
+// workgraph truncation counter for op=work_item_team_attributions, read
+// from the real OTel SDK reader installed by TestMain.
+func workItemTruncationCounter(t *testing.T) int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := realMeterReader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("reader.Collect: %v", err)
+	}
+	var total int64
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "devhealth_query_api_workgraph_truncation_total" {
+				continue
+			}
+			data, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("counter data shape = %T, want Sum[int64]", m.Data)
+			}
+			for _, dp := range data.DataPoints {
+				if op, _ := dp.Attributes.Value("op"); op.AsString() == "work_item_team_attributions" {
+					total += dp.Value
+				}
+			}
+		}
+	}
+	return total
+}
+
+// Drives the whole production path (resolve -> default record ->
+// default counter increment, no seam swapped) and reads the REAL meter:
+// a hit of the cap raises the counter by exactly 1, a result exactly at
+// the cap does not.
+func TestResolveWorkItemTeamAttributions_ProductionCounterIncrementsOnlyOnTruncation(t *testing.T) {
+	before := workItemTruncationCounter(t)
+
+	atLimit := &witaFakeClient{scanner: &witaFakeScanner{rows: witaRowsNumbered(3)}}
+	if _, err := resolveWorkItemTeamAttributions(context.Background(), atLimit, "org1", nil, nil, 3); err != nil {
+		t.Fatalf("at-limit resolve: %v", err)
+	}
+	if got := workItemTruncationCounter(t); got != before {
+		t.Fatalf("counter moved %d -> %d for a result exactly at the limit", before, got)
+	}
+
+	over := &witaFakeClient{scanner: &witaFakeScanner{rows: witaRowsNumbered(4)}}
+	got, err := resolveWorkItemTeamAttributions(context.Background(), over, "org1", nil, nil, 3)
+	if err != nil {
+		t.Fatalf("over-limit resolve: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3 (capped)", len(got))
+	}
+	if after := workItemTruncationCounter(t); after != before+1 {
+		t.Fatalf("counter %d -> %d, want +1 through the production increment", before, after)
 	}
 }

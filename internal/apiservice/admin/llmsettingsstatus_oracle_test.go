@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	adminsvc "github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -27,9 +28,11 @@ import (
 // The readiness/binary_transport_readiness/readiness_checked_at/
 // readiness_safe_failure_reason fields are DELIBERATELY normalized out of the
 // two "readiness record" cases below (D2715 ruling): this port surfaces the
-// persisted ask_dev_agent_readiness record read-only, with no currency check
-// against the org's current BYO fingerprint/READINESS_VERSION -- that
-// currency/role-certification state machine is Ask Dev-role machinery
+// persisted ask_dev_agent_readiness record read-only, trusting it only while
+// its fingerprint equals this port's credential-only fingerprint of the org's
+// current BYO config (a mismatch is never_checked here, "stale" in Python --
+// a named divergence asserted below). Python's full currency/role-
+// certification state machine is Ask Dev-role machinery
 // (CHAOS-6252b, folded into the CHAOS-6262 Ask Dev deletion class; prod Ask
 // Dev is OFF until the MCP project lands). A synthetic seeded record cannot
 // satisfy Python's real currency check, so Python and Go are EXPECTED to
@@ -58,6 +61,7 @@ func TestLLMSettingsStatusRouteVenueOracle(t *testing.T) {
 		{slug: "failed", tier: "team"},         // active, readiness=failed
 		{slug: "community", tier: "community"}, // tier gate, 402
 		{slug: "off", tier: "team"},            // flag kill switch, 403
+		{slug: "mismatch", tier: "team"},       // active, readiness record certified against a DIFFERENT config -> never_checked here (Python: stale)
 		{slug: "incomplete", tier: "team"},     // active, readiness blob missing required keys -> never_checked
 		{slug: "fallback", tier: "team"},       // invalid_base_url with a matching audit_logs fallback row -> last_fallback_at set
 	} {
@@ -110,10 +114,19 @@ VALUES ($1, $2, $3, $4, $5, false, NULL, '2026-02-01T00:00:00+00:00', '2026-02-0
 			row("ready", "llm", "api_key", "sk-anything")
 			row("failed", "llm", "provider", "openai")
 			row("failed", "llm", "api_key", "sk-anything")
+			row("mismatch", "llm", "provider", "openai")
+			row("mismatch", "llm", "api_key", "sk-anything")
 
-			readinessRecord := func(outcome, safeErrorCode string) string {
+			// The Go port only trusts a record whose fingerprint equals the
+			// org's CURRENT BYO config (codex r3 P1), so the seeded ready/failed
+			// records carry that fingerprint (provider openai, api_key
+			// sk-anything, no model/base_url) -- the same value a real
+			// POST /llm-settings/readiness would have stored. The mismatch org
+			// carries a fingerprint that does not match.
+			currentFingerprint := adminsvc.ReadinessFingerprint("openai", "", "", "sk-anything")
+			readinessRecord := func(fingerprint, outcome, safeErrorCode string) string {
 				payload := map[string]any{
-					"fingerprint":       "venue-oracle-synthetic-fingerprint",
+					"fingerprint":       fingerprint,
 					"readiness_version": "venue-oracle-synthetic-version",
 					"checked_at":        "2026-01-15T12:00:00+00:00",
 					"outcome":           outcome,
@@ -128,8 +141,9 @@ VALUES ($1, $2, $3, $4, $5, false, NULL, '2026-02-01T00:00:00+00:00', '2026-02-0
 				}
 				return string(encoded)
 			}
-			row("ready", "llm", "ask_dev_agent_readiness", readinessRecord("ready", ""))
-			row("failed", "llm", "ask_dev_agent_readiness", readinessRecord("failed", "provider_unavailable"))
+			row("ready", "llm", "ask_dev_agent_readiness", readinessRecord(currentFingerprint, "ready", ""))
+			row("failed", "llm", "ask_dev_agent_readiness", readinessRecord(currentFingerprint, "failed", "provider_unavailable"))
+			row("mismatch", "llm", "ask_dev_agent_readiness", readinessRecord("venue-oracle-stale-fingerprint", "ready", ""))
 
 			// round-1 review finding (codex, P2): a readiness blob missing
 			// fingerprint/readiness_version/checked_at must be treated as
@@ -198,6 +212,7 @@ VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failu
 		get("active never_checked", "active"),
 		get("readiness record ready", "ready"),
 		get("readiness record failed", "failed"),
+		get("readiness record fingerprint mismatch", "mismatch"),
 		get("community tier gate", "community"),
 		get("kill switch gate", "off"),
 		get("incomplete readiness blob never_checked", "incomplete"),
@@ -227,6 +242,16 @@ VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failu
 				assertJSONField(t, request.Name, goResponse.Body, "readiness", "ready")
 				assertJSONField(t, request.Name, goResponse.Body, "binary_transport_readiness", "ready")
 				assertJSONField(t, request.Name, goResponse.Body, "readiness_checked_at", "2026-01-15T12:00:00Z")
+				assertJSONField(t, request.Name, goResponse.Body, "readiness_safe_failure_reason", nil)
+			case "readiness record fingerprint mismatch":
+				// NAMED DIVERGENCE from Python, which answers "stale" for a
+				// record whose fingerprint no longer matches (settings.py
+				// is_current). This port has no "stale" state (CHAOS-6252b) and
+				// reports never_checked instead, so a superseded certification
+				// is never displayed as current.
+				assertJSONField(t, request.Name, goResponse.Body, "readiness", "never_checked")
+				assertJSONField(t, request.Name, goResponse.Body, "binary_transport_readiness", "never_checked")
+				assertJSONField(t, request.Name, goResponse.Body, "readiness_checked_at", nil)
 				assertJSONField(t, request.Name, goResponse.Body, "readiness_safe_failure_reason", nil)
 			case "readiness record failed":
 				assertJSONField(t, request.Name, goResponse.Body, "readiness", "failed")

@@ -17,3 +17,8 @@ func SetSetupCallbackTimeout(d time.Duration) (restore func()) {
 	setupCallbackTimeout = d
 	return func() { setupCallbackTimeout = previous }
 }
+
+// ReadinessFingerprint exposes this port's credential-only readiness
+// fingerprint so the status venue oracle can seed records that match the
+// org's CURRENT BYO config, as a real certification would.
+var ReadinessFingerprint = readinessFingerprint

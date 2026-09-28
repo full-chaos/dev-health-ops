@@ -15,19 +15,41 @@ Two hook Jobs close both gaps, structurally, the way CHAOS-7022 does for bigboy-
   - pre-upgrade: `dho goapi routing carry` against the still-live pre-roll query-api. Refuse-
     not-skip: any refusal OTHER than carry's own "digests already agree" (an ordinary,
     non-schema-changing roll -- expected, not a failure) fails the upgrade. One documented,
-    real exception: a refusal naming "run repoint first" (rows lagging the actually-running
-    build, no schema change involved -- the rev196 shape) triggers a `repoint` against the
-    same live process, then ONE retry of carry; only a second refusal is fatal.
+    real exception: a stale-build refusal (rows lagging the actually-running build, no schema
+    change involved -- the rev196 shape) triggers a `repoint` against the same live process,
+    then ONE retry of carry; only a second refusal is fatal.
   - post-upgrade: `dho goapi routing repoint`, unconditionally, every roll (provenance-only,
     never touches reachability) -- this is what would have caught rev196's own gap before it
     needed a manual 50-row repoint mid-roll.
 
-No enable/disable knob for either: this is a gate, not an optional feature (see
-values.yaml's migrations.hook.goApiRoutingTools comment). Neither hook renders on pre-install:
-carry's whole premise is a live, already-running process to copy FROM, which does not exist on
-a fresh install.
+D2828/D2829 (#3369 r1): both hooks branch on `dho ... -json`'s `reason` field (a small,
+closed vocabulary the Go CLI sets at the call site that knows why -- "carried",
+"digest_unchanged", "stale_build", "refused", "error" for carry; "repointed", "refused",
+"error" for repoint -- internal/goapicli/routing/carry.go's carryResult doc comment), never
+on the human-readable error text: that text was wrong TWICE during this ticket's own review
+(a hand-typed guess that never matched the real Go string, then a "fix" that broke a DIFFERENT
+already-correct branch by reasoning from the wrong Go call site) before landing on this
+structural fix. The go-api-tools image carries no `jq` (docker/go-api-tools.Dockerfile's
+runtime base is bare debian-slim, and adding one is a separate image-rebuild decision this
+PR does not make), so `reason` is read with `grep`+`sed` against the JSON line's known,
+controlled shape (this Job's own `dho` always emits `reason` as the FIRST field) rather than
+a real JSON parser.
+
+D2829 P2-a: gates on `queryApi.enabled` ONLY, never `migrations.hook.enabled` -- these two
+Jobs are not migrations (see values.yaml's migrations.hook.goApiRoutingTools comment: no
+enable/disable knob, this is a gate), and an operator disabling migrations for an unrelated
+reason must not silently disable the routing safety gate as a side effect.
+
+D2829 P2-b: the tools image's commit is cross-checked against `queryApi.image` (the image
+actually being rolled), inline rather than via `dev-health.lockstepImageCheck` -- that shared
+helper hardcodes its comparison target to `dev-health.image` (`.Values.image`, the PYTHON api
+image), which is the WRONG reference for a Go-only concern: the tools image's embedded SDL
+must agree with the GO query-api image's, never the Python api's, or `carry` could compute a
+target digest for a commit the actual roll never runs.
+
+Neither hook renders on pre-install: carry's whole premise is a live, already-running process
+to copy FROM, which does not exist on a fresh install.
 */}}
-{{- if .Values.migrations.hook.enabled }}
 {{- if .Values.queryApi.enabled }}
 {{- $tools := .Values.migrations.hook.goApiRoutingTools }}
 {{- $toolsImage := $tools.image }}
@@ -47,8 +69,18 @@ every other hook image otherwise: required, no floating default.
 {{- if not (or $toolsDigestPinned $toolsImmutableTag $toolsSideloadedLocal) }}
 {{- fail (printf "migrations.hook.goApiRoutingTools.image (%s) is not a pinned image. It runs the pre/post-upgrade go-api routing carry/repoint hooks: set it to repo@sha256:<64 lowercase-hex-digit digest> or repo:sha-<12 hex>; repo:local is accepted only with pullPolicy Never or IfNotPresent." $toolsImage) }}
 {{- end }}
-{{- include "dev-health.lockstepImageCheck" (dict "context" . "image" $toolsImage "labelWithValue" (printf "migrations.hook.goApiRoutingTools.image (%s)" $toolsImage) "reason" "the routing carry/repoint hooks must read the same schema digest the commit about to roll computes.") }}
-{{- $mintOrg := required "migrations.hook.goApiRoutingTools.mintOrg is required whenever queryApi.enabled=true and migrations.hook.enabled=true -- a disposable operator/fixture org, never a real customer org" $tools.mintOrg }}
+{{- /*
+D2829 P2-b: cross-check against queryApi.image (the image actually being rolled), NOT
+dev-health.lockstepImageCheck's hardcoded dev-health.image (the Python api image) -- see the
+file-level comment above.
+*/}}
+{{- $queryApiImageRef := include "dev-health.queryApiImage" . }}
+{{- $toolsImageTag := regexFind ":sha-[0-9a-f]{12}$" $toolsImage }}
+{{- $queryApiImageTag := regexFind ":sha-[0-9a-f]{12}$" $queryApiImageRef }}
+{{- if and $toolsImageTag $queryApiImageTag (ne $toolsImageTag $queryApiImageTag) }}
+{{- fail (printf "migrations.hook.goApiRoutingTools.image (%s) and queryApi.image (%s) are pinned to different commits (%s vs %s) -- the routing carry/repoint hooks must read the same schema digest the commit about to roll computes." $toolsImage $queryApiImageRef $toolsImageTag $queryApiImageTag) }}
+{{- end }}
+{{- $mintOrg := required "migrations.hook.goApiRoutingTools.mintOrg is required whenever queryApi.enabled=true -- a disposable operator/fixture org, never a real customer org" $tools.mintOrg }}
 {{- $queryApiURL := include "dev-health.queryApiURL" . }}
 {{- $postgresSecretName := include "dev-health.goPgbouncerSecretName" . }}
 {{- $envelopeSecretName := include "dev-health.secretName" . }}
@@ -91,38 +123,45 @@ spec:
           args:
             - |
               set -eu
+              # No `jq` in this image (see the file-level comment) -- `carry_reason` reads
+              # -json's `reason` field with grep+sed against the JSON line's known, controlled
+              # shape (dho's own carryResult always emits `reason` as the FIRST field).
+              carry_reason() {
+                printf '%s\n' "$1" | grep '^GOAPI_ROUTING_JSON ' | sed -E 's/^GOAPI_ROUTING_JSON \{"reason":"([^"]*)".*/\1/'
+              }
               BEARER=$(dho mint envelope -org "$MINT_ORG" -key-file /keys/envelope.pem)
               OUT=$(GO_API_ROUTING_BEARER="$BEARER" dho goapi routing carry \
                 -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
-                -recorded-by helm-pre-upgrade \
+                -json -recorded-by helm-pre-upgrade \
                 -review-evidence "CHAOS-7023 pre-upgrade carry, release ${RELEASE_NAME}" 2>&1) && RC=0 || RC=$?
               printf '%s\n' "$OUT"
               if [ "$RC" -eq 0 ]; then
                 echo "carry: OK"
                 exit 0
               fi
-              if printf '%s' "$OUT" | grep -q "this binary's SDL is the one the deployed process already computes"; then
+              REASON=$(carry_reason "$OUT")
+              if [ "$REASON" = "digest_unchanged" ]; then
                 echo "carry: no schema-digest change this roll -- nothing to carry, not a failure"
                 exit 0
               fi
-              if printf '%s' "$OUT" | grep -qF 'run `repoint` first'; then
+              if [ "$REASON" = "stale_build" ]; then
                 echo "carry: rows lag the actually-running build (no schema change) -- repointing then retrying once"
                 REOUT=$(GO_API_ROUTING_BEARER="$BEARER" dho goapi routing repoint \
                   -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
-                  -operations all-registered -recorded-by helm-pre-upgrade \
+                  -json -operations all-registered -recorded-by helm-pre-upgrade \
                   -review-evidence "CHAOS-7023 pre-upgrade repoint-before-retry, release ${RELEASE_NAME}" 2>&1) && RRC=0 || RRC=$?
                 printf '%s\n' "$REOUT"
                 [ "$RRC" -eq 0 ] || { echo "carry: repoint-before-retry itself failed -- ABORTING upgrade"; exit 1; }
                 OUT2=$(GO_API_ROUTING_BEARER="$BEARER" dho goapi routing carry \
                   -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
-                  -recorded-by helm-pre-upgrade \
+                  -json -recorded-by helm-pre-upgrade \
                   -review-evidence "CHAOS-7023 pre-upgrade carry retry after repoint, release ${RELEASE_NAME}" 2>&1) && RC2=0 || RC2=$?
                 printf '%s\n' "$OUT2"
                 [ "$RC2" -eq 0 ] || { echo "carry: still refused after repoint -- ABORTING upgrade"; exit 1; }
                 echo "carry: OK after repoint-then-retry"
                 exit 0
               fi
-              echo "carry: refused for a reason other than digest-agreement or a stale build -- ABORTING upgrade (CHAOS-7023 refuse-not-skip)"
+              echo "carry: refused for a reason other than digest-agreement or a stale build (reason=${REASON:-unrecognized}) -- ABORTING upgrade (CHAOS-7023 refuse-not-skip)"
               exit 1
           env:
             - name: MINT_ORG
@@ -224,5 +263,4 @@ spec:
             items:
               - key: GO_API_ENVELOPE_PRIVATE_KEY
                 path: envelope.pem
-{{- end }}
 {{- end }}

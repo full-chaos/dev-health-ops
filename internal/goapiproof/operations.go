@@ -729,32 +729,6 @@ var operationSpecs = map[string]OperationSpec{
 	// magnitude above a 1e-9 tolerance -- so Tier B would not have excused
 	// it anyway; it is a real defect, not last-bit noise
 	// (lane-goapi-parity, correcting the field list it was handed).
-	// "home" (CHAOS-6084/CHAOS-7042, PR #3376): fully determined by the org
-	// alone -- filters is optional and omitted here, matching
-	// home.DefaultFilters()'s own convention (range_days=14,
-	// compare_days=14, scope=org) for a request that sends none. No
-	// InstanceVariable: home is a per-org aggregate, never a single
-	// stored row.
-	//
-	// No Parity/BaselineDefect entry yet: this field has zero web callers
-	// (CHAOS-6084's caller check) and its Python counterpart
-	// (resolvers/home.py resolve_home) was NEVER wired to the real
-	// build_home_response the REST twin uses -- it computes a smaller,
-	// always-unused, hand-rolled answer (two hardcoded metrics,
-	// delta_pct hardcoded to 0). A live two-plane run WILL disagree with
-	// Python here by construction, not by defect; that is the Python-side
-	// follow-up PR's job to resolve (D2870 item 1: flip schema.py's
-	// `home` to `_raise_served_by_query_api`), not this table's. Do not
-	// add a BaselineDefect for this until a live run actually observes
-	// it -- an invented tolerance for a mismatch nobody has measured is
-	// exactly the "claim without executed evidence" AGENTS.md warns
-	// against.
-	"home": {
-		ResponseRoot: "home",
-		Variables: func(orgID string, _ Window) map[string]any {
-			return map[string]any{"orgId": orgID, "filters": nil}
-		},
-	},
 	"hotspots": {
 		ResponseRoot: "hotspots",
 		Variables: func(orgID string, w Window) map[string]any {

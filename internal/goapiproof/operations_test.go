@@ -37,7 +37,7 @@ var registeredOperations = []string{
 	"aiGovernanceSummary", "aiWorkflowDrilldown",
 	"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage",
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
-	"featureFlagEvents", "featureFlags", "flowMatrix", "home", "hotspots",
+	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
 	"releaseImpact",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
 	"createSavedReport", "updateSavedReport", "deleteSavedReport", "cloneSavedReport", "triggerReport",
@@ -131,9 +131,6 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"connectorsDataHealth": true, "dataHealthIdentity": true, "mappingCoverageHealth": true, "metricLineage": true,
 		"capacityForecast": true, "capacityForecasts": true,
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
-		// home's SDL input (FilterInput) carries no date range at all --
-		// same reason featureFlags is windowless.
-		"home":        true,
 		"experiments": true, "busFactor": true, "compoundingRisk": true, "reportRuns": true, "savedReport": true, "savedReports": true, "securityAlerts": true, "securityOverview": true,
 		"releaseImpact": true, "throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
 		"aiOpportunities": true, "improveOpportunities": true,

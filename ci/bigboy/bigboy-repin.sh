@@ -6,6 +6,26 @@
 set -euo pipefail
 OLD8=${1:?old8}; NEW=${2:?new full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
 R=/home/ubuntu/devhealth; OV=$R/compose/compose.bigboy.images.yml
+# CHAOS-7014 (D2801): a mistyped OLD8 (9 chars, "bd25cd0a9" instead of "bd25cd0a") once made the
+# repin's own cp of _records/bigboy-$OLD8/*.sh fail under set -euo pipefail BEFORE the sed rewrite
+# below ever ran -- $OV was backed up but never actually repointed, and every downstream STEP in
+# bigboy-cut.sh (migrate/up/up-workers/rest/...) still reported rc=0 against the stale, pre-cut
+# images. A measurement that did not happen must FAIL, loudly: OLD8 is checked BEFORE any file is
+# touched, both for shape and against the ACTUALLY-running build -- the digest compose.bigboy.
+# images.yml currently pins (nothing else rewrites this file, so it is live ground truth) must be
+# the same digest the registry resolves for OLD8, never trusted as a bare caller-supplied string.
+case "$OLD8" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+  *) echo "FAIL: OLD8='$OLD8' is not exactly 8 lowercase hex characters (got ${#OLD8}) -- the exact typo class that silently no-op'd a repin once already (D2801)"; exit 4 ;;
+esac
+OLD_DIGEST_RESOLVED=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-hops-api:sha-$OLD8" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest || true)
+[[ ${OLD_DIGEST_RESOLVED:-} == sha256:* ]] || { echo "FAIL: OLD8=$OLD8 does not resolve to a real dev-hops-api image in the registry"; exit 4; }
+OLD_DIGEST_PINNED=$(grep -ohE "dev-hops-api@sha256:[0-9a-f]{64}" "$OV" | head -1 | cut -d@ -f2)
+[[ -n "$OLD_DIGEST_PINNED" ]] || { echo "FAIL: $OV has no dev-hops-api digest pinned to cross-check OLD8 against"; exit 4; }
+if [[ "$OLD_DIGEST_RESOLVED" != "$OLD_DIGEST_PINNED" ]]; then
+  echo "FAIL: OLD8=$OLD8 resolves to $OLD_DIGEST_RESOLVED, but $OV currently pins $OLD_DIGEST_PINNED for dev-hops-api -- OLD8 does not name the ACTUALLY-running build. Refusing rather than silently no-op'ing the repin (CHAOS-7014/D2801)."
+  exit 4
+fi
 dig() { docker buildx imagetools inspect "ghcr.io/full-chaos/$1:sha-$S7" --format '{{json .Manifest}}' | jq -r .digest; }
 declare -A O N
 for i in dev-hops-api dev-health-go-dho dev-health-go-api-tools dev-health-go-operator; do

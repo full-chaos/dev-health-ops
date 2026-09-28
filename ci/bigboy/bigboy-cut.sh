@@ -129,7 +129,7 @@ CARRY_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://q
 CARRY_OUT=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
   "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing carry $CARRY_ARGS -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll carry, cut $OLD8 -> $N8'" 2>&1)
 CARRY_RC=$?
-echo "$CARRY_OUT" > $REC.routing-carry.out
+echo "$CARRY_OUT" > "$REC.routing-carry.out"
 if [ $CARRY_RC -eq 0 ]; then
   st routing-carry 0
 elif echo "$CARRY_OUT" | grep -q "this binary's SDL is the one the deployed process already computes"; then
@@ -139,7 +139,7 @@ elif echo "$CARRY_OUT" | grep -q "run repoint first"; then
   REPOINT_OUT=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
     "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing repoint $CARRY_ARGS -operations all-registered -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll repoint-before-retry, cut $OLD8 -> $N8'" 2>&1)
   REPOINT_RC=$?
-  echo "$REPOINT_OUT" >> $REC.routing-carry.out
+  echo "$REPOINT_OUT" >> "$REC.routing-carry.out"
   if [ $REPOINT_RC -ne 0 ]; then
     st routing-carry 1
     echo "FAIL: pre-roll repoint-before-retry itself failed -- see $REC.routing-carry.out; ABORTING (CHAOS-7022)" >&2
@@ -148,7 +148,7 @@ elif echo "$CARRY_OUT" | grep -q "run repoint first"; then
   CARRY_OUT2=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
     "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing carry $CARRY_ARGS -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll carry retry after repoint, cut $OLD8 -> $N8'" 2>&1)
   CARRY_RC2=$?
-  echo "$CARRY_OUT2" >> $REC.routing-carry.out
+  echo "$CARRY_OUT2" >> "$REC.routing-carry.out"
   if [ $CARRY_RC2 -eq 0 ]; then
     st routing-carry 0; echo "pre-roll carry: OK after repoint-then-retry"
   else
@@ -200,8 +200,21 @@ python3 "$HERE/check-routing-parity.py" "$HERE/routing-ops.txt" "$REC.routing-st
 # still named the build from two rolls back, with no schema change involved at all). Provenance
 # only -- repoint never touches mode/reachability (docs/contribute/architecture/go-api-wave-0-
 # proof-infrastructure.md's "repoint" section), so it is safe unconditionally, every cut.
-vt "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing repoint -registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -operations all-registered -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: post-cut repoint, cut $OLD8 -> $N8'" > "$REC.routing-repoint.out" 2>&1
-st routing-repoint $?
+#
+# D2823 (r1 P1 #1): `st` only PRINTS a step's rc -- it never fails the script -- so a failed
+# post-cut repoint used to leave the cut reporting overall success while routing rows silently
+# stayed stale. Capture the rc explicitly and abort, same shape as the up-workers guard above
+# (Trap #420).
+#
+# D2823 (r1 P1 #2): pin with -expect-build $NEW, the SAME guard bigboy-graphql-prove.sh already
+# uses on its own repoint call. Unpinned, this call accepts whatever build query-api's /buildinfo
+# happens to report right now -- if the api/query-api/go-api recreate above (STEP up) left an
+# OLDER query-api still serving (a partial or failed recreate), this call would silently write
+# routing-repoint rows for that STALE build while the cut still reports success.
+vt "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing repoint -registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -expect-build $NEW -operations all-registered -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: post-cut repoint, cut $OLD8 -> $N8'" > "$REC.routing-repoint.out" 2>&1
+rc_repoint=$?
+st routing-repoint "$rc_repoint"
+[ "$rc_repoint" = 0 ] || { echo "ABORT: post-cut routing repoint failed or refused (-expect-build $NEW) -- see $REC.routing-repoint.out; routing rows may be stale (CHAOS-7022)" >&2; exit 1; }
 # proof tokens are 12 h: RE-MINT at every cut (rev 188: an expired token silently refused 65 REST entries, runbook step 9)
 for b in bootstrap-admin-proof.sh bootstrap-superadmin-proof.sh; do bash $R/_records/bigboy-1152962/$b > $REC/$b.out 2>&1; st $b $?; done
 $HERE/bigboy-log-checks.sh $REC > $REC/log-checks.out 2>&1; st log-checks $?; tail -6 $REC/log-checks.out

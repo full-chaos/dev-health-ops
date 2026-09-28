@@ -13,11 +13,18 @@
 # refuses the old token and a fresh mint is accepted, and an inactive
 # principal refuses the token while the minter refuses to mint.
 #
-# Reads: ROOT_DIR, BIN_DIR, TMP_DIR, BASE_URL, POSTGRES_URI,
+# Reads: ROOT_DIR, BIN_DIR, TMP_DIR, EDGE_BASE_URL, POSTGRES_URI,
 # CLICKHOUSE_URI_NATIVE, E2E_ORG_ID, JWT_SECRET_KEY, QUERY_API_PORT,
 # READINESS_ATTEMPTS, READINESS_SLEEP_SECS, EXIT_FAILURE. Sets QUERY_API_PID
 # (the caller declares it and stops it with stop_service). Requires
 # run_python and wait_for_http_ready to be defined.
+#
+# CHAOS-7039: EDGE_BASE_URL is the Python `dev-hops api` process, kept
+# booted ONLY for this file's /graphql leg (go_api_prove_e2e_edge_status
+# below) -- it is no longer the same process ci/run_live_backend_e2e.sh's
+# health/customer-push checks run against (that is now `dho api`, BASE_URL).
+# CHAOS-6263 (after CHAOS-6084) moves this leg onto query-api and retires
+# the Python process from the harness; this comment's owner is that ticket.
 #
 # CHAOS-6241: query_api_e2e_start/query_api_e2e_mint_envelope_token are also
 # called directly by the caller (ci/run_live_backend_e2e.sh) BEFORE
@@ -132,7 +139,7 @@ go_api_prove_e2e_edge_status() {
   { printf 'Authorization: Bearer '; tr -d '\r\n' < "${token_file}"; printf '\n'; } > "${header_file}"
   curl -sS -o "${GO_API_PROVE_E2E_DIR}/edge-response.json" -w '%{http_code}' \
     -H @"${header_file}" -H 'Content-Type: application/json' \
-    --data '{"query":"{ __typename }"}' "${BASE_URL}/graphql"
+    --data '{"query":"{ __typename }"}' "${EDGE_BASE_URL}/graphql"
   rm -f "${header_file}"
 }
 
@@ -260,7 +267,7 @@ run_go_api_prove_e2e() {
       -registry-url "${query_api}/registry" \
       -buildinfo-url "${query_api}/buildinfo" \
       -proof-url "${query_api}/query/proof" \
-      -edge-url "${BASE_URL}/graphql" \
+      -edge-url "${EDGE_BASE_URL}/graphql" \
       -documents "${dir}/documents.json" \
       -org "${E2E_ORG_ID}" \
       -artifact-dir "${dir}/artifacts" \

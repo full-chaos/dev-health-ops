@@ -252,7 +252,22 @@ require_cmd curl
 
 CLICKHOUSE_URI_DEFAULT="clickhouse://ch:ch@127.0.0.1:8123/default"
 POSTGRES_URI_DEFAULT="postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/test_db"
-REDIS_URL_DEFAULT="redis://127.0.0.1:6379/0"
+# CHAOS-7039: database 1, matching compose.yml's REAL deployed convention
+# for BOTH planes (line ~595's Python `api` service REDIS_URL and line
+# ~1268's `go-api` service VALKEY_URI both point at
+# `redis://valkey:6379/1`) -- not this harness's pre-existing, long-lived
+# db-0 default, which happened to never matter while only the Python
+# process touched Valkey here. `dho api`'s Valkey client
+# (internal/storage/valkey/factory.go's Config.Validate()) hard-requires
+# database 1 for every one of its callers, including the externalingest
+# stream producer the customer-push test now exercises against the real
+# Go process -- measured: on db 0, `POST /batches` answered 202 correctly
+# but the real XADD landed in a database this harness's own REDIS_URL-based
+# test assertions and consumer never looked at, so `stream length +1` and
+# `consumer processed > 0` both read as a silent no-op. Moving the default
+# to db 1 makes the harness match prod's own topology instead of adding a
+# THIRD divergent index.
+REDIS_URL_DEFAULT="redis://127.0.0.1:6379/1"
 
 CLICKHOUSE_URI="${CLICKHOUSE_URI:-${CLICKHOUSE_URI_DEFAULT}}"
 POSTGRES_URI="${POSTGRES_URI:-${POSTGRES_URI_DEFAULT}}"
@@ -267,6 +282,30 @@ export DISABLE_DOTENV=1
 API_HOST="${LIVE_E2E_API_HOST:-127.0.0.1}"
 API_PORT="${LIVE_E2E_API_PORT:-18080}"
 BASE_URL="http://${API_HOST}:${API_PORT}"
+
+# CHAOS-7039: BASE_URL is `dho api` (the Go binary) -- health/ready and the
+# customer-push live e2e test below run against it. The Python `dev-hops
+# api` process still boots too, on an INTERNAL-ONLY port never exposed as
+# BASE_URL, solely so go_api_prove_e2e_edge_status (ci/lib/go_api_prove_e2e.sh)
+# can exercise its GraphQL edge dispatcher (x-dev-health-plane stamping,
+# principal/token_version checks) -- that dispatcher has no Go equivalent
+# yet. CHAOS-6263 (after CHAOS-6084) moves that leg onto query-api and
+# retires this process from the harness entirely.
+EDGE_API_HOST="${LIVE_E2E_EDGE_API_HOST:-127.0.0.1}"
+EDGE_API_PORT="${LIVE_E2E_EDGE_API_PORT:-18082}"
+EDGE_BASE_URL="http://${EDGE_API_HOST}:${EDGE_API_PORT}"
+
+# CHAOS-7039: `dho api`'s OWN operator listener (/healthz, /readyz,
+# /metrics -- internal/platform/shell, distinct from the api-addr business
+# routes above) defaults to :8080 (internal/platform/config/config.go's
+# defaultHTTPAddress), the SAME default `dho query-api` uses for its own
+# operator listener (query_api_e2e_start, ci/lib/go_api_prove_e2e.sh, run
+# later in this script). Both processes are now `dho` binaries in the same
+# harness for the first time -- give dho api an explicit, distinct
+# operator port so it never collides (measured: unpatched, query-api's
+# later start failed with "listen tcp :8080: bind: address already in
+# use" and every check after it silently hit a stale process instead).
+API_OPERATOR_PORT="${LIVE_E2E_API_OPERATOR_PORT:-18081}"
 
 FIXTURE_SEED="${LIVE_E2E_FIXTURE_SEED:-20260219}"
 FIXTURE_DAYS="${LIVE_E2E_FIXTURE_DAYS:-14}"
@@ -323,7 +362,9 @@ TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/live-backend-e2e.XXXXXX")"
 BIN_DIR="${TMP_DIR}/bin"
 mkdir -p "${BIN_DIR}"
 API_LOG_FILE="${LIVE_E2E_API_LOG_FILE:-${TMP_DIR}/api.log}"
+EDGE_API_LOG_FILE="${LIVE_E2E_EDGE_API_LOG_FILE:-${TMP_DIR}/edge-api.log}"
 API_PID=""
+EDGE_API_PID=""
 WORKER_PID=""
 RECONCILER_PID=""
 QUERY_API_PID=""
@@ -357,7 +398,8 @@ cleanup() {
   # -- kept as a conservative convention.
   stop_worker_stack
   stop_service "query-api" "${QUERY_API_PID}"
-  stop_service "dev-hops api" "${API_PID}"
+  stop_service "dho api" "${API_PID}"
+  stop_service "dev-hops edge api" "${EDGE_API_PID}"
   rm -rf "${TMP_DIR}" >/dev/null 2>&1 || true
   return "${rc}"
 }
@@ -554,7 +596,51 @@ if [ -z "${JWT_SECRET_KEY:-}" ]; then
   export JWT_SECRET_KEY
 fi
 
-echo "==> starting API at ${BASE_URL}"
+# CHAOS-7039: `dho api` (the Go binary) at BASE_URL. Needs its own dedicated
+# Postgres/ClickHouse/Valkey env shape (internal/apiservice/service.go,
+# internal/platform/config/config.go) rather than dev-hops's `--db`/
+# `--analytics-db` flags: API_DATABASE_URI (accepts the same
+# postgresql+asyncpg DSN, normalized at the Go boundary -- see
+# internal/storage/postgres/factory.go's normalizeURI), CLICKHOUSE_URI
+# (already the same variable name), and --api-addr (not --host/--port).
+# VALKEY_URI is expressed separately from REDIS_URL, not because they
+# differ (both are database 1 on the same instance now, see
+# REDIS_URL_DEFAULT's own comment above) but because
+# internal/storage/valkey/factory.go's Config.Validate() hard-requires
+# SelectDB == 1 ("Valkey database 1") -- spelling it out here via
+# VALKEY_HOST/VALKEY_PORT (the same pair start_worker_stack already uses,
+# ci/lib/go_worker_fixture.sh) keeps that requirement visible at the call
+# site rather than relying on REDIS_URL happening to agree.
+echo "==> [CHAOS-7039] building dho for the api process"
+build_go_binaries
+
+echo "==> starting dho api at ${BASE_URL}"
+(
+  export API_DATABASE_URI="${POSTGRES_URI}"
+  export CLICKHOUSE_URI="${CLICKHOUSE_URI}"
+  # internal/apiservice/deps.go's health check (internal/api/health) reads
+  # deps.ClickHouse, which buildDeps populates from API_CLICKHOUSE_URI (the
+  # api's OWN dedicated ClickHouse login, CHAOS-6310) -- NOT from the
+  # generic CLICKHOUSE_URI above, which this Service ignores for that
+  # purpose. Without it deps.ClickHouse stays nil and /health always
+  # answers "down" for clickhouse (measured: compose.yml's go-api service
+  # itself does not set this either, a pre-existing gap out of this PR's
+  # scope). CLICKHOUSE_URI_NATIVE, not CLICKHOUSE_URI: clickhouse-go speaks
+  # the native wire protocol, not Python's HTTP port (measured: the HTTP
+  # port answers with "unexpected packet [72]" -- 'H' -- to a native
+  # handshake). Same throwaway instance; this harness has no per-service
+  # ClickHouse login separation.
+  export API_CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
+  export VALKEY_URI="redis://${VALKEY_HOST}:${VALKEY_PORT}/1"
+  export JWT_SECRET_KEY="${JWT_SECRET_KEY}"
+  exec "${BIN_DIR}/dho" api --api-addr="${API_HOST}:${API_PORT}" --http-addr="127.0.0.1:${API_OPERATOR_PORT}"
+) >"${API_LOG_FILE}" 2>&1 &
+API_PID="$!"
+
+# CHAOS-7039: the Python `dev-hops api` process, retained ONLY for
+# go_api_prove_e2e_edge_status's /graphql leg -- see the BASE_URL/
+# EDGE_BASE_URL comment above. Never exposed as BASE_URL.
+echo "==> starting dev-hops edge api at ${EDGE_BASE_URL}"
 (
   export DATABASE_URI="${DATABASE_URI}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI}"
@@ -567,12 +653,14 @@ echo "==> starting API at ${BASE_URL}"
   exec_dev_hops \
     --db "${POSTGRES_URI}" \
     --analytics-db "${CLICKHOUSE_URI}" \
-    api --host "${API_HOST}" --port "${API_PORT}"
-) >"${API_LOG_FILE}" 2>&1 &
-API_PID="$!"
+    api --host "${EDGE_API_HOST}" --port "${EDGE_API_PORT}"
+) >"${EDGE_API_LOG_FILE}" 2>&1 &
+EDGE_API_PID="$!"
 
 echo "==> waiting for readiness"
 wait_for_ready
+echo "==> waiting for dev-hops edge api readiness"
+wait_for_http_ready "dev-hops edge api" "${EDGE_BASE_URL}/health" "${EDGE_API_LOG_FILE}" EDGE_API_PID
 
 # CHAOS-5362: drive the real Go dispatch/compute pipeline for every family
 # whose Python compute is deleted, now that the --with-metrics/

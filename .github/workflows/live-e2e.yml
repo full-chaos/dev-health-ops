@@ -174,7 +174,14 @@ jobs:
           CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: "1"
-          REDIS_URL: redis://localhost:6379/0
+          # CHAOS-7039: database 1, matching REDIS_URL_DEFAULT's own comment in
+          # ci/run_live_backend_e2e.sh and compose.yml's real deployed
+          # convention -- this workflow-level override previously pinned db 0,
+          # which silently beat the script's own default and reintroduced the
+          # exact db-0-vs-db-1 cross-plane defect that default was fixed to
+          # avoid (caught live: PR #3377's hosted live-e2e job failed with the
+          # same 3 customer-push tests, same symptom, as the pre-fix local run).
+          REDIS_URL: redis://localhost:6379/1
           LIVE_E2E_FIXTURE_SEED: "20260219"
           LIVE_E2E_API_LOG_FILE: ./live-e2e-api.log
           LIVE_E2E_WORKER_LOG_FILE: ./live-e2e-worker.log

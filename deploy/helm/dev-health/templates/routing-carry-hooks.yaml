@@ -1,0 +1,228 @@
+{{- /*
+CHAOS-7023 (sibling of CHAOS-7022, the bigboy-cut.sh equivalent) / CHAOS-7016 / D2811.
+
+go_api_routing_state rows are keyed by schema_digest. A roll that changes the GraphQL SDL
+computes a NEW digest and un-routes every currently-enabled operation the instant the first
+new pod starts, unless `dho goapi routing carry` has already copied those rows forward against
+the STILL-LIVE pre-roll query-api -- see docs/contribute/architecture/go-api-wave-0-proof-
+infrastructure.md, "When the schema digest moves". Separately, rows can lag the actually-
+running build after an ORDINARY roll with no schema change at all, if nothing repoints them --
+the exact gap the real rev196 prod roll hit (_records/bigboy-1b05473e/prod-rev196-step1.5-carry-
+lines.md, _records/deploy-196/README.md): rows still named a build from TWO rolls back.
+
+Two hook Jobs close both gaps, structurally, the way CHAOS-7022 does for bigboy-cut.sh:
+
+  - pre-upgrade: `dho goapi routing carry` against the still-live pre-roll query-api. Refuse-
+    not-skip: any refusal OTHER than carry's own "digests already agree" (an ordinary,
+    non-schema-changing roll -- expected, not a failure) fails the upgrade. One documented,
+    real exception: a refusal naming "run repoint first" (rows lagging the actually-running
+    build, no schema change involved -- the rev196 shape) triggers a `repoint` against the
+    same live process, then ONE retry of carry; only a second refusal is fatal.
+  - post-upgrade: `dho goapi routing repoint`, unconditionally, every roll (provenance-only,
+    never touches reachability) -- this is what would have caught rev196's own gap before it
+    needed a manual 50-row repoint mid-roll.
+
+No enable/disable knob for either: this is a gate, not an optional feature (see
+values.yaml's migrations.hook.goApiRoutingTools comment). Neither hook renders on pre-install:
+carry's whole premise is a live, already-running process to copy FROM, which does not exist on
+a fresh install.
+*/}}
+{{- if .Values.migrations.hook.enabled }}
+{{- if .Values.queryApi.enabled }}
+{{- $tools := .Values.migrations.hook.goApiRoutingTools }}
+{{- $toolsImage := $tools.image }}
+{{- $toolsPullPolicy := $tools.pullPolicy | default "IfNotPresent" }}
+{{- /*
+Pin-shape check, inline rather than dev-health.pinnedOperatorImageCheck: that helper's identity
+check requires a bare-dho-ENTRYPOINT image (route-activate/river-hooks/migrate-job's own
+invocation shape) and explicitly denies dev-health-go-api-tools by name -- see _helpers.tpl's
+own comment on why (it has no ENTRYPOINT set; these hooks override `command` themselves to run
+a shell chain, which is exactly what that image is built to allow, docker/go-api-tools.
+Dockerfile's own comment: "the operator's one-off corrective-verb pod"). Same pin-shape rule as
+every other hook image otherwise: required, no floating default.
+*/}}
+{{- $toolsDigestPinned := regexMatch "@sha256:[0-9a-f]{64}$" $toolsImage }}
+{{- $toolsImmutableTag := regexMatch "^.+:sha-[0-9a-f]{12}$" $toolsImage }}
+{{- $toolsSideloadedLocal := and (regexMatch "^.+:local$" $toolsImage) (or (eq $toolsPullPolicy "Never") (eq $toolsPullPolicy "IfNotPresent")) }}
+{{- if not (or $toolsDigestPinned $toolsImmutableTag $toolsSideloadedLocal) }}
+{{- fail (printf "migrations.hook.goApiRoutingTools.image (%s) is not a pinned image. It runs the pre/post-upgrade go-api routing carry/repoint hooks: set it to repo@sha256:<64 lowercase-hex-digit digest> or repo:sha-<12 hex>; repo:local is accepted only with pullPolicy Never or IfNotPresent." $toolsImage) }}
+{{- end }}
+{{- include "dev-health.lockstepImageCheck" (dict "context" . "image" $toolsImage "labelWithValue" (printf "migrations.hook.goApiRoutingTools.image (%s)" $toolsImage) "reason" "the routing carry/repoint hooks must read the same schema digest the commit about to roll computes.") }}
+{{- $mintOrg := required "migrations.hook.goApiRoutingTools.mintOrg is required whenever queryApi.enabled=true and migrations.hook.enabled=true -- a disposable operator/fixture org, never a real customer org" $tools.mintOrg }}
+{{- $queryApiURL := include "dev-health.queryApiURL" . }}
+{{- $postgresSecretName := include "dev-health.goPgbouncerSecretName" . }}
+{{- $envelopeSecretName := include "dev-health.secretName" . }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dev-health.fullname" . }}-routing-carry
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "routing-carry" "context" $) | nindent 4 }}
+  annotations:
+    {{- /* pre-upgrade ONLY -- never pre-install, see the file-level comment above. */}}
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "1"
+    {{- /*
+    FAIL-CLOSED, same reasoning as route-activate: before-hook-creation only, not
+    hook-succeeded, so a refused/failed carry's pod survives for its logs.
+    */}}
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.hook.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.hook.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "routing-carry" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: routing-carry
+          image: {{ $toolsImage }}
+          imagePullPolicy: {{ $toolsPullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              BEARER=$(dho mint envelope -org "$MINT_ORG" -key-file /keys/envelope.pem)
+              OUT=$(GO_API_ROUTING_BEARER="$BEARER" dho goapi routing carry \
+                -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
+                -recorded-by helm-pre-upgrade \
+                -review-evidence "CHAOS-7023 pre-upgrade carry, release ${RELEASE_NAME}" 2>&1) && RC=0 || RC=$?
+              printf '%s\n' "$OUT"
+              if [ "$RC" -eq 0 ]; then
+                echo "carry: OK"
+                exit 0
+              fi
+              if printf '%s' "$OUT" | grep -q "this binary's SDL is the one the deployed process already computes"; then
+                echo "carry: no schema-digest change this roll -- nothing to carry, not a failure"
+                exit 0
+              fi
+              if printf '%s' "$OUT" | grep -q "run repoint first"; then
+                echo "carry: rows lag the actually-running build (no schema change) -- repointing then retrying once"
+                REOUT=$(GO_API_ROUTING_BEARER="$BEARER" dho goapi routing repoint \
+                  -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
+                  -operations all-registered -recorded-by helm-pre-upgrade \
+                  -review-evidence "CHAOS-7023 pre-upgrade repoint-before-retry, release ${RELEASE_NAME}" 2>&1) && RRC=0 || RRC=$?
+                printf '%s\n' "$REOUT"
+                [ "$RRC" -eq 0 ] || { echo "carry: repoint-before-retry itself failed -- ABORTING upgrade"; exit 1; }
+                OUT2=$(GO_API_ROUTING_BEARER="$BEARER" dho goapi routing carry \
+                  -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
+                  -recorded-by helm-pre-upgrade \
+                  -review-evidence "CHAOS-7023 pre-upgrade carry retry after repoint, release ${RELEASE_NAME}" 2>&1) && RC2=0 || RC2=$?
+                printf '%s\n' "$OUT2"
+                [ "$RC2" -eq 0 ] || { echo "carry: still refused after repoint -- ABORTING upgrade"; exit 1; }
+                echo "carry: OK after repoint-then-retry"
+                exit 0
+              fi
+              echo "carry: refused for a reason other than digest-agreement or a stale build -- ABORTING upgrade (CHAOS-7023 refuse-not-skip)"
+              exit 1
+          env:
+            - name: MINT_ORG
+              value: {{ $mintOrg | quote }}
+            - name: QUERY_API_URL
+              value: {{ $queryApiURL | quote }}
+            - name: RELEASE_NAME
+              value: {{ .Release.Name | quote }}
+            - name: POSTGRES_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $postgresSecretName }}
+                  key: POSTGRES_URI
+            - name: GO_API_ENVELOPE_ISSUER
+              value: {{ .Values.queryApi.envelope.issuer | quote }}
+            - name: GO_API_ENVELOPE_AUDIENCE
+              value: {{ .Values.queryApi.envelope.audience | quote }}
+          volumeMounts:
+            - name: envelope-key
+              mountPath: /keys/envelope.pem
+              subPath: envelope.pem
+              readOnly: true
+          resources:
+            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
+      volumes:
+        - name: envelope-key
+          secret:
+            secretName: {{ $envelopeSecretName }}
+            items:
+              - key: GO_API_ENVELOPE_PRIVATE_KEY
+                path: envelope.pem
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dev-health.fullname" . }}-routing-repoint
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "routing-repoint" "context" $) | nindent 4 }}
+  annotations:
+    {{- /* post-upgrade ONLY, unconditional every roll -- D2811 addendum. */}}
+    helm.sh/hook: post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.hook.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.hook.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "routing-repoint" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: routing-repoint
+          image: {{ $toolsImage }}
+          imagePullPolicy: {{ $toolsPullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              BEARER=$(dho mint envelope -org "$MINT_ORG" -key-file /keys/envelope.pem)
+              GO_API_ROUTING_BEARER="$BEARER" dho goapi routing repoint \
+                -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
+                -operations all-registered -recorded-by helm-post-upgrade \
+                -review-evidence "CHAOS-7023/D2811 post-upgrade repoint, release ${RELEASE_NAME}"
+          env:
+            - name: MINT_ORG
+              value: {{ $mintOrg | quote }}
+            - name: QUERY_API_URL
+              value: {{ $queryApiURL | quote }}
+            - name: RELEASE_NAME
+              value: {{ .Release.Name | quote }}
+            - name: POSTGRES_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $postgresSecretName }}
+                  key: POSTGRES_URI
+            - name: GO_API_ENVELOPE_ISSUER
+              value: {{ .Values.queryApi.envelope.issuer | quote }}
+            - name: GO_API_ENVELOPE_AUDIENCE
+              value: {{ .Values.queryApi.envelope.audience | quote }}
+          volumeMounts:
+            - name: envelope-key
+              mountPath: /keys/envelope.pem
+              subPath: envelope.pem
+              readOnly: true
+          resources:
+            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
+      volumes:
+        - name: envelope-key
+          secret:
+            secretName: {{ $envelopeSecretName }}
+            items:
+              - key: GO_API_ENVELOPE_PRIVATE_KEY
+                path: envelope.pem
+{{- end }}
+{{- end }}

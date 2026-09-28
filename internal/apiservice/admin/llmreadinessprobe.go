@@ -131,7 +131,12 @@ func newOpenAICompatibleReadinessProber(doer providerfoundation.HTTPDoer) *openA
 		return &openAICompatibleReadinessProber{client: doer}
 	}
 	return &openAICompatibleReadinessProber{client: &http.Client{
-		Timeout: 30 * time.Second,
+		// Codex r3 hardening-table audit (D3016, CHAOS-6976): matches
+		// Python's make_hardened_async_httpx2_client's timeout=60.0
+		// (providers/_http.py:27) exactly -- this value had never been
+		// checked against the Python client it ports before now; 30s was
+		// an unremarked, undocumented choice, not a deliberate divergence.
+		Timeout: 60 * time.Second,
 		// Codex r1 P1 (CHAOS-6976): Python's hardened client
 		// (llm/providers/_http.py's make_hardened_*_client) sets
 		// follow_redirects=False unconditionally -- this route validated the

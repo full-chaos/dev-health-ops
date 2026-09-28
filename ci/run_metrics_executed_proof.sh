@@ -75,20 +75,10 @@ run_dev_hops() {
   python3 -m dev_health_ops.cli "$@"
 }
 
-# exec-flavored counterpart for a long-running process (the api server): `exec
-# run_dev_hops ...` does NOT work -- `exec` replaces the shell with an
-# EXTERNAL executable named "run_dev_hops", which does not exist, and fails
-# with "exec: run_dev_hops: not found" before ever reaching dev-hops. Confirmed
-# the hard way: this was the actual cause of this job's first CI run failing,
-# not CHAOS-4263.
-exec_dev_hops() {
-  if command -v dev-hops >/dev/null 2>&1; then
-    exec dev-hops "$@"
-  fi
-  # See run_dev_hops() above (CHAOS-4411/4181/4407) for why `uv run dev-hops`
-  # is skipped here too.
-  exec python3 -m dev_health_ops.cli "$@"
-}
+# CHAOS-7040 deleted this file's only long-running-process launch (the
+# Python `dev-hops api` boot) along with it its exec-flavored counterpart,
+# exec_dev_hops() -- dead code once that call site was gone. run_dev_hops()
+# above is still used (fixtures generate, below).
 
 require_cmd go
 require_cmd psql
@@ -134,7 +124,6 @@ ORG_ID="${METRICS_PROOF_ORG_ID:-c0ffee00-dead-4bee-8bad-f00dfeedface}"
 REPO_NAME="${METRICS_PROOF_REPO_NAME:-ci-metrics-executed-proof/repo}"
 BACKFILL_DAYS="${METRICS_PROOF_BACKFILL_DAYS:-7}"
 
-API_PORT="${METRICS_PROOF_API_PORT:-18081}"
 WORKER_HTTP_PORT="${METRICS_PROOF_WORKER_PORT:-18085}"
 RECONCILER_HTTP_PORT="${METRICS_PROOF_RECONCILER_PORT:-18086}"
 
@@ -147,7 +136,6 @@ TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/metrics-executed-proof.XXXXXX")"
 BIN_DIR="${TMP_DIR}/bin"
 mkdir -p "${BIN_DIR}"
 
-API_PID=""
 WORKER_PID=""
 RECONCILER_PID=""
 
@@ -182,18 +170,12 @@ cleanup() {
   # EXIT trap here -- on_signal() below manages that, because clearing EXIT from
   # inside cleanup is what let a cancelled run fall through and resume.
   trap '' INT TERM
-  # Kill ORDER (CHAOS-5025), historically load-bearing, not cosmetic: back
-  # when dev-health-worker's --operational-bridge-url made it the API's
-  # only client, signalling the API FIRST left the worker alive and still
-  # issuing bridge calls into a shutting-down uvicorn -- 100 further job
-  # attempts over 16 minutes in run 33822295135, uvicorn's "waiting for
-  # connections to close" loop never converging. CHAOS-6279 deletes that
-  # flag/config (nothing sends bridge calls any more, CHAOS-5320 having
-  # already deleted the Python side), so this order is no longer
-  # load-bearing -- kept as a conservative convention; the incident above
-  # is why it existed. (ci/lib/go_worker_fixture.sh)
+  # CHAOS-5025's kill-order comment (worker/reconciler before the api) is
+  # moot: CHAOS-7040 deletes the Python `dev-hops api` process from this
+  # script entirely (it was never load-bearing here -- run with the boot
+  # removed reproduced the identical readback JSON, see the PR's
+  # TEST-EVIDENCE). Only worker/reconciler remain to stop.
   stop_worker_stack
-  stop_service "dev-hops api" "${API_PID}"
   rm -rf "${TMP_DIR}" >/dev/null 2>&1 || true
   return "${rc}"
 }
@@ -223,47 +205,27 @@ build_go_binaries
 migrate_and_assert_river
 provision_river
 
-# Job control ON for the three service launches (codex r1 P2). Without `set -m`
-# a background job stays in THIS script's process group, which makes a group
-# signal in signal_service() both useless (it would not isolate the service) and
-# dangerous (it would target the script). With it, each service's PGID == its
-# PID, so the group form reaches the service's descendants and nothing else.
-# Turned back off straight after the launches so the rest of the script keeps
-# its normal non-job-control behaviour.
-set -m
-
-echo "==> starting dev-hops api"
-JWT_SECRET_KEY="$(SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY}" python3 -c "import hashlib, os; print(hashlib.sha256(os.environ['SETTINGS_ENCRYPTION_KEY'].encode()).hexdigest())")"
-# Overridable to a path OUTSIDE TMP_DIR (matching LIVE_E2E_API_LOG_FILE in
-# ci/run_live_backend_e2e.sh): cleanup() below unconditionally rm -rf's
-# TMP_DIR on exit, which runs before the workflow's own "Upload logs" step,
-# so logs left only in TMP_DIR are already gone by upload time (codex
-# review, CHAOS-4266 -- confirmed on the first live CI run: all 4 artifacts
-# reported "No files were found").
-API_LOG_FILE="${METRICS_PROOF_API_LOG_FILE:-${TMP_DIR}/api.log}"
-(
-  export DATABASE_URI="${POSTGRES_SUPERUSER_URI}"
-  export CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}"
-  export SETTINGS_ENCRYPTION_KEY JWT_SECRET_KEY
-  export REDIS_URL="redis://${VALKEY_HOST}:${VALKEY_PORT}/0"
-  export ENVIRONMENT=test
-  export OTEL_ENABLED=false
-  exec_dev_hops --db "${DATABASE_URI}" --analytics-db "${CLICKHOUSE_URI}" api --host 127.0.0.1 --port "${API_PORT}"
-) >"${API_LOG_FILE}" 2>&1 &
-API_PID="$!"
-wait_for_http_ready "dev-hops api" "http://127.0.0.1:${API_PORT}/health" "${API_LOG_FILE}" API_PID
-
+# CHAOS-7040: the Python `dev-hops api` process this script used to boot
+# and health-check here is DELETED -- read-only investigation plus an
+# executed differential (this script run with the boot present vs.
+# removed, identical readback JSON both times, see the PR's TEST-EVIDENCE)
+# found zero downstream reference to its port or any HTTP call against it
+# anywhere in this script after the old readiness wait: the real pipeline
+# under test here (seed -> outbox -> river -> the Go worker/reconciler ->
+# ClickHouse readback) never touches it. Job control (`set -m`/`set +m`,
+# codex r1 P2) is no longer needed at this level either: it existed only
+# to isolate that api launch's process group for signal_service(); the
+# remaining worker/reconciler launch already brackets itself with its own
+# set -m/set +m (start_worker_stack, ci/lib/go_worker_fixture.sh).
+#
 # dho worker / dho reconciler startup is shared with
 # ci/run_live_backend_e2e.sh -- see start_worker_stack in
 # ci/lib/go_worker_fixture.sh (--shutdown-timeout=7260s's CHAOS-3873 contract
 # and the "stop_service() bounds teardown regardless" rationale live there
-# now). It brackets its own two launches with set -m/set +m; the outer
-# set -m above/set +m below still covers the API launch immediately above.
+# now).
 WORKER_LOG_FILE="${METRICS_PROOF_WORKER_LOG_FILE:-${TMP_DIR}/worker.log}"
 RECONCILER_LOG_FILE="${METRICS_PROOF_RECONCILER_LOG_FILE:-${TMP_DIR}/reconciler.log}"
 start_worker_stack "${WORKER_LOG_FILE}" "${RECONCILER_LOG_FILE}"
-
-set +m
 
 RUN_START="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
 # Ordering contract (CHAOS-4266): seed ALL FOUR targets' ClickHouse rows

@@ -8,12 +8,11 @@ compose stack's real, active GitLab credential, read-only GET requests:
   `[]`, the captured group has no subgroups)
 - `GET /api/v4/groups/{group}/projects` -> `projects.json`
 
-Sanitized before being committed as fixtures: the real group id/name/path
-(`107805027`/`fullchaos`/`full.chaos`), the real project ids/names/paths
-(`77145099`/`dev-health-ops`, `71133891`/`chaos-ops`) and the real
-`creator_id` (`179182`) are replaced throughout with fictitious
-`9100001`/`acme-corp`, `9200001`/`repo-one`, `9200002`/`repo-two`, and
-`9000001` values. Every field NAME, JSON TYPE, and the field SET are
+Sanitized before being committed as fixtures: the real group id/name/path,
+the real project ids/names/paths, and the real numeric `creator_id` are
+replaced throughout with fictitious `9100001`/`acme-corp` (group),
+`9200001`/`repo-one`, `9200002`/`repo-two` (projects), and `9000001`
+(`creator_id`) values. Every field NAME, JSON TYPE, and the field SET are
 preserved exactly as the live API returned them. The `gitlab.com` /
 `registry.gitlab.com` hosts are kept (GitLab's own SaaS domains, not
 org-identifying). `created_at`/`updated_at` timestamps are kept as captured.

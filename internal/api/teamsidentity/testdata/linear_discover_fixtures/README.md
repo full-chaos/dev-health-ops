@@ -6,7 +6,7 @@ exact `TEAMS_QUERY` GraphQL document `discoverLinear`/`iter_teams` send
 (providers/linear/client.py) -> `teams.json`.
 
 Sanitized before being committed as a fixture (real person and workspace
-data): the real team id/key/name (a UUID/`CHAOS`/`Fullchaos`), the real
+data): the real team id/key/name, the real
 member ids, the real member names (including one real person's name), the
 real member emails (including one real person's email address), and the
 workspace timezone are all replaced throughout with fictitious

@@ -48,14 +48,29 @@ func TestRoutesRegisterWithoutPanicking(t *testing.T) {
 // GET /api/v1/admin/teams/discover is captured by the {team_id} wildcard's
 // AdminOrg-guarded getTeam handler -- proven here by its 401 (the guard
 // runs and refuses; a request that fell through to the mux's own
-// not-found handler would be 404 instead). This is production-SAFE only
-// because ingress routes GET /teams/discover to the Python api by exact
-// path; the Go binary's own route table never receives live traffic for
-// it today. This test exists to FAIL the moment that stops being true --
-// a new pattern registered here that changes which handler (or status)
-// answers this exact path is a deliberate routing change that must
-// re-justify itself against the ingress assumption above, not a silent
-// drift.
+// not-found handler would be 404 instead).
+//
+// STALE UNTIL 2026-09-28, CORRECTED HERE (CHAOS-6311): this comment used to
+// say production was safe only because ingress sent this exact path to the
+// Python api and the Go binary's own route table never saw live traffic for
+// it. That stopped being true on 2026-09-25 -- deploy PR #263 (CHAOS-6838)
+// added /api/v1/admin/teams/{team_id} to ingress.goApiPaths
+// (deploy/values.prod.yaml:1321-1328), and ingress-nginx's most-specific-
+// path-first rule means that wildcard now wins over the Python "/"
+// catch-all for THIS literal path too, exactly as it does for a real
+// team_id. Confirmed live: an unauthenticated GET/POST against
+// api.fullchaos.dev for discover/import/pending-changes answers 401 with
+// x-dev-health-plane: go. So ingress and this test now agree: both
+// send it to Go. This test's job is unchanged -- it still pins that the
+// dispatch mechanism is the {team_id} wildcard, not a literal pattern
+// (Go's http.ServeMux still cannot register both safely, see the route
+// table's own comment) -- but the old "ingress carve-out is the only
+// safety net" framing is gone: there is no longer a carve-out to drift
+// away from. A future change to Go's OWN route table that stops answering
+// this path from the wildcard is still a deliberate routing change this
+// test will catch (its 401 would become a 404 from the mux's own
+// not-found handler); re-verify the ingress side separately in the
+// deploy repo if that ever changes.
 func TestTeamsDiscoverCapturedByWildcardOnRealRoutesToday(t *testing.T) {
 	guard := policy.NewGuard(nil, nil)
 	server, err := httpapi.NewServer(httpapi.ServerOptions{

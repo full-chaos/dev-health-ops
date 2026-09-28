@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -25,25 +27,39 @@ const (
 	testEncryptionSalt = "gwc-atlassian-teams-test-salt"
 )
 
-// seedJiraCredential creates the minimal integration_credentials row
+// applyRealSchema builds the REAL Postgres schema -- the pgmigrate baseline
+// and chain, the same schema the Alembic heads produce -- so
+// integration_credentials exists exactly as production has it (Trap #412:
+// integration tests never hand-write DDL for production tables; see
+// internal/api/externalingest/accept_batch_integration_test.go's identical
+// pattern and internal/pgmigrate's TestHandWrittenTestDDLMatchesTheMigratedSchema).
+func applyRealSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	conn, err := pgx.Connect(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatalf("connect for the schema: %v", err)
+	}
+	defer conn.Close(context.Background())
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatalf("load baseline: %v", err)
+	}
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatalf("load chain: %v", err)
+	}
+	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain); err != nil {
+		t.Fatalf("apply the schema: %v", err)
+	}
+}
+
+// seedJiraCredential inserts the integration_credentials row
 // PostgresCredentialRepository.ResolveEncrypted reads -- the same table
 // work-items sync and the worker's post-sync team_autoimport job resolve
-// their credential from (D2770).
+// their credential from (D2770). Callers apply the real schema first via
+// applyRealSchema.
 func seedJiraCredential(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID string, config map[string]string, secretFields map[string]string) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE IF NOT EXISTS integration_credentials (
-	id uuid PRIMARY KEY,
-	org_id text NOT NULL,
-	provider text NOT NULL,
-	name text NOT NULL,
-	is_active boolean NOT NULL,
-	credentials_encrypted text,
-	config jsonb
-)`)
-	if err != nil {
-		t.Fatalf("create integration_credentials: %v", err)
-	}
 	decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(testEncryptionKey), testEncryptionSalt)
 	if err != nil {
 		t.Fatalf("build test decryptor: %v", err)
@@ -61,8 +77,8 @@ CREATE TABLE IF NOT EXISTS integration_credentials (
 		t.Fatalf("marshal config: %v", err)
 	}
 	_, err = pool.Exec(ctx,
-		`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config)
-		 VALUES ($1, $2, 'jira', 'default', true, $3, $4::jsonb)`,
+		`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
+		 VALUES ($1, $2, 'jira', 'default', true, $3, $4::jsonb, now(), now())`,
 		uuid.New(), orgID, ciphertext.Reveal(), string(configJSON))
 	if err != nil {
 		t.Fatalf("insert test credential: %v", err)
@@ -93,6 +109,7 @@ func TestResolveJiraStoredSettingsUsesTheStoredCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	applyRealSchema(t, ctx, pool)
 
 	tenantInfo := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != atlassianteams.TenantInfoPath {
@@ -142,6 +159,7 @@ func TestResolveJiraStoredSettingsRespectsAConfigCloudIDOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	applyRealSchema(t, ctx, pool)
 
 	calledTenantInfo := false
 	tenantInfo := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -186,6 +204,7 @@ func TestResolveJiraStoredSettingsRefusesWithoutAnOrganizationID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	applyRealSchema(t, ctx, pool)
 
 	const orgID = "org-under-test"
 	seedJiraCredential(t, ctx, pool, orgID,
@@ -217,11 +236,7 @@ func TestResolveJiraStoredSettingsRefusesWithNoRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS integration_credentials (
-		id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, name text NOT NULL,
-		is_active boolean NOT NULL, credentials_encrypted text, config jsonb)`); err != nil {
-		t.Fatal(err)
-	}
+	applyRealSchema(t, ctx, pool)
 
 	_, err = resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, "org-with-no-integration")
 	if err == nil {

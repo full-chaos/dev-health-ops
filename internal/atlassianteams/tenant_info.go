@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -53,7 +54,7 @@ func fetchTenantCloudID(ctx context.Context, doer providerfoundation.HTTPDoer, t
 	}
 	response, err := doer.Do(request)
 	if err != nil {
-		return "", err
+		return "", logging.TransportFailure(err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
@@ -63,7 +64,7 @@ func fetchTenantCloudID(ctx context.Context, doer providerfoundation.HTTPDoer, t
 		CloudID string `json:"cloudId"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return "", fmt.Errorf("decode tenant_info response: %w", err)
+		return "", logging.DecodeFailure(err)
 	}
 	cloudID := strings.TrimSpace(payload.CloudID)
 	if cloudID == "" {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // jiraTeamsScopeIntegrationID is the sentinel TenantScope.Validate requires
@@ -107,8 +108,18 @@ func resolveJiraStoredSettings(
 	}, nil
 }
 
+// openPostgresPool opens the domain database the stored jira credential is
+// resolved from. The connect failure text can carry the effective login
+// (CHAOS-6665): pgstorage.Boundary resolves it the same way pgx itself does
+// (DSN, PGUSER/PGPASSWORD, service files), not just the DSN's own
+// components, so a login that pgx picked up from the environment is
+// redacted too.
 func openPostgresPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
-	return pgxpool.New(ctx, pgxDSN(dsn))
+	pool, err := pgxpool.New(ctx, pgxDSN(dsn))
+	if err != nil {
+		return nil, pgstorage.Boundary(dsn).Redact(err)
+	}
+	return pool, nil
 }
 
 // pgxDSN normalizes the asyncpg dialect prefix POSTGRES_URI may carry

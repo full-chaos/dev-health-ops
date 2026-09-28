@@ -353,7 +353,9 @@ func resolveTeamsSettings(ctx context.Context, env cli.Env, d deps, orgID string
 		}
 		pool, err := d.openPostgres(ctx, pgDSN.Reveal())
 		if err != nil {
-			return settings{}, fmt.Errorf("open postgres: %w", secrets.NewBoundary(pgDSN.Reveal()).Redact(err))
+			// openPostgresPool (the default d.openPostgres) already redacts via
+			// pgstorage.Boundary before returning; wrap without redacting again.
+			return settings{}, fmt.Errorf("open postgres: %w", err)
 		}
 		defer pool.Close()
 		decryptor, err := d.decryptor(env)

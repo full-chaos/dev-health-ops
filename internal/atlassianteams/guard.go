@@ -3,10 +3,13 @@ package atlassianteams
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // maxGuardedBody bounds the response the guard buffers to inspect.
@@ -36,7 +39,11 @@ func (t completePages) RoundTrip(req *http.Request) (*http.Response, error) {
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxGuardedBody+1))
 	_ = resp.Body.Close()
 	if readErr != nil {
-		return nil, readErr
+		// readErr is io.ReadAll's own I/O failure reading resp.Body -- never
+		// the body's content itself, but the guard test treats any error from
+		// a call that reads the body as provider-origin by construction, so
+		// it is classified rather than returned raw.
+		return nil, logging.TransportFailure(readErr)
 	}
 	if len(body) > maxGuardedBody {
 		return nil, fmt.Errorf("atlassian gateway answer exceeds %d bytes", maxGuardedBody)
@@ -49,8 +56,11 @@ func (t completePages) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return resp, nil // the client reports a body it cannot read
 	}
-	if at := incompletePage(decoded, "$"); at != "" {
-		return nil, fmt.Errorf("atlassian gateway answered hasNextPage without an endCursor at %s: the list would be cut short", at)
+	if incompletePage(decoded, "$") != "" {
+		// The JSON path incompletePage found is provider-echoed structure
+		// (map keys from the gateway's own response); it never enters the
+		// error, only the fixed fact that the guard fired.
+		return nil, errors.New("atlassian gateway answered hasNextPage without an endCursor: the list would be cut short")
 	}
 	return resp, nil
 }

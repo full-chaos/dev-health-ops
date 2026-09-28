@@ -10,6 +10,7 @@ reported rc=0 against the stale, pre-cut images -- a void proof run that looked 
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,6 +41,49 @@ def test_old8_shape_is_checked_before_any_file_is_touched() -> None:
         f"(cp backup, line {backup_at + 1})"
     )
     assert shape_at < mkdir_at
+
+
+def _build_root(tmp_path: Path) -> Path:
+    """A minimal real-shaped bigboy tree (BIGBOY_ROOT, CHAOS-7022 D2895): just enough to pass
+    bigboy-repin.sh's own layout check (compose/compose.bigboy.images.yml + _records must
+    exist) without needing anything the shape guard runs before ever reaches."""
+    root = tmp_path / "root"
+    (root / "compose").mkdir(parents=True)
+    (root / "compose" / "compose.bigboy.images.yml").write_text("placeholder\n")
+    (root / "_records").mkdir()
+    return root
+
+
+def test_old8_shape_guard_actually_rejects_a_bad_old8_before_any_write(
+    tmp_path: Path,
+) -> None:
+    """D2922: the source-order pin above proves TEXT position, which a mutation that keeps
+    the same ordering but neuters the check (e.g. drops the `exit 4`) would not catch. This
+    drives the REAL bigboy-repin.sh with the exact D2801 typo shape (9 characters,
+    'bd25cd0a9') and asserts the OUTCOME: nonzero exit, the D2801 error text, and -- the part
+    a text pin cannot see at all -- that neither compose.bigboy.images.yml nor any
+    `_records/bigboy-<N8>` dir was actually touched."""
+    root = _build_root(tmp_path)
+    ov_path = root / "compose" / "compose.bigboy.images.yml"
+    ov_before = ov_path.read_text()
+    proc = subprocess.run(
+        ["bash", str(REPIN), "bd25cd0a9", "b" * 40],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+        env={"PATH": "/usr/bin:/bin", "BIGBOY_ROOT": str(root)},
+    )
+    assert proc.returncode != 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert "not exactly 8 lowercase hex characters" in proc.stdout + proc.stderr, (
+        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert ov_path.read_text() == ov_before, (
+        "compose.bigboy.images.yml must not be touched"
+    )
+    assert not any((root / "_records").iterdir()), (
+        "no _records/bigboy-<N8> dir must be created for a rejected OLD8"
+    )
 
 
 def test_old8_shape_guard_rejects_nine_characters() -> None:

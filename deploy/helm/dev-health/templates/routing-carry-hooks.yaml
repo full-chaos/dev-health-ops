@@ -105,7 +105,7 @@ spec:
                 echo "carry: no schema-digest change this roll -- nothing to carry, not a failure"
                 exit 0
               fi
-              if printf '%s' "$OUT" | grep -q "run repoint first"; then
+              if printf '%s' "$OUT" | grep -qF 'run `repoint` first'; then
                 echo "carry: rows lag the actually-running build (no schema change) -- repointing then retrying once"
                 REOUT=$(GO_API_ROUTING_BEARER="$BEARER" dho goapi routing repoint \
                   -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \

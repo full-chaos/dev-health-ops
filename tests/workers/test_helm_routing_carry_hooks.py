@@ -139,17 +139,36 @@ def test_missing_mint_org_is_refused() -> None:
 
 
 def test_carry_script_treats_digest_agreement_as_a_pass() -> None:
+    """The digest-agreement text matches the CLI's OWN early "Preflight 2" refusal
+    (internal/goapicli/routing/carry.go), not goapiproof.CarryRequest's separate,
+    differently-worded ErrCarryDigestUnchanged -- that package-level error is dead code
+    from this caller's perspective, since the CLI's preflight returns first. Confirmed by
+    running the real dho CLI end to end against a stub registry/buildinfo server
+    (TestCarryRefusesWhenTheDeployedProcessAlreadyComputesThisDigest,
+    internal/goapicli/routing/carry_integration_test.go) -- the live text is exactly what
+    this grep already matched. (An earlier pass at this fix wrongly "corrected" this text
+    by testing goapiproof.CarryRequest.validate() directly, which bypasses the CLI's own
+    earlier preflight and exercises a path this caller never reaches -- reverted once the
+    real CLI's own integration test proved the original text was already right.)
+    """
     script = _script(_jobs(*_ENABLED)[_CARRY])
-    assert "this binary's SDL is the one the deployed process already computes" in script
+    assert (
+        "this binary's SDL is the one the deployed process already computes" in script
+    )
     assert "not a failure" in script or "nothing to carry" in script
 
 
 def test_carry_script_has_the_repoint_then_retry_fallback() -> None:
     """The documented, real exception (rev196, both bigboy's re-cut and the actual prod
-    roll): a refusal naming 'run repoint first' triggers ONE repoint-then-retry before
-    anything is treated as fatal."""
+    roll): a refusal naming the stale-build text triggers ONE repoint-then-retry before
+    anything is treated as fatal.
+
+    r1 P1 (#3369): the real Go text is backtick-quoted -- "run `repoint` first"
+    (internal/goapiproof/routing_carry.go:172, ErrCarryBuildNotRunning) -- not the plain
+    "run repoint first" this test originally asserted, which never matched real output.
+    """
     script = _script(_jobs(*_ENABLED)[_CARRY])
-    assert "run repoint first" in script
+    assert "run `repoint` first" in script
     assert script.count("dho goapi routing repoint") == 1
     assert script.count("dho goapi routing carry") == 2, (
         "exactly two carry attempts: the first, and the one retry after repoint"

@@ -15,14 +15,16 @@ package graph
 //
 // The DATA comes from home.BuildResponse, the SAME already
 // golden-parity-proven builder (against the real build_home_response)
-// that backs REST home_route.go -- this field maps only the three
-// sub-fields the GraphQL HomeResult type exposes (freshness.
-// lastIngestedAt, deltas, reworkThemeAllocation) out of that builder's
-// much richer Response. No new query logic is added here.
+// that backs REST home_route.go. CHAOS-7070 grows the GraphQL HomeResult
+// type to expose the FULL Response (every field, not the original
+// three) -- no new query logic is added here, only translation.
 
 import (
+	"encoding/json"
+	"sort"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
@@ -84,17 +86,17 @@ func scopeLevelToHomeLevel(level model.ScopeLevelInput) string {
 	}
 }
 
-// homeResultFromResponse maps home.Response's GraphQL-visible fields to
-// model.HomeResult. Freshness.Coverage is mapped too (registered_document_
-// field_gate_test.go's populatability gate caught its earlier omission):
-// unlike the orphan Python resolve_home this field replaces (which never
-// set Freshness.coverage at all, and left it out of the exposed shape
-// entirely -- schema.py's old Strawberry construction only ever passed
-// last_ingested_at), the real build_home_response's Freshness DOES carry
-// a populated coverage -- home.BuildResponse computes it from a real
-// ClickHouse read (builder.go's own Response construction) -- so mapping
-// it is strictly more complete than parity with the orphan resolver would
-// have required, not a divergence from it.
+// homeResultFromResponse maps every field of home.Response to
+// model.HomeResult (CHAOS-7070). Freshness.Coverage is mapped too
+// (registered_document_field_gate_test.go's populatability gate caught its
+// earlier omission): unlike the orphan Python resolve_home this field
+// replaces (which never set Freshness.coverage at all, and left it out of
+// the exposed shape entirely -- schema.py's old Strawberry construction
+// only ever passed last_ingested_at), the real build_home_response's
+// Freshness DOES carry a populated coverage -- home.BuildResponse computes
+// it from a real ClickHouse read (builder.go's own Response construction)
+// -- so mapping it is strictly more complete than parity with the orphan
+// resolver would have required, not a divergence from it.
 func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 	deltas := make([]model.MetricDelta, 0, len(resp.Deltas))
 	for _, d := range resp.Deltas {
@@ -122,7 +124,9 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 
 	return &model.HomeResult{
 		Freshness: &model.Freshness{
-			LastIngestedAt: naiveDateTimeToGraphQL(resp.Freshness.LastIngestedAt),
+			LastIngestedAt:         naiveDateTimeToGraphQL(resp.Freshness.LastIngestedAt),
+			LatestSuccessfulSyncAt: microDateTimeToGraphQL(resp.Freshness.LatestSuccessfulSyncAt),
+			Sources:                homeFreshnessSourcesFromResponse(resp.Freshness.Sources),
 			Coverage: &model.Coverage{
 				ReposCoveredPct:          resp.Freshness.Coverage.ReposCoveredPct,
 				PrsLinkedToIssuesPct:     resp.Freshness.Coverage.PRsLinkedToIssuesPct,
@@ -131,6 +135,165 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 		},
 		Deltas:                deltas,
 		ReworkThemeAllocation: allocations,
+		Summary:               homeSummaryFromResponse(resp.Summary),
+		Tiles:                 homeTilesFromResponse(resp.Tiles),
+		Constraint:            homeConstraintFromResponse(resp.Constraint),
+		Events:                homeEventsFromResponse(resp.Events),
+		HealthState:           homeHealthStateFromResponse(resp.HealthState),
+		Signals:               homeSignalsFromResponse(resp.Signals),
+		LimitingFactor:        homeLimitingFactorFromResponse(resp.LimitingFactor),
+		DataConfidence:        homeDataConfidenceFromResponse(resp.DataConfidence),
+	}
+}
+
+// homeFreshnessSourcesFromResponse maps Freshness.Sources (map[string]string
+// in home.Response, since Python's WTI sync-source keys are provider names
+// discovered at sync time, not a fixed enum) to a deterministically ordered
+// list -- sorted by provider name, since a Go map has no order of its own
+// and the wire shape must not flap between two resolutions of the same data.
+func homeFreshnessSourcesFromResponse(sources map[string]string) []model.HomeFreshnessSource {
+	if len(sources) == 0 {
+		return []model.HomeFreshnessSource{}
+	}
+	providers := make([]string, 0, len(sources))
+	for provider := range sources {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+	out := make([]model.HomeFreshnessSource, 0, len(providers))
+	for _, provider := range providers {
+		out = append(out, model.HomeFreshnessSource{Provider: provider, Status: sources[provider]})
+	}
+	return out
+}
+
+func homeSummaryFromResponse(sentences []home.SummarySentence) []model.SummarySentence {
+	out := make([]model.SummarySentence, 0, len(sentences))
+	for _, s := range sentences {
+		out = append(out, model.SummarySentence{ID: s.ID, Text: s.Text, EvidenceLink: s.EvidenceLink})
+	}
+	return out
+}
+
+// homeTilesFromResponse maps HomeResponse.tiles (a Python dict[str, Any],
+// carried here as the already-ordered pyjson.OrderedMap[Tile] home.Response
+// uses -- see response.go's own Tile doc comment) to a list of key/value
+// entries in the SAME insertion order, so GraphQL's list ordering carries
+// what a JSON object's key order otherwise only carries by convention.
+func homeTilesFromResponse(tiles pyjson.OrderedMap[home.Tile]) []model.HomeTileEntry {
+	out := make([]model.HomeTileEntry, 0, tiles.Len())
+	for key, tile := range tiles.All() {
+		out = append(out, model.HomeTileEntry{
+			Key: key,
+			Value: &model.HomeTile{
+				Title:    tile.Title,
+				Subtitle: tile.Subtitle,
+				Link:     tile.Link,
+			},
+		})
+	}
+	return out
+}
+
+func homeConstraintFromResponse(c home.ConstraintCard) *model.ConstraintCard {
+	evidence := make([]model.ConstraintEvidence, 0, len(c.Evidence))
+	for _, e := range c.Evidence {
+		evidence = append(evidence, model.ConstraintEvidence{Label: e.Label, Link: e.Link})
+	}
+	experiments := c.Experiments
+	if experiments == nil {
+		experiments = []string{}
+	}
+	return &model.ConstraintCard{
+		Title:       c.Title,
+		Claim:       c.Claim,
+		Evidence:    evidence,
+		Experiments: experiments,
+	}
+}
+
+func homeEventsFromResponse(events []home.EventItem) []model.EventItem {
+	out := make([]model.EventItem, 0, len(events))
+	for _, e := range events {
+		ts := e.TS
+		tsString := microDateTimeToGraphQL(&ts)
+		out = append(out, model.EventItem{
+			Ts:   *tsString,
+			Type: e.Type,
+			Text: e.Text,
+			Link: e.Link,
+		})
+	}
+	return out
+}
+
+func homeHealthStateFromResponse(hs home.HealthState) *model.HealthState {
+	return &model.HealthState{
+		Status:   hs.Status,
+		Headline: hs.Headline,
+		Summary:  hs.Summary,
+		AsOf:     naiveDateTimeToGraphQL(hs.AsOf),
+	}
+}
+
+func homeSignalsFromResponse(signals []home.Signal) []model.HomeSignal {
+	out := make([]model.HomeSignal, 0, len(signals))
+	for _, s := range signals {
+		var scopeEntity *model.ScopeEntityRef
+		if s.ScopeEntity != nil {
+			scopeEntity = &model.ScopeEntityRef{ID: s.ScopeEntity.ID, DisplayName: s.ScopeEntity.DisplayName}
+		}
+		out = append(out, model.HomeSignal{
+			ID:                s.ID,
+			Title:             s.Title,
+			Metric:            s.Metric,
+			CurrentValue:      s.CurrentValue,
+			PriorValue:        s.PriorValue,
+			Delta:             s.Delta,
+			Direction:         s.Direction,
+			Severity:          s.Severity,
+			Confidence:        s.Confidence,
+			AffectedScope:     s.AffectedScope,
+			EvidenceCount:     s.EvidenceCount,
+			WhyItMatters:      s.WhyItMatters,
+			RecommendedAction: s.RecommendedAction,
+			EvidenceRef:       s.EvidenceRef,
+			Category:          s.Category,
+			ScopeEntity:       scopeEntity,
+		})
+	}
+	return out
+}
+
+func homeLimitingFactorFromResponse(lf home.LimitingFactor) *model.HomeLimitingFactor {
+	return &model.HomeLimitingFactor{
+		Claim:             lf.Claim,
+		WhyItMatters:      lf.WhyItMatters,
+		RecommendedAction: lf.RecommendedAction,
+		Confidence:        lf.Confidence,
+		EvidenceRef:       lf.EvidenceRef,
+	}
+}
+
+func homeDataConfidenceFromResponse(dc home.DataConfidence) *model.HomeDataConfidence {
+	connected := dc.ConnectedSources
+	if connected == nil {
+		connected = []string{}
+	}
+	missing := dc.MissingSources
+	if missing == nil {
+		missing = []string{}
+	}
+	caveats := dc.Caveats
+	if caveats == nil {
+		caveats = []string{}
+	}
+	return &model.HomeDataConfidence{
+		Level:            dc.Level,
+		CoveragePct:      dc.CoveragePct,
+		ConnectedSources: connected,
+		MissingSources:   missing,
+		Caveats:          caveats,
 	}
 }
 
@@ -157,5 +320,27 @@ func naiveDateTimeToGraphQL(at *pytime.NaiveDateTime) *string {
 		return nil
 	}
 	s := pytime.Pydantic(pytime.DateTime{Time: time.Time(*at)})
+	return &s
+}
+
+// microDateTimeToGraphQL formats a *home.MicroDateTime BY CALLING its own
+// MarshalJSON, not by reformatting the time.Time underneath -- unlike
+// pytime.NaiveDateTime, MicroDateTime is tz-aware and always appends "Z"
+// (naivetime.go's own doc comment), so reusing naiveDateTimeToGraphQL's
+// pytime.Pydantic formatting here silently drops it. Calling the type's
+// own marshaler keeps this byte-identical to the REST wire shape by
+// construction, even if that format ever changes.
+func microDateTimeToGraphQL(at *home.MicroDateTime) *string {
+	if at == nil {
+		return nil
+	}
+	raw, err := at.MarshalJSON()
+	if err != nil {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil
+	}
 	return &s
 }

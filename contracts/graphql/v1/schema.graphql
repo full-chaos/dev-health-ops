@@ -810,13 +810,118 @@ type FlowMatrixResult {
 
 type Freshness {
   lastIngestedAt: String
+  """ISO timestamp of the most recent sync that succeeded across every connected source, or null when none ever has."""
+  latestSuccessfulSyncAt: String
+  """One entry per connected source (provider name and its own sync status) -- not a fixed set of keys."""
+  sources: [HomeFreshnessSource!]!
   coverage: Coverage
+}
+
+type HomeFreshnessSource {
+  provider: String!
+  status: String!
+}
+
+type ConstraintEvidence {
+  label: String!
+  link: String!
+}
+
+type ConstraintCard {
+  title: String!
+  claim: String!
+  evidence: [ConstraintEvidence!]!
+  experiments: [String!]!
+}
+
+type EventItem {
+  ts: String!
+  type: String!
+  text: String!
+  link: String!
+}
+
+type ScopeEntityRef {
+  id: String!
+  displayName: String!
+}
+
+type HealthState {
+  status: String!
+  headline: String!
+  summary: String!
+  asOf: String
+}
+
+type HomeSignal {
+  id: String!
+  title: String!
+  metric: String!
+  currentValue: String!
+  priorValue: String
+  delta: String
+  direction: String!
+  severity: String!
+  confidence: String!
+  affectedScope: String!
+  evidenceCount: Int!
+  whyItMatters: String!
+  """The action the builder recommends, verbatim -- deterministic output of home.BuildResponse, not an LLM suggestion and not re-ranked here."""
+  recommendedAction: String!
+  """Opaque reference into the evidence store, or null when the signal carries none."""
+  evidenceRef: String
+  category: String!
+  """Null when the signal is not scoped to one entity (e.g. an org-wide signal)."""
+  scopeEntity: ScopeEntityRef
+}
+
+type HomeLimitingFactor {
+  claim: String!
+  whyItMatters: String!
+  recommendedAction: String!
+  confidence: String!
+  evidenceRef: String
+}
+
+type HomeDataConfidence {
+  level: String!
+  """Null when coverage could not be computed for this window."""
+  coveragePct: Float
+  connectedSources: [String!]!
+  missingSources: [String!]!
+  caveats: [String!]!
+}
+
+type HomeTile {
+  title: String!
+  subtitle: String!
+  link: String!
+}
+
+"""One entry of HomeResult.tiles -- a list, not a map, so field order matches the builder's own ordering."""
+type HomeTileEntry {
+  key: String!
+  value: HomeTile!
 }
 
 type HomeResult {
   freshness: Freshness!
   deltas: [MetricDelta!]!
   reworkThemeAllocation: [ReworkThemeAllocation!]!
+  summary: [SummarySentence!]!
+  tiles: [HomeTileEntry!]!
+  constraint: ConstraintCard!
+  events: [EventItem!]!
+  healthState: HealthState!
+  signals: [HomeSignal!]!
+  limitingFactor: HomeLimitingFactor!
+  dataConfidence: HomeDataConfidence!
+}
+
+type SummarySentence {
+  id: String!
+  text: String!
+  evidenceLink: String!
 }
 
 type HotspotRow {

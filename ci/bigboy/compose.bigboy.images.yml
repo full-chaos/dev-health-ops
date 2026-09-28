@@ -34,10 +34,22 @@ services:
     build: !reset null
     entrypoint: !override ["/usr/local/bin/dho"]
     command: !override ["query-api"]
+    # CHAOS-7079 (D2930/D2939/D2943): the port range published to the host is the PUBLIC
+    # listener only (container 8090, via check-route-coverage.py:85 from the host itself,
+    # bigboy-cut.sh:123) -- rebind to loopback so it is never reachable off-host. This was
+    # publishing on 0.0.0.0 before.
     ports: !override
-      - "8091-8092:8090"
+      - "127.0.0.1:8091-8092:8090"
     deploy:
       replicas: 2
+    # CHAOS-7079: the INTERNAL listener (CHAOS-6780/6783, same mechanism prod's chart
+    # enables via deploy/chart/templates/query-api-internal.yaml). Container-only port,
+    # never in `ports:` above, never published to the host. Reachable only from a
+    # container attached to the `dho-query-internal` network below (nothing joins it in
+    # this PR -- the caller's venue joins with its own one-line network membership once
+    # decided, D2930 item 2).
+    networks:
+      - dho-query-internal
     # CHAOS-6967(b)/6971/D2709 (2026-09-27): these ~23 REST routes' Go-plane switch is a
     # plain in-memory flag flipped ONCE at container boot from its own bare env var --
     # never Postgres, never the routeswitch ledger `dho goapi routing enable` writes (that
@@ -50,6 +62,11 @@ services:
     # and the rendered manifest, not just proximity). Re-derive from that same file at every
     # cut; never hand-edit this list without citing the source lines again.
     environment:
+      # CHAOS-7079: the internal listener's OWN address (CHAOS-6780/6783). Container-only;
+      # never added to `ports:` above. Matches prod's mechanism (deploy/values.prod.yaml
+      # QUERY_API_INTERNAL_ADDR), a different literal port (8095) so it is never confused
+      # with the host-published 8091-8092 range, which is the PUBLIC listener only.
+      QUERY_API_INTERNAL_ADDR: ":8095"
       GO_API_QUADRANT_ENABLED: "true"
       GO_API_FILTER_OPTIONS_ENABLED: "true"
       GO_API_DRILLDOWN_PRS_ENABLED: "true"
@@ -147,3 +164,37 @@ services:
     ports:
       - "127.0.0.1:8093:8000"
     restart: unless-stopped
+  # CHAOS-7079: base compose.yml's own `clickhouse` service keeps its `dev-health`
+  # membership unchanged; this only ADDS the dedicated read-only-callers network so a
+  # future read-only ClickHouse user (ci/bigboy/prepare-clickhouse-readonly-user.sql,
+  # prepared, not applied) is reachable from it without opening `dev-health` itself to
+  # any new caller.
+  clickhouse:
+    networks:
+      - dho-clickhouse-readers
+
+# CHAOS-7079 (D2930/D2938/D2939/D2943): two dedicated networks, fixed `name:` so another
+# compose project (a separate `docker compose -p ...`) can reference them `external: true`
+# by that exact name -- MCP's own venue plan does this (`dho-query-internal`,
+# `dho-clickhouse-readers`; names agreed with them, not invented here).
+#
+# `internal: true` on BOTH: this only removes the network's own route to the outside
+# world (no internet egress for a container reachable ONLY via this network) -- it does
+# NOT block another compose project from joining as `external: true` (that is ordinary
+# Docker network membership, unaffected by the `internal` flag). `query-api` and
+# `clickhouse` keep their unchanged `dev-health` membership too, so THEIR OWN normal
+# upstream reachability (Postgres, the rest of the stack) is untouched; only a container
+# whose ONLY network membership is one of these two would have no outside route, which
+# is exactly the posture wanted for a read-only ClickHouse caller. Ingress scoping itself
+# is by network MEMBERSHIP (only `query-api`/`clickhouse` are on these networks from our
+# side in this PR) -- `internal: true` is defense-in-depth on top of that, not a
+# substitute for it.
+networks:
+  dho-query-internal:
+    name: dho-query-internal
+    driver: bridge
+    internal: true
+  dho-clickhouse-readers:
+    name: dho-clickhouse-readers
+    driver: bridge
+    internal: true

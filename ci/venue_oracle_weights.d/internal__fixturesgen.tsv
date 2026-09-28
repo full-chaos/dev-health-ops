@@ -1,3 +1,5 @@
 internal/fixturesgen	TestProductTelemetryMatchesLivePython	3
 internal/fixturesgen	TestRandMatchesLivePython	2
+internal/fixturesgen	TestShuffleMatchesLivePython	2
 internal/fixturesgen	TestSyntheticOrgIDsMatchThePythonFallback	2
+internal/fixturesgen	TestSyntheticTeamsMatchLivePython	3

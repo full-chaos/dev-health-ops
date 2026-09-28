@@ -23,7 +23,6 @@ import os
 import sys
 
 import dev_health_ops.providers.linear.client as linear_client_module
-
 from dev_health_ops import cli as devhops_cli
 
 MANAGED_ENV = [

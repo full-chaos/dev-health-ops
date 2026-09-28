@@ -422,6 +422,10 @@ func (o *teamsOracle) runGitHub(fake *fakeGitHub, orgID, owner, token string, pr
 	return run
 }
 
+// teamsOracleNow is the Go verb's pinned clock in runGo; fixtures that must predate its write
+// derive their timestamps from it rather than from the wall clock.
+var teamsOracleNow = time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+
 // runGo runs only the Go verb (the same arguments and environment as runGitHub gives it).
 func (o *teamsOracle) runGo(fake *fakeGitHub, orgID, owner, token string, sc *teamsScenario, extra ...string) (int, string, string) {
 	o.t.Helper()
@@ -445,7 +449,7 @@ func (o *teamsOracle) runGo(fake *fakeGitHub, orgID, owner, token string, sc *te
 	args = append(args, extra...)
 	var stdout, stderr strings.Builder
 	d := defaultDeps()
-	d.now = func() time.Time { return time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC) }
+	d.now = func() time.Time { return teamsOracleNow }
 	d.doer = http.DefaultClient
 	d.openStore = func(context.Context, string) (driver.Conn, error) { return &keepOpen{o.goConn}, nil }
 	code := runTeams(o.ctx, cli.Env{Args: args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr}, d)
@@ -874,8 +878,12 @@ func githubScenarios() []*teamsScenario {
 			}},
 		{name: "an admin override survives", org: "acme", owner: "acme", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2,
 			prepare: func(o *teamsOracle, fake *fakeGitHub) {
+				// The override predates both writers: a day before the Go verb's pinned clock (and so
+				// before the Python verb's wall clock). A wall-clock-relative stamp would outrank the Go
+				// write under ReplacingMergeTree(updated_at) once real time passed the pinned clock + 1 day.
+				seededAt := teamsOracleNow.Add(-24 * time.Hour).Format("2006-01-02 15:04:05.000000")
 				for _, database := range []string{o.pythonDatabase, o.goDatabase} {
-					if err := o.admin.Exec(o.ctx, fmt.Sprintf(`INSERT INTO %s.teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider) VALUES ('gh:platform', generateUUIDv4(), 'Platform', 'old', ['old'], ['override@example.com'], [], [], 1, now64(6) - INTERVAL 1 DAY, now64(6) - INTERVAL 1 DAY, 'org-1', 'github')`, database)); err != nil {
+					if err := o.admin.Exec(o.ctx, fmt.Sprintf(`INSERT INTO %[1]s.teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider) VALUES ('gh:platform', generateUUIDv4(), 'Platform', 'old', ['old'], ['override@example.com'], [], [], 1, toDateTime64('%[2]s', 6), toDateTime64('%[2]s', 6), 'org-1', 'github')`, database, seededAt)); err != nil {
 						o.t.Fatal(err)
 					}
 				}

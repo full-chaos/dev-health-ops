@@ -34,8 +34,18 @@ CREATE SETTINGS PROFILE IF NOT EXISTS mcp_readonly_profile
 
 -- Password/auth method chosen and set at apply time (never written here).
 -- The literal string below is a syntax placeholder, not a real value.
+-- D2947/D2953 (2026-09-28): compose network membership alone does not admit anything --
+-- `clickhouse` stays a member of both `dev-health` and `dho-clickhouse-readers`, and the
+-- stock ClickHouse image listens on every interface by default; a container on
+-- `dev-health` alone could still open a TCP connection to it. The real admission control
+-- for THIS user is HOST IP, a per-user ClickHouse setting checked at authentication
+-- regardless of which interface accepted the connection -- restricted to
+-- `dho-clickhouse-readers`' own fixed subnet (ci/bigboy/compose.bigboy.images.yml's
+-- `networks.dho-clickhouse-readers.ipam.config`), so mcp_readonly cannot authenticate
+-- from `dev-health` even with the correct password.
 CREATE USER IF NOT EXISTS mcp_readonly
     IDENTIFIED WITH sha256_password BY '<SET AT APPLY TIME, NEVER COMMITTED>'
+    HOST IP '10.199.80.0/28'
     DEFAULT DATABASE default
     SETTINGS PROFILE mcp_readonly_profile;
 

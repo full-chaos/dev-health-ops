@@ -44,10 +44,26 @@ services:
       replicas: 2
     # CHAOS-7079: the INTERNAL listener (CHAOS-6780/6783, same mechanism prod's chart
     # enables via deploy/chart/templates/query-api-internal.yaml). Container-only port,
-    # never in `ports:` above, never published to the host. Reachable only from a
-    # container attached to the `dho-query-internal` network below (nothing joins it in
-    # this PR -- the caller's venue joins with its own one-line network membership once
-    # decided, D2930 item 2).
+    # never in `ports:` above, never published to the host.
+    #
+    # D2947/D2953 (2026-09-28): network membership ALONE does not admit anything here --
+    # `query-api` stays a member of BOTH `dev-health` and `dho-query-internal`, and
+    # `QUERY_API_INTERNAL_ADDR` binds ":8095" (every interface, both replicas), so a
+    # container on `dev-health` alone could reach `:8095` too, proven live in a throwaway
+    # compose project (`/var/lib/oci-cache/lane-scratch/gwc-bigboy-ops-3/bindtest/`,
+    # TEST-EVIDENCE). Ruling D2953 (option c): stay on ONE scaled service (no split into
+    # named replicas -- that needs a duplicated ~40-line env block plus a bigboy-cut.sh
+    # edit, too much drift for a hand-synced venue file); the real admission control moves
+    # INTO the Go listener: it must accept a connection only when the peer address is
+    # inside `QUERY_API_INTERNAL_ALLOWED_CIDRS` (new variable, gwc-cut-hardening's Go work,
+    # tracked against CHAOS-7097 which is Rev 198 and has no PR yet as of this comment --
+    # confirm the ticket's scope covers peer-CIDR filtering, not only route-set separation,
+    # before trusting this line is current).
+    #
+    # THIS FILE ALONE DOES NOT CLOSE THE GAP. The fixed subnet named in the environment
+    # block below only makes the allowlist value KNOWN in advance; nothing enforces it
+    # until the Go change ships. Do not apply this compose change in a cut before that Go
+    # PR is in the running image.
     networks:
       - dho-query-internal
     # CHAOS-6967(b)/6971/D2709 (2026-09-27): these ~23 REST routes' Go-plane switch is a
@@ -67,6 +83,10 @@ services:
       # QUERY_API_INTERNAL_ADDR), a different literal port (8095) so it is never confused
       # with the host-published 8091-8092 range, which is the PUBLIC listener only.
       QUERY_API_INTERNAL_ADDR: ":8095"
+      # D2953: the real admission control (not yet built, gwc-cut-hardening/CHAOS-7097 or
+      # its successor ticket -- confirm scope before trusting this is wired). Must equal
+      # the `dho-query-internal` network's `ipam.config` subnet below, byte for byte.
+      QUERY_API_INTERNAL_ALLOWED_CIDRS: 10.199.79.0/28
       GO_API_QUADRANT_ENABLED: "true"
       GO_API_FILTER_OPTIONS_ENABLED: "true"
       GO_API_DRILLDOWN_PRS_ENABLED: "true"
@@ -179,22 +199,39 @@ services:
 # `dho-clickhouse-readers`; names agreed with them, not invented here).
 #
 # `internal: true` on BOTH: this only removes the network's own route to the outside
-# world (no internet egress for a container reachable ONLY via this network) -- it does
-# NOT block another compose project from joining as `external: true` (that is ordinary
-# Docker network membership, unaffected by the `internal` flag). `query-api` and
-# `clickhouse` keep their unchanged `dev-health` membership too, so THEIR OWN normal
-# upstream reachability (Postgres, the rest of the stack) is untouched; only a container
-# whose ONLY network membership is one of these two would have no outside route, which
-# is exactly the posture wanted for a read-only ClickHouse caller. Ingress scoping itself
-# is by network MEMBERSHIP (only `query-api`/`clickhouse` are on these networks from our
-# side in this PR) -- `internal: true` is defense-in-depth on top of that, not a
-# substitute for it.
+# world -- it does NOT block another compose project from joining `external: true` (that
+# is ordinary Docker network membership, unaffected by the `internal` flag), and it does
+# NOT restrict which of a MULTI-HOMED member's own listeners answer which network: a
+# process bound to ":PORT" (every interface) is reachable from EVERY network that
+# container is a member of, `internal: true` or not. Proven live (D2947, throwaway compose
+# project, TEST-EVIDENCE): `query-api` keeps its unchanged `dev-health` membership
+# alongside `dho-query-internal`, and its internal listener bound ":8095" -- a container on
+# `dev-health` alone could still reach it. Network MEMBERSHIP on `dho-query-internal` is
+# therefore NOT the admission control by itself; the fixed subnet below exists so
+# `QUERY_API_INTERNAL_ALLOWED_CIDRS` (query-api's own environment block above) names a
+# known value for the Go-side peer-CIDR check that IS the real control (D2953, pending,
+# gwc-cut-hardening -- see that env var's own comment for the ticket caveat).
+#
+# `dho-clickhouse-readers` carries the SAME multi-homed-bind class of exposure
+# (`clickhouse` also keeps its `dev-health` membership, and the stock ClickHouse image
+# listens on every interface by default) -- D2953 did not rule on this network, only on
+# query-api's. Not fixed in this PR's network config; ClickHouse's OWN per-user `HOST IP`
+# restriction (a config field on `CREATE USER`, no code change, no network dependency) is
+# used instead for the one user this PR prepares
+# (`ci/bigboy/prepare-clickhouse-readonly-user.sql`) -- flagged to team-lead as a related,
+# separately-closed finding, not silently assumed safe from network isolation alone.
 networks:
   dho-query-internal:
     name: dho-query-internal
     driver: bridge
     internal: true
+    ipam:
+      config:
+        - subnet: 10.199.79.0/28
   dho-clickhouse-readers:
     name: dho-clickhouse-readers
     driver: bridge
     internal: true
+    ipam:
+      config:
+        - subnet: 10.199.80.0/28

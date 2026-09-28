@@ -1,38 +1,36 @@
-"""Pin the exported GraphQL SDL against the checked-in canonical artifact.
+"""Pin the Python GraphQL schema against the canonical SDL: Python must be a SUBSET.
 
-CHAOS-4366 (Go API epic, plan §4/§6 Wave 0) requires the invariant
-``Strawberry export == checked-in canonical SDL`` to be a CI-checked gate,
-not a convention. ``contracts/graphql/v1/schema.graphql`` is the pin; this
-test is what makes drift a hard failure via the standing
-``ci/local_validate.sh`` full-suite run (root AGENTS.md's rule #4: "a
-measurement that did not happen must FAIL, loudly" — this test runs inside
-the unmarked pure-Python unit suite, so it cannot be silently skipped the
-way an opt-in live-schema check could be).
+``contracts/graphql/v1/schema.graphql`` is owned by the Go plane. query-api
+generates its executable schema from that file (gqlgen, schema-first), so
+the file grows when Go ports a field or type that Python never had. It is
+therefore NOT a Strawberry export and must never be regenerated from one:
+regenerating from Python would erase the Go-only growth.
 
-Consumers of this pin:
-- Web codegen (``dev-health/web/codegen.ts``) points its GraphQL Code
-  Generator ``schema:`` at a copy of this file
-  (``web/src/lib/graphql/schema.graphql``) and regenerates TypeScript types
-  from it; web's own CI drift-checks that copy against a fresh export from
-  this repo (``.github/workflows/live-e2e.yml`` in the web repo).
-- ``query-api`` (Go, gqlgen, schema-first) takes this same file as its
-  gqlgen input SDL (see ``docs/architecture/go-api/query-api.md``).
+What this test gates instead: every type, field, argument and enum value
+the Python (Strawberry) schema exposes must exist in the pin, so a Python
+change that the pin (and therefore Go, web codegen and the routing digest)
+does not know about fails here. Extra types/fields in the pin are allowed.
+The subset relation ends when CHAOS-6264 deletes the Python schema.
 
-If this test fails, the SDL genuinely changed: regenerate the pin with
-
-    PYTHONPATH=src .venv/bin/python -m dev_health_ops.api.graphql.export_schema \\
-      --out contracts/graphql/v1/schema.graphql
-
-review the diff, and commit it in the same PR as the schema change that
-caused it -- and update the checked-in copy in ``dev-health/web`` in a
-paired PR (schema drift across repos is exactly the risk this pin exists
-to catch early, in this repo's own gate, rather than downstream in web's
-optional live-e2e job).
+To change the schema: edit ``contracts/graphql/v1/schema.graphql``, run
+``go generate ./internal/queryapi/...`` (gqlgen), update
+``contracts/graphql/v1/schema-digest.json`` and the schema-digest history
+table, and bump the checked-in ``web`` copy in a paired PR. A Python-side
+addition must be mirrored into the pin in the same PR.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+
+from graphql import (
+    GraphQLEnumType,
+    GraphQLInputObjectType,
+    GraphQLInterfaceType,
+    GraphQLObjectType,
+    GraphQLUnionType,
+    build_schema,
+)
 
 from dev_health_ops.api.graphql.schema import schema
 
@@ -45,24 +43,88 @@ _PINNED_SDL_PATH = (
 )
 
 
-def test_exported_sdl_matches_checked_in_pin() -> None:
-    """Strawberry's live schema export must byte-for-byte match the pin."""
+def python_members_missing_from_pin(python_sdl: str, pinned_sdl: str) -> list[str]:
+    """Every type / field / argument / enum value / union member / implemented
+    interface in ``python_sdl`` that ``pinned_sdl`` lacks (empty = subset)."""
+    py = build_schema(python_sdl)
+    pin = build_schema(pinned_sdl)
+    missing: list[str] = []
+    for name, py_type in sorted(py.type_map.items()):
+        if name.startswith("__"):
+            continue
+        pin_type = pin.type_map.get(name)
+        if pin_type is None:
+            missing.append(f"type {name}")
+            continue
+        if type(pin_type) is not type(py_type):
+            missing.append(
+                f"type {name}: kind {type(py_type).__name__} in Python, "
+                f"{type(pin_type).__name__} in the pin"
+            )
+            continue
+        if isinstance(py_type, (GraphQLObjectType, GraphQLInterfaceType)):
+            pin_fields = pin_type.fields  # type: ignore[union-attr]
+            for fname, field in sorted(py_type.fields.items()):
+                pin_field = pin_fields.get(fname)
+                if pin_field is None:
+                    missing.append(f"field {name}.{fname}")
+                    continue
+                for aname in sorted(field.args):
+                    if aname not in pin_field.args:
+                        missing.append(f"argument {name}.{fname}({aname})")
+            for iface in py_type.interfaces:
+                if iface.name not in {
+                    i.name
+                    for i in pin_type.interfaces  # type: ignore[union-attr]
+                }:
+                    missing.append(f"type {name} implements {iface.name}")
+        elif isinstance(py_type, GraphQLInputObjectType):
+            for fname in sorted(py_type.fields):
+                if fname not in pin_type.fields:  # type: ignore[union-attr]
+                    missing.append(f"input field {name}.{fname}")
+        elif isinstance(py_type, GraphQLEnumType):
+            for vname in sorted(py_type.values):
+                if vname not in pin_type.values:  # type: ignore[union-attr]
+                    missing.append(f"enum value {name}.{vname}")
+        elif isinstance(py_type, GraphQLUnionType):
+            pin_members = {t.name for t in pin_type.types}  # type: ignore[union-attr]
+            for member in py_type.types:
+                if member.name not in pin_members:
+                    missing.append(f"union {name} member {member.name}")
+    return missing
+
+
+def test_python_schema_is_a_subset_of_the_checked_in_pin() -> None:
+    """The pin is Go-owned; the Python schema may not expose anything it lacks."""
     assert _PINNED_SDL_PATH.exists(), (
-        f"Canonical SDL pin missing at {_PINNED_SDL_PATH}. Generate it with "
-        "`PYTHONPATH=src .venv/bin/python -m dev_health_ops.api.graphql."
-        "export_schema --out contracts/graphql/v1/schema.graphql`."
+        f"Canonical SDL pin missing at {_PINNED_SDL_PATH}."
+    )
+    missing = python_members_missing_from_pin(
+        schema.as_str(), _PINNED_SDL_PATH.read_text()
+    )
+    assert not missing, (
+        "The Python (Strawberry) schema exposes members that "
+        "contracts/graphql/v1/schema.graphql does not: "
+        + ", ".join(missing)
+        + ". The pin is the Go plane's schema and is never regenerated from "
+        "Python; add the member to the pin (then `go generate`, update "
+        "schema-digest.json and its history row) in the same PR."
     )
 
-    pinned_sdl = _PINNED_SDL_PATH.read_text()
-    live_sdl = schema.as_str()
 
-    assert live_sdl == pinned_sdl, (
-        "GraphQL schema drift detected: the live Strawberry schema export no "
-        "longer matches contracts/graphql/v1/schema.graphql. Regenerate the "
-        "pin (see this test's module docstring for the exact command), "
-        "review the diff, and commit it alongside the resolver/type change "
-        "that caused the drift. Do not edit the pin file by hand."
-    )
+def test_subset_check_reports_a_member_the_pin_lacks() -> None:
+    """Observe the guard failing: a pin missing one field is reported by name."""
+    pinned = _PINNED_SDL_PATH.read_text()
+    python_sdl = schema.as_str()
+    mutated = pinned.replace("  home(orgId", "  homeRenamedProbe(orgId", 1)
+    assert mutated != pinned
+    assert python_members_missing_from_pin(python_sdl, mutated) == ["field Query.home"]
+
+
+def test_a_pin_that_only_grows_still_passes() -> None:
+    """Go-owned growth (an extra type and field) must not trip the gate."""
+    grown = _PINNED_SDL_PATH.read_text() + "\ntype GoOnlyProbe {\n  id: String!\n}\n"
+    assert python_members_missing_from_pin(schema.as_str(), grown) == []
 
 
 def test_pinned_sdl_is_nonempty_and_well_formed() -> None:

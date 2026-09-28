@@ -432,8 +432,8 @@ class Query:
     # query-api, not by Python.
     #
     # The DECLARATIONS below are load-bearing and must not be deleted. They are
-    # what `dev_health_ops.api.graphql.export_schema` emits into
-    # contracts/graphql/v1/schema.graphql, which is gqlgen's input SDL for
+    # what `test_schema_sdl_pinned.py` requires contracts/graphql/v1/schema.graphql
+    # to contain (Python is a subset of that Go-owned file), which is gqlgen's input SDL for
     # query-api, web's codegen schema, AND half of both planes' routing key --
     # routeswitch.PostgresSwitch looks up go_api_routing_state by
     # (schema_digest, document_digest, selected_operation). Measured:

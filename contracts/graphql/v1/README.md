@@ -1,15 +1,18 @@
 # GraphQL SDL contract (v1)
 
-`schema.graphql` in this directory is the **canonical, CI-checked** export
-of the Strawberry GraphQL schema (`src/dev_health_ops/api/graphql/schema.py`).
-It is generated, never hand-edited.
+`schema.graphql` in this directory is the **canonical, CI-checked** GraphQL
+schema. The **Go plane owns it**: gqlgen generates query-api's executable
+schema from this file (schema-first). It is edited directly and is **never
+regenerated from the Python (Strawberry) export** -- that would erase every
+type Go added that Python never had. The Python schema must be a **subset**
+of it until CHAOS-6264 deletes Python.
 
 ## Why this exists
 
 CHAOS-4366 (Go API epic Wave 0) requires the invariant
 
 ```
-Strawberry export == checked-in canonical SDL == gqlgen input SDL == web codegen SDL
+Python schema ⊆ checked-in canonical SDL == gqlgen input SDL == web codegen SDL
 ```
 
 to be a real CI gate, not a convention. Before this pin existed, the only
@@ -22,16 +25,22 @@ check into this repo's own unmarked unit-test suite
 runs in full on every push — so drift is caught here, at the source, not
 only (optionally) downstream.
 
-## Regenerating
+## Changing the schema
 
-```bash
-PYTHONPATH=src .venv/bin/python -m dev_health_ops.api.graphql.export_schema \
-  --out contracts/graphql/v1/schema.graphql
-```
+1. Edit `schema.graphql`.
+2. `go generate ./internal/queryapi/...` (gqlgen) and commit the diff;
+   `TestGeneratedSchemaSourceIsTheCheckedInPin` fails until you do.
+3. Update `schema-digest.json` and the schema-digest history row (the
+   digest is the sha256 of this file's raw bytes; see
+   `docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md`,
+   "When the schema digest moves"). `test_go_api_schema_digest.py` and
+   `ci/check_go_api_routing_digest.py` fail until you do.
+4. If Python also exposes the member, it must already be in the file:
+   `tests/api/graphql/test_schema_sdl_pinned.py` fails when the Python
+   schema has a type, field, argument, enum value, union member or
+   interface the file lacks. Extra members in the file are allowed.
 
-Commit the regenerated file in the same PR as the schema change that
-produced the diff. Review the diff — this file is a contract, not a build
-artifact to rubber-stamp.
+Review the diff -- this file is a contract, not a build artifact.
 
 ## Consumers
 

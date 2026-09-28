@@ -28,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/hotspots"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/operatingreview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/producttelemetry"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/recommendations"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/reports"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/reviewedges"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/security"
@@ -1237,9 +1238,28 @@ func (r *queryResolver) ReviewEdges(ctx context.Context, input model.ReviewEdges
 	return result, nil
 }
 
-// Recommendations is the resolver for the recommendations field.
+// Recommendations is the resolver for the recommendations field
+// (CHAOS-7065). Ports resolve_recommendations
+// (api/graphql/resolvers/recommendations.py) via recommendations.Resolve.
+//
+// Authorization mirrors Python's ACTUAL behavior, not its signature: the
+// GraphQL field takes an orgId argument, but schema.py's own wrapper
+// discards it and calls require_org_id(context) instead, which uses the
+// authorized org unconditionally -- same "authorized org always wins"
+// convention as ReviewEdges/Home/WorkGraphEdges above. The orgId argument
+// is never read here for the same reason.
 func (r *queryResolver) Recommendations(ctx context.Context, orgID string, team string, window model.WindowInput) ([]model.Recommendation, error) {
-	panic(fmt.Errorf("not implemented: Recommendations - recommendations"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	return recommendations.Resolve(ctx, r.ClickHouse, claims.OrgID, team, window, time.Now().UTC()), nil
 }
 
 // Experiments is the resolver for the experiments field.

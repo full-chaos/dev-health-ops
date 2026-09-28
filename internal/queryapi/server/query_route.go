@@ -2358,6 +2358,40 @@ const registeredWorkItemTeamAttributionsDocument = `query WorkItemTeamAttributio
   }
 }`
 
+// registeredRecommendationsDocument is the registered document for the
+// `recommendations` operation (CHAOS-7065). Not a captured real web
+// query -- like `home` (CHAOS-7042), the web consumer is a separate,
+// not-yet-built ticket (CHAOS-7068), so this document is hand-written
+// against the published SDL, selecting every field model.Recommendation
+// carries. It exists to prove the field is reachable and correctly
+// shaped, not to certify a live wire-parity comparison against a real
+// caller's exact selection set -- that certification is CHAOS-7068's
+// job, against its own real query, same sequencing as CHAOS-7070/7064.
+const registeredRecommendationsDocument = `query Recommendations($orgId: String!, $team: ID!, $window: WindowInput!) {
+  recommendations(orgId: $orgId, team: $team, window: $window) {
+    ruleId
+    teamId
+    orgId
+    computedAt
+    windowStart
+    windowEnd
+    severity
+    title
+    rationale
+    successCriterion
+    evidence {
+      teamId
+      metricTable
+      windowStart
+      windowEnd
+      field
+      value
+      __typename
+    }
+    __typename
+  }
+}`
+
 // digestHex is a thin wrapper over the ONE canonical document-digest
 // algorithm (CHAOS-4696): sha256(strings.TrimSpace(text)), hex-encoded,
 // now shared code in internal/queryapi/digest so
@@ -3078,6 +3112,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
 		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
 		"workItemTeamAttributions":          digestHex(registeredWorkItemTeamAttributionsDocument),
+		"recommendations":                   digestHex(registeredRecommendationsDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a

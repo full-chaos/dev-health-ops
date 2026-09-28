@@ -155,6 +155,10 @@
     "digest": "8e2847048e3b70b0391f45d9cd8804735ea4401b7e78cd614e35e49ca39e348f"
   },
   {
+    "operation": "recommendations",
+    "digest": "c6261e9cb250f22f909e81c54b0c92e6d9e01aea7c25aa0a96919633e2c33276"
+  },
+  {
     "operation": "releaseImpact",
     "digest": "0d11e4442ba732c441246bf7c04c8585a391761187b0d20ebf26bcb4bbce1b4c"
   },

@@ -4,3 +4,4 @@ internal/synccli	TestLocalSyncMatchesLivePython	run
 internal/synccli	TestLocalSyncRerunKeepsHeldColumnsUnlikePython	run
 internal/synccli	TestSyncTargetMatchesLivePython	run
 internal/synccli	TestSyncTeamsGitHubVenueOracleMatchesThePythonProducer	run
+internal/synccli	TestSyncTeamsGitLabVenueOracleMatchesThePythonProducer	run

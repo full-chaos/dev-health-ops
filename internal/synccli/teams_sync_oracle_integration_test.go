@@ -220,6 +220,16 @@ type teamsOracle struct {
 
 func newTeamsOracle(t *testing.T) *teamsOracle {
 	t.Helper()
+	return newTeamsOracleFor(t, teamsSyncOracleProgram)
+}
+
+// newTeamsOracleFor is newTeamsOracle parameterized on the Python program run
+// as the live-producer child -- the github oracle's program and the gitlab
+// oracle's (teams_sync_oracle_gitlab.py) share every other piece of this
+// harness (the two ClickHouse databases, the migration chain, the line
+// protocol child-process wiring).
+func newTeamsOracleFor(t *testing.T, program string) *teamsOracle {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 	t.Cleanup(cancel)
 	root, err := filepath.Abs(filepath.Join("..", ".."))
@@ -278,7 +288,7 @@ func newTeamsOracle(t *testing.T) *teamsOracle {
 	}
 	t.Cleanup(func() { _ = goConn.Close() })
 
-	command := exec.Command(python, "-c", teamsSyncOracleProgram)
+	command := exec.Command(python, "-c", program)
 	command.Env = append(os.Environ(), "PYTHONHASHSEED=0", "PYTHONPATH="+filepath.Join(root, "src"))
 	stdin, err := command.StdinPipe()
 	if err != nil {

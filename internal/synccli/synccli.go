@@ -136,9 +136,9 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	flags := flag.NewFlagSet("dho sync teams", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
 	flags.Usage = func() { fmt.Fprint(env.Stderr, teamsUsage) }
-	provider := flags.String("provider", "", "the team source: jira or github")
-	owner := flags.String("owner", "", "the GitHub organization (github)")
-	auth := flags.String("auth", "", "the provider token (github; else GITHUB_TOKEN)")
+	provider := flags.String("provider", "", "the team source: jira, github or gitlab")
+	owner := flags.String("owner", "", "the GitHub organization (github) or GitLab group path (gitlab)")
+	auth := flags.String("auth", "", "the provider token (github/gitlab; else GITHUB_TOKEN/GITLAB_TOKEN)")
 	org := flags.String("org", "", "the organization id the rows are written under")
 	db := flags.String("db", "", "the domain database DSN the stored jira credential is resolved from (jira; else "+PostgresURIKey+")")
 	structure := flags.Bool("structure", false, "sync the teams")
@@ -156,7 +156,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 		return cli.ExitUsage
 	}
 	if *provider != "jira" && !isCatalogProvider(*provider) {
-		fmt.Fprintln(env.Stderr, "argument error: --provider must be jira or github")
+		fmt.Fprintln(env.Stderr, "argument error: --provider must be jira, github or gitlab")
 		return cli.ExitUsage
 	}
 	orgID := strings.TrimSpace(*org)
@@ -183,7 +183,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 		}
 		return runCatalogTeams(ctx, env, d, catalogRequest{
 			provider: *provider, orgID: orgID, owner: *owner, auth: *auth, allowEmpty: *allowEmpty,
-			structure: selections.Structure, members: selections.Members, dsn: dsn.Reveal(),
+			structure: selections.Structure, members: selections.Members, projects: selections.Projects, dsn: dsn.Reveal(),
 		})
 	}
 	settings, err := resolveTeamsSettings(ctx, env, d, orgID, *db)

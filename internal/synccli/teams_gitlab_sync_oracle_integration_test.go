@@ -1,0 +1,507 @@
+//go:build integration
+
+package synccli
+
+import (
+	"context"
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+)
+
+//go:embed testdata/teams_sync_oracle_gitlab.py
+var teamsSyncOracleGitLabProgram string
+
+// fakeGitLab is the one GitLab both planes read: python-gitlab (the real Python
+// verb, pointed here via GITLAB_URL, which providers/teams.py's gitlab branch
+// already reads -- no client monkeypatch needed, unlike the GitHub oracle) and
+// the Go catalog. It serves a single group (no subgroups): the subgroup-naming
+// divergence (python IDs a subgroup by its bare path, "gl:<leaf>"; the Go
+// catalog IDs it by full_path, "gl:<parent>/<leaf>") is proven separately in
+// TestGitLabSubgroupIDsDivergeByDesign, not through this row-by-row harness.
+type fakeGitLab struct {
+	server *httptest.Server
+	mu     sync.Mutex
+
+	token    string
+	group    fakeGitLabGroup
+	projects []fakeGitLabProject
+	users    map[string]string // username -> email ("" = private/none)
+	failing  map[string]int    // escaped path -> status to answer instead
+}
+
+type fakeGitLabGroup struct {
+	ID          int
+	FullPath    string
+	Name        string
+	Description *string
+	Members     []string
+}
+
+type fakeGitLabProject struct {
+	ID                int
+	PathWithNamespace string
+	Name              string
+	Archived          bool
+}
+
+func newFakeGitLab(t *testing.T) *fakeGitLab {
+	t.Helper()
+	f := &fakeGitLab{users: map[string]string{}, failing: map[string]int{}}
+	f.server = httptest.NewServer(http.HandlerFunc(f.handle))
+	t.Cleanup(f.server.Close)
+	return f
+}
+
+func (f *fakeGitLab) base() string { return f.server.URL }
+
+func (f *fakeGitLab) set(token string, group fakeGitLabGroup, projects []fakeGitLabProject, users map[string]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.token, f.group, f.projects, f.users = token, group, projects, users
+	f.failing = map[string]int{}
+}
+
+func writeGitLabJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func (f *fakeGitLab) groupJSON() map[string]any {
+	var description any
+	if f.group.Description != nil {
+		description = *f.group.Description
+	}
+	return map[string]any{"id": f.group.ID, "full_path": f.group.FullPath, "path": f.group.FullPath, "name": f.group.Name, "description": description}
+}
+
+func (f *fakeGitLab) memberJSON(username string) map[string]any {
+	email, known := f.users[username]
+	m := map[string]any{"id": 1000 + len(username), "username": username, "name": "Name of " + username}
+	if known && email != "" {
+		m["email"] = email
+	} else {
+		m["email"] = nil
+	}
+	return m
+}
+
+func (f *fakeGitLab) projectJSON(p fakeGitLabProject) map[string]any {
+	return map[string]any{
+		"id": p.ID, "path_with_namespace": p.PathWithNamespace, "name": p.Name,
+		"archived": p.Archived, "web_url": f.base() + "/" + p.PathWithNamespace,
+	}
+}
+
+func (f *fakeGitLab) handle(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	path := r.URL.EscapedPath()
+	if f.token != "" && r.Header.Get("PRIVATE-TOKEN") != f.token {
+		writeGitLabJSON(w, http.StatusUnauthorized, map[string]any{"message": "401 Unauthorized"})
+		return
+	}
+	if status, ok := f.failing[path]; ok {
+		writeGitLabJSON(w, status, map[string]any{"message": "injected failure"})
+		return
+	}
+	groupBase := "/api/v4/groups/" + url.PathEscape(f.group.FullPath)
+	switch {
+	case path == groupBase:
+		writeGitLabJSON(w, http.StatusOK, f.groupJSON())
+	case path == groupBase+"/subgroups":
+		writeGitLabJSON(w, http.StatusOK, []any{})
+	case path == groupBase+"/projects":
+		items := make([]any, 0, len(f.projects))
+		for _, p := range f.projects {
+			items = append(items, f.projectJSON(p))
+		}
+		writeGitLabJSON(w, http.StatusOK, items)
+	case path == groupBase+"/members":
+		items := make([]any, 0, len(f.group.Members))
+		for _, username := range f.group.Members {
+			items = append(items, f.memberJSON(username))
+		}
+		writeGitLabJSON(w, http.StatusOK, items)
+	default:
+		writeGitLabJSON(w, http.StatusNotFound, map[string]any{"message": "404 Group Not Found"})
+	}
+}
+
+type gitlabRun struct {
+	pythonStage string
+	pythonCode  string
+	goCode      int
+	goStdout    string
+	goStderr    string
+}
+
+// runGitLab runs both planes on the same scenario.
+func (o *teamsOracle) runGitLab(fake *fakeGitLab, orgID, owner, token string, sc *gitlabScenario, extra ...string) gitlabRun {
+	o.t.Helper()
+	o.truncateAll()
+	viaEnv := strings.HasPrefix(token, "env:")
+	token = strings.TrimPrefix(token, "env:")
+	argv := []string{"--org", orgID, "sync", "teams", "--provider", "gitlab", "--owner", owner}
+	pythonEnv := map[string]string{"CLICKHOUSE_URI": o.pythonHTTPDSN, "GITLAB_URL": fake.base()}
+	if sc != nil && sc.envToken != "" {
+		pythonEnv["GITLAB_TOKEN"] = sc.envToken
+	}
+	if viaEnv {
+		pythonEnv["GITLAB_TOKEN"] = token
+	} else {
+		argv = append(argv, "--auth", token)
+	}
+	argv = append(argv, extra...)
+	answer := o.ask(map[string]any{"argv": argv, "env": pythonEnv})
+	value := func(key string) string {
+		if item, ok := answer[key].(map[string]any); ok {
+			return fmt.Sprint(item["v"])
+		}
+		return ""
+	}
+	run := gitlabRun{pythonStage: value("stage"), pythonCode: value("code")}
+	run.goCode, run.goStdout, run.goStderr = o.runGoGitLab(fake, orgID, owner, token, viaEnv, sc, extra...)
+	return run
+}
+
+func (o *teamsOracle) runGoGitLab(fake *fakeGitLab, orgID, owner, token string, viaEnv bool, sc *gitlabScenario, extra ...string) (int, string, string) {
+	o.t.Helper()
+	env := map[string]string{"CLICKHOUSE_URI": o.goNativeDSN, "GITLAB_URL": fake.base()}
+	if sc != nil && sc.envToken != "" {
+		env["GITLAB_TOKEN"] = sc.envToken
+	}
+	lookup := func(key string) (string, bool) { v, ok := env[key]; return v, ok }
+	args := []string{"--provider", "gitlab", "--org", orgID, "--owner", owner}
+	if viaEnv {
+		env["GITLAB_TOKEN"] = token
+	} else {
+		args = append(args, "--auth", token)
+	}
+	args = append(args, extra...)
+	var stdout, stderr strings.Builder
+	d := defaultDeps()
+	d.now = func() time.Time { return time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC) }
+	d.doer = http.DefaultClient
+	d.openStore = func(context.Context, string) (driver.Conn, error) { return &keepOpen{o.goConn}, nil }
+	code := runTeams(o.ctx, cli.Env{Args: args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr}, d)
+	return code, stdout.String(), stderr.String()
+}
+
+type gitlabScenario struct {
+	name     string
+	owner    string
+	token    string
+	envToken string
+	group    fakeGitLabGroup
+	projects []fakeGitLabProject
+	users    map[string]string
+	prepare  func(o *teamsOracle, fake *fakeGitLab)
+	extra    []string
+	failPath map[string]int
+	// wantExit is the exit code both planes must end with.
+	wantExit int
+	// wantRows is how many teams both planes must have written.
+	wantRows int
+	// goDiffers marks a scenario where the two planes end differently by design
+	// (a sync-policy guard, for instance): the two databases are not compared
+	// column by column and `after` says what each must hold instead.
+	goDiffers bool
+	goExit    int
+	goRows    int
+	after     func(t *testing.T, o *teamsOracle, fake *fakeGitLab, sc *gitlabScenario, run gitlabRun, python, goRows []map[string]string)
+}
+
+func (sc *gitlabScenario) wantToken() string { return strings.TrimPrefix(sc.token, "env:") }
+
+// gitlabTeamsRule is teamsRule's gitlab-shaped counterpart: what one column of
+// `teams` must hold, given the scenario's fake group. Every column of the real
+// table needs one (the set is read from the schema in compareGitLab, so a
+// column added later fails until it is classified here).
+type gitlabTeamsRule struct {
+	same  bool
+	check func(sc *gitlabScenario, py, gr map[string]string) string
+	why   string
+}
+
+// parseGitLabList reads ClickHouse's toString of an Array(String): ['a','b'].
+func parseGitLabList(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "[]" || text == "" {
+		return nil
+	}
+	text = strings.TrimSuffix(strings.TrimPrefix(text, "["), "]")
+	var out []string
+	for _, part := range strings.Split(text, "','") {
+		out = append(out, strings.Trim(part, "'"))
+	}
+	return out
+}
+
+func gitlabTeamsRules() map[string]gitlabTeamsRule {
+	same := gitlabTeamsRule{same: true}
+	return map[string]gitlabTeamsRule{
+		// A top-level group's python id ("gl:"+group.path) and go's
+		// ("gl:"+full_path) are identical -- no namespace prefix. The
+		// subgroup case where they diverge is proven separately, not here.
+		"id": same, "is_active": same, "org_id": same,
+		"manual_members": {same: true, why: "neither scenario here seeds an admin override"},
+		"parent_team_id": same, "source_id": same,
+		"repo_patterns": {same: true, why: "GitLab ownership is team_project_ownership, not repo_patterns; neither plane writes it"},
+		"name": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			// Every scenario here gives the group a real, unpadded name, so both
+			// planes' actual behavior (python: the raw group.name, no fallback;
+			// go: trimmed, falling back to the team id when empty) agree. The
+			// fallback branch is not exercised.
+			want := sc.group.Name
+			if py["name"] != want || gr["name"] != want {
+				return fmt.Sprintf("name: want %q, python %q go %q", want, py["name"], gr["name"])
+			}
+			return ""
+		}, why: "both take the provider's name (a blank name is a named, untested divergence: go falls back to the team id, python does not)"},
+		"description": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			if sc.group.Description != nil && *sc.group.Description != "" {
+				if py["description"] != *sc.group.Description || gr["description"] != *sc.group.Description {
+					return fmt.Sprintf("a provider description is carried by both: python %q go %q", py["description"], gr["description"])
+				}
+				return ""
+			}
+			wantPy := "GitLab group " + sc.group.FullPath
+			if py["description"] != wantPy {
+				return fmt.Sprintf("python's fallback is %q, got %q", wantPy, py["description"])
+			}
+			if gr["description"] != "<NULL>" && gr["description"] != "" {
+				return fmt.Sprintf("go carries the provider's empty description, got %q", gr["description"])
+			}
+			return ""
+		}, why: "legacy: 'GitLab group <full_path>' when the provider has none; catalog: the provider's value"},
+		"members": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			var logins []string
+			for _, entry := range parseGitLabList(gr["members"]) {
+				if strings.HasPrefix(entry, "gitlab:") {
+					logins = append(logins, strings.TrimPrefix(entry, "gitlab:"))
+				}
+			}
+			want := parseGitLabList(py["members"])
+			sort.Strings(logins)
+			sort.Strings(want)
+			if strings.Join(logins, ",") != strings.Join(want, ",") {
+				return fmt.Sprintf("members: the usernames differ: python %v, go %v (from %s)", want, logins, gr["members"])
+			}
+			return ""
+		}, why: "legacy: bare usernames; catalog: provider-scoped identity facets"},
+		"team_uuid": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			wantGo := uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+py["id"])).String()
+			parsed, err := uuid.Parse(py["team_uuid"])
+			if err != nil || parsed.Version() != 4 {
+				return fmt.Sprintf("team_uuid: python's is a random uuid4, got %q", py["team_uuid"])
+			}
+			if gr["team_uuid"] != wantGo {
+				return fmt.Sprintf("team_uuid: go's is uuid5(URL, \"team:<id>\") = %s, got %s", wantGo, gr["team_uuid"])
+			}
+			return ""
+		}, why: "legacy: a random uuid4 per run; catalog: uuid5 of the team id, stable across runs"},
+		"provider": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			if py["provider"] != "" || gr["provider"] != "gitlab" {
+				return fmt.Sprintf("provider: python %q (want empty), go %q (want gitlab)", py["provider"], gr["provider"])
+			}
+			return ""
+		}, why: "legacy rows carry no provider; catalog rows are provider_access rows of 'gitlab'"},
+		"native_team_key": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			if py["native_team_key"] != "<NULL>" || gr["native_team_key"] != sc.group.FullPath {
+				return fmt.Sprintf("native_team_key: python %q (want NULL), go %q (want %q)", py["native_team_key"], gr["native_team_key"], sc.group.FullPath)
+			}
+			return ""
+		}, why: "legacy rows carry no native key; the catalog keys the team by its full_path"},
+		"project_keys": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			if py["project_keys"] != "[]" {
+				return fmt.Sprintf("project_keys: python %q (want [])", py["project_keys"])
+			}
+			var want []string
+			for _, p := range sc.projects {
+				want = append(want, p.PathWithNamespace)
+			}
+			sort.Strings(want)
+			got := parseGitLabList(gr["project_keys"])
+			sort.Strings(got)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				return fmt.Sprintf("project_keys: go %v, want %v", got, want)
+			}
+			return ""
+		}, why: "legacy: none; catalog: the group's own projects (its path_with_namespace values)"},
+		"updated_at": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			if py["updated_at"] == "" || gr["updated_at"] != "2026-09-26 12:00:00.000000" {
+				return fmt.Sprintf("updated_at: python %q, go %q (want the run's clock)", py["updated_at"], gr["updated_at"])
+			}
+			return ""
+		}, why: "time of the run (python: its own clock)"},
+		"last_synced": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			if py["last_synced"] == "" || gr["last_synced"] == "" {
+				return "last_synced is empty"
+			}
+			return ""
+		}, why: "time of the write (DEFAULT now() on both databases)"},
+	}
+}
+
+// compareGitLab checks one scenario: exit codes, then the `teams` rows column by column under
+// gitlabTeamsRules, then the tables only the catalog writes.
+func (o *teamsOracle) compareGitLab(sc *gitlabScenario, fake *fakeGitLab) {
+	t := o.t
+	t.Helper()
+	fake.set(sc.wantToken(), sc.group, sc.projects, sc.users)
+	for path, status := range sc.failPath {
+		fake.failing[path] = status
+	}
+	if sc.prepare != nil {
+		sc.prepare(o, fake)
+	}
+	run := o.runGitLab(fake, "org-1", sc.owner, sc.token, sc, sc.extra...)
+	if run.pythonStage != "ok" && run.pythonStage != "exit" {
+		t.Fatalf("%s: python ended %s (%s)", sc.name, run.pythonStage, run.pythonCode)
+	}
+	wantGoExit, wantGoRows := sc.wantExit, sc.wantRows
+	if sc.goDiffers {
+		wantGoExit, wantGoRows = sc.goExit, sc.goRows
+	}
+	wantPython := strconv.Itoa(sc.wantExit)
+	if run.pythonCode != wantPython || run.goCode != wantGoExit {
+		t.Fatalf("%s: exit codes: python %s (stage %s, want %d), go %d (want %d)\ngo stderr: %s", sc.name, run.pythonCode, run.pythonStage, sc.wantExit, run.goCode, wantGoExit, run.goStderr)
+	}
+	python := o.rows(o.pythonDatabase, "teams", "org-1")
+	goRows := o.rows(o.goDatabase, "teams", "org-1")
+	if len(python) != sc.wantRows || len(goRows) != wantGoRows {
+		t.Fatalf("%s: teams written: python %d (want %d), go %d (want %d)", sc.name, len(python), sc.wantRows, len(goRows), wantGoRows)
+	}
+	rules := gitlabTeamsRules()
+	cols, err := o.admin.Query(o.ctx, "SELECT name FROM system.columns WHERE database = ? AND table = 'teams' ORDER BY position", o.pythonDatabase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var columns []string
+	for cols.Next() {
+		var name string
+		if err := cols.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		columns = append(columns, name)
+	}
+	_ = cols.Close()
+	for _, column := range columns {
+		if _, ok := rules[column]; !ok {
+			t.Fatalf("teams has a column %q that the gitlab comparison does not classify: add a rule for it", column)
+		}
+	}
+	if !sc.goDiffers {
+		for index := range python {
+			py, gr := python[index], goRows[index]
+			for _, column := range columns {
+				rule := rules[column]
+				switch {
+				case rule.same:
+					if py[column] != gr[column] {
+						t.Errorf("%s team %s column %s: python %q go %q", sc.name, py["id"], column, py[column], gr[column])
+					}
+				default:
+					if message := rule.check(sc, py, gr); message != "" {
+						t.Errorf("%s team %s column %s: %s", sc.name, py["id"], column, message)
+					}
+				}
+			}
+		}
+	}
+	if sc.after != nil {
+		sc.after(t, o, fake, sc, run, python, goRows)
+	}
+	// Python wrote nothing but `teams`; the catalog also writes ownership and memberships.
+	for _, table := range []string{"team_project_ownership", "team_memberships", "projects"} {
+		if rows := o.rows(o.pythonDatabase, table, "org-1"); len(rows) != 0 {
+			t.Errorf("%s: python wrote %d %s rows", sc.name, len(rows), table)
+		}
+	}
+	if sc.wantExit == 0 && sc.wantRows > 0 && !sc.goDiffers {
+		wantMemberships := len(sc.group.Members)
+		memberships := o.rows(o.goDatabase, "team_memberships", "org-1")
+		if len(memberships) != wantMemberships {
+			t.Errorf("%s: go wrote %d team_memberships rows, the fake has %d members", sc.name, len(memberships), wantMemberships)
+		}
+		for _, row := range memberships {
+			username := strings.TrimPrefix(row["raw_provider_user_id"], "gitlab:")
+			want := fake.users[username]
+			if want == "" {
+				want = "<NULL>"
+			}
+			if row["raw_email"] != want {
+				t.Errorf("%s: membership of %s carries email %q, the fake's is %q", sc.name, username, row["raw_email"], want)
+			}
+			if row["member_id"] != "gl:"+username || row["source"] != "provider_access" || row["provider"] != "gitlab" || row["is_primary"] != "0" {
+				t.Errorf("%s: membership of %s has member_id %q source %q provider %q is_primary %q", sc.name, username, row["member_id"], row["source"], row["provider"], row["is_primary"])
+			}
+		}
+		wantOwnership := len(sc.projects)
+		if got := len(o.rows(o.goDatabase, "team_project_ownership", "org-1")); got != wantOwnership {
+			t.Errorf("%s: go wrote %d team_project_ownership rows, the fake has %d projects", sc.name, got, wantOwnership)
+		}
+	}
+}
+
+func TestSyncTeamsGitLabVenueOracleMatchesThePythonProducer(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
+	}
+	o := newTeamsOracleFor(t, teamsSyncOracleGitLabProgram)
+	fake := newFakeGitLab(t)
+
+	scenarios := []*gitlabScenario{
+		{name: "one top-level group with members and projects", owner: "acme", token: "tok", wantExit: 0, wantRows: 1,
+			group:    fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Description: strPtr("The Acme group"), Members: []string{"alice", "bob"}},
+			projects: []fakeGitLabProject{{ID: 501, PathWithNamespace: "acme/api", Name: "api"}, {ID: 502, PathWithNamespace: "acme/web", Name: "web"}},
+			users:    map[string]string{"alice": "alice@example.com", "bob": ""}},
+		{name: "no description", owner: "acme", token: "tok", wantExit: 0, wantRows: 1,
+			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Description: nil, Members: []string{"alice"}}, users: map[string]string{"alice": "a@example.com"}},
+		{name: "a group with no projects and one member", owner: "acme", token: "tok", wantExit: 0, wantRows: 1,
+			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, users: map[string]string{"alice": ""}},
+		{name: "the token from GITLAB_TOKEN", owner: "acme", token: "env:tok", wantExit: 0, wantRows: 1,
+			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, users: map[string]string{"alice": ""}},
+		{name: "--auth wins over GITLAB_TOKEN", owner: "acme", token: "tok", envToken: "not-the-token", wantExit: 0, wantRows: 1,
+			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, users: map[string]string{"alice": ""}},
+		{name: "a rejected token", owner: "acme", token: "wrong", wantExit: 1, wantRows: 0,
+			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}},
+		{name: "an unknown group", owner: "nope", token: "tok", wantExit: 1, wantRows: 0,
+			group: fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}},
+		{name: "a member roster that cannot be read stops the run", owner: "acme", token: "tok", wantExit: 1, wantRows: 0,
+			group:    fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}},
+			failPath: map[string]int{"/api/v4/groups/acme/members": 500}},
+	}
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			o.t = t
+			o.compareGitLab(sc, fake)
+		})
+	}
+	if !t.Failed() {
+		venueoracle.WriteProof(t)
+	}
+}
+
+// The subgroup id divergence this harness deliberately does not exercise
+// (python: "gl:" + the group's own path; go: "gl:" + full_path) is proven in
+// internal/providersync/gitlab_team_catalog_subgroup_id_test.go, next to
+// gitlabTeamID itself.

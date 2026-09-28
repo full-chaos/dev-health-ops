@@ -94,7 +94,7 @@ func run(t *testing.T, env map[string]string, d deps, args ...string) (int, stri
 func TestUsageErrorsRunNothing(t *testing.T) {
 	for name, args := range map[string][]string{
 		"no provider":    {"--org", "o"},
-		"wrong provider": {"--provider", "gitlab", "--org", "o"},
+		"wrong provider": {"--provider", "bitbucket", "--org", "o"},
 		"no org":         {"--provider", "jira"},
 		"blank org":      {"--provider", "jira", "--org", "  "},
 		"unknown flag":   {"--provider", "jira", "--org", "o", "--nope"},
@@ -330,6 +330,35 @@ func TestGitHubCatalogRefusalsRunNothing(t *testing.T) {
 	delete(noCH, "CLICKHOUSE_URI")
 	rec := &recorded{}
 	if code, _, stderr := run(t, noCH, stubDeps(rec, failingClient{}, nil), "--provider", "github", "--org", "o", "--owner", "acme", "--auth", "tok"); code != cli.ExitRefused || !strings.Contains(stderr, "CLICKHOUSE_URI") {
+		t.Errorf("no ClickHouse: exit %d %s", code, stderr)
+	}
+}
+
+// The GitLab catalog verb refuses what Python's gitlab branch refuses, before it opens a
+// store: no owner (group path), no token.
+func TestGitLabCatalogRefusalsRunNothing(t *testing.T) {
+	env := validEnv()
+	delete(env, "GITLAB_TOKEN")
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		args []string
+		want string
+	}{
+		"no owner":    {env, []string{"--provider", "gitlab", "--org", "o", "--auth", "tok"}, "--owner is required for gitlab provider"},
+		"no token":    {env, []string{"--provider", "gitlab", "--org", "o", "--owner", "acme"}, "GitLab token required"},
+		"blank owner": {env, []string{"--provider", "gitlab", "--org", "o", "--owner", "  ", "--auth", "tok"}, "--owner is required for gitlab provider"},
+	} {
+		rec := &recorded{}
+		code, stdout, stderr := run(t, tc.env, stubDeps(rec, failingClient{}, nil), tc.args...)
+		if code != cli.ExitFailure || !strings.Contains(stderr, tc.want) || stdout != "" || rec.opened != 0 {
+			t.Errorf("%s: exit %d stdout %q stderr %q opened %d", name, code, stdout, stderr, rec.opened)
+		}
+	}
+	// Without ClickHouse the verb is refused (exit 3) before anything is read.
+	noCH := validEnv()
+	delete(noCH, "CLICKHOUSE_URI")
+	rec := &recorded{}
+	if code, _, stderr := run(t, noCH, stubDeps(rec, failingClient{}, nil), "--provider", "gitlab", "--org", "o", "--owner", "acme", "--auth", "tok"); code != cli.ExitRefused || !strings.Contains(stderr, "CLICKHOUSE_URI") {
 		t.Errorf("no ClickHouse: exit %d %s", code, stderr)
 	}
 }

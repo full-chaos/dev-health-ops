@@ -109,7 +109,9 @@ def test_the_repoint_call_actually_received_is_pinned_with_expect_build() -> Non
     """D2823 P1 #2, behaviorally: the ACTUAL string the stubbed vt() received (not a grep of
     the source file) must carry -expect-build $NEW."""
     _, captured_call = _run_harness(vt_stub_rc=0)
-    assert captured_call, "the stub vt() was never invoked -- the block did not run at all"
+    assert captured_call, (
+        "the stub vt() was never invoked -- the block did not run at all"
+    )
     assert "-expect-build 1111111111111111111111111111111111111111" in captured_call, (
         "the real post-cut repoint invocation the stub received does not carry "
         f"-expect-build $NEW: {captured_call!r}"

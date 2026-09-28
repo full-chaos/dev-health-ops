@@ -272,8 +272,19 @@ func scriptedReadinessStub(w http.ResponseWriter, r *http.Request) {
 	case req.MaxCompletionTokens != readinessMaxOutputTokens:
 		fail("unexpected max_completion_tokens")
 		return
-	case req.ParallelToolCalls == nil || *req.ParallelToolCalls != false:
-		fail("unexpected parallel_tool_calls")
+	// parallel_tool_calls is gated on tools being present
+	// (build_completion_request: `if tools and supports_parallel_tool_calls(model)`)
+	// -- round1 sends it (false), round2 (no tools) omits the key entirely.
+	// D2984: this was unconditional before, so round2's correct omission
+	// was rejected on EVERY request regardless of round, on BOTH planes
+	// identically -- masking any round1 mutation under an unrelated,
+	// always-firing false failure that made the two planes agree
+	// ("failed"/"provider_unavailable") for the wrong reason.
+	case wantTools == 1 && (req.ParallelToolCalls == nil || *req.ParallelToolCalls != false):
+		fail("unexpected parallel_tool_calls on the tool-bearing round")
+		return
+	case wantTools == 0 && req.ParallelToolCalls != nil:
+		fail("unexpected parallel_tool_calls present on the no-tools round")
 		return
 	case req.Temperature == nil || *req.Temperature != 0.0:
 		fail("unexpected temperature")

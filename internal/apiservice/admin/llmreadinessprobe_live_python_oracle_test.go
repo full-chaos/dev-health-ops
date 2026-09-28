@@ -7,12 +7,31 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
+
+// jsonSemanticallyEqual compares two JSON documents by VALUE, not by byte
+// content: Go's encoding/json and Python's json.dumps do not agree on key
+// order or whitespace for the same logical document, so a byte-string
+// comparison of Go's own hand-computed schema constants against Python's own
+// runtime-serialized schema would fail even when the two are the identical
+// schema. Both sides decode into `any` (map[string]any/[]any/float64/etc.)
+// and compare with reflect.DeepEqual, which JSON's decoded types support.
+func jsonSemanticallyEqual(a, b []byte) bool {
+	var va, vb any
+	if err := json.Unmarshal(a, &va); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &vb); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(va, vb)
+}
 
 // TestReadinessProbeMatchesLivePython is the CHAOS-6976 differential oracle
 // (D2839 item 6): it runs THIS PORT'S readinessProber and readiness.py's
@@ -191,9 +210,29 @@ func scriptedReadinessStub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Model      string `json:"model"`
-		ToolChoice string `json:"tool_choice"`
-		Messages   []struct {
+		Model               string   `json:"model"`
+		ToolChoice          string   `json:"tool_choice"`
+		MaxCompletionTokens int      `json:"max_completion_tokens"`
+		ParallelToolCalls   *bool    `json:"parallel_tool_calls"`
+		Temperature         *float64 `json:"temperature"`
+		ReasoningEffort     string   `json:"reasoning_effort"`
+		Tools               []struct {
+			Type     string `json:"type"`
+			Function struct {
+				Name       string          `json:"name"`
+				Parameters json.RawMessage `json:"parameters"`
+				Strict     bool            `json:"strict"`
+			} `json:"function"`
+		} `json:"tools"`
+		ResponseFormat *struct {
+			Type       string `json:"type"`
+			JSONSchema struct {
+				Name   string          `json:"name"`
+				Strict bool            `json:"strict"`
+				Schema json.RawMessage `json:"schema"`
+			} `json:"json_schema"`
+		} `json:"response_format"`
+		Messages []struct {
 			Role string `json:"role"`
 		} `json:"messages"`
 	}
@@ -206,21 +245,63 @@ func scriptedReadinessStub(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// D2908 condition 3a: assert the wire tool_choice matches
-	// build_completion_request's own rule (openai_compatible.py:1016-1018)
-	// -- "required" while a tool is still pending (round 1) and omitted
-	// once a final answer is allowed (round 2, tools=[]) -- on EVERY
-	// request either plane sends. A caller (Go OR Python) that gets this
-	// wrong degrades to a 500 here rather than the mismatch going
-	// unnoticed, which is exactly the class of gap a hand-mutated
-	// tool_choice slipped past in r1's own P3 finding.
+	// D2908 condition 3a (widened per codex r2's P3 finding,
+	// llmreadinessprobe_live_python_oracle_test.go:193): assert the FULL
+	// wire request shape both AgentReadinessService.certify's real
+	// OpenAICompatibleAgentProvider and this port's readinessProber must
+	// produce, matching build_completion_request (openai_compatible.py:970-1038)
+	// field for field -- not just tool_choice. A caller (Go OR Python) that
+	// gets any of these wrong degrades to a 500 here rather than the
+	// mismatch going unnoticed silently as a passing scenario.
 	wantToolChoice := "required"
+	wantTools := 1
+	wantResponseFormat := false
 	if round2 {
 		wantToolChoice = ""
+		wantTools = 0
+		wantResponseFormat = true
 	}
-	if req.ToolChoice != wantToolChoice {
+	fail := func(reason string) {
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"error":{"type":"server_error","message":"oracle stub: unexpected tool_choice"}}`))
+		_, _ = w.Write([]byte(`{"error":{"type":"server_error","message":"oracle stub: ` + reason + `"}}`))
+	}
+	switch {
+	case req.ToolChoice != wantToolChoice:
+		fail("unexpected tool_choice")
+		return
+	case req.MaxCompletionTokens != readinessMaxOutputTokens:
+		fail("unexpected max_completion_tokens")
+		return
+	case req.ParallelToolCalls == nil || *req.ParallelToolCalls != false:
+		fail("unexpected parallel_tool_calls")
+		return
+	case req.Temperature == nil || *req.Temperature != 0.0:
+		fail("unexpected temperature")
+		return
+	case req.ReasoningEffort != "":
+		// scripted-* model names never match the gpt-5* prefix on either
+		// plane (openai_capabilities.py:82-84 / reasoningEffort in
+		// llmreadinessprobe.go) -- always omitted for this oracle's models.
+		fail("unexpected reasoning_effort")
+		return
+	case len(req.Tools) != wantTools:
+		fail("unexpected tools count")
+		return
+	case wantTools == 1 && (req.Tools[0].Type != "function" ||
+		req.Tools[0].Function.Name != readinessEchoWireName ||
+		!req.Tools[0].Function.Strict ||
+		!jsonSemanticallyEqual(req.Tools[0].Function.Parameters, []byte(readinessToolParametersSchema))):
+		fail("unexpected tool schema")
+		return
+	case wantResponseFormat && (req.ResponseFormat == nil ||
+		req.ResponseFormat.Type != "json_schema" ||
+		req.ResponseFormat.JSONSchema.Name != "ask_dev_decision" ||
+		!req.ResponseFormat.JSONSchema.Strict ||
+		!jsonSemanticallyEqual(req.ResponseFormat.JSONSchema.Schema, []byte(readinessDecisionResponseSchema))):
+		fail("unexpected response_format")
+		return
+	case !wantResponseFormat && req.ResponseFormat != nil:
+		fail("unexpected response_format present on round 1")
 		return
 	}
 

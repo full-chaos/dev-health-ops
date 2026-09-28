@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -72,6 +73,29 @@ func failingDoer() fakeReadinessDoer {
 	}
 }
 
+// poisonDoer records whether it was ever invoked, for the SSRF route-wiring
+// subtest below. TestReadinessSSRFGuardCoversEveryPythonRefusalClass
+// (llmreadinessprobe_ssrf_test.go) proves llmorgsettings.ValidateBaseURLChecked
+// itself refuses every Python refusal class, called DIRECTLY -- codex r2's P3
+// finding is that nothing proves the ROUTE still calls that guard: a route
+// that stopped calling it, or called it and ignored the result, would not be
+// caught by that unit test alone. The route's HTTP handler runs the request
+// on the http.Server's own goroutine, not the test's, so this cannot call
+// t.Fatalf directly (testing.T requires FailNow on the test's own
+// goroutine) -- it records the request URL on an atomic pointer instead, and
+// the test asserts it's still nil AFTER the POST call returns.
+type poisonDoer struct {
+	invokedURL atomic.Pointer[string]
+}
+
+func (p *poisonDoer) Do(req *http.Request) (*http.Response, error) {
+	url := req.URL.String()
+	p.invokedURL.Store(&url)
+	// Answer as if the SSRF target were "ready" -- the worst case, proving
+	// this isn't refused only by accident of an otherwise-unreachable stub.
+	return jsonResponse(200, readyRound1Body), nil
+}
+
 // TestLLMSettingsReadinessRouteSuccessPath is D2908 condition 3 (the P3
 // r1 named: "0.0% coverage" on postLLMSettingsReadiness/
 // loadReadinessBYOConfig). It is a Go-only proof (no Python response is
@@ -99,7 +123,7 @@ func TestLLMSettingsReadinessRouteSuccessPath(t *testing.T) {
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-readiness-32-bytes!"
 
-	readyOrgID, failOrgID := uuid.New(), uuid.New()
+	readyOrgID, failOrgID, ssrfOrgID := uuid.New(), uuid.New(), uuid.New()
 	adminUserID := uuid.New()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
@@ -113,7 +137,7 @@ func TestLLMSettingsReadinessRouteSuccessPath(t *testing.T) {
 					t.Fatalf("seed: %v\n%s", err, sql)
 				}
 			}
-			for slug, id := range map[string]uuid.UUID{"ready": readyOrgID, "fail": failOrgID} {
+			for slug, id := range map[string]uuid.UUID{"ready": readyOrgID, "fail": failOrgID, "ssrf": ssrfOrgID} {
 				exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $2, 'team', 'stripe', true, now(), now())`, id, "llmreadiness-route-"+slug)
 			}
@@ -130,9 +154,17 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), org.Stri
 				row(org, "api_key", "sk-route-test")
 				row(org, "base_url", "https://example.invalid/v1")
 			}
+			// ssrfOrgID: an otherwise-valid config (provider/model/api_key all
+			// set) whose base_url is a real SSRF refusal class -- IP-literal
+			// loopback, class 8 of TestReadinessSSRFGuardCoversEveryPythonRefusalClass
+			// -- proving the ROUTE's own call site still blocks it end to end.
+			row(ssrfOrgID, "provider", "openai")
+			row(ssrfOrgID, "model", "gpt-5-mini")
+			row(ssrfOrgID, "api_key", "sk-route-test")
+			row(ssrfOrgID, "base_url", "https://127.0.0.1/v1")
 
 			tokens := map[string]map[string]any{}
-			for slug, org := range map[string]uuid.UUID{"ready": readyOrgID, "fail": failOrgID} {
+			for slug, org := range map[string]uuid.UUID{"ready": readyOrgID, "fail": failOrgID, "ssrf": ssrfOrgID} {
 				tokens[slug] = map[string]any{"user_id": adminUserID.String(), "email": "llmreadiness-route-admin@example.com", "org_id": org.String(), "role": "admin"}
 			}
 			return tokens
@@ -216,6 +248,27 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), org.Stri
 		}
 		if getDecoded["readiness_safe_failure_reason"] != reason {
 			t.Fatalf("GET status readiness_safe_failure_reason = %v, want the POST's own %q (readback of the SAME row): %s", getDecoded["readiness_safe_failure_reason"], reason, getResp.body)
+		}
+	})
+
+	t.Run("ssrf_refused_base_url_never_reaches_the_network", func(t *testing.T) {
+		doer := &poisonDoer{}
+		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = doer })
+
+		postResp := doRouteRequest(t, base, "POST", "/api/v1/admin/llm-settings/readiness", auth("ssrf"))
+		if postResp.status != 404 {
+			t.Fatalf("POST readiness with an SSRF-refused base_url: status=%d body=%s, want 404 (guard must refuse before any network call)", postResp.status, postResp.body)
+		}
+		var postDecoded map[string]any
+		if err := json.Unmarshal([]byte(postResp.body), &postDecoded); err != nil {
+			t.Fatalf("decode POST body: %v\n%s", err, postResp.body)
+		}
+		const wantDetail = "No BYO LLM configuration is saved for this organization."
+		if postDecoded["detail"] != wantDetail {
+			t.Fatalf("POST readiness detail = %v, want %q: %s", postDecoded["detail"], wantDetail, postResp.body)
+		}
+		if invoked := doer.invokedURL.Load(); invoked != nil {
+			t.Fatalf("SSRF guard did not block the route: the prober reached the network at %s", *invoked)
 		}
 	})
 

@@ -118,19 +118,47 @@ for f in $R/_records/bigboy-$OLD8/pass-bigboy-corpus-admin7.sh; do [ -f $f ] && 
 # proof-infrastructure.md, "When the schema digest moves"). `carry` itself refuses (exit 2) when
 # the live and target schema digests already agree -- the EXPECTED shape for an ordinary,
 # non-schema-changing roll, not a failure, so only that one named refusal text is read as a
-# pass here. Any other non-zero result aborts the cut before migrate/up ever runs.
+# pass here. One documented, real exception (rev196, both bigboy's own re-cut and the actual
+# prod roll, _records/bigboy-1b05473e/prod-rev196-step1.5-carry-lines.md's own ABORT RULE A):
+# a refusal naming "run repoint first" means the live rows lag the actually-running build (no
+# schema change involved at all) -- repoint against the same live process, then ONE retry of
+# carry; only a second refusal is fatal. Any other non-zero result aborts the cut before
+# migrate/up ever runs.
 ROUTING_ORG=${ROUTING_ORG:-67f1add8-9fcb-4272-addb-044b70c442c8}  # the disposable fixture org, never the local org
+CARRY_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo"
 CARRY_OUT=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
-  "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing carry -registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll carry, cut $OLD8 -> $N8'" 2>&1)
+  "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing carry $CARRY_ARGS -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll carry, cut $OLD8 -> $N8'" 2>&1)
 CARRY_RC=$?
 echo "$CARRY_OUT" > $REC.routing-carry.out
 if [ $CARRY_RC -eq 0 ]; then
   st routing-carry 0
 elif echo "$CARRY_OUT" | grep -q "this binary's SDL is the one the deployed process already computes"; then
   st routing-carry 0; echo "no schema-digest change this cut -- nothing to carry"
+elif echo "$CARRY_OUT" | grep -q "run repoint first"; then
+  echo "pre-roll carry: rows lag the actually-running build (no schema change) -- repointing then retrying once"
+  REPOINT_OUT=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
+    "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing repoint $CARRY_ARGS -operations all-registered -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll repoint-before-retry, cut $OLD8 -> $N8'" 2>&1)
+  REPOINT_RC=$?
+  echo "$REPOINT_OUT" >> $REC.routing-carry.out
+  if [ $REPOINT_RC -ne 0 ]; then
+    st routing-carry 1
+    echo "FAIL: pre-roll repoint-before-retry itself failed -- see $REC.routing-carry.out; ABORTING (CHAOS-7022)" >&2
+    exit 1
+  fi
+  CARRY_OUT2=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
+    "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing carry $CARRY_ARGS -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll carry retry after repoint, cut $OLD8 -> $N8'" 2>&1)
+  CARRY_RC2=$?
+  echo "$CARRY_OUT2" >> $REC.routing-carry.out
+  if [ $CARRY_RC2 -eq 0 ]; then
+    st routing-carry 0; echo "pre-roll carry: OK after repoint-then-retry"
+  else
+    st routing-carry 1
+    echo "FAIL: pre-roll routing carry still refused after repoint-then-retry -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
+    exit 1
+  fi
 else
   st routing-carry 1
-  echo "FAIL: pre-roll routing carry refused for a reason other than 'no schema change' -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
+  echo "FAIL: pre-roll routing carry refused for a reason other than 'no schema change' or a stale build -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
   exit 1
 fi
 # CHAOS-6987 (D2728): --env-file is required from here on -- docker compose's default .env

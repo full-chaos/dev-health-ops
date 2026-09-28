@@ -28,7 +28,9 @@ def _first(lines: list[str], needle: str, *, start: int = 0) -> int:
         stripped = lines[i].lstrip()
         if needle in lines[i] and not stripped.startswith("#"):
             return i
-    raise AssertionError(f"{needle!r} not found in bigboy-cut.sh after line {start + 1}")
+    raise AssertionError(
+        f"{needle!r} not found in bigboy-cut.sh after line {start + 1}"
+    )
 
 
 def test_carry_runs_after_repin_and_before_migrate_up() -> None:
@@ -58,7 +60,13 @@ def test_carry_never_hand_types_the_target_digest() -> None:
         "the carry invocation must not carry a hand-typed schema digest -- "
         "it is computed by the binary's own embedded SDL"
     )
-    assert "-registry-url" in carry_line and "-buildinfo-url" in carry_line, (
+    args_at = _first(lines, "CARRY_ARGS=")
+    args_line = lines[args_at]
+    assert "CARRY_ARGS" in carry_line, (
+        "the carry call must reuse the shared CARRY_ARGS (registry/buildinfo endpoints), "
+        "not repeat or diverge from it per call"
+    )
+    assert "-registry-url" in args_line and "-buildinfo-url" in args_line, (
         "carry must read the live digest from the deployed process's /registry, "
         "not from a flag"
     )
@@ -69,7 +77,9 @@ def test_digest_unchanged_refusal_is_treated_as_pass() -> None:
     lines = _lines()
     carry_at = _first(lines, "dho goapi routing carry")
     block = "\n".join(lines[carry_at : carry_at + 15])
-    assert "this binary's SDL is the one the deployed process already computes" in block, (
+    assert (
+        "this binary's SDL is the one the deployed process already computes" in block
+    ), (
         "the digest-unchanged refusal text (carry's own wording) must be matched explicitly, "
         "not inferred from a bare exit code"
     )
@@ -88,6 +98,37 @@ def test_carry_refusal_for_any_other_reason_aborts_before_the_recreate() -> None
     assert "exit 1" in tail, (
         "a carry refusal other than the named digest-unchanged case must abort the cut "
         "(exit 1) before migrate/up ever runs -- refuse-not-skip, CHAOS-7022"
+    )
+
+
+def test_carry_has_the_repoint_then_retry_fallback() -> None:
+    """The documented, real exception (rev196, both bigboy's re-cut and the actual prod
+    roll): a refusal naming 'run repoint first' triggers ONE repoint-then-retry before
+    anything is treated as fatal."""
+    lines = _lines()
+    carry_at = _first(lines, "dho goapi routing carry")
+    migrate_at = _first(lines, "--no-deps migrate", start=carry_at)
+    block = "\n".join(lines[carry_at:migrate_at])
+    assert "run repoint first" in block
+    assert block.count("dho goapi routing repoint") == 1, (
+        "exactly one repoint call in the pre-roll carry block's fallback"
+    )
+    assert block.count("dho goapi routing carry") == 2, (
+        "exactly two carry attempts: the first, and the one retry after repoint"
+    )
+
+
+def test_carry_retry_failure_after_repoint_still_aborts() -> None:
+    """Only a SECOND refusal (after the repoint-then-retry) is fatal -- but it must still
+    be fatal, not silently accepted."""
+    lines = _lines()
+    carry_at = _first(lines, "dho goapi routing carry")
+    migrate_at = _first(lines, "--no-deps migrate", start=carry_at)
+    block = "\n".join(lines[carry_at:migrate_at])
+    assert "still refused after repoint-then-retry" in block
+    assert block.count("exit 1") >= 2, (
+        "both the repoint-before-retry failure path and the carry-still-refused-after-retry "
+        "path must abort (exit 1), not just the final catch-all"
     )
 
 

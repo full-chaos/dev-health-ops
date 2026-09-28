@@ -12,13 +12,19 @@ HTTP server standing in for the deployed query-api's /registry and /buildinfo, a
 only `docker` -- rewriting bigboy-cut.sh's `docker compose run venue-tools "<cmd>"`
 invocation to run the real binary against that real server instead of the docker-network
 hostname `query-api:8090` -- for the two cases bigboy-cut.sh actually branches on
-`$CARRY_REASON` for: digest unchanged (no-op) and stale build (repoint-then-retry). (The
-"carried" success case needs nothing new here: bigboy-cut.sh's `[ $CARRY_RC -eq 0 ]` branch
-is unchanged by this whole rework, and the JSON contract itself is proven end to end
-against real Postgres by internal/goapicli/routing/carry_integration_test.go's
-TestCarryJSONReasonIsCarriedOnSuccess.) Neither case here needs Postgres: `carry`'s own
-preflights refuse both before ever opening a database connection (confirmed by the
-existing Go integration test asserting the SAME refusal against an unreachable DSN).
+`$CARRY_REASON` for: digest unchanged (no-op) and stale build (repoint-then-retry). Neither
+case here needs Postgres: `carry`'s own preflights refuse both before ever opening a
+database connection (confirmed by the existing Go integration test asserting the SAME
+refusal against an unreachable DSN).
+
+r3 P1 (CHAOS-7022, real, reproduced -- corrects a false claim this docstring used to make):
+the "carried" success case was NOT, in fact, unchanged and needing no test -- bigboy-cut.sh's
+`[ $CARRY_RC -eq 0 ]` branch (and its retry's `[ $CARRY_RC2 -eq 0 ]`) accepted a zero exit
+status alone as proof of a carry, with no check that a `carried` reason (or ANY recognized
+reason) actually accompanied it. A docker/compose-layer zero exit with no
+`GOAPI_ROUTING_JSON` line at all -- never touching the real `dho` binary -- passed silently.
+`test_real_zero_exit_with_no_json_still_aborts_the_cut` below is the missing test: `docker`
+stubbed to `exit 0` unconditionally, emitting nothing, never invoking the real CLI at all.
 """
 
 from __future__ import annotations
@@ -499,5 +505,57 @@ def test_real_unrecognized_refusal_still_aborts_the_cut(
     ), f"the catch-all abort branch never fired -- stderr={proc.stderr!r}"
     assert _HARNESS_SENTINEL not in proc.stdout, (
         "the harness reached the line after the carry block -- an unrecognized refusal "
+        f"did not actually abort. stdout={proc.stdout!r}"
+    )
+
+
+def test_real_zero_exit_with_no_json_still_aborts_the_cut(tmp_path: Path) -> None:
+    """r3 P1 (CHAOS-7022): a zero exit status alone must never be read as a carry. `docker`
+    here exits 0 unconditionally and prints nothing for every call -- the compose layer
+    "succeeded" but the real `dho` binary never ran, so no `GOAPI_ROUTING_JSON` line, and no
+    `carried` reason, ever exists. Before the fix this fell straight into the
+    `[ $CARRY_RC -eq 0 ]` branch and reported success; the retry path (same stub, reached via
+    a first call returning `stale_build`) has the identical bug at `[ $CARRY_RC2 -eq 0 ]`.
+    Both must abort. No dho binary or fake query-api server needed: `docker` never reaches
+    either."""
+    block = _extract_block()
+    stub_bin = tmp_path / "stubbin"
+    stub_bin.mkdir(exist_ok=True)
+    docker_stub = stub_bin / "docker"
+    docker_stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+    docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC)
+
+    rec_prefix = tmp_path / "rec"
+    harness = tmp_path / "harness.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"REC={rec_prefix}\n"
+        "OLD8=aaaaaaaa\n"
+        "N8=bbbbbbbb\n"
+        'st() { echo "STEP $1 rc=$2"; }\n'
+        f"{block}\n"
+        f"echo {_HARNESS_SENTINEL}\n"
+    )
+    harness.chmod(harness.stat().st_mode | stat.S_IEXEC)
+
+    proc = subprocess.run(
+        ["bash", str(harness)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+        env={"PATH": f"{stub_bin}:/usr/bin:/bin"},
+    )
+    assert proc.returncode != 0, (
+        "a zero exit with no GOAPI_ROUTING_JSON line (no evidence a carry happened) must "
+        f"abort the cut -- got rc={proc.returncode}, stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert (
+        "refused for a reason other than 'no schema change' or a stale build"
+        in proc.stderr
+    ), f"the catch-all abort branch never fired -- stderr={proc.stderr!r}"
+    assert _HARNESS_SENTINEL not in proc.stdout, (
+        "the harness reached the line after the carry block -- a zero exit with no reason "
         f"did not actually abort. stdout={proc.stdout!r}"
     )

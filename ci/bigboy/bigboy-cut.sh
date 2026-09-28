@@ -157,7 +157,14 @@ CARRY_OUT=$(docker compose --env-file ops/.env --profile venue run --rm --no-dep
 CARRY_RC=$?
 echo "$CARRY_OUT" > "$REC.routing-carry.out"
 CARRY_REASON=$(carry_reason "$CARRY_OUT")
-if [ $CARRY_RC -eq 0 ]; then
+# r3 P1 (real, reproduced): a zero exit status alone is not evidence a carry
+# happened -- a docker/compose-layer zero exit with no GOAPI_ROUTING_JSON line
+# at all (or one with an unrecognized reason) previously fell into this branch
+# unconditionally. "carried" is the CLI's only reason for a true zero-exit
+# success (D2828/D2829's closed vocabulary); require it explicitly, and treat
+# a zero exit with anything else the same as a refusal -- fail closed, never
+# fall through on exit status alone.
+if [ $CARRY_RC -eq 0 ] && [ "$CARRY_REASON" = "carried" ]; then
   st routing-carry 0
 elif [ "$CARRY_REASON" = "digest_unchanged" ]; then
   st routing-carry 0; echo "no schema-digest change this cut -- nothing to carry"
@@ -176,16 +183,19 @@ elif [ "$CARRY_REASON" = "stale_build" ]; then
     "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing carry $CARRY_ARGS -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll carry retry after repoint, cut $OLD8 -> $N8'" 2>&1)
   CARRY_RC2=$?
   echo "$CARRY_OUT2" >> "$REC.routing-carry.out"
-  if [ $CARRY_RC2 -eq 0 ]; then
+  CARRY_REASON2=$(carry_reason "$CARRY_OUT2")
+  # Same r3 P1 fix, applied to the retry: exit status alone is not enough here
+  # either.
+  if [ $CARRY_RC2 -eq 0 ] && [ "$CARRY_REASON2" = "carried" ]; then
     st routing-carry 0; echo "pre-roll carry: OK after repoint-then-retry"
   else
     st routing-carry 1
-    echo "FAIL: pre-roll routing carry still refused after repoint-then-retry -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
+    echo "FAIL: pre-roll routing carry still refused after repoint-then-retry (rc=$CARRY_RC2 reason=${CARRY_REASON2:-unrecognized}) -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
     exit 1
   fi
 else
   st routing-carry 1
-  echo "FAIL: pre-roll routing carry refused for a reason other than 'no schema change' or a stale build (reason=${CARRY_REASON:-unrecognized}) -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
+  echo "FAIL: pre-roll routing carry refused for a reason other than 'no schema change' or a stale build (rc=$CARRY_RC reason=${CARRY_REASON:-unrecognized}) -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
   exit 1
 fi
 # CHAOS-6987 (D2728): --env-file is required from here on -- docker compose's default .env

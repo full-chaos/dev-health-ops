@@ -114,7 +114,7 @@ func TestInternalOnlyRouteExistsOnlyOnTheInternalListener(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 	})
 
-	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, nil)
 	ctx := context.Background()
 	if err := public.Start(ctx); err != nil {
 		t.Fatal(err)

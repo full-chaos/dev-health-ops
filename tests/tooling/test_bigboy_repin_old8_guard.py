@@ -25,7 +25,9 @@ def _first(lines: list[str], needle: str, *, start: int = 0) -> int:
         stripped = lines[i].lstrip()
         if needle in lines[i] and not stripped.startswith("#"):
             return i
-    raise AssertionError(f"{needle!r} not found in bigboy-repin.sh after line {start + 1}")
+    raise AssertionError(
+        f"{needle!r} not found in bigboy-repin.sh after line {start + 1}"
+    )
 
 
 def test_old8_shape_is_checked_before_any_file_is_touched() -> None:
@@ -43,7 +45,7 @@ def test_old8_shape_is_checked_before_any_file_is_touched() -> None:
 def test_old8_shape_guard_rejects_nine_characters() -> None:
     """The exact D2801 shape: bd25cd0a9 (9 chars) must not match the 8-hex-char case pattern."""
     lines = _lines()
-    shape_at = _first(lines, "case \"$OLD8\" in")
+    shape_at = _first(lines, 'case "$OLD8" in')
     pattern_line = lines[shape_at + 1]
     hex_class_count = pattern_line.count("[0-9a-f]")
     assert hex_class_count == 8, (
@@ -56,7 +58,11 @@ def test_old8_cross_checked_against_the_actually_pinned_digest_before_repin() ->
     lines = _lines()
     resolved_at = _first(lines, "OLD_DIGEST_RESOLVED=")
     pinned_at = _first(lines, "OLD_DIGEST_PINNED=", start=resolved_at)
-    mismatch_at = _first(lines, 'if [[ "$OLD_DIGEST_RESOLVED" != "$OLD_DIGEST_PINNED" ]]', start=pinned_at)
+    mismatch_at = _first(
+        lines,
+        'if [[ "$OLD_DIGEST_RESOLVED" != "$OLD_DIGEST_PINNED" ]]',
+        start=pinned_at,
+    )
     dig_fn_at = _first(lines, "dig() {", start=mismatch_at)
     assert resolved_at < pinned_at < mismatch_at < dig_fn_at, (
         "OLD8 must be resolved against the registry and cross-checked against the digest "
@@ -67,7 +73,11 @@ def test_old8_cross_checked_against_the_actually_pinned_digest_before_repin() ->
 
 def test_digest_mismatch_fails_loudly_not_a_silent_noop() -> None:
     lines = _lines()
-    mismatch_at = _first(lines, 'if [[ "$OLD_DIGEST_RESOLVED" != "$OLD_DIGEST_PINNED" ]]')
+    mismatch_at = _first(
+        lines, 'if [[ "$OLD_DIGEST_RESOLVED" != "$OLD_DIGEST_PINNED" ]]'
+    )
     block = "\n".join(lines[mismatch_at : mismatch_at + 5])
-    assert "exit 4" in block, "an OLD8/live-digest mismatch must abort (non-zero exit), never continue"
+    assert "exit 4" in block, (
+        "an OLD8/live-digest mismatch must abort (non-zero exit), never continue"
+    )
     assert "does not name the ACTUALLY-running build" in block

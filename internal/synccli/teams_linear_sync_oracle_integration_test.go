@@ -130,6 +130,28 @@ func (f *fakeLinear) handle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"errors": []any{map[string]any{"message": "bad request"}}})
 		return
 	}
+	// codex r1, CHAOS-6908 (P3): the collector issues THREE query shapes with
+	// no "teamId" key on two of them -- routing on "teamId" alone (the only
+	// check this fake originally had) misrouted both to the teams-listing
+	// branch below, which answers with `data.teams` instead of `data.cycles`/
+	// `data.projects`; the Go client's JSON decode of that mismatched shape
+	// failed with "provider pagination response is invalid" on every
+	// non-empty scenario (an executed repro confirmed this against the
+	// unmodified fake). Dispatch on the actual distinguishing variable each
+	// query sends instead of assuming "no teamId" means "teams listing":
+	//   - "filter": {"team": {"id": {"eq": <id>}}}      -> cycles (collectLinearCycles)
+	//   - "teamId": "<id>"                                -> members for one team
+	//   - "includeArchived": true                         -> native projects
+	//   - none of the above                                -> teams listing
+	// Neither cycles nor projects affect anything this oracle compares
+	// (python's legacy verb never fetches either), so both get a clean empty
+	// answer.
+	if _, isCycles := req.Variables["filter"]; isCycles {
+		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
+			"cycles": map[string]any{"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}},
+		}})
+		return
+	}
 	if teamID, ok := req.Variables["teamId"].(string); ok {
 		key := strings.TrimPrefix(teamID, "id-")
 		var members []any
@@ -143,6 +165,12 @@ func (f *fakeLinear) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
 			"team": map[string]any{"members": map[string]any{"nodes": members, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}}},
+		}})
+		return
+	}
+	if includeArchived, ok := req.Variables["includeArchived"].(bool); ok && includeArchived {
+		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
+			"projects": map[string]any{"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}},
 		}})
 		return
 	}
@@ -213,8 +241,14 @@ func (o *teamsOracle) runGoLinear(fake *fakeLinear, orgID, token string, viaEnv 
 type linearScenario struct {
 	name  string
 	token string
-	teams []fakeLinearTeam
-	extra []string
+	// serverToken, when set, is the token the fake actually requires --
+	// distinct from token (what the client sends). Needed for a genuine
+	// rejected-token scenario: leaving it unset made the fake accept
+	// whatever token the client happened to send, so "a rejected token"
+	// never actually rejected anything (codex r1, CHAOS-6908, P3).
+	serverToken string
+	teams       []fakeLinearTeam
+	extra       []string
 	// wantExit is the exit code both planes must end with.
 	wantExit int
 	// wantRows is python's written team count.
@@ -228,7 +262,15 @@ type linearScenario struct {
 	after     func(t *testing.T, o *teamsOracle, sc *linearScenario, run linearRun, python, goRows []map[string]string)
 }
 
-func (sc *linearScenario) wantToken() string { return strings.TrimPrefix(sc.token, "env:") }
+// wantToken is the token the fake actually requires: serverToken when the
+// scenario sets one (a genuine mismatch case), else the token the client
+// itself sends.
+func (sc *linearScenario) wantToken() string {
+	if sc.serverToken != "" {
+		return sc.serverToken
+	}
+	return strings.TrimPrefix(sc.token, "env:")
+}
 
 type linearTeamsRule struct {
 	same  bool
@@ -309,11 +351,16 @@ func linearTeamsRules() map[string]linearTeamsRule {
 			if strings.Join(logins, ",") != strings.Join(want, ",") {
 				return fmt.Sprintf("members: the identities differ: want %v, go %v (from %s)", want, logins, gr["members"])
 			}
+			// codex r1, CHAOS-6908 (P1): providers/teams.py's inline path (a
+			// team's page-1 members(first:10), which every row-compared
+			// scenario here fits inside) never filters on `active` at all --
+			// only the FULL-pagination path (LinearClient.get_team_members)
+			// does. No row-compared scenario has an inactive member (that
+			// divergence is asserted directly, not through this equality
+			// check); if one is ever added here, python's expectation must
+			// NOT filter it out.
 			var pyWant []string
 			for _, m := range team.Members {
-				if !m.Active {
-					continue
-				}
 				identity := m.Email
 				if identity == "" {
 					identity = m.Name
@@ -451,16 +498,49 @@ func TestSyncTeamsLinearVenueOracleMatchesThePythonProducer(t *testing.T) {
 		}},
 		{Key: "OPS", Name: "Operations", Members: []fakeLinearMember{
 			{ID: "u3", Name: "Carol", Email: "carol@example.com", Active: true},
-			{ID: "u4", Name: "Dave", Email: "dave@example.com", Active: false}, // inactive: excluded by both planes
+			{ID: "u4", Name: "Dave", Email: "dave@example.com", Active: true},
 		}},
 	}
 
 	scenarios := []*linearScenario{
-		{name: "two teams, one member without an email, one inactive member excluded", token: "tok", teams: two, wantExit: 0, wantRows: 2},
+		{name: "two teams, one member without an email", token: "tok", teams: two, wantExit: 0, wantRows: 2},
 		{name: "the token from LINEAR_API_KEY", token: "env:tok", teams: two, wantExit: 0, wantRows: 2},
-		{name: "a rejected token", token: "wrong", teams: two, wantExit: 1, wantRows: 0},
+		{name: "a rejected token", token: "wrong", serverToken: "tok", teams: two, wantExit: 1, wantRows: 0},
 		{name: "an empty workspace is an error", token: "tok", teams: nil, wantExit: 1, wantRows: 0},
 		{name: "an empty workspace with --allow-empty", token: "tok", teams: nil, extra: []string{"--allow-empty"}, wantExit: 0, wantRows: 0},
+		{name: "an inactive member: legacy keeps it inline, dho's catalog excludes it", token: "tok", wantExit: 0, wantRows: 1,
+			teams: []fakeLinearTeam{{Key: "ENG", Name: "Engineering", Members: []fakeLinearMember{
+				{ID: "u1", Name: "Alice", Email: "alice@example.com", Active: true},
+				{ID: "u2", Name: "Bob", Email: "bob@example.com", Active: false},
+			}}},
+			// codex r1, CHAOS-6908 (P1): for a team with <=10 inline members,
+			// providers/teams.py never filters on `active` at all (only the
+			// FULL-pagination path, LinearClient.get_team_members, does) --
+			// the legacy verb keeps an inactive member in `teams.members`;
+			// dho's catalog always excludes one (linearReferenceTeamRosterFacets).
+			// Real, undocumented-until-now output divergence: not a row-by-row
+			// comparison, `after` asserts each plane's actual content directly.
+			goDiffers: true, goExit: 0, goRows: 1,
+			after: func(t *testing.T, o *teamsOracle, sc *linearScenario, run linearRun, python, goRows []map[string]string) {
+				if len(python) != 1 || len(goRows) != 1 {
+					t.Fatalf("want exactly one team row on each plane, got python %d go %d", len(python), len(goRows))
+				}
+				pyMembers := parseLinearList(python[0]["members"])
+				sort.Strings(pyMembers)
+				if strings.Join(pyMembers, ",") != "alice@example.com,bob@example.com" {
+					t.Errorf("python members = %v, want both alice and the inactive bob kept (inline path never filters active)", pyMembers)
+				}
+				var goLogins []string
+				for _, entry := range parseLinearList(goRows[0]["members"]) {
+					if strings.HasPrefix(entry, "linear:") {
+						goLogins = append(goLogins, strings.TrimPrefix(entry, "linear:"))
+					}
+				}
+				sort.Strings(goLogins)
+				if strings.Join(goLogins, ",") != "alice@example.com" {
+					t.Errorf("go members = %v, want only alice (the catalog always excludes inactive members)", goLogins)
+				}
+			}},
 		{name: "an archived team: python skips it, go's catalog does not", token: "tok", wantExit: 0, wantRows: 1,
 			teams:     []fakeLinearTeam{{Key: "ENG", Name: "Engineering", Members: []fakeLinearMember{{ID: "u1", Name: "Alice", Email: "alice@example.com", Active: true}}}, {Key: "OLD", Name: "Retired", Archived: true, Members: []fakeLinearMember{{ID: "u5", Name: "Eve", Email: "eve@example.com", Active: true}}}},
 			goDiffers: true, goExit: 0, goRows: 2,

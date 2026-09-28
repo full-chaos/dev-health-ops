@@ -88,9 +88,9 @@ var webhookSubOrgs = []string{
 // webhookUnknownOrg is a well-formed org id no organizations row has.
 const webhookUnknownOrg = "99999999-0000-4000-8000-000000000001"
 
-func webhookRequests(t *testing.T, f billingFixture) []venueoracle.Request {
+func webhookRequests(t *testing.T, f billingFixture, now time.Time) []venueoracle.Request {
 	t.Helper()
-	stamp := time.Now().Unix() + 200
+	stamp := now.Unix() + 200
 	var requests []venueoracle.Request
 	raw := func(name string, body []byte, header string) {
 		headers := map[string]string{"Content-Type": "application/json"}
@@ -165,7 +165,7 @@ func webhookRequests(t *testing.T, f billingFixture) []venueoracle.Request {
 	invoice("invoice.payment_failed: metadata null", "invoice.payment_failed", nil)
 	invoice("invoice.payment_failed: empty org_id", "invoice.payment_failed", map[string]any{"org_id": ""})
 
-	subscriptionRequests(t, f, event, func(name string, body []byte) { signed(name, body) })
+	subscriptionRequests(t, f, event, func(name string, body []byte) { signed(name, body) }, now)
 	refundRequests(t, event)
 
 	// Types this slice does not handle yet (named in the PR) and unknown
@@ -177,7 +177,7 @@ func webhookRequests(t *testing.T, f billingFixture) []venueoracle.Request {
 	raw("signature: missing header", body, "\x00")
 	raw("signature: empty header", body, "")
 	raw("signature: wrong secret", body, webhookSignature("whsec_other", stamp, body))
-	raw("signature: expired", body, webhookSignature(webhookVenueSecret, time.Now().Unix()-1000, body))
+	raw("signature: expired", body, webhookSignature(webhookVenueSecret, stamp-1200, body))
 	raw("signature: garbage header", body, "t=abc,v1=00")
 	signed("payload: not utf-8", []byte("\xff\xfe"))
 	signed("payload: not json", []byte("not json"))
@@ -242,6 +242,7 @@ func webhookEnv() map[string]string {
 func TestVenueOracleBillingWebhook(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
+	golden := venueoracle.OpenGolden(t, webhookGoldenSpec(t.Name(), goldenDigest(t.Name())))
 	start := time.Now().UTC()
 	fake := newFakeStripe()
 	pyStripe, goStripe := httptest.NewServer(fake.plane("py")), httptest.NewServer(fake.plane("go"))
@@ -260,7 +261,7 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 	}
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			// Org C's tier is managed by hand: Stripe events leave it alone.
@@ -294,17 +295,35 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 		StripeSecretKey:    loaded.StripeSecretKey, APIBilling: loaded.APIBilling,
 		StripeWebhookSecret: loaded.StripeWebhookSecret, LicensePrivateKey: loaded.LicensePrivateKey,
 	}
-	base := startBillingVenueAPI(t, ctx, cfg, venue, goStripe.URL)
-	requests := webhookRequests(t, seed)
-	python := venue.ServePython(t, requests)
-	normalize := billingNormalizer(seeded, start)
+	// Prime the golden's lifecycle (recordedAt needs at least one Python call
+	// first) so the webhook signatures webhookRequests stamps below are
+	// stamped from the recorded clock, not the instant a later frozen
+	// replay happens to run at.
+	golden.Python(t, venue, []venueoracle.Request{})
+	goNow := recordedAt(t, golden, start)
+	base := startBillingVenueAPI(t, ctx, cfg, venue, goStripe.URL, func() time.Time { return goNow })
+	requests := webhookRequests(t, seed, goNow)
+	rawPython := golden.Python(t, venue, requests)
+	// Both normalizers key off goNow, not start: every billing write in
+	// this run (Go's h.now(), threaded from Deps.Now above) lands near
+	// goNow, never near start once start and goNow diverge on a frozen
+	// replay -- using start here would judge Go's OWN writes against the
+	// wrong clock and read a row genuinely written "just now" (by goNow's
+	// reckoning) as stale, on every replay after the one that recorded it.
+	normalize := billingNormalizer(seeded, goNow)
+	normalizePython := billingNormalizer(seeded, goNow)
+	python := normalizeAnswers(rawPython, normalizePython)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
+		Golden:    golden,
 	})
 
-	fake.mu.Lock()
-	pyCalls, goCalls := append([]string(nil), fake.calls["py"]...), append([]string(nil), fake.calls["go"]...)
-	fake.mu.Unlock()
+	goCalls := func() []string {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		return append([]string(nil), fake.calls["go"]...)
+	}()
+	pyCalls := pythonCalls(t, golden, fake)
 	// The line-items reads both planes made on the run that fixed this
 	// number: a change in how many checkout cases reach Stripe has to change
 	// it knowingly, not pass as long as the two lists agree.
@@ -331,8 +350,8 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 		sort.Strings(out)
 		return strings.Join(out, "\n")
 	}
-	tables := subscriptionTables(t, ctx, start)
-	for name, read := range refundTables(t, ctx, start) {
+	tables := subscriptionTables(t, ctx, goNow)
+	for name, read := range refundTables(t, ctx, goNow) {
 		tables[name] = read
 	}
 	for name, read := range map[string]func(string) string{
@@ -343,7 +362,7 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 		"org_licenses timestamps": func(uri string) string {
 			return venueoracle.TableRows(t, ctx, uri, `SELECT org_id::text, last_validated_at IS NOT NULL, created_at IS NOT NULL, updated_at IS NOT NULL,
 				features_override::text, limits_override::text, licensed_users IS NULL, issued_at IS NULL, validation_error IS NULL,
-				`+webhookTimestamp("expires_at", start)+` FROM org_licenses ORDER BY org_id`)
+				`+webhookTimestamp("expires_at", goNow)+` FROM org_licenses ORDER BY org_id`)
 		},
 	} {
 		tables[name] = read
@@ -396,11 +415,22 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 		t.Errorf("go trial_expiring keys are not keyed by the Stripe event id: %v", goTrialKeys)
 	}
 	for _, name := range names {
-		pyRows := normalize(tables[name](venue.AdminURI(t, venue.SourceDB)))
+		// billing_notifications/worker_job_outbox carry a trial_expiring key
+		// each plane forms differently (see blankTrialKeys' own comment);
+		// blanking must happen BEFORE the golden compares the two values, or
+		// a real, expected difference reads as a frozen-golden mismatch.
+		blank := name == "billing_notifications" || name == "worker_job_outbox"
 		goRows := normalize(tables[name](venue.AdminURI(t, venue.GoDB)))
-		if name == "billing_notifications" || name == "worker_job_outbox" {
-			pyRows, goRows = blankTrialKeys(pyRows), blankTrialKeys(goRows)
+		if blank {
+			goRows = blankTrialKeys(goRows)
 		}
+		pyRows := golden.CompareRows(t, "rows:"+name, func() string {
+			raw := normalizePython(tables[name](venue.AdminURI(t, venue.SourceDB)))
+			if blank {
+				raw = blankTrialKeys(raw)
+			}
+			return raw
+		}, goRows)
 		same := pyRows == goRows && pyRows != ""
 		receipt += fmt.Sprintf("%s rows after the events: %s\n", name, venueoracle.Mark(same))
 		if !same {
@@ -409,7 +439,7 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 	}
 	measureSubscriptions(t, ctx, venue.AdminURI(t, venue.GoDB))
 	measureRefunds(t, ctx, venue.AdminURI(t, venue.GoDB))
-	receipt += refundMetadata(t, ctx, venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB))
+	receipt += refundMetadata(t, ctx, golden, venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB))
 	goLicenses := licenses(venue.AdminURI(t, venue.GoDB))
 	if !strings.Contains(goLicenses, "valid=true") || !strings.Contains(goLicenses, `"tier":"enterprise"`) {
 		t.Errorf("the Go plane stored no verified enterprise license: the checkout path measured nothing\n%s", goLicenses)
@@ -418,4 +448,5 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 		_ = os.WriteFile(path+".webhook", []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	golden.Finish(t)
 }

@@ -85,8 +85,12 @@ func startVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, venue *
 }
 
 // startBillingVenueAPI is startVenueAPI with the Go plane's Stripe client
-// pointed at stripeBase ("" = Stripe's own base).
-func startBillingVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, venue *venueoracle.Venue, stripeBase string) string {
+// pointed at stripeBase ("" = Stripe's own base). now optionally injects the
+// billing routes' clock (a frozen golden's webhook signature timestamp check
+// must judge a replay at the instant it was recorded for, not the instant it
+// happens to replay at, see recordedAt); omitted or nil, it is time.Now, same
+// as every existing caller that does not pass one.
+func startBillingVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, venue *venueoracle.Venue, stripeBase string, now ...func() time.Time) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, cfg.APIDatabaseURI.Reveal())
 	if err != nil {
@@ -113,10 +117,15 @@ func startBillingVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	clock := time.Now
+	if len(now) > 0 && now[0] != nil {
+		clock = now[0]
+	}
 	deps := apiservice.Deps{
 		Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), Producer: producer,
 		Stripe:        stripeclient.New(stripeclient.Options{Key: cfg.StripeSecretKey.Reveal(), BaseURL: stripeBase}),
 		BillingConfig: cfg.APIBilling, StripeWebhookSecret: cfg.StripeWebhookSecret, LicensePrivateKey: cfg.LicensePrivateKey,
+		Now: clock,
 	}
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.OrgScope, scope.Impersonation)
@@ -152,6 +161,16 @@ func resetSeedSequence(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 // route bodies: the build the frozen goldens' Python answers were executed on.
 const pythonBuild = "023ae3e584ef6345a3bfaef1f0b30abd89f5dee8"
 
+// webhookPythonBuild is the commit the CHAOS-7032 webhook goldens' Python
+// answers were executed on: the last main commit before the Python Stripe
+// webhook route (billing/router.py's stripe_webhook, CHAOS-6258) is deleted.
+// Deliberately its OWN const, not pythonBuild above: the billing route bodies
+// pythonBuild's goldens froze (CHAOS-6924/6859) may have changed between that
+// pin and this one, and reusing one shared build for both would either force
+// a pointless re-record of the four already-verified goldens or silently
+// pin them to a build their own frozen files were never executed on.
+const webhookPythonBuild = "c3a755abd3b30ba41625178c6bb00e1e2c219fcb"
+
 // goldenOracles names the oracles that have a golden; goldenPins holds their
 // digests in the same order (the digests the recording run printed). They are
 // two lists, not a name-to-digest map: a "...Key" oracle name next to a
@@ -161,6 +180,15 @@ var goldenOracles = []string{
 	"TestVenueOracleBillingLedger",
 	"TestVenueOracleBillingPlansCheckout",
 	"TestVenueOracleBillingWithoutStripeKey",
+	// CHAOS-7032: the four webhook oracles that still called venue.ServePython
+	// directly, frozen before the Python Stripe webhook route is deleted
+	// (CHAOS-6258/7033). Each pin below starts as goldenrecord's own
+	// placeholder format (PIN:<test name>) and is find-and-replaced with the
+	// real digest by the record verb at promotion time -- never hand-edited.
+	"TestVenueOracleBillingWebhook",
+	"TestInvoiceWebhookAppliesTestModeEvents",
+	"TestRefundEventOwnershipGrid",
+	"TestRefundEventSettledGrid",
 }
 
 var goldenPins = []string{
@@ -168,6 +196,10 @@ var goldenPins = []string{
 	"086d39915f2bf1a97ce9a895c3e45d74496c0b24a4c1a91c4a55835468ff5f78",
 	"62b01745c54ab42a2e714dab3140d895fbab9c83d978445003a0b185e0bbd0f4",
 	"bc6f6a1cfd97cc65b0381e87742bd157b17306f0d9b77fa20cde18fad5464ff2",
+	"eae6b7b926d6cbfff0a0f45267f0c8567dc4eb4b7517521cc52095c6d8f5ff98",
+	"9ec608a8968381fe737c3429c0bd3282cd594d6ed86987557dc5e5af0b5d67e0",
+	"4c98044fee585b1ed44003e9a4d09bd68cc09f39fd25b567ccdc9345ac45172b",
+	"30337911414d150b0d6d9fa68051fb36e6c35919a7769f4d3a16fb8abe4a21a0",
 }
 
 // goldenDigest is the pinned digest of the golden of the oracle called name.
@@ -188,6 +220,19 @@ func goldenSpec(name, sha string) venueoracle.GoldenSpec {
 		PythonBuild: pythonBuild,
 		SHA256:      sha,
 		Recipe: "git worktree add --detach <dir> " + pythonBuild + "; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 " +
+			"DHO_VENUE_GOLDEN_PYTHON_ROOT=<dir> DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^" + name + "$' .",
+	}
+}
+
+// webhookGoldenSpec is goldenSpec for the CHAOS-7032 webhook oracles: same
+// shape, pinned to webhookPythonBuild instead of pythonBuild (see its own
+// comment for why they must not share one build const).
+func webhookGoldenSpec(name, sha string) venueoracle.GoldenSpec {
+	return venueoracle.GoldenSpec{
+		Path:        filepath.Join("testdata", "golden", name+".json"),
+		PythonBuild: webhookPythonBuild,
+		SHA256:      sha,
+		Recipe: "git worktree add --detach <dir> " + webhookPythonBuild + "; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 " +
 			"DHO_VENUE_GOLDEN_PYTHON_ROOT=<dir> DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^" + name + "$' .",
 	}
 }

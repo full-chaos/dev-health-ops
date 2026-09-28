@@ -320,7 +320,7 @@ func startGoMutationServer(t *testing.T, ctx context.Context, venue *venueoracle
 	for op := range oracleDocuments() {
 		mux.Register(op, gql)
 	}
-	handler := newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, true)
+	handler := newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, nil, nil, true)
 	envelopes = func(org string) string {
 		return iaEnvelope(t, priv, principal.Claims{OrgID: org, Role: "admin"})
 	}

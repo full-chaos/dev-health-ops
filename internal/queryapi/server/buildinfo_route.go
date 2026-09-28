@@ -122,7 +122,10 @@ func newBuildInfoHandler(verifier *principal.Verifier) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if _, ok := authenticateInternalRequest(w, r, verifier); !ok {
+		// edgeAuth/edgeStore nil: the edge-access-token carrier is /query-only
+		// (CHAOS-6263 PR (a), D2898/D2905) -- /buildinfo keeps accepting only
+		// the internal headers or the envelope, unchanged.
+		if _, ok := authenticateInternalRequest(w, r, verifier, nil, nil); !ok {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

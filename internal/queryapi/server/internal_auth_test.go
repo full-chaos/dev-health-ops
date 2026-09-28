@@ -18,6 +18,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
@@ -81,6 +82,14 @@ func iaEnvelope(t *testing.T, priv ed25519.PrivateKey, claims principal.Claims) 
 // records the claims the resolver would see.
 func iaDispatch(t *testing.T, verifier *principal.Verifier) (http.HandlerFunc, *[]authctx.Claims) {
 	t.Helper()
+	return iaDispatchWithEdge(t, verifier, nil, nil)
+}
+
+// iaDispatchWithEdge is iaDispatch generalized over the edge-carrier
+// dependencies (CHAOS-6263 PR (a)) -- nil, nil reproduces iaDispatch's own
+// "edge carrier not configured" posture exactly.
+func iaDispatchWithEdge(t *testing.T, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store) (http.HandlerFunc, *[]authctx.Claims) {
+	t.Helper()
 	seen := &[]authctx.Claims{}
 	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": true})
 	mux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +97,7 @@ func iaDispatch(t *testing.T, verifier *principal.Verifier) (http.HandlerFunc, *
 		*seen = append(*seen, claims)
 		w.WriteHeader(http.StatusOK)
 	}))
-	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, true)
+	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, edgeAuth, edgeStore, true)
 	return handler, seen
 }
 

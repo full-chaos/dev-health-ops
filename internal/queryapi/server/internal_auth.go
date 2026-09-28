@@ -1,9 +1,11 @@
 package server
 
 import (
+	"errors"
 	"log"
 	"net/http"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
@@ -16,16 +18,28 @@ import (
 //   - the internal identity headers (the in-cluster caller states the
 //     identity; no token), or
 //   - the effective-principal envelope bearer (the migration carrier, until
-//     the Python edge stops minting it).
+//     the Python edge stops minting it), or
+//   - (CHAOS-6263 PR (a), /query only: edgeAuth non-nil) the user's own
+//     edge access token -- the SAME HS256 bearer authenticateRESTRequest
+//     already accepts on every REST route, disambiguated from the
+//     envelope by the token's own JWT `alg` header, exactly as that
+//     function does.
 //
-// A request carrying both is refused, never resolved by preferring one: two
-// carriers can name two identities. A request carrying neither, or a
-// malformed one, is refused with the same bare 401 the envelope path always
-// answered. Never call this from a route an Ingress reaches: a browser could
-// set the identity headers itself. Those routes keep authenticateRESTRequest.
+// A request carrying both the header carrier and ANY Authorization value
+// is refused, never resolved by preferring one: two carriers can name two
+// identities. A request carrying more than one Authorization header value
+// is refused the same way -- two bearer tokens can also name two
+// identities, and taking "the first" (net/http's Header.Get) would silently
+// ignore the second rather than notice the ambiguity. A request carrying
+// neither, or a malformed one, is refused with the same bare 401 the
+// envelope path always answered. Never call this from a route an Ingress
+// reaches: a browser could set the identity headers itself. Those routes
+// keep authenticateRESTRequest.
 //
 // verifier may be nil only where a test exercises the no-carrier refusal.
-func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier) (authctx.Claims, bool) {
+// edgeAuth/edgeStore are nil for /buildinfo (this credential is /query-only,
+// per D2898/D2905) and for a pod with no GO_API_EDGE_JWT_SECRET configured.
+func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store) (authctx.Claims, bool) {
 	if refuseAmbiguousCarrier(w, r) {
 		return authctx.Claims{}, false
 	}
@@ -52,6 +66,13 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 		refuseInternal(w, r, "no_carrier", "none")
 		return authctx.Claims{}, false
 	}
+
+	if edgeAuth != nil {
+		if alg, ok := jwtHeaderAlg(token); ok && alg == principal.EdgeAlgorithm {
+			return authenticateEdgeCarrier(w, r, edgeAuth, edgeStore, token)
+		}
+	}
+
 	verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
 	claims, err := verifier.Verify(verifyCtx, token)
 	if err != nil {
@@ -65,12 +86,93 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 	return authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}, true
 }
 
-// refuseAmbiguousCarrier answers 401 and reports true when the request carries
-// both the internal identity headers and an Authorization header. /query calls
-// it before it looks the document up, so an ambiguous request is refused even
-// for a document this router would otherwise 404 (r1 P1: the 404 came first).
+// authenticateEdgeCarrier is /query's edge-access-token path (CHAOS-6263
+// PR (a), D2905). Unlike the envelope branch above, it does not trust the
+// token's own is_superuser/impersonation claims (there ARE none --
+// EdgeClaims/the raw JWT carry is_superuser too, but Authenticate replaces
+// it with the LIVE users row value, same as go-api's REST plane and
+// Python's authenticate_access_token, see principal.go:19,144 there): is
+// active, is_superuser and token_version are read live via
+// policy.Authenticator.Authenticate; membership and impersonation-session
+// state are read live via the SAME store Authenticate used (edgeStore),
+// mirroring policy.Scope's own mayUseOrg/Impersonation call shape
+// (scope.go) rather than reimplementing the DB checks. Role is trusted
+// from the token, unchanged inherited behaviour -- Python's own
+// get_authenticated_user does the same (services/auth.py:350), never
+// re-verified against a live row on either plane today.
+func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store, token string) (authctx.Claims, bool) {
+	ctx := r.Context()
+	user, err := edgeAuth.Authenticate(ctx, token)
+	if err != nil {
+		internalidentity.RecordOutcome("edge", "invalid")
+		if errors.Is(err, policy.ErrUnavailable) {
+			log.Printf("query-api: internal request refused: reason=edge_store_unavailable carrier=edge path=%s request_id=%s",
+				r.URL.Path, envelopeRequestID(r))
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return authctx.Claims{}, false
+		}
+		refuseInternal(w, r, "edge_rejected", "edge")
+		return authctx.Claims{}, false
+	}
+
+	orgID := user.OrgID
+	impersonationActive := false
+	if user.IsSuperuser {
+		session, sessionErr := edgeStore.ActiveImpersonation(ctx, user.ID)
+		if sessionErr != nil {
+			// Fail OPEN on this one check only -- Scope.Impersonation's own
+			// precedent (scope.go): a session-lookup failure means "not
+			// impersonating", logged, never a 401 over a single degraded
+			// read. is_active/is_superuser/token_version above already
+			// failed CLOSED; this is the one live check that does not,
+			// matching go-api's existing behaviour exactly.
+			log.Printf("query-api: edge impersonation lookup failed, treating as not impersonating: user_id=%s path=%s request_id=%s",
+				user.UserID, r.URL.Path, envelopeRequestID(r))
+		} else if session != nil {
+			orgID = session.TargetOrgID.String()
+			impersonationActive = true
+		}
+	}
+
+	// Membership existence for the token's own claimed org (D2905
+	// condition 1) -- skipped only when impersonating (the live session
+	// above IS the authorization for the target org; an impersonating
+	// admin is deliberately not a member of it) or when orgID is empty
+	// (a platform-wide operation, e.g. productTelemetryPlatformDashboard,
+	// which Python itself calls with org_id="" -- schema.py:222).
+	if orgID != "" && !impersonationActive {
+		member, memberErr := edgeAuth.IsMember(ctx, user.UserID, orgID)
+		if memberErr != nil {
+			log.Printf("query-api: internal request refused: reason=edge_membership_lookup_failed carrier=edge path=%s request_id=%s",
+				r.URL.Path, envelopeRequestID(r))
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return authctx.Claims{}, false
+		}
+		if !member {
+			refuseInternal(w, r, "edge_not_a_member", "edge")
+			return authctx.Claims{}, false
+		}
+	}
+
+	internalidentity.RecordOutcome("edge", "accepted")
+	return authctx.Claims{OrgID: orgID, Role: user.Role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive}, true
+}
+
+// refuseAmbiguousCarrier answers 401 and reports true when the request
+// carries both the internal identity headers and an Authorization header,
+// OR more than one Authorization header value (two bearer tokens can also
+// name two identities; net/http's Header.Get silently returns only the
+// first, which would hide the second rather than notice the ambiguity).
+// /query calls it before it looks the document up, so an ambiguous
+// request is refused even for a document this router would otherwise 404
+// (r1 P1: the 404 came first).
 func refuseAmbiguousCarrier(w http.ResponseWriter, r *http.Request) bool {
-	if !internalidentity.Present(r.Header) || len(r.Header.Values("Authorization")) == 0 {
+	authValues := len(r.Header.Values("Authorization"))
+	if authValues > 1 {
+		refuseInternal(w, r, "ambiguous_carrier", "authorization")
+		return true
+	}
+	if !internalidentity.Present(r.Header) || authValues == 0 {
 		return false
 	}
 	refuseInternal(w, r, "ambiguous_carrier", "both")

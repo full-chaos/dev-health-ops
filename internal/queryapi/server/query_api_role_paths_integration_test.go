@@ -13,9 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
@@ -114,6 +116,17 @@ const (
 	pathsSchema   = "paths-schema-digest"
 	pathsDocument = "paths-document-digest"
 	pathsOp       = "pathsOperation"
+
+	// CHAOS-6263 PR (a): the identity fixtures /query's edge-carrier path
+	// reads (internal/api/policy.PGStore) -- an active superuser (also the
+	// impersonation session's admin), the org they are really a member of,
+	// and a target user/org for the impersonation session.
+	pathsAdminUser         = "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b"
+	pathsTargetUser        = "0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c"
+	pathsTargetOrg         = "0d0d0d0d-0d0d-4d0d-8d0d-0d0d0d0d0d0d"
+	pathsMembershipID      = "0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e"
+	pathsImpersonationID   = "0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f"
+	pathsAdminTokenVersion = 3
 )
 
 func startQueryAPIRoleFixture(t *testing.T, ctx context.Context) *queryAPIRoleFixture {
@@ -191,6 +204,17 @@ func startQueryAPIRoleFixture(t *testing.T, ctx context.Context) *queryAPIRoleFi
 	pgseed.OrgLicense(ctx, t, admin, pathsOrg, "enterprise", "{}")
 	pgseed.Setting(ctx, t, admin, pathsOrg, "llm", "provider", "openai", false)
 	pgseed.RoutingState(ctx, t, admin, pathsSchema, pathsDocument, pathsOp, "primary")
+
+	// CHAOS-6263 PR (a): identity fixtures for /query's edge-carrier
+	// PGStore reads (see the consts' own doc comment).
+	pgseed.Org(ctx, t, admin, pathsTargetOrg, "enterprise")
+	pgseed.User(ctx, t, admin, pathsAdminUser)
+	pgseed.SetUserState(ctx, t, admin, pathsAdminUser, true, true, pathsAdminTokenVersion)
+	pgseed.User(ctx, t, admin, pathsTargetUser)
+	pgseed.Membership(ctx, t, admin, pathsMembershipID, pathsAdminUser, pathsOrg, "member")
+	pgseed.ImpersonationSession(ctx, t, admin, pathsImpersonationID, pathsAdminUser, pathsTargetUser, pathsTargetOrg, "member",
+		time.Now().Add(time.Hour), nil)
+
 	return &queryAPIRoleFixture{admin: admin, rolePool: rolePool, role: role, org: pathsOrg}
 }
 
@@ -292,6 +316,27 @@ VALUES (gen_random_uuid(), $1, 'paths connector' || $2::text, 'github', '[]'::js
 	fail("producttelemetry.LoadOrgNames", err)
 	_, err = llmorgsettings.Store{Pool: pool}.ResolveUsableProvider(ctx, f.org)
 	fail("llmorgsettings.ResolveUsableProvider", err)
+
+	// CHAOS-6263 PR (a): /query's edge-carrier PGStore reads, driven AS THE
+	// RESTRICTED ROLE (pool), against internal/api/policy.PGStore directly
+	// -- the same store buildQueryEdgeAuthenticatorFromEnv constructs, not
+	// a second reimplementation.
+	policyStore := policy.PGStore{Pool: pool}
+	state, found, err := policyStore.UserState(ctx, uuid.MustParse(pathsAdminUser))
+	fail("policy.UserState", err)
+	if err == nil && (!found || !state.IsActive || !state.IsSuperuser || state.TokenVersion != pathsAdminTokenVersion) {
+		fail("policy.UserState", fmt.Errorf("unexpected state: found=%v state=%+v", found, state))
+	}
+	isMember, err := policyStore.IsMember(ctx, uuid.MustParse(pathsAdminUser), uuid.MustParse(pathsOrg))
+	fail("policy.IsMember", err)
+	if err == nil && !isMember {
+		fail("policy.IsMember", errors.New("expected the seeded membership row, found none"))
+	}
+	session, err := policyStore.ActiveImpersonation(ctx, uuid.MustParse(pathsAdminUser))
+	fail("policy.ActiveImpersonation", err)
+	if err == nil && session == nil {
+		fail("policy.ActiveImpersonation", errors.New("expected the seeded active impersonation session, found none"))
+	}
 	return failures
 }
 

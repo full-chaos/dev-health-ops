@@ -37,6 +37,14 @@ import (
 //   - org_licenses, feature_flags, org_feature_overrides: the BYO-LLM feature
 //     gate.
 //   - settings: the org's BYO-LLM settings rows.
+//   - users, memberships, impersonation_sessions (CHAOS-6263 PR (a)): /query's
+//     edge-access-token carrier reuses internal/api/policy.Authenticator (and
+//     its PGStore) to resolve is_active/is_superuser/token_version live per
+//     request (never trusting those three from the token, same as go-api's own
+//     REST plane and Python's authenticate_access_token), an IsMember check for
+//     the token's own claimed org, and an ActiveImpersonation lookup for a
+//     superuser caller. All three reads only -- this role never writes an
+//     identity table.
 //
 // Writes (the five saved-report GraphQL mutations, CHAOS-6098):
 //   - saved_reports: create and clone insert, update updates, delete deletes.
@@ -74,6 +82,9 @@ func queryAPIPosture() RolePosture {
 			{"feature_flags", false, false, false},
 			{"org_feature_overrides", false, false, false},
 			{"settings", false, false, false},
+			{"users", false, false, false},
+			{"memberships", false, false, false},
+			{"impersonation_sessions", false, false, false},
 		},
 	}
 }

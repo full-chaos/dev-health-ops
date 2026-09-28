@@ -27,6 +27,9 @@ func TestQueryAPIPostureIsPinned(t *testing.T) {
 		{"feature_flags", false, false, false},
 		{"org_feature_overrides", false, false, false},
 		{"settings", false, false, false},
+		{"users", false, false, false},
+		{"memberships", false, false, false},
+		{"impersonation_sessions", false, false, false},
 	}
 	got := QueryAPIPosture()
 	if !reflect.DeepEqual(got.RequiredTables, want) {

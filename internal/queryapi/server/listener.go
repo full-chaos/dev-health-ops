@@ -96,6 +96,10 @@ func (l *Listener) Address() string {
 //
 // extra, when non-nil, answers the paths it declares (the one-release operator
 // compatibility routes, OperatorCompat) and everything else goes to the plane's routes.
+// /healthz and /readyz are mounted on BOTH listeners (probes reach the query listener from
+// either network); /metrics is mounted on the INTERNAL one ONLY: a scrape endpoint
+// is operational detail, not a probe, and this compat shim's whole point is that its real,
+// permanent home is the operator listener's own -- never the public one.
 //
 // internalAllowedPeers (D2953), when non-empty, restricts the internal listener to
 // accepting a connection only from a peer address inside one of these CIDRs -- see
@@ -114,16 +118,18 @@ func Listeners(publicAddr, internalAddr string, plane *Plane, extra http.Handler
 		internalBase = plane.Handler
 	}
 	if extra != nil {
-		withExtra := func(base http.Handler) http.Handler {
+		withExtra := func(base http.Handler, mountMetrics bool) http.Handler {
 			mux := http.NewServeMux()
 			mux.Handle("/healthz", extra)
 			mux.Handle("/readyz", extra)
-			mux.Handle("/metrics", extra)
+			if mountMetrics {
+				mux.Handle("/metrics", extra)
+			}
 			mux.Handle("/", base)
 			return mux
 		}
-		publicBase = withExtra(publicBase)
-		internalBase = withExtra(internalBase)
+		publicBase = withExtra(publicBase, false)
+		internalBase = withExtra(internalBase, true)
 	}
 	publicServer, internalServer := newListenerServers(publicAddr, internalAddr, publicBase, internalBase)
 	public = &Listener{name: "query-http", server: publicServer, errors: make(chan error, 1)}

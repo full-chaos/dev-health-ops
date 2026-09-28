@@ -100,8 +100,12 @@ func TestCompatMetricsKeepsTheOperatorsRefusal(t *testing.T) {
 	}
 }
 
-// A listener with the compat routes answers the three operator paths and still serves
-// the plane's routes; without them the operator paths belong to the plane (404).
+// A listener with the compat routes answers /healthz and /readyz and still serves the
+// plane's routes; without them those paths belong to the plane (404). /metrics is internal-only:
+// it is mounted on the INTERNAL route set only, never the public one this test's `with`/
+// `without` pair inspects (both built with internalAddr="" -- public listeners), so it
+// behaves exactly like an unmounted path (the plane's own answer) on EITHER, compat or
+// not; the internal listener's own /metrics is proven separately, below.
 func TestListenersCompatRoutesSitBesideThePlane(t *testing.T) {
 	plane := &Plane{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
@@ -122,13 +126,25 @@ func TestListenersCompatRoutesSitBesideThePlane(t *testing.T) {
 		l.server.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		return rec.Code
 	}
-	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+	for _, path := range []string{"/healthz", "/readyz"} {
 		if got := status(with, path); got != http.StatusOK {
 			t.Errorf("with compat: %s = %d, want 200", path, got)
 		}
 		if got := status(without, path); got != http.StatusTeapot {
 			t.Errorf("without compat: %s = %d, want the plane's answer", path, got)
 		}
+	}
+	// /metrics: the PUBLIC listener, compat or not, never answers it (a scrape endpoint is not for the public network).
+	if got := status(with, "/metrics"); got != http.StatusTeapot {
+		t.Errorf("with compat, public listener: /metrics = %d, want the plane's answer (internal-only)", got)
+	}
+	if got := status(without, "/metrics"); got != http.StatusTeapot {
+		t.Errorf("without compat, public listener: /metrics = %d, want the plane's answer", got)
+	}
+	// The internal listener DOES get /metrics from the compat shim.
+	_, internalWith := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, OperatorCompat(registry, operator, "dev-health-query-api"), nil)
+	if got := status(internalWith, "/metrics"); got != http.StatusOK {
+		t.Errorf("internal listener with compat: /metrics = %d, want 200", got)
 	}
 	if got := status(with, "/query"); got != http.StatusTeapot {
 		t.Errorf("with compat: /query = %d, want the plane's answer", got)

@@ -639,6 +639,14 @@ func (r *queryResolver) FeatureFlagEvents(ctx context.Context, orgID string, fla
 // claims.OrgID from the verified envelope, never the caller-supplied
 // value.
 //
+// Result cap: the list is capped at workgraph.workUnitTeamAttributionsMaxRows rows (shared with the work-unit reader),
+// exactly as Python's resolver is (the field is a bare list, so neither
+// plane can carry a truncation flag). A cap hit is logged at WARN with the
+// org and the cap and counted on the shared workgraph truncation counter
+// (op=work_item_team_attributions); the caller sees the first cap rows in
+// work_item_id order. A result-typed successor field with a truncation
+// signal is tracked as a follow-up.
+//
 // Registration: registeredWorkItemTeamAttributionsDocument in
 // query_route.go, hand-written against the published SDL (no real web
 // caller yet, same CHAOS-7042/7070 precedent) -- registration is not

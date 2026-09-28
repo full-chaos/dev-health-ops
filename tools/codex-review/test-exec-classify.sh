@@ -154,13 +154,22 @@ check "a log with no exec block" "$l" "0 0 0" 0
 
 # 8b. CHAOS-6948: did the round SEE the diff? The fourth number counts blocks that
 # SUCCEEDED and ran `git diff` or read the review patch.
-diffcheck() { # name log want-diff-count
-  local name=$1 log=$2 want=$3 got
+# CHAOS-7018 (D2822): the fifth number (optional 4th arg here, default unchecked) counts
+# blocks whose status NEVER ARRIVED -- a batched-exec block flushed with no resolution --
+# distinct from a block that resolved and failed. A block never resolved is UNKNOWN, never
+# silently folded into "not seen": diffs stays a COUNT OF CONFIRMED successes only, the same
+# conservative default as every other "no repro = non-existent" gate in this repo.
+diffcheck() { # name log want-diff-count [want-unknown-count]
+  local name=$1 log=$2 want=$3 want_unknown=${4:-} got got_unknown
   got=$(classify "$log" | awk '{print $4}')
+  got_unknown=$(classify "$log" | awk '{print $5}')
   if [ "$got" != "$want" ]; then
     echo "FAIL $name: diff-seen said '${got:-<none>}', want '$want'" >&2; fails=$((fails + 1)); return
   fi
-  echo "ok   $name -> diff-seen $got"
+  if [ -n "$want_unknown" ] && [ "$got_unknown" != "$want_unknown" ]; then
+    echo "FAIL $name: unknown-count said '${got_unknown:-<none>}', want '$want_unknown'" >&2; fails=$((fails + 1)); return
+  fi
+  echo "ok   $name -> diff-seen $got unknown=${got_unknown:-0}"
 }
 l=$(newlog diff-src-only)
 block "$l" "/bin/bash -lc 'cat internal/pgmigrate/apply.go' in /w" " succeeded in 9ms:" "package pgmigrate"
@@ -210,9 +219,45 @@ diffcheck "a log with no exec block: not seen" "$l" 0
 # the shipped fixture (a real round that ran multi-line go scripts and never read the diff)
 diffcheck "the real #3276 r1 log (no diff read): not seen" "$FIXTURES/3276-multiline-script.log" 0
 
-# 9. every wrapper output is exactly four integers.
+# 10. CHAOS-7018 (D2821/D2822): the classifier's exec/status/output state machine assumed
+# strict per-block framing (exec, command, ONE status line, output, next exec) and a SINGLE
+# open block at a time. It breaks when codex issues several tool calls back-to-back before
+# any of their results print -- the OLD `/^exec$/` rule fired on the NEXT block's own marker
+# before the CURRENT block ever saw its status line, so `flush()` ran with `ok` still at its
+# zero default and every block caught in the burst was silently scored as "not ok," diff-read
+# or not. Real, reproduced shape: chaos-6908-3360-r1's first attempt (20260928T035811.log)
+# shows four exec markers 2 lines apart with NO status/output between them -- one of those
+# four blocks is `sed -n '1,900p' .codex-review.patch`, which DID succeed (confirmed by
+# reading the real, untrimmed log: its own output follows much later) -- and the round was
+# wrongly stamped VOID IN FORM (diff not seen) as a direct result.
+#
+# The fix (D2822, FIFO queue): a status line resolves the OLDEST still-pending block, in
+# ISSUE ORDER, never the block currently at the front of the raw text -- and a block whose
+# status never arrives before EOF is its own outcome, UNKNOWN, counted separately (5th
+# number) and NEVER folded into "diffs" as if it were confirmed. On THIS excerpt the one
+# status line that does arrive (704ms) resolves the OLDEST pending entry (the
+# .codex-review-context.md read, queued first) -- not `.codex-review.patch`, whose block
+# text sits textually adjacent to that status line but was issued fourth. That is the
+# conservative, honest answer this excerpt can support: the genuine successful patch read
+# is UNRESOLVABLE from this excerpt alone (its true result lives further down the real log,
+# outside this trimmed fixture) and must read UNKNOWN, never silently promoted to SEEN on
+# textual adjacency alone -- the same "no repro = non-existent" discipline this whole file
+# already applies everywhere else. diffs stays 0 (nothing here CONFIRMS a diff-read
+# succeeded); unknown=3 (the context.md-adjacent, .git-adjacent and patch-read blocks all
+# still lack a resolution at EOF of this excerpt).
+diffcheck "CHAOS-7018: a batched exec burst leaves unresolved blocks UNKNOWN, never silently 'not seen'" "$FIXTURES/3360-batched-burst.log" 0 3
+
+# 11. Regression control for the same fix: a real SERIAL excerpt (chaos-6907-3359-r1, normal
+# exec/status/output framing, no burst -- the queue never holds more than one entry) where a
+# compound `&&`-chained command correctly FAILS as a whole (git diff denied) and a SEPARATE,
+# later, `;`-joined command correctly SUCCEEDS and reads the patch. On a serial log the FIFO
+# queue degenerates to the old single-block behavior exactly, so both answers -- and
+# unknown=0, nothing left pending at EOF -- must be unchanged by the fix.
+diffcheck "CHAOS-7018 regression control: a clean serial diff-read stays SEEN, a failed && chain stays NOT seen, unknown=0" "$FIXTURES/3359-serial-diffread.log" 1 0
+
+# 9. every wrapper output is exactly five integers (CHAOS-7018/D2822 adds the unknown count).
 for f in "$WORK"/*.log "$FIXTURES"/*.log; do
-  classify "$f" | grep -Eq '^[0-9]+ [0-9]+ [0-9]+ [0-9]+$' || { echo "FAIL: $f produced a malformed classification" >&2; fails=$((fails + 1)); }
+  classify "$f" | grep -Eq '^[0-9]+ [0-9]+ [0-9]+ [0-9]+ [0-9]+$' || { echo "FAIL: $f produced a malformed classification" >&2; fails=$((fails + 1)); }
 done
 
 if [ "$fails" -ne 0 ]; then echo "$fails check(s) FAILED" >&2; exit 1; fi

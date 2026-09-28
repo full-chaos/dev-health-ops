@@ -2641,13 +2641,37 @@ EXEC_CLASSIFY_AWK=$(cat <<'AWK'
 # mentions `go test` is not a run.
 #
 # Prints "<go blocks> <py blocks> <go blocks that FAILED and whose output shows the
-# sandbox refusing a path the wrapper configured> <diff-seen blocks>".
+# sandbox refusing a path the wrapper configured> <diff-seen blocks> <unresolved blocks>".
 #
 # v4.8.22 (CHAOS-6948): the fourth number counts blocks that SUCCEEDED and either ran
 # `git diff` (a command segment starting `git [-C dir] diff`) or read the review patch
 # (PATCH_NAME, e.g. .codex-review.patch, named on the command line of a segment that
 # starts with a reading verb). A FAILED `git diff` (the denied-worktree case that
 # motivated this) and a failed read do not count. PATCH_NAME empty: only `git diff`.
+#
+# CHAOS-7018/D2822 (5th number, UNRESOLVED/UNKNOWN blocks): the state machine through
+# v4.8.22 tracked exactly ONE open block at a time and flushed it the instant the NEXT
+# `exec` marker appeared, whether or not a status line had ever resolved it. codex does
+# not always print a block's status immediately after its command -- when several tool
+# calls are issued before any of their results print (a real, reproduced, NOT RARE shape:
+# chaos-6908-3360-r1's first attempt shows four `exec` markers back to back with zero
+# status/output between them), the old machine silently scored every block caught in that
+# burst as "not ok" -- including a `.codex-review.patch` read that genuinely succeeded --
+# because it never got the chance to see a status line before being flushed.
+#
+# Fixed with a FIFO PENDING QUEUE (Q_*[] arrays, front..tail) instead of one scalar
+# block: every `exec` marker PUSHES a new tail entry without flushing anything. A status
+# line resolves the OLDEST still-pending entry (front), in ISSUE order -- never
+# necessarily the block whose command text sits immediately above it in the log, which is
+# only the same entry when nothing is mid-burst (the ordinary, non-batched case, where
+# front and tail are always the same index and this reduces to the old behavior exactly).
+# A block still pending at EOF -- its status never arrived -- is counted as UNKNOWN, the
+# 5th number, and is NEVER folded into "diffs" (or gos/pys) as if it had been confirmed:
+# the same "no repro = non-existent" discipline this whole file applies everywhere else.
+# BLOCKED_PAT (sandbox-denial output scanning for go-test failures) is only attributed to
+# a block resolved WHILE it is still the tail (front == tail at resolution) -- the output
+# text immediately following an out-of-order resolution belongs to a LATER block, not the
+# one just resolved, and attributing it would corrupt `hits` rather than merely miss it.
 function norm(s) {
   sub(/^[ \t(]+/, "", s)
   while (match(s, /^[A-Za-z_][A-Za-z0-9_]*=[^ \t]*[ \t]+/)) s = substr(s, RLENGTH + 1)
@@ -2670,37 +2694,78 @@ function first_diff(s) { return s ~ /(^|[^A-Za-z0-9_])git[ \t]+(-C[ \t]+[^ \t]+[
 function first_read(s) { return PATCH_NAME != "" && index(s, PATCH_NAME) > 0 && s ~ /(^|[^A-Za-z0-9_])(cat|sed|head|tail|less|more|rg|grep|awk|nl|bat)[ \t]/ }
 function seg_gitdiff(s) { return s ~ /^([^ \t]*\/)?git[ \t]+(-C[ \t]+[^ \t]+[ \t]+)?diff([^A-Za-z0-9_-]|$)/ }
 function seg_read(s) { return PATCH_NAME != "" && index(s, PATCH_NAME) > 0 && s ~ /^([^ \t]*\/)?(cat|sed|head|tail|less|more|rg|grep|awk|nl|bat)[ \t]/ }
-function flush() {
-  if (!in_block) return
-  if (ok && (is_diff || is_read)) diffs++
-  gos += is_go; pys += is_py
-  if (is_go && failed && blocked) hits++
-  in_block = 0
+# front=1, tail=0: an empty queue where the NEXT push (tail becomes 1) immediately makes
+# front == tail == 1, the single-pending-entry state every existing (non-batched) fixture
+# exercises. awk auto-inits unset numerics to 0, which would wrongly make front 0 (queue
+# index 0 is never used) -- set it explicitly rather than rely on the implicit default.
+BEGIN { front = 1; tail = 0 }
+# finalize(i): counts gos/pys for entry i EXACTLY once, the moment its own command text is
+# known complete -- whether or not it EVER gets a status line. gos/pys measure ATTEMPTED
+# go/py commands (the same contract this counter has always had: a killed round's last,
+# never-resolved block still counted, see the "unterminated last block" fixture below) --
+# unlike diffs/hits, which require a CONFIRMED resolution and are counted in resolve() only.
+function finalize(i) {
+  if (i < 1 || Q_counted[i]) return
+  gos += Q_is_go[i]; pys += Q_is_py[i]
+  Q_counted[i] = 1
 }
-/^exec$/ { flush(); in_block = 1; phase = "cmd"; ncmd = 0; is_go = 0; is_py = 0; is_diff = 0; is_read = 0; ok = 0; failed = 0; blocked = 0; next }
-in_block && phase == "cmd" {
-  if ($0 ~ /^ *(succeeded|failed|exited [0-9]+) in [0-9]+ms/) { failed = ($0 ~ /^ *failed in/); ok = ($0 ~ /^ *succeeded in/); phase = "out"; next }
-  ncmd++
-  if (ncmd == 1) {
-    if (first_go($0)) is_go = 1
-    if (first_py($0)) is_py = 1
-    if (first_diff($0)) is_diff = 1
-    if (first_read($0)) is_read = 1
+# resolve(): FIFO-dequeues the oldest pending entry (Q[front]) against a status line just
+# read (this_ok/this_failed), finalizes it (gos/pys) if that has not already happened via a
+# later `exec` marker, counts diffs on a CONFIRMED success, and decides whether output
+# scanning for BLOCKED_PAT may be attributed to it (only when it was still the tail -- see
+# the header comment). Always advances front by one.
+function resolve(this_ok, this_failed,    attributable) {
+  if (front > tail) return  # a status line with no pending entry at all: ignore, nothing to resolve
+  finalize(front)
+  if (this_ok && (Q_is_diff[front] || Q_is_read[front])) diffs++
+  attributable = (front == tail)
+  if (attributable) {
+    out_target = front; out_go = Q_is_go[front]; out_failed = this_failed
+  } else {
+    out_target = 0  # output that follows belongs to a LATER (still-open) block, not this one
+  }
+  front++
+}
+/^exec$/ {
+  finalize(tail)  # the previous tail's command text is now complete, whatever happens next
+  tail++
+  Q_is_go[tail] = 0; Q_is_py[tail] = 0; Q_is_diff[tail] = 0; Q_is_read[tail] = 0; Q_ncmd[tail] = 0
+  phase = "cmd"
+  next
+}
+tail >= front && phase == "cmd" {
+  if ($0 ~ /^ *(succeeded|failed|exited [0-9]+) in [0-9]+ms/) {
+    resolve($0 ~ /^ *succeeded in/, $0 ~ /^ *failed in/)
+    phase = "out"
+    next
+  }
+  Q_ncmd[tail]++
+  if (Q_ncmd[tail] == 1) {
+    if (first_go($0)) Q_is_go[tail] = 1
+    if (first_py($0)) Q_is_py[tail] = 1
+    if (first_diff($0)) Q_is_diff[tail] = 1
+    if (first_read($0)) Q_is_read[tail] = 1
   }
   line = $0
   gsub(/&&|\|\||;|\||\$\(|`/, "\n", line)
   n = split(line, segs, "\n")
   for (i = 1; i <= n; i++) {
     seg = norm(segs[i])
-    if (seg_go(seg)) is_go = 1
-    if (seg_py(seg)) is_py = 1
-    if (seg_gitdiff(seg)) is_diff = 1
-    if (seg_read(seg)) is_read = 1
+    if (seg_go(seg)) Q_is_go[tail] = 1
+    if (seg_py(seg)) Q_is_py[tail] = 1
+    if (seg_gitdiff(seg)) Q_is_diff[tail] = 1
+    if (seg_read(seg)) Q_is_read[tail] = 1
   }
   next
 }
-in_block && phase == "out" && $0 ~ BLOCKED_PAT { blocked = 1 }
-END { flush(); print gos + 0, pys + 0, hits + 0, diffs + 0 }
+phase == "out" && out_target != 0 && !hit_counted[out_target] && out_go && out_failed && $0 ~ BLOCKED_PAT {
+  hits++; hit_counted[out_target] = 1
+}
+END {
+  finalize(tail)  # an unterminated last block (round killed mid-command) still attempted go/py
+  unknown = (front <= tail) ? (tail - front + 1) : 0
+  print gos + 0, pys + 0, hits + 0, diffs + 0, unknown + 0
+}
 # EXEC-CLASSIFY-END
 AWK
 )
@@ -2713,8 +2778,9 @@ if [ -z "$EXEC_CLASSIFY" ]; then
   PY_EXECS=0
   BLOCKED_HITS=0
   DIFF_SEEN=1  # unmeasured: never stamp VOID on a measurement that did not happen
+  DIFF_UNKNOWN=0  # same reasoning: the classifier itself did not run, nothing to report as pending
 else
-  read -r GO_EXECS PY_EXECS BLOCKED_HITS DIFF_SEEN <<<"$EXEC_CLASSIFY"
+  read -r GO_EXECS PY_EXECS BLOCKED_HITS DIFF_SEEN DIFF_UNKNOWN <<<"$EXEC_CLASSIFY"
 fi
 # v4.8.13 (team-lead spec, from #2306 r1-v4): the counter above only matched
 # Go verbs, so a Python-only diff's round -- reviewer ran `pytest` (52/52),
@@ -2767,7 +2833,14 @@ EXECUTED_EXECS=$((GO_EXECS + PY_EXECS))
 warn "round recorded $EXEC_BLOCKS exec block(s) ($GO_EXECS go test/run/build, $PY_EXECS pytest/uv run/ruff/mypy/bash-or-sh-script/python/shellcheck/py_compile)"
 
 if [ "${DIFF_SEEN:-0}" -eq 0 ]; then
-  warn "VOID IN FORM: the log shows no successful \`git diff\` exec and no successful read of ${REVIEW_PATCH_NAME:-the review patch} (review patch: $REVIEW_PATCH_STATUS) -- the round did not see the diff it certifies; do not ledger this verdict, relaunch or escalate"
+  if [ "${DIFF_UNKNOWN:-0}" -gt 0 ]; then
+    # CHAOS-7018/D2822: some exec block(s) never got a resolved status (a batched-tool-call
+    # framing gap, not necessarily an unattempted diff read) -- say AMBIGUOUS, not a flat
+    # "did not see the diff", which overclaims certainty this log does not actually support.
+    warn "VOID IN FORM (AMBIGUOUS): the log shows no CONFIRMED \`git diff\` exec or read of ${REVIEW_PATCH_NAME:-the review patch} (review patch: $REVIEW_PATCH_STATUS), but $DIFF_UNKNOWN exec block(s) never resolved a status line (batched tool calls) -- this cannot be certified as 'the round never saw the diff', only as unproven; relaunch or escalate"
+  else
+    warn "VOID IN FORM: the log shows no successful \`git diff\` exec and no successful read of ${REVIEW_PATCH_NAME:-the review patch} (review patch: $REVIEW_PATCH_STATUS) -- the round did not see the diff it certifies; do not ledger this verdict, relaunch or escalate"
+  fi
 fi
 
 # v4.8.8: under workspace-write the round was explicitly told execution is
@@ -2974,7 +3047,13 @@ fi
 
 # v4.8.22: same insertion for the diff-visibility rule.
 if [ "${DIFF_SEEN:-0}" -eq 0 ]; then
-  VOID_LINE="VOID IN FORM: the round did not see the diff (no successful git diff exec and no read of ${REVIEW_PATCH_NAME:-the review patch} in its log) -- do not ledger this verdict as a review of the diff; relaunch or escalate."
+  if [ "${DIFF_UNKNOWN:-0}" -gt 0 ]; then
+    # CHAOS-7018/D2822: name the ambiguity rather than overclaiming a confirmed absence --
+    # see the matching comment on the identical branch earlier in this file.
+    VOID_LINE="VOID IN FORM (AMBIGUOUS): no CONFIRMED git diff exec or read of ${REVIEW_PATCH_NAME:-the review patch} in this log, but $DIFF_UNKNOWN exec block(s) never resolved a status line (batched tool calls) -- unproven, not certified absent; relaunch or escalate."
+  else
+    VOID_LINE="VOID IN FORM: the round did not see the diff (no successful git diff exec and no read of ${REVIEW_PATCH_NAME:-the review patch} in its log) -- do not ledger this verdict as a review of the diff; relaunch or escalate."
+  fi
   LAST_NONBLANK=$(grep -vn '^[[:space:]]*$' "$V" | tail -1 | cut -d: -f1)
   if [ -n "$LAST_NONBLANK" ]; then
     awk -v n="$LAST_NONBLANK" -v line="$VOID_LINE" 'NR==n{print line} {print}' "$V" > "$V.voiddiff.tmp" && mv "$V.voiddiff.tmp" "$V"

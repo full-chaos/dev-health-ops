@@ -1,0 +1,13 @@
+codex
+I'll inspect the supplied patch and PR evidence first, then map the changed Go paths to callers, build and vet the named packages, and run their tests with coverage. I'll exercise the CLI and integration path where the available isolated fixtures allow, keeping all container activity within this review's label.
+exec
+/bin/bash -lc "pwd && git diff --stat origin/main...8c04fcd1077ef39b7f5e10da17dab7fe80c3b5c5 && sed -n '1,260p' .codex-review.patch && sed -n '1,240p' .codex-review-context.md" in <round-dir>
+ exited 128 in 397ms:
+<round-dir>
+fatal: not a git repository: /home/ubuntu/devhealth/ops/.git/worktrees/<round-dir>
+
+exec
+/bin/bash -lc "sed -n '1,260p' .codex-review.patch; sed -n '1,260p' .codex-review-context.md; rg --files -g 'go.mod' -g 'AGENTS.md' -g 'go.work' -g 'Makefile'" in <round-dir>
+ succeeded in 406ms:
+ ci/venue_oracle_registry.d/internal__synccli.tsv   |   1 +
+ ci/venue_oracle_weights.d/internal__synccli.tsv    |   1 +

@@ -60,7 +60,7 @@ const (
 		"--members and --projects, all three are synced. Members and project links a team no longer has are\n" +
 		"retracted (closed); an empty result is refused, so a permissions problem retracts nothing, unless --allow-empty.\n\n" +
 		"--provider jira resolves the org's stored jira integration credential from Postgres\n" +
-		"(POSTGRES_URI or _FILE) by default -- the atlassian_organization_id (required) and\n" +
+		"(--db, else POSTGRES_URI or _FILE) by default -- the atlassian_organization_id (required) and\n" +
 		"atlassian_cloud_id (optional; else derived live from the tenant) come from that same\n" +
 		"integration's config. The environment below overrides individual fields, or (when\n" +
 		"ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN and ATLASSIAN_JIRA_BASE_URL are ALL set) replaces\n" +
@@ -140,6 +140,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	owner := flags.String("owner", "", "the GitHub organization (github)")
 	auth := flags.String("auth", "", "the provider token (github; else GITHUB_TOKEN)")
 	org := flags.String("org", "", "the organization id the rows are written under")
+	db := flags.String("db", "", "the domain database DSN the stored jira credential is resolved from (jira; else "+PostgresURIKey+")")
 	structure := flags.Bool("structure", false, "sync the teams")
 	members := flags.Bool("members", false, "sync team memberships")
 	projects := flags.Bool("projects", false, "sync the projects each team works on")
@@ -185,7 +186,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 			structure: selections.Structure, members: selections.Members, dsn: dsn.Reveal(),
 		})
 	}
-	settings, err := resolveTeamsSettings(ctx, env, d, orgID)
+	settings, err := resolveTeamsSettings(ctx, env, d, orgID, *db)
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitRefused, "configuration", err.Error())
 	}
@@ -328,7 +329,7 @@ func settingsFromEnv(o envOverrides) (settings, error) {
 // triple is an offline/test escape hatch with no database at all; either
 // way, ATLASSIAN_ORGANIZATION_ID/ATLASSIAN_CLOUD_ID individually override
 // whatever was resolved.
-func resolveTeamsSettings(ctx context.Context, env cli.Env, d deps, orgID string) (settings, error) {
+func resolveTeamsSettings(ctx context.Context, env cli.Env, d deps, orgID string, dbFlag string) (settings, error) {
 	overrides, err := readEnvOverrides(env.Lookup)
 	if err != nil {
 		return settings{}, err
@@ -343,15 +344,21 @@ func resolveTeamsSettings(ctx context.Context, env cli.Env, d deps, orgID string
 		if d.openPostgres == nil || d.decryptor == nil {
 			return settings{}, errors.New("no stored-credential resolution is configured")
 		}
-		pgDSN, configured, err := platformconfig.ResolveDSN(env.Lookup, PostgresURIKey, platformconfig.DomainDatabaseSpec)
-		if err != nil || !configured {
-			detail := PostgresURIKey + " is not set"
-			if err != nil {
-				detail = err.Error()
+		// --db, like every sibling sync verb's own --db (internal/synccli/
+		// target.go's dbValue), wins over POSTGRES_URI when given.
+		pgDSNValue := strings.TrimSpace(dbFlag)
+		if pgDSNValue == "" {
+			pgDSN, configured, err := platformconfig.ResolveDSN(env.Lookup, PostgresURIKey, platformconfig.DomainDatabaseSpec)
+			if err != nil || !configured {
+				detail := PostgresURIKey + " is not set"
+				if err != nil {
+					detail = err.Error()
+				}
+				return settings{}, fmt.Errorf("%s (needed to resolve the stored jira credential; alternatively set %s, %s and %s together)", detail, emailKey, apiTokenKey, baseURLKey)
 			}
-			return settings{}, fmt.Errorf("%s (needed to resolve the stored jira credential; alternatively set %s, %s and %s together)", detail, emailKey, apiTokenKey, baseURLKey)
+			pgDSNValue = pgDSN.Reveal()
 		}
-		pool, err := d.openPostgres(ctx, pgDSN.Reveal())
+		pool, err := d.openPostgres(ctx, pgDSNValue)
 		if err != nil {
 			// openPostgresPool (the default d.openPostgres) already redacts via
 			// pgstorage.Boundary before returning; wrap without redacting again.

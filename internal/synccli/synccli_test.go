@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"atlassian/atlassian"
 
@@ -330,5 +331,38 @@ func TestGitHubCatalogRefusalsRunNothing(t *testing.T) {
 	rec := &recorded{}
 	if code, _, stderr := run(t, noCH, stubDeps(rec, failingClient{}, nil), "--provider", "github", "--org", "o", "--owner", "acme", "--auth", "tok"); code != cli.ExitRefused || !strings.Contains(stderr, "CLICKHOUSE_URI") {
 		t.Errorf("no ClickHouse: exit %d %s", code, stderr)
+	}
+}
+
+// TestDBFlagIsAcceptedAndOverridesPostgresURI is the codex review r2 fix
+// proof: docs/reference/cli/index.md documents --db as a way to point `sync
+// teams --provider jira` at the domain database, but the verb's own flag set
+// never defined one -- dho's root dispatcher hands every leaf --db (it is in
+// rootflags.go's handedToEvery set), so a leaf that does not define it
+// refuses the command outright ("flag provided but not defined: -db"). --db
+// must both be accepted and win over POSTGRES_URI, the same precedence the
+// sibling `sync <target>` verbs' own --db already has (target.go's dbValue).
+func TestDBFlagIsAcceptedAndOverridesPostgresURI(t *testing.T) {
+	env := validEnv()
+	delete(env, "ATLASSIAN_EMAIL")
+	delete(env, "ATLASSIAN_API_TOKEN")
+	delete(env, "ATLASSIAN_JIRA_BASE_URL")
+	env["POSTGRES_URI"] = "postgresql://env-should-not-be-used@host/db"
+	rec := &recorded{}
+	d := stubDeps(rec, failingClient{}, nil)
+	var gotDSN string
+	d.openPostgres = func(_ context.Context, dsn string) (*pgxpool.Pool, error) {
+		gotDSN = dsn
+		return nil, errors.New("stub: stop before a real connection")
+	}
+	code, _, stderr := run(t, env, d, "--provider", "jira", "--org", "o", "--db", "postgresql://flag-wins@host/db")
+	if code != cli.ExitRefused {
+		t.Fatalf("exit %d, want refused (the stub Postgres open fails deliberately): %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "open postgres") {
+		t.Fatalf("stderr = %q, want it naming the open-postgres failure (proving --db was not rejected as an unknown flag)", stderr)
+	}
+	if gotDSN != "postgresql://flag-wins@host/db" {
+		t.Fatalf("openPostgres dsn = %q, want the --db flag value, not POSTGRES_URI", gotDSN)
 	}
 }

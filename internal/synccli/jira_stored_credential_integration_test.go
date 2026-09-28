@@ -289,7 +289,7 @@ func TestResolveTeamsSettingsHonorsAnIndividualTokenOverride(t *testing.T) {
 		}
 		return "", false
 	}}
-	settings, err := resolveTeamsSettings(ctx, env, d, orgID)
+	settings, err := resolveTeamsSettings(ctx, env, d, orgID, "")
 	if err != nil {
 		t.Fatalf("resolveTeamsSettings: %v", err)
 	}

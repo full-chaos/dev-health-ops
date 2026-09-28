@@ -185,6 +185,27 @@ func defaultRecordWorkItemTeamAttributionsTruncation(ctx context.Context, orgID 
 		"limit", limit,
 		"reason", "the limit+1 probe row was returned; more matching attribution rows exist beyond the cap",
 	)
+	incrementWorkItemTeamAttributionsTruncationCounter(ctx)
+}
+
+// incrementWorkItemTeamAttributionsTruncationCounter is a package var,
+// not a plain call inline, for the same injectable-observable reason
+// incrementWorkUnitTeamAttributionsTruncationCounter (teamattribution.go)
+// is one: a test needs to prove
+// defaultRecordWorkItemTeamAttributionsTruncation increments the counter
+// specifically, independent of resolveWorkItemTeamAttributions-level
+// tests that swap the OUTER recordWorkItemTeamAttributionsTruncation var
+// entirely. This is its OWN seam, not a reuse of the sibling's: that
+// one's own body hardcodes op="work_unit_team_attributions", which would
+// mislabel every call from this file if reused directly -- both write to
+// the SAME underlying workUnitTeamAttributionsTruncationCounter series
+// (that counter's own doc comment anticipates exactly this: "a future
+// truncation-prone read ... adds itself as a new family/op label
+// combination"), just via a second, independently-swappable seam
+// carrying this file's own op label.
+var incrementWorkItemTeamAttributionsTruncationCounter = defaultIncrementWorkItemTeamAttributionsTruncationCounter
+
+func defaultIncrementWorkItemTeamAttributionsTruncationCounter(ctx context.Context) {
 	workUnitTeamAttributionsTruncationCounter.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("family", "team_attribution"),
 		attribute.String("op", "work_item_team_attributions"),

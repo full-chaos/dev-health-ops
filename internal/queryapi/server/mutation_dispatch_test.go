@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -28,7 +29,7 @@ const (
 	mdUnparseable = "mutation MutationDispatchBroken {"
 )
 
-func mdHandler(t *testing.T, servesMutations bool) (http.HandlerFunc, *int) {
+func mdHandler(t *testing.T, requireKind string) (http.HandlerFunc, *int) {
 	t.Helper()
 	verifier, _ := iaVerifier(t)
 	executed := new(int)
@@ -43,7 +44,7 @@ func mdHandler(t *testing.T, servesMutations bool) (http.HandlerFunc, *int) {
 		digestHex(mdQuery): "q", digestHex(mdMutation): "m",
 		digestHex(mdSubscription): "s", digestHex(mdUnparseable): "u",
 	}
-	return newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, nil, nil, servesMutations), executed
+	return newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, nil, nil, requireKind, nil), executed
 }
 
 func mdPost(t *testing.T, handler http.HandlerFunc, document string, authenticated bool) int {
@@ -64,21 +65,21 @@ func mdPost(t *testing.T, handler http.HandlerFunc, document string, authenticat
 
 func TestDispatchHandlerServesAMutationOnlyWhereItServesMutations(t *testing.T) {
 	for _, tc := range []struct {
-		name            string
-		servesMutations bool
-		document        string
-		wantCode        int
-		wantExecuted    int
+		name         string
+		requireKind  string
+		document     string
+		wantCode     int
+		wantExecuted int
 	}{
-		{"query route serves a query", true, mdQuery, http.StatusOK, 1},
-		{"query route serves a mutation", true, mdMutation, http.StatusOK, 1},
-		{"proof route serves a query", false, mdQuery, http.StatusOK, 1},
-		{"proof route refuses a mutation", false, mdMutation, http.StatusMethodNotAllowed, 0},
-		{"proof route refuses a subscription", false, mdSubscription, http.StatusMethodNotAllowed, 0},
-		{"proof route refuses an unparseable registered document", false, mdUnparseable, http.StatusMethodNotAllowed, 0},
+		{"query route serves a query", "", mdQuery, http.StatusOK, 1},
+		{"query route serves a mutation", "", mdMutation, http.StatusOK, 1},
+		{"proof route serves a query", digest.KindQuery, mdQuery, http.StatusOK, 1},
+		{"proof route refuses a mutation", digest.KindQuery, mdMutation, http.StatusMethodNotAllowed, 0},
+		{"proof route refuses a subscription", digest.KindQuery, mdSubscription, http.StatusMethodNotAllowed, 0},
+		{"proof route refuses an unparseable registered document", digest.KindQuery, mdUnparseable, http.StatusMethodNotAllowed, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			handler, executed := mdHandler(t, tc.servesMutations)
+			handler, executed := mdHandler(t, tc.requireKind)
 			if code := mdPost(t, handler, tc.document, true); code != tc.wantCode {
 				t.Fatalf("got %d, want %d", code, tc.wantCode)
 			}
@@ -90,7 +91,7 @@ func TestDispatchHandlerServesAMutationOnlyWhereItServesMutations(t *testing.T) 
 }
 
 func TestProofRouteRefusesAMutationOnlyAfterAuthentication(t *testing.T) {
-	handler, executed := mdHandler(t, false)
+	handler, executed := mdHandler(t, digest.KindQuery)
 	if code := mdPost(t, handler, mdMutation, false); code != http.StatusUnauthorized {
 		t.Fatalf("an unauthenticated mutation got %d, want 401 (authentication precedes the kind refusal)", code)
 	}
@@ -117,7 +118,7 @@ func TestNewQueryHandlerPairTreatsARegisteredMutationDifferently(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	serve, proof, _, _ := newQueryHandler(nil, pool, verifier, "schema-digest", os.Getenv)
+	serve, proof, _, _, _ := newQueryHandler(nil, pool, verifier, "schema-digest", os.Getenv)
 
 	for _, tc := range []struct {
 		name         string

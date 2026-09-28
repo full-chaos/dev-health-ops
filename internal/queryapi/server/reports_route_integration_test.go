@@ -53,7 +53,7 @@ func TestSavedReportRoutes_ThroughTheSignedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
 	for doc, op := range map[string]string{
 		registeredSavedReportsDocument: "savedReports",
 		registeredSavedReportDocument:  "savedReport",

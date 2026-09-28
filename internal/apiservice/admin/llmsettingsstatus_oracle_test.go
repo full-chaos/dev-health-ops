@@ -212,7 +212,7 @@ VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failu
 		get("active never_checked", "active"),
 		get("readiness record ready", "ready"),
 		get("readiness record failed", "failed"),
-		get("readiness record fingerprint mismatch", "mismatch"),
+		get("readiness record fingerprint mismatch (python stale, go never_checked)", "mismatch"),
 		get("community tier gate", "community"),
 		get("kill switch gate", "off"),
 		get("incomplete readiness blob never_checked", "incomplete"),
@@ -243,7 +243,7 @@ VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failu
 				assertJSONField(t, request.Name, goResponse.Body, "binary_transport_readiness", "ready")
 				assertJSONField(t, request.Name, goResponse.Body, "readiness_checked_at", "2026-01-15T12:00:00Z")
 				assertJSONField(t, request.Name, goResponse.Body, "readiness_safe_failure_reason", nil)
-			case "readiness record fingerprint mismatch":
+			case "readiness record fingerprint mismatch (python stale, go never_checked)":
 				// NAMED DIVERGENCE from Python, which answers "stale" for a
 				// record whose fingerprint no longer matches (settings.py
 				// is_current). This port has no "stale" state (CHAOS-6252b) and

@@ -5,12 +5,25 @@
 # CH grants check -> PG grants read-back -> post-cut routing repoint (CHAOS-7022, every cut) ->
 # receipt/admin/superadmin/REST(leg1+2)/admin corpus batches. Every step prints one `STEP <name> rc=<n>` line; nothing secret is printed.
 set -u
-OLD8=${1:?old8}; NEW=${2:?full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}; R=/home/ubuntu/devhealth; REC=$R/_records/bigboy-$N8
+OLD8=${1:?old8}; NEW=${2:?full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
+# CHAOS-7022 D2895/D2886(2): BIGBOY_ROOT is a root PARAMETER, not a test hook -- default is
+# byte-identical to the hardcoded path this script always used, and every one of this family
+# (bigboy-repin.sh, bigboy-repin-web.sh) reads the SAME env var name so a caller pointing all
+# three at an isolated tree gets a fully self-consistent sandbox. Exported so those sibling
+# scripts, invoked below via $HERE, see the SAME resolved value rather than each independently
+# falling back to the real default.
+export BIGBOY_ROOT="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"
+R=$BIGBOY_ROOT; REC=$R/_records/bigboy-$N8
 HERE=$(cd "$(dirname "$0")" && pwd)  # sibling scripts (this family) resolve from HERE, never a hardcoded _records path -- proves the tracked move actually runs, not just coexists with a synced _records copy
+# Fail closed (D2895): refuse a root that is not shaped like a real bigboy tree, rather than
+# silently proceeding to `cd` into it and produce confusing failures many steps later.
+for need in ci/bigboy compose/compose.bigboy.images.yml _records; do
+  [ -e "$R/$need" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing $need -- refusing to run against a root that is not a real bigboy tree" >&2; exit 1; }
+done
 export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:compose/compose.metrics-api.local.yml:.remember/lanes/team-lead/reconciler-sweep-override.yml:compose/compose.bigboy.images.yml:compose/compose.bigboy.workers.yml
-cd $R
+cd "$R"
 st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
-echo "cut start $(date -u +%T) new=$NEW"
+echo "cut start $(date -u +%T) new=$NEW root=$R"
 for i in $(seq 1 240); do
   ok=1; for img in dev-hops-api dev-health-go-operator dev-health-go-dho dev-health-go-api-tools; do docker buildx imagetools inspect ghcr.io/full-chaos/$img:sha-$S7 >/dev/null 2>&1 || ok=0; done
   [ $ok = 1 ] && break; sleep 30
@@ -54,7 +67,7 @@ fi
 if [ -n "$VALUES" ]; then
   python3 "$HERE/generate-query-api-enabled-flags.py" "$VALUES" --out "$REC.query-api-enabled-flags.generated" 2>"$REC.query-api-enabled-flags.err"
   GEN_NAMES=$(awk -F: '{print $1}' "$REC.query-api-enabled-flags.generated" | tr -d ' ' | sort)
-  LIVE_NAMES=$(awk -F: '/^      [A-Za-z_]+:/{print $1}' $R/compose/compose.bigboy.images.yml | tr -d ' ' | sort -u)
+  LIVE_NAMES=$(awk -F: '/^      [A-Za-z_]+:/{print $1}' "$R"/compose/compose.bigboy.images.yml | tr -d ' ' | sort -u)
   MISSING=$(comm -23 <(echo "$GEN_NAMES") <(echo "$LIVE_NAMES"))
   if [ -z "$MISSING" ]; then
     st query-api-enabled-flags-current 0
@@ -152,19 +165,25 @@ carry_reason() {
   # a case we recognize", the same conservative default text-matching always fell back to).
   printf '%s\n' "$1" | grep '^GOAPI_ROUTING_JSON ' | sed 's/^GOAPI_ROUTING_JSON //' | jq -r '.reason // empty' 2>/dev/null
 }
+# routing_call_succeeded RC OUTPUT EXPECTED -- the ONE success rule (r3 D2886 condition 1),
+# shared by every carry/repoint call site below: a call succeeds ONLY when the exit code is 0
+# AND the GOAPI_ROUTING_JSON line's reason parses AND equals EXPECTED ("carried" for carry,
+# "repointed" for repoint). Every other combination -- nonzero exit, no JSON line at all,
+# malformed JSON, an empty reason, or a reason that parsed but does not match EXPECTED -- is a
+# failure, indistinguishable in effect from a real refusal. r3's P1 (real, reproduced): a zero
+# exit status alone used to be read as proof of success at each of these call sites
+# independently, so a docker/compose-layer zero exit with no JSON line at all (never touching
+# the real dho binary) fell straight into a success branch.
+routing_call_succeeded() {
+  local rc="$1" output="$2" expected="$3"
+  [ "$rc" -eq 0 ] && [ "$(carry_reason "$output")" = "$expected" ]
+}
 CARRY_OUT=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
   "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing carry $CARRY_ARGS -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll carry, cut $OLD8 -> $N8'" 2>&1)
 CARRY_RC=$?
 echo "$CARRY_OUT" > "$REC.routing-carry.out"
 CARRY_REASON=$(carry_reason "$CARRY_OUT")
-# r3 P1 (real, reproduced): a zero exit status alone is not evidence a carry
-# happened -- a docker/compose-layer zero exit with no GOAPI_ROUTING_JSON line
-# at all (or one with an unrecognized reason) previously fell into this branch
-# unconditionally. "carried" is the CLI's only reason for a true zero-exit
-# success (D2828/D2829's closed vocabulary); require it explicitly, and treat
-# a zero exit with anything else the same as a refusal -- fail closed, never
-# fall through on exit status alone.
-if [ $CARRY_RC -eq 0 ] && [ "$CARRY_REASON" = "carried" ]; then
+if routing_call_succeeded "$CARRY_RC" "$CARRY_OUT" carried; then
   st routing-carry 0
 elif [ "$CARRY_REASON" = "digest_unchanged" ]; then
   st routing-carry 0; echo "no schema-digest change this cut -- nothing to carry"
@@ -174,23 +193,20 @@ elif [ "$CARRY_REASON" = "stale_build" ]; then
     "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing repoint $REPOINT_ARGS -operations all-registered -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll repoint-before-retry, cut $OLD8 -> $N8'" 2>&1)
   REPOINT_RC=$?
   echo "$REPOINT_OUT" >> "$REC.routing-carry.out"
-  if [ $REPOINT_RC -ne 0 ]; then
+  if ! routing_call_succeeded "$REPOINT_RC" "$REPOINT_OUT" repointed; then
     st routing-carry 1
-    echo "FAIL: pre-roll repoint-before-retry itself failed -- see $REC.routing-carry.out; ABORTING (CHAOS-7022)" >&2
+    echo "FAIL: pre-roll repoint-before-retry itself failed (rc=$REPOINT_RC reason=$(carry_reason "$REPOINT_OUT")) -- see $REC.routing-carry.out; ABORTING (CHAOS-7022)" >&2
     exit 1
   fi
   CARRY_OUT2=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
     "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing carry $CARRY_ARGS -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll carry retry after repoint, cut $OLD8 -> $N8'" 2>&1)
   CARRY_RC2=$?
   echo "$CARRY_OUT2" >> "$REC.routing-carry.out"
-  CARRY_REASON2=$(carry_reason "$CARRY_OUT2")
-  # Same r3 P1 fix, applied to the retry: exit status alone is not enough here
-  # either.
-  if [ $CARRY_RC2 -eq 0 ] && [ "$CARRY_REASON2" = "carried" ]; then
+  if routing_call_succeeded "$CARRY_RC2" "$CARRY_OUT2" carried; then
     st routing-carry 0; echo "pre-roll carry: OK after repoint-then-retry"
   else
     st routing-carry 1
-    echo "FAIL: pre-roll routing carry still refused after repoint-then-retry (rc=$CARRY_RC2 reason=${CARRY_REASON2:-unrecognized}) -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
+    echo "FAIL: pre-roll routing carry still refused after repoint-then-retry (rc=$CARRY_RC2 reason=$(carry_reason "$CARRY_OUT2")) -- see $REC.routing-carry.out; ABORTING before migrate/up/up-workers (CHAOS-7022 refuse-not-skip)" >&2
     exit 1
   fi
 else
@@ -253,7 +269,7 @@ rc_repoint=$?
 st routing-repoint "$rc_repoint"
 [ "$rc_repoint" = 0 ] || { echo "ABORT: post-cut routing repoint failed or refused (-expect-build $NEW) -- see $REC.routing-repoint.out; routing rows may be stale (CHAOS-7022)" >&2; exit 1; }
 # proof tokens are 12 h: RE-MINT at every cut (rev 188: an expired token silently refused 65 REST entries, runbook step 9)
-for b in bootstrap-admin-proof.sh bootstrap-superadmin-proof.sh; do bash $R/_records/bigboy-1152962/$b > $REC/$b.out 2>&1; st $b $?; done
+for b in bootstrap-admin-proof.sh bootstrap-superadmin-proof.sh; do bash "$R"/_records/bigboy-1152962/"$b" > "$REC"/"$b".out 2>&1; st "$b" $?; done
 $HERE/bigboy-log-checks.sh $REC > $REC/log-checks.out 2>&1; st log-checks $?; tail -6 $REC/log-checks.out
 $HERE/bigboy-6889-checks.sh $REC > $REC/6889-checks.out 2>&1; st worker-checks $?; tail -4 $REC/6889-checks.out | cut -c1-200
 $HERE/bigboy-river-apply.sh > $REC/river-apply.out 2>&1; st river-apply $?
@@ -265,7 +281,7 @@ cd $REC
 for s in pass-bigboy.sh pass-bigboy-admin.sh pass-bigboy-superadmin.sh pass-bigboy-corpus-admin7.sh pass-bigboy-admin2.sh pass-bigboy-superadmin2.sh pass-bigboy-corpus-admin8.sh pass-bigboy-corpus-admin9.sh; do [ -f $s ] || continue; timeout 300 bash $s > out-${s%.sh}.txt 2>&1; st ${s%.sh} $?; done
 timeout 900 bash run-rest-bigboy.sh > out-rest.txt 2>&1; st rest $?; grep -E "attempted=|exit_cause" out-rest.txt | head -4
 for f in out-pass-bigboy.txt out-pass-bigboy-admin.txt out-pass-bigboy-superadmin.txt out-pass-bigboy-corpus-admin7.txt; do [ -f $f ] && echo "$f rows=$(awk -F' [|] ' 'NR>1' $f | wc -l) notidentical=$(awk -F' [|] ' 'NR>1 && ($4!~/True/||$5!~/True/)' $f | wc -l)"; done
-cd $R
+cd "$R"
 # CHAOS-6987/R460: the web-path smoke -- the only proof this cut serves the real org
 # through a real browser session, not a hand-minted token. Fails loud (rc=1) while
 # DHO_SMOKE_ADMIN_EMAIL/DHO_SMOKE_ADMIN_PASSWORD_FILE are absent from ops/.env; that

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -20,15 +19,6 @@ from dev_health_ops.api.billing.invoice_service import InvoiceService
 from dev_health_ops.models import Base, Organization
 from dev_health_ops.models.git import GUID
 from dev_health_ops.models.invoices import Invoice
-
-
-def _make_stripe_event(event_type: str, data_object: dict, event_id: str = "evt_test"):
-    obj = SimpleNamespace(**data_object)
-    return SimpleNamespace(
-        id=event_id,
-        type=event_type,
-        data=SimpleNamespace(object=obj),
-    )
 
 
 @pytest_asyncio.fixture
@@ -127,56 +117,6 @@ async def test_invoice_service_upsert_and_list(
     assert total == 1
     assert len(items) == 1
     assert items[0].stripe_invoice_id == "in_123"
-
-
-@pytest.mark.asyncio
-async def test_webhook_invoice_event_is_idempotent(api_client):
-    event = _make_stripe_event(
-        "invoice.updated",
-        {
-            "id": "in_dup",
-            "customer": "cus_1",
-            "metadata": {"org_id": str(uuid.uuid4())},
-            "lines": SimpleNamespace(data=[]),
-        },
-        event_id="evt_dup_1",
-    )
-
-    with (
-        patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
-        patch(
-            "dev_health_ops.api.billing.router.get_webhook_secret",
-            return_value="whsec_test",
-        ),
-        patch(
-            "dev_health_ops.api.billing.router.invoice_service"
-        ) as mock_invoice_service,
-        patch(
-            "dev_health_ops.api.billing.router.get_postgres_session"
-        ) as mock_get_session,
-    ):
-        mock_client = MagicMock()
-        mock_client.construct_event.return_value = event
-        mock_client_fn.return_value = mock_client
-
-        mock_invoice_service.is_duplicate_event = AsyncMock(return_value=True)
-        mock_invoice_service.upsert_invoice = AsyncMock()
-        mock_db = AsyncMock()
-
-        @asynccontextmanager
-        async def _ctx():
-            yield mock_db
-
-        mock_get_session.return_value = _ctx()
-
-        response = await api_client.post(
-            "/api/v1/billing/webhooks/stripe",
-            content=b"{}",
-            headers={"stripe-signature": "sig"},
-        )
-
-    assert response.status_code == 200
-    mock_invoice_service.upsert_invoice.assert_not_awaited()
 
 
 @pytest.mark.asyncio

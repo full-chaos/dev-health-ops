@@ -11896,65 +11896,6 @@
       "disclosure_behavior": null
     },
     {
-      "id": "POST /api/v1/billing/webhooks/stripe [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/billing/webhooks/stripe",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 315,
-        "router_local_path": "/webhooks/stripe"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "stripe_webhook_signature"
-      ],
-      "primary_validator": {
-        "description": "stripe_webhook verifies the Stripe-Signature header against the configured webhook secret.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/billing/router.py",
-          "line": 319,
-          "line_end": 340
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ runs get_authenticated_user_from_headers on ANY Authorization header value, decoding it as an ops JWT via authenticate_access_token, before this route's own validator runs. Exempts only path prefix /api/v1/internal/acr/. A non-JWT bearer degrades to anonymous (InvalidTokenError caught, returns None) rather than erroring -- observable but not fatal.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": "billing.webhook.stripe",
-      "resource_resolver": "Stripe event payload",
-      "tenant_requirement": "unknown",
-      "current_state_cache_behavior": "no-cache (webhook)",
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "Served only by the ops api app; the billing host's webhook is served by the go-api billing-edge listener."
-    },
-    {
       "id": "POST /api/v1/billing/checkout [dev-health-ops-api]",
       "surface_kind": "rest",
       "method": "POST",
@@ -11963,7 +11904,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 890,
+        "line": 191,
         "router_local_path": "/checkout"
       },
       "gaps": [
@@ -12024,7 +11965,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 951,
+        "line": 252,
         "router_local_path": "/portal"
       },
       "gaps": [
@@ -12085,7 +12026,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 1041,
+        "line": 341,
         "router_local_path": "/entitlements/{org_id}"
       },
       "gaps": [
@@ -12146,7 +12087,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 1057,
+        "line": 357,
         "router_local_path": "/audit"
       },
       "gaps": [
@@ -12207,7 +12148,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 1094,
+        "line": 394,
         "router_local_path": "/audit/{audit_id}"
       },
       "gaps": [
@@ -12268,7 +12209,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 1109,
+        "line": 409,
         "router_local_path": "/audit/{audit_id}/resolve"
       },
       "gaps": [
@@ -12329,7 +12270,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 1133,
+        "line": 433,
         "router_local_path": "/reconcile"
       },
       "gaps": [

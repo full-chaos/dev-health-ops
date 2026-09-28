@@ -6,6 +6,8 @@ import logging
 from datetime import date, datetime
 
 from fastapi import Depends, FastAPI, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from dev_health_ops.logging_config import configure_logging
@@ -95,6 +97,34 @@ from .webhooks import router as webhooks_router
 logger = logging.getLogger(__name__)
 
 
+async def stock_validation_error_handler(request: Request, exc: Exception) -> Response:
+    """Delegate every REST route's ``RequestValidationError`` to FastAPI's own handler.
+
+    The parameter is typed as ``Exception`` to satisfy Starlette's
+    ``ExceptionHandler`` protocol (matching the deleted
+    ``ask_dev_validation_error_handler``'s own signature); the runtime
+    ``isinstance`` check is defensive since this is registered specifically
+    for ``RequestValidationError``.
+
+    Registered LAST (Starlette's exception-handler dict is last-write-wins),
+    so this -- not ``_errors.py``'s now-deleted structured handler -- is the
+    real handler for every route, producing the stock ``{"detail": [...]}``
+    shape ``internal/queryapi/server/pydantic_validation_error.go`` is built
+    to match.
+
+    This delegation used to be Ask Dev's own (``dev.router.py``'s
+    ``ask_dev_validation_error_handler``, for any path outside
+    ``/api/v1/dev``): deleting Ask Dev (CHAOS-6262/#3358) deleted that
+    handler too, which silently un-shadowed ``_errors.py``'s dead structured
+    handler for every OTHER route -- a real regression, not a Python defect
+    (CHAOS-7015/D2802). The delegation itself is still needed for every
+    non-Ask-Dev route, so it is kept here under this name instead of being
+    removed along with Ask Dev.
+    """
+    assert isinstance(exc, RequestValidationError)
+    return await request_validation_exception_handler(request, exc)
+
+
 app = FastAPI(
     title="Dev Health Ops API",
     version="1.0.0",
@@ -106,6 +136,8 @@ app = FastAPI(
 app.state.limiter = limiter
 register_exception_handlers(app)
 register_external_ingest_error_handlers(app)
+app.add_exception_handler(RequestValidationError, stock_validation_error_handler)
+
 register_middleware(app)
 
 graphql_app = create_graphql_app()

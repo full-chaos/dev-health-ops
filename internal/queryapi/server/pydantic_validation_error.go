@@ -2,18 +2,20 @@
 // RequestValidationError response body -- the actual 422 envelope every
 // REST route in this binary (quadrant, investment/explain,
 // filters/options has no validation surface at all, drilldown/prs)
-// answers with, confirmed live via FastAPI's own TestClient (not
-// assumed, not read off the app's OWN, unrelated
-// _errors.py::_validation_error_handler, which registers a DIFFERENT,
-// simpler {"detail": {"message": ..., "errors": [...]}} shape for
-// RequestValidationError but is silently SHADOWED for every route: main.py
-// registers ask_dev_validation_error_handler for the SAME exception type
-// AFTER register_exception_handlers(app) runs, and Starlette's
+// answers with, confirmed live via FastAPI's own TestClient.
+//
+// main.py registers stock_validation_error_handler for RequestValidationError
+// last (after register_exception_handlers(app) runs; Starlette's
 // exception-handler registry is a last-write-wins dict keyed by exception
-// type. ask_dev_validation_error_handler (api/dev/router.py:335-350)
-// delegates to fastapi.exception_handlers.request_validation_exception_handler
-// -- FastAPI's stock handler -- for any path outside /api/v1/dev, which is
-// every path this binary's REST ports serve.
+// type), and that handler delegates straight to
+// fastapi.exception_handlers.request_validation_exception_handler -- FastAPI's
+// stock handler -- for every route. It is the ONLY RequestValidationError
+// handler registered anywhere in the app; there is no shadowed alternate
+// shape to describe (CHAOS-7015/D2802: an earlier _errors.py handler with a
+// different {"detail": {"message", "errors"}} shape briefly became the real
+// handler for a short window after Ask Dev's own delegation was deleted
+// alongside Ask Dev in CHAOS-6262/#3358 -- a regression, fixed by keeping the
+// delegation itself under a non-Ask-Dev name, and that other handler is gone).
 //
 // This is the ONE shared validator every REST route in this binary uses
 // -- no route keeps its own copy of any piece of it. Every

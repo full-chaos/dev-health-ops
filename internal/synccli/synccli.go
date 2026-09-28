@@ -59,9 +59,10 @@ const (
 		"Syncs the organization's Atlassian Teams into ClickHouse. With none of --structure,\n" +
 		"--members and --projects, all three are synced. Members and project links a team no longer has are\n" +
 		"retracted (closed); an empty result is refused, so a permissions problem retracts nothing, unless --allow-empty.\n\n" +
-		"--provider github|gitlab --org <org-id> --owner <org-or-group> [--auth <token>] runs that\n" +
-		"provider's own team catalog instead of Atlassian Teams; see docs/reference/cli/index.md for\n" +
-		"its exact flags, refusals and env vars, which differ per provider.\n\n" +
+		"--provider github|gitlab|linear --org <org-id> [--owner <org-or-group>] [--auth <token>] runs\n" +
+		"that provider's own team catalog instead of Atlassian Teams (--owner is required for github/\n" +
+		"gitlab, not used for linear); see docs/reference/cli/index.md for its exact flags, refusals\n" +
+		"and env vars, which differ per provider.\n\n" +
 		"--provider jira resolves the org's stored jira integration credential from Postgres\n" +
 		"(--db, else POSTGRES_URI or _FILE) by default -- the atlassian_organization_id (required) and\n" +
 		"atlassian_cloud_id (optional; else derived live from the tenant) come from that same\n" +

@@ -31,10 +31,22 @@ var teamsSyncOracleLinearProgram string
 // LinearClient (repointed at this server via LINEAR_API_URL, which its module
 // hardcodes with no env override -- a named difference from GitHub/GitLab)
 // and the Go catalog (repointed via the CLI's own LINEAR_URL, a Go-only
-// addition for testability). Both send one POST /graphql; this fake ignores
-// the query TEXT (it never varies field selection in a way either consumer
-// cares about) and dispatches on the request's variables shape instead:
-// "teamId" present -> a team-members page; absent -> a teams listing page.
+// addition for testability). Both send one POST /graphql; this fake dispatches
+// on the request's VARIABLES shape (see handle()'s dispatch comment for the
+// three query shapes and how they're told apart), never the query text.
+//
+// It does NOT emulate real GraphQL field selection: every response includes
+// every field this file's payload structs define, regardless of what the
+// query actually asked for. This was already a design tradeoff (chosen for
+// simplicity over building a real selection-set interpreter) but it is a
+// FOOTGUN, not a free simplification: codex r1 (CHAOS-6908) caught a case
+// where it fabricated a divergence that cannot occur in production -- an
+// "archivedAt" field python's own TEAMS_QUERY never selects at all, so a
+// conforming server would never send it, but this fake did, making python's
+// dead `if t.get("archivedAt")` check look alive. Never add a field to a
+// response struct/JSON here that the corresponding real query does not
+// actually select -- check the query constant in client.go (python) and the
+// route file (Go) first.
 type fakeLinear struct {
 	server *httptest.Server
 	mu     sync.Mutex
@@ -55,7 +67,6 @@ type fakeLinearTeam struct {
 	Key         string
 	Name        string
 	Description *string
-	Archived    bool // python skips archivedAt teams; Go's team query never even asks for it
 	Members     []fakeLinearMember
 }
 
@@ -93,10 +104,6 @@ func (f *fakeLinear) teamJSON(team fakeLinearTeam) map[string]any {
 	if team.Description != nil {
 		description = *team.Description
 	}
-	var archivedAt any
-	if team.Archived {
-		archivedAt = "2026-01-01T00:00:00.000Z"
-	}
 	members := make([]any, 0, len(team.Members))
 	for i, m := range team.Members {
 		if i >= 10 {
@@ -104,9 +111,18 @@ func (f *fakeLinear) teamJSON(team fakeLinearTeam) map[string]any {
 		}
 		members = append(members, f.memberJSON(m))
 	}
+	// codex r1 relaunch, CHAOS-6908 (P2): no "archivedAt" key here, ever --
+	// this fake previously injected one to simulate an "archived team"
+	// divergence, but python's real TEAMS_QUERY (client.py:258-287) never
+	// SELECTS that field at all. A real GraphQL server omits an unselected
+	// field entirely (it does not return it as null); a fake that returns it
+	// anyway lets python's `t.get("archivedAt")` check see data no
+	// conforming server would ever hand it, fabricating a divergence that
+	// cannot occur in production. Confirmed by removing the field and
+	// re-running the live oracle: python includes the "archived" team same
+	// as Go, because its own filter is dead code against the real query.
 	return map[string]any{
 		"id": "id-" + team.Key, "key": team.Key, "name": team.Name, "description": description,
-		"archivedAt": archivedAt,
 		"members": map[string]any{
 			"nodes":    members,
 			"pageInfo": map[string]any{"hasNextPage": len(team.Members) > 10, "endCursor": nil},
@@ -176,13 +192,6 @@ func (f *fakeLinear) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	nodes := make([]any, 0, len(f.teams))
 	for _, team := range f.teams {
-		if team.Archived {
-			// Go's team query never requests archivedAt at all, so its own
-			// walk includes an archived team unconditionally (a named
-			// divergence -- python's providers.teams.py skips it). Serve it
-			// to BOTH: the difference is in what each CONSUMER does with the
-			// field, not in what the fake returns.
-		}
 		nodes = append(nodes, f.teamJSON(team))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
@@ -254,7 +263,7 @@ type linearScenario struct {
 	// wantRows is python's written team count.
 	wantRows int
 	// goDiffers marks a scenario where the two planes end differently by
-	// design (the archived-team divergence): the two databases are not
+	// design (the inactive-member divergence): the two databases are not
 	// compared column by column and `after` says what each must hold.
 	goDiffers bool
 	goExit    int
@@ -541,25 +550,25 @@ func TestSyncTeamsLinearVenueOracleMatchesThePythonProducer(t *testing.T) {
 					t.Errorf("go members = %v, want only alice (the catalog always excludes inactive members)", goLogins)
 				}
 			}},
-		{name: "an archived team: python skips it, go's catalog does not", token: "tok", wantExit: 0, wantRows: 1,
-			teams:     []fakeLinearTeam{{Key: "ENG", Name: "Engineering", Members: []fakeLinearMember{{ID: "u1", Name: "Alice", Email: "alice@example.com", Active: true}}}, {Key: "OLD", Name: "Retired", Archived: true, Members: []fakeLinearMember{{ID: "u5", Name: "Eve", Email: "eve@example.com", Active: true}}}},
-			goDiffers: true, goExit: 0, goRows: 2,
-			after: func(t *testing.T, o *teamsOracle, sc *linearScenario, run linearRun, python, goRows []map[string]string) {
-				var pythonIDs, goIDs []string
-				for _, row := range python {
-					pythonIDs = append(pythonIDs, row["id"])
-				}
-				for _, row := range goRows {
-					goIDs = append(goIDs, row["id"])
-				}
-				sort.Strings(pythonIDs)
-				sort.Strings(goIDs)
-				if strings.Join(pythonIDs, ",") != "linear:ENG" {
-					t.Errorf("python wrote %v, want only linear:ENG (archived team skipped)", pythonIDs)
-				}
-				if strings.Join(goIDs, ",") != "ENG,OLD" {
-					t.Errorf("go wrote %v, want both ENG and OLD (the catalog's team query never reads archivedAt)", goIDs)
-				}
+		// codex r1 relaunch, CHAOS-6908 (P2): NOT a divergence, corrected from
+		// an earlier draft that claimed one. providers/teams.py's `archivedAt`
+		// check (teams.py) reads a field its own TEAMS_QUERY never selects
+		// (client.py:258-287) -- against the real Linear API that check is
+		// dead code, always false, and python includes every team regardless
+		// of archived status, same as dho's catalog (whose query never asks
+		// for archivedAt either). Verified directly: injecting an
+		// "archivedAt" value into this fake's response (as an earlier draft
+		// did) made python skip the team -- but that only proves python
+		// trusts a field a conforming GraphQL server would never send for
+		// this query; a real server omits an unselected field entirely
+		// rather than sending it null. This scenario proves the NULL
+		// hypothesis instead: with no archivedAt in the response at all, both
+		// planes write every team.
+		{name: "an org-archived team is included by both planes (teams.py's archivedAt check is dead code against the real query)",
+			token: "tok", wantExit: 0, wantRows: 2,
+			teams: []fakeLinearTeam{
+				{Key: "ENG", Name: "Engineering", Members: []fakeLinearMember{{ID: "u1", Name: "Alice", Email: "alice@example.com", Active: true}}},
+				{Key: "OLD", Name: "Retired", Members: []fakeLinearMember{{ID: "u5", Name: "Eve", Email: "eve@example.com", Active: true}}},
 			}},
 	}
 	for _, sc := range scenarios {

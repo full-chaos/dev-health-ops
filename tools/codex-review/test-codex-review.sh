@@ -2032,6 +2032,46 @@ else
   notok "v4.8.7 default sandbox is not unconditionally read-only as expected"
 fi
 
+# ---------------------------------------------------------------------------
+# #3368 r1 P2 (EXECUTED, reproduced by the reviewer): DIFF_UNKNOWN used to surface only
+# inside the DIFF_SEEN=0 warning branch -- a round with a CONFIRMED diff (DIFF_SEEN=1) but
+# some blocks still unresolved (DIFF_UNKNOWN>0) printed the ordinary "round recorded N exec
+# block(s)..." summary with NO trace of the pending unknown count anywhere in its log.
+#
+# D2827: the bar is UNCONDITIONAL -- the unknown count is part of the summary line's fixed
+# text, literally always printed (even as 0), never appended only "when >0". A conditional
+# append makes the count's ABSENCE itself ambiguous (nothing unresolved, or this build just
+# doesn't carry the fix?); asserting the literal count at both DIFF_UNKNOWN=2 AND
+# DIFF_UNKNOWN=0 proves the line's SHAPE never changes, only the number in it.
+# ---------------------------------------------------------------------------
+extract 'EXECUTED_EXECS=$((GO_EXECS + PY_EXECS))' \
+  'warn "round recorded $EXEC_BLOCKS exec block(s) ($GO_EXECS go test/run/build, $PY_EXECS pytest/uv run/ruff/mypy/bash-or-sh-script/python/shellcheck/py_compile, ${DIFF_UNKNOWN:-0} unresolved/unknown)"' \
+  "$WORK/exec_summary.sh"
+SUMMARY_WITH_UNKNOWN=$( (
+  GO_EXECS=1 PY_EXECS=0 EXEC_BLOCKS=3 DIFF_SEEN=1 DIFF_UNKNOWN=2
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/exec_summary.sh"
+) 2>&1 )
+if printf '%s' "$SUMMARY_WITH_UNKNOWN" | grep -q '2 unresolved/unknown)$'; then
+  ok "#3368 r1 P2 fix: the always-printed summary names the unknown count even when DIFF_SEEN=1 (a confirmed diff does not hide pending ambiguity)"
+else
+  notok "#3368 r1 P2 fix: DIFF_UNKNOWN=2 with DIFF_SEEN=1 produced no trace of the unknown count in the summary (out='$SUMMARY_WITH_UNKNOWN')"
+fi
+SUMMARY_ZERO_UNKNOWN=$( (
+  GO_EXECS=1 PY_EXECS=0 EXEC_BLOCKS=1 DIFF_SEEN=1 DIFF_UNKNOWN=0
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/exec_summary.sh"
+) 2>&1 )
+if printf '%s' "$SUMMARY_ZERO_UNKNOWN" | grep -q '0 unresolved/unknown)$'; then
+  ok "#3368 r1 P2 fix, D2827 bar: DIFF_UNKNOWN=0 still prints the count LITERALLY (as 0), same line shape as the nonzero case -- its absence is never itself ambiguous"
+else
+  notok "#3368 r1 P2 fix, D2827 bar: DIFF_UNKNOWN=0 did not print the literal '0 unresolved/unknown)' -- the line's shape changes depending on the value (out='$SUMMARY_ZERO_UNKNOWN')"
+fi
+
 echo "----"
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

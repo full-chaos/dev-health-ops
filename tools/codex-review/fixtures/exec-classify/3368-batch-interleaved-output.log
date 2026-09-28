@@ -1,0 +1,22 @@
+exec
+/bin/bash -lc 'go test ./...' in /w
+exec
+/bin/bash -lc 'ls -la' in /w
+exec
+/bin/bash -lc 'sed -n "1,50p" .codex-review.patch' in /w
+ succeeded in 100ms:
+ok
+--- ok x/y/z 0.01s
+--- ok x/y/w 0.02s
+ succeeded in 5ms:
+total 0
+drwxr-xr-x 2 user user 4096 .
+-rw-r--r-- 1 user user  123 README.md
+ succeeded in 12ms:
+diff --git a/x b/x
+index abc123..def456 100644
+--- a/x
++++ b/x
+@@ -1 +1 @@
+-old line
++new line

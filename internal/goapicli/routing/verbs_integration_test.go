@@ -862,6 +862,85 @@ func TestRepointRefusesARegistryThatRegistersNothingAtAll(t *testing.T) {
 	}
 }
 
+// extractRepointJSON mirrors extractCarryJSON (carry_integration_test.go) for repoint's
+// own -json output shape.
+func extractRepointJSON(t *testing.T, out string) repointResult {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(line, repointJSONPrefix); ok {
+			var result repointResult
+			if err := json.Unmarshal([]byte(rest), &result); err != nil {
+				t.Fatalf("repoint -json line did not decode: %v\nline: %s", err, rest)
+			}
+			return result
+		}
+	}
+	t.Fatalf("no %q line found in repoint's stdout:\n%s", repointJSONPrefix, out)
+	return repointResult{}
+}
+
+// D2828/D2831 (r2 P3 on #3362): repoint's -json/reason contract shipped in the same PR as
+// carry's, but with zero test coverage of its own -- printRepointResult sat at 0.0%
+// function coverage. These two mirror carry's TestCarryJSONReasonIsCarriedOnSuccess and
+// the digest_unchanged/refused shape, for repoint's flatter ("repointed"/"refused"/"error")
+// vocabulary.
+func TestRepointJSONReasonIsRepointedOnSuccess(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "4444444444444444444444444444444444444444444444444444444444444444"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, verbTestBearer)
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+	if _, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...); err != nil {
+		t.Fatalf("seeding enable: %v", err)
+	}
+
+	out, _, err := captureVerb(t,
+		"repoint",
+		"-registry-url", server.URL+"/registry",
+		"-buildinfo-url", server.URL+"/buildinfo",
+		"-postgres-uri", dsn,
+		"-recorded-by", "lane-routing-verbs",
+		"-review-evidence", "repoint -json success",
+		"-json",
+	)
+	if err != nil {
+		t.Fatalf("repoint: %v\n%s", err, out)
+	}
+	result := extractRepointJSON(t, out)
+	if result.Reason != "repointed" {
+		t.Fatalf("reason = %q, want \"repointed\" (out:\n%s)", result.Reason, out)
+	}
+}
+
+func TestRepointJSONReasonIsRefusedOnARealRefusal(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "3333333333333333333333333333333333333333333333333333333333333333"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, verbTestBearer)
+	seedServer := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+	if _, _, err := captureVerb(t, enableArgs(seedServer, dsn, catalogPath)...); err != nil {
+		t.Fatalf("seeding enable: %v", err)
+	}
+	emptyServer := startQueryAPI(t, localSchemaDigest(), map[string]string{})
+
+	out, _, err := captureVerb(t,
+		"repoint",
+		"-registry-url", emptyServer.URL+"/registry",
+		"-buildinfo-url", emptyServer.URL+"/buildinfo",
+		"-postgres-uri", dsn,
+		"-recorded-by", "lane-routing-verbs",
+		"-review-evidence", "repoint -json refused",
+		"-json",
+	)
+	if err == nil {
+		t.Fatal("expected a real refusal against a registry that registers nothing at all")
+	}
+	result := extractRepointJSON(t, out)
+	if result.Reason != "refused" {
+		t.Fatalf("reason = %q, want \"refused\" (out:\n%s)", result.Reason, out)
+	}
+}
+
 // End to end. Two ways
 // `status` used to report a positive `reachable` answer that `enable`
 // would refuse: a SCHEMA-level digest disagreement (checked before the

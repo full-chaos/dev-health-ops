@@ -95,7 +95,13 @@ def test_digest_unchanged_refusal_is_treated_as_pass() -> None:
 
 
 def test_carry_refusal_for_any_other_reason_aborts_before_the_recreate() -> None:
-    """Refuse-not-skip: any OTHER carry refusal must abort the cut, not just log rc=1."""
+    """Refuse-not-skip: any OTHER carry refusal must abort the cut, not just log rc=1.
+
+    Static/source-only (a `exit 1` text match, not an executed reproduction) -- the
+    REAL, executed proof that the catch-all branch actually aborts against a genuine
+    CLI refusal is test_real_unrecognized_refusal_still_aborts_the_cut in
+    test_bigboy_cut_carry_refusal_text_behavior.py (r2 finding on this PR: a claim here
+    was read as executed evidence when it was only ever this text match)."""
     lines = _lines()
     carry_at = _first(lines, "dho goapi routing carry")
     migrate_at = _first(lines, "--no-deps migrate", start=carry_at)

@@ -136,7 +136,15 @@ for f in $R/_records/bigboy-$OLD8/pass-bigboy-corpus-admin7.sh; do [ -f $f ] && 
 # used elsewhere in this script, host-side, after `docker compose run` returns -- no new
 # dependency), never grep on error text again.
 ROUTING_ORG=${ROUTING_ORG:-67f1add8-9fcb-4272-addb-044b70c442c8}  # the disposable fixture org, never the local org
-CARRY_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -json"
+# carry's -catalog/-documents default to paths relative to CWD (the tools image's own WORKDIR,
+# /app/go-api, per docker/go-api-tools.Dockerfile) -- but venue-tools' compose service overrides
+# working_dir to /work (a host-mounted scratch dir, always empty), so those relative defaults can
+# never resolve there. Point carry at the SAME files by their absolute, image-baked path instead
+# (still the tools image's own catalog/documents -- "the image THIS binary was built from", per
+# carry.go's flag help -- never a separately fetched copy). repoint has no -catalog/-documents
+# flags at all, so it keeps its own, shorter arg list.
+CARRY_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -json -catalog /app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json -documents /app/go-api/documents.json"
+REPOINT_ARGS="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo -json"
 carry_reason() {
   # $1: the captured carry/repoint stdout+stderr blob. Prints the GOAPI_ROUTING_JSON line's
   # `reason` field, or empty if the line is missing/unparseable -- never dies (a missing/
@@ -156,7 +164,7 @@ elif [ "$CARRY_REASON" = "digest_unchanged" ]; then
 elif [ "$CARRY_REASON" = "stale_build" ]; then
   echo "pre-roll carry: rows lag the actually-running build (no schema change) -- repointing then retrying once"
   REPOINT_OUT=$(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-tools \
-    "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing repoint $CARRY_ARGS -operations all-registered -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll repoint-before-retry, cut $OLD8 -> $N8'" 2>&1)
+    "GO_API_ROUTING_BEARER=\$(dho mint envelope -org $ROUTING_ORG -key-file /keys/envelope.pem) dho goapi routing repoint $REPOINT_ARGS -operations all-registered -recorded-by bigboy-cut -review-evidence 'CHAOS-7022: pre-roll repoint-before-retry, cut $OLD8 -> $N8'" 2>&1)
   REPOINT_RC=$?
   echo "$REPOINT_OUT" >> "$REC.routing-carry.out"
   if [ $REPOINT_RC -ne 0 ]; then

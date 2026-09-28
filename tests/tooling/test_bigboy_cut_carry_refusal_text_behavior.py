@@ -134,6 +134,9 @@ class _FakeQueryAPIHandler(http.server.BaseHTTPRequestHandler):
     document_digest = "3b1e0818acf4ae4659152ff300e682ec4ef80ac71e9d25efa32ac9d2952a385d"
     operation = "featureFlagTimeseries"
     running_commit = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+    no_operations = False  # True -> /registry reports zero operations, a real, distinct
+    # refusal ("registers no operations") from digest_unchanged/stale_build -- used to
+    # prove the catch-all abort branch against the REAL CLI, not a source-text match.
 
     def _write_json(self, payload: dict) -> None:
         body = json.dumps(payload).encode()
@@ -145,16 +148,18 @@ class _FakeQueryAPIHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler's own naming
         if self.path == "/registry":
+            operations = (
+                []
+                if self.no_operations
+                else [
+                    {
+                        "operation": self.operation,
+                        "document_digest": self.document_digest,
+                    }
+                ]
+            )
             self._write_json(
-                {
-                    "schema_digest": self.schema_digest,
-                    "operations": [
-                        {
-                            "operation": self.operation,
-                            "document_digest": self.document_digest,
-                        }
-                    ],
-                }
+                {"schema_digest": self.schema_digest, "operations": operations}
             )
             return
         if self.path == "/buildinfo":
@@ -179,12 +184,16 @@ class _FakeQueryAPIHandler(http.server.BaseHTTPRequestHandler):
 
 
 def _start_fake_query_api(
-    *, schema_digest: str, running_commit: str
+    *, schema_digest: str, running_commit: str, no_operations: bool = False
 ) -> http.server.HTTPServer:
     handler = type(
         "_Handler",
         (_FakeQueryAPIHandler,),
-        {"schema_digest": schema_digest, "running_commit": running_commit},
+        {
+            "schema_digest": schema_digest,
+            "running_commit": running_commit,
+            "no_operations": no_operations,
+        },
     )
     server = http.server.HTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -207,16 +216,24 @@ def _run_harness(
     postgres_uri: str = _UNREACHABLE_POSTGRES_URI,
     catalog_json: str = _MINIMAL_CATALOG,
     documents_json: str = _MINIMAL_DOCUMENTS,
+    no_operations: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Runs the REAL bigboy-cut.sh carry block, with `docker` stubbed to invoke the REAL
     dho binary (built by the dho_binary fixture) against a REAL local HTTP server -- never
     a canned string standing in for either."""
     server = _start_fake_query_api(
-        schema_digest=schema_digest, running_commit=running_commit
+        schema_digest=schema_digest,
+        running_commit=running_commit,
+        no_operations=no_operations,
     )
     try:
-        # bigboy-cut.sh's own CARRY_ARGS names no -catalog/-documents (it relies on the
-        # tools IMAGE's baked-in default paths, which do not exist on this host).
+        # bigboy-cut.sh's own CARRY_ARGS now names -catalog/-documents explicitly, pointed
+        # at the tools IMAGE's baked-in absolute paths (/app/go-api/... -- see the comment
+        # above CARRY_ARGS in bigboy-cut.sh for why: venue-tools' compose working_dir
+        # override makes carry's own relative defaults unreachable there). Those absolute
+        # paths exist only inside the real container, so the docker stub below rewrites
+        # them to these local fixture files -- the same substitution shape already used for
+        # query-api:8090, proving the REAL script's own flags (not a test-side injection).
         catalog_path = tmp_path / "catalog.json"
         catalog_path.write_text(catalog_json)
         documents_path = tmp_path / "documents.json"
@@ -232,8 +249,10 @@ def _run_harness(
         # Rewritten here to run OUTSIDE any container: query-api:8090 -> the fake server,
         # the `dho mint envelope` subshell -> the fixture bearer (never really minted;
         # envelopeCredential() only reads the env var, never verifies it client-side), the
-        # bare `dho` invocation -> the real, locally-built binary, and -catalog/-documents
-        # appended -> the empty fixtures above (the CLI's own baked-in defaults otherwise).
+        # bare `dho` invocation -> the real, locally-built binary, and the two image-baked
+        # -catalog/-documents paths CARRY_ARGS itself now names -> these local fixtures.
+        # -catalog/-documents only ever appear on a `carry` command (REPOINT_ARGS has
+        # neither), so the sed substitution below is a harmless no-op on the repoint leg.
         docker_stub.write_text(
             "#!/usr/bin/env bash\n"
             "set -u\n"
@@ -241,10 +260,7 @@ def _run_harness(
             f'cmd="${{cmd//query-api:8090/{fake_addr}}}"\n'
             f'cmd=$(printf "%s" "$cmd" | sed -E \'s#GO_API_ROUTING_BEARER=\\$\\(dho mint envelope[^)]*\\)#GO_API_ROUTING_BEARER={_FAKE_BEARER}#\')\n'
             f'cmd="${{cmd/dho goapi/{dho} goapi}}"\n'
-            # -catalog/-documents only exist on `carry`, never `repoint` -- appending them
-            # unconditionally broke the repoint leg of the repoint-then-retry fallback with
-            # "flag provided but not defined" (found by actually running this test).
-            f'case "$cmd" in *"routing carry"*) cmd="$cmd -catalog {catalog_path} -documents {documents_path}" ;; esac\n'
+            f'cmd=$(printf "%s" "$cmd" | sed "s#/app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json#{catalog_path}#; s#/app/go-api/documents.json#{documents_path}#")\n'
             'eval "$cmd"\n'
         )
         docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC)
@@ -455,3 +471,33 @@ def test_real_stale_build_triggers_the_repoint_then_retry_fallback(
         f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
     )
     assert _HARNESS_SENTINEL in proc.stdout
+
+
+def test_real_unrecognized_refusal_still_aborts_the_cut(
+    dho_binary: Path, tmp_path: Path
+) -> None:
+    """A real refusal outside {digest_unchanged, stale_build} -- here, the deployed
+    registry genuinely reports zero operations ("registers no operations", carry's own
+    Preflight 1) -- must abort the cut before migrate/up/up-workers ever runs, never fall
+    through silently. This proves the final catch-all `else` branch against the REAL CLI's
+    own `reason` field, not a source-text match for the literal string "exit 1" (the r2
+    finding this test replaces)."""
+    proc = _run_harness(
+        dho_binary,
+        tmp_path,
+        schema_digest="sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        running_commit="irrelevant",
+        no_operations=True,
+    )
+    assert proc.returncode != 0, (
+        "a real, unrecognized carry refusal must abort the cut -- "
+        f"got rc={proc.returncode}, stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert (
+        "refused for a reason other than 'no schema change' or a stale build"
+        in proc.stderr
+    ), f"the catch-all abort branch never fired -- stderr={proc.stderr!r}"
+    assert _HARNESS_SENTINEL not in proc.stdout, (
+        "the harness reached the line after the carry block -- an unrecognized refusal "
+        f"did not actually abort. stdout={proc.stdout!r}"
+    )

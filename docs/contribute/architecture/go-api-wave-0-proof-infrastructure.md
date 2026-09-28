@@ -699,10 +699,17 @@ make it structural:
   `migrate`/`up`/`up-workers` recreate `api`/`query-api`/`go-api` -- `query-api` at this point is
   still the OLD, pre-roll, live process, exactly the source `carry` is designed to read from.
   `carry` itself refuses (exit 2) when the live and target schema digests already agree -- the
-  expected shape for an ordinary, non-schema-changing roll, not a failure, so the STEP reads that
-  one named refusal text (`this binary's SDL is the one the deployed process already computes`)
-  as a pass. Any OTHER refusal aborts the cut before `migrate`/`up` ever runs: **refuse-not-skip**,
-  never a silent no-op.
+  expected shape for an ordinary, non-schema-changing roll, not a failure. The STEP does not
+  branch on refusal prose (D2828/D2829: text differs between the CLI's own preflight and
+  goapiproof's sentinel errors for the same condition, so branching on it was wrong twice).
+  `carry -json` instead prints one `GOAPI_ROUTING_JSON {...}` line with a `reason` field from a
+  small, closed vocabulary set at the Go call site that knows why: `carried` (success),
+  `digest_unchanged` (the expected no-op -- read as a pass), `stale_build` (rows lag the
+  actually-running build, no schema change -- the STEP repoints then retries carry once), or
+  `refused`/`error` (anything else -- always aborts). `bigboy-cut.sh`'s `carry_reason()` extracts
+  the field with `jq`, host-side, after `docker compose run` returns. Any reason other than
+  `digest_unchanged` or a successfully-retried `stale_build` aborts the cut before `migrate`/`up`
+  ever runs: **refuse-not-skip**, never a silent no-op.
 - **`routing-repoint`**, right after `routing-parity` (post-roll, against the newly-running
   build), unconditionally on every cut, schema-change or not. Provenance-only -- it never touches
   mode/reachability -- so it is safe to run every time, and it closes the OTHER gap this ticket
@@ -737,11 +744,18 @@ documents dump generated from the SAME commit at build time
 (`/app/go-api/documents.json`), and the checked-in operation catalog at its
 `DefaultCatalogPath` relative to the image's working directory
 (`/app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json`) --
-`dho goapi routing`'s `-catalog` flag needs no override when run from
-there, and neither does `carry`'s `-documents` flag, whose default is that
-same baked-in dump — which is exactly what makes the image's own binary
-able to say which documents the deployment it was built from will
-register.
+`dho goapi routing`'s `-catalog` flag needs no override, and neither does
+`carry`'s `-documents` flag, whose default is that same baked-in dump,
+**when run from the image's own WORKDIR (`/app/go-api`)**. `bigboy-cut.sh`
+runs the tools image through `venue-tools`, whose compose service
+overrides `working_dir` to `/work` (a host-mounted scratch dir, always
+empty), so those relative defaults never resolve there -- `CARRY_ARGS`
+points `-catalog`/`-documents` at the same files by their absolute,
+image-baked path instead (still the tools image's own catalog/documents,
+never a separately fetched copy). `repoint` has no `-catalog`/`-documents`
+flags at all, so callers running under an overridden `working_dir` are
+unaffected for that verb. Either way, the image's own binary is what says
+which documents the deployment it was built from will register.
 
 The runtime base is a small Debian, not distroless: this image doubles as
 the operator's one-off Pod for running both binaries by hand, and a

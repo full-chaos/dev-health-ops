@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -199,5 +201,54 @@ func TestNewProofOrgAllowedFailsClosedOnARealStoreError(t *testing.T) {
 	orgAllowed := newProofOrgAllowed(pool)
 	if orgAllowed(context.Background(), "org-1") {
 		t.Fatal("newProofOrgAllowed's real closure returned true against a pool that cannot answer -- a store error must fail closed, never open")
+	}
+}
+
+// The edge access token must reach the authenticator on EVERY handler
+// newQueryHandler builds, /query/proof-write included. pwHandler hard-codes
+// (nil, nil) for the edge carrier, so it cannot see whether newQueryHandler
+// itself passes the authenticator through; this drives the real wiring. The
+// pool points nowhere, so the authenticator's live user read is unavailable
+// and the request is refused with 401 either way -- what distinguishes the
+// wired handler is the refusal it logs: only the edge carrier logs
+// carrier=edge, whereas a handler wired without the authenticator treats the
+// HS256 token as a malformed envelope and never reaches that branch.
+func TestNewQueryHandlerWiresTheEdgeAuthenticatorIntoEveryRoute(t *testing.T) {
+	verifier, _ := iaVerifier(t)
+	pool, err := pgxpool.New(context.Background(), "postgres://nobody:none@127.0.0.1:1/none?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	getenv := func(key string) string {
+		if key == edgeJWTSecretEnvVar {
+			return ecSecret
+		}
+		return ""
+	}
+	serve, proof, proofWrite, _, err := newQueryHandler(nil, pool, verifier, "schema-digest", getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member"})
+
+	for route, handler := range map[string]http.HandlerFunc{"serve": serve, "proof": proof, "proof-write": proofWrite} {
+		var logged bytes.Buffer
+		previous := log.Writer()
+		log.SetOutput(&logged)
+		body, _ := json.Marshal(map[string]any{"query": registeredCreateSavedReportDocument})
+		req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		log.SetOutput(previous)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s: status %d, want 401 (edge store unreachable)", route, rec.Code)
+		}
+		if !strings.Contains(logged.String(), "carrier=edge") {
+			t.Errorf("%s: the edge token never reached the edge authenticator (log: %q) -- newQueryHandler did not wire it into this route", route, logged.String())
+		}
 	}
 }

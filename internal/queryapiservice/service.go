@@ -108,7 +108,7 @@ func configure(
 		return closeOnError(err)
 	}
 	logger.WarnContext(ctx, "the query listener still serves /healthz, /readyz and /metrics for one release; probes and scrape belong on the operator listener", "setting", "HTTP_ADDR")
-	public, internal := server.Listeners(cfg.QueryAPIAddress, cfg.QueryAPIInternalAddress, plane, server.OperatorCompat(registry, operatorRoutes, config.QueryAPIServiceName))
+	public, internal := server.Listeners(cfg.QueryAPIAddress, cfg.QueryAPIInternalAddress, plane, server.OperatorCompat(registry, operatorRoutes, config.QueryAPIServiceName), cfg.QueryAPIInternalAllowedCIDRs)
 	if err := registry.RegisterRequired(listenerCheck, func(context.Context) error {
 		if public.Address() == "" {
 			return errors.New("query listener is not bound")

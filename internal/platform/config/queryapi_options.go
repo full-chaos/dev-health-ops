@@ -27,6 +27,11 @@ var queryAPIOptions = func() []Option {
 			Usage: "host:port of the internal listener that honours the X-DH-Internal-* identity headers (off when unset; no Ingress may route to it)",
 		},
 		{
+			Flag: "internal-allowed-cidrs", Env: "QUERY_API_INTERNAL_ALLOWED_CIDRS", Kind: KindString,
+			Services: q, Group: GroupRuntime,
+			Usage: "comma-separated CIDR list (IPv4/IPv6) the internal listener accepts a peer connection from; unset accepts every peer (D2953) -- checked at accept time, never from a header",
+		},
+		{
 			Flag: "database-role", Env: "QUERY_API_DATABASE_ROLE", Kind: KindString,
 			Services: q, Group: GroupDatabase,
 			Usage: "PostgreSQL role the readiness write-grant check expects the registry pool to hold",

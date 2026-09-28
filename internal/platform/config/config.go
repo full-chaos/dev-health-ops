@@ -343,6 +343,11 @@ type Config struct {
 	// otherwise, and the internal one empty means no internal listener).
 	QueryAPIAddress         string
 	QueryAPIInternalAddress string
+	// QueryAPIInternalAllowedCIDRs (D2953) restricts the internal listener to a
+	// peer address inside one of these CIDRs, checked at accept time. nil (the
+	// zero value) means QUERY_API_INTERNAL_ALLOWED_CIDRS was unset -- no
+	// restriction beyond whatever network segmentation already exists.
+	QueryAPIInternalAllowedCIDRs []*net.IPNet
 	// Setting resolves one declared setting of the service (flag > environment),
 	// for code that reads settings by name (dho query-api's route builders). It
 	// answers only for a name declared for this service or for every service, so
@@ -961,6 +966,14 @@ func Load(spec Spec) (Config, error) {
 				return Config{}, fmt.Errorf("%s must be a host:port address", settingLabel("QUERY_API_INTERNAL_ADDR"))
 			}
 		}
+		// D2953: a malformed peer allowlist is a startup error, same fail-closed
+		// shape as every other malformed setting here -- never a partially
+		// applied or silently ignored list.
+		allowedCIDRs, cidrErr := parseAllowedCIDRs(envOrDefault(lookup, "QUERY_API_INTERNAL_ALLOWED_CIDRS", ""))
+		if cidrErr != nil {
+			return Config{}, fmt.Errorf("%s: %w", settingLabel("QUERY_API_INTERNAL_ALLOWED_CIDRS"), cidrErr)
+		}
+		cfg.QueryAPIInternalAllowedCIDRs = allowedCIDRs
 		// The three listeners are separate: an identical pair would fail the
 		// second bind (port 0 asks the kernel for a free port each time).
 		for _, pair := range [][2]string{
@@ -1967,6 +1980,37 @@ func firstOrEmpty(value string, ok bool) string {
 		return ""
 	}
 	return value
+}
+
+// parseAllowedCIDRs (D2953) parses a comma-separated CIDR list (IPv4 and
+// IPv6 entries may mix freely): split on commas, trim, drop the empty
+// entries, then require every remaining one to parse as a CIDR -- a
+// malformed entry is a startup error (config.Load fails closed), never a
+// silently-dropped or partially-applied allowlist. An all-empty (unset)
+// input returns (nil, nil): "unset", not "empty list" -- a genuinely empty,
+// non-nil allowlist would refuse every peer, which is not what an unset
+// setting means.
+func parseAllowedCIDRs(raw string) ([]*net.IPNet, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var nets []*net.IPNet
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		_, ipnet, err := net.ParseCIDR(entry)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR %q: %w", entry, err)
+		}
+		nets = append(nets, ipnet)
+	}
+	if len(nets) == 0 {
+		return nil, fmt.Errorf("no CIDR entries found in a non-empty list")
+	}
+	return nets, nil
 }
 
 // parseCORSOrigins mirrors the Python api's _parse_cors_origins: split on

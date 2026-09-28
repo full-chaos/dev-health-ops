@@ -63,6 +63,10 @@ const (
 		"that provider's own team catalog instead of Atlassian Teams (--owner is required for github/\n" +
 		"gitlab, not used for linear); see docs/reference/cli/index.md for its exact flags, refusals\n" +
 		"and env vars, which differ per provider.\n\n" +
+		"--provider synthetic --org <org-id> [--allow-empty] writes 8 deterministic demo teams\n" +
+		"(no --owner/--auth; the generator takes no live input). Same 8 teams every run --\n" +
+		"see docs/reference/cli/index.md for the field-by-field parity with dev-hops's own\n" +
+		"synthetic provider.\n\n" +
 		"--provider jira resolves the org's stored jira integration credential from Postgres\n" +
 		"(--db, else POSTGRES_URI or _FILE) by default -- atlassian_organization_id and\n" +
 		"atlassian_cloud_id (both optional; else derived live from the tenant via the AGG gateway)\n" +
@@ -154,7 +158,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	flags := flag.NewFlagSet("dho sync teams", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
 	flags.Usage = func() { fmt.Fprint(env.Stderr, teamsUsage) }
-	provider := flags.String("provider", "", "the team source: jira, github, gitlab or linear")
+	provider := flags.String("provider", "", "the team source: jira, github, gitlab, linear or synthetic")
 	owner := flags.String("owner", "", "the GitHub organization (github) or GitLab group path (gitlab); not used for linear")
 	auth := flags.String("auth", "", "the provider token (github/gitlab/linear; else GITHUB_TOKEN/GITLAB_TOKEN/LINEAR_API_KEY)")
 	org := flags.String("org", "", "the organization id the rows are written under")
@@ -173,8 +177,8 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
 		return cli.ExitUsage
 	}
-	if *provider != "jira" && !isCatalogProvider(*provider) {
-		fmt.Fprintln(env.Stderr, "argument error: --provider must be jira, github, gitlab or linear")
+	if *provider != "jira" && *provider != "synthetic" && !isCatalogProvider(*provider) {
+		fmt.Fprintln(env.Stderr, "argument error: --provider must be jira, github, gitlab, linear or synthetic")
 		return cli.ExitUsage
 	}
 	orgID := strings.TrimSpace(*org)
@@ -204,6 +208,19 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 			structure: selections.Structure, members: selections.Members, projects: selections.Projects, dsn: dsn.Reveal(),
 		})
 	}
+
+	if *provider == "synthetic" {
+		dsn, configured, err := platformconfig.ResolveDSN(env.Lookup, ClickHouseURIKey, platformconfig.ClickHouseSpec)
+		if err != nil || !configured {
+			detail := ClickHouseURIKey + " is not set"
+			if err != nil {
+				detail = err.Error()
+			}
+			return writeError(env.Stderr, cli.ExitRefused, "configuration", detail)
+		}
+		return runSyntheticTeams(ctx, env, d, orgID, *allowEmpty, dsn.Reveal())
+	}
+
 	settings, err := resolveTeamsSettings(ctx, env, d, orgID, *db)
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitRefused, "configuration", err.Error())

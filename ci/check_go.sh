@@ -1811,7 +1811,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/fixturesgen (the fixture generators vs the REAL dev-health-ops Python generators: random.Random draws, product telemetry rows via the real persist path)\n'
+  printf 'go test -count=1: internal/fixturesgen (the fixture generators vs the REAL dev-health-ops Python generators: random.Random draws, product telemetry rows via the real persist path, shuffle, synthetic teams)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -1819,12 +1819,12 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -run '^(TestRandMatchesLivePython|TestProductTelemetryMatchesLivePython|TestSyntheticOrgIDsMatchThePythonFallback)$' ./internal/fixturesgen
+      go test -mod=readonly -count=1 -run '^(TestRandMatchesLivePython|TestProductTelemetryMatchesLivePython|TestSyntheticOrgIDsMatchThePythonFallback|TestShuffleMatchesLivePython|TestSyntheticTeamsMatchLivePython)$' ./internal/fixturesgen
   ); then
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in fixtures-pyrand fixtures-product-telemetry fixtures-synthetic-orgs; do
+  for proof_name in fixtures-pyrand fixtures-product-telemetry fixtures-synthetic-orgs fixtures-shuffle fixtures-synthetic-teams; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: the fixture generators live Python oracle measurement (%s) did not occur\n' "${proof_name}" >&2

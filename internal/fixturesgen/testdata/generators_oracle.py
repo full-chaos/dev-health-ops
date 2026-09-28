@@ -15,6 +15,21 @@ A line protocol on stdin/stdout, one JSON object per line:
      capture, so the rows are exactly what the production path would insert. The columns
      are PRODUCT_TELEMETRY_COLUMNS from the production module, not a list kept here.
 
+  {"kind": "shuffle", "seed": "<int as text>", "n": <int>}
+      -> {"order": [<int>, ...]}
+     shuffles list(range(n)) with a REAL random.Random(seed).shuffle and returns the
+     resulting permutation (CHAOS-7037's Shuffle port).
+
+  {"kind": "teams", "repo_name": <str|null>, "seed": <int|null, key omitted = Python
+   default>, "count": <int>}
+      -> {"teams": [{"id","name","members": [...]}, ...]}
+     runs the REAL SyntheticDataGenerator(...).generate_teams(count), the exact call
+     providers/teams.py's `sync teams --provider synthetic` branch makes (CHAOS-7037).
+     repo_name null lets SyntheticDataGenerator default it (DEFAULT_DEMO_REPO_NAME); a
+     present "seed" key (including null) is passed through, an ABSENT key lets
+     SyntheticDataGenerator derive its own seed from repo_name, matching the CLI's own
+     zero-argument call.
+
 Every leaf is tagged {"t": type, "v": text} so no bare JSON number reaches a comparison.
 """
 
@@ -114,6 +129,35 @@ def run_product_telemetry(request):
     }
 
 
+def run_shuffle(request):
+    rng = random.Random(int(request["seed"]))
+    order = list(range(int(request["n"])))
+    rng.shuffle(order)
+    return {"order": order}
+
+
+def run_teams(request):
+    from dev_health_ops.fixtures.generator import SyntheticDataGenerator
+
+    kwargs = {}
+    if request.get("repo_name") is not None:
+        kwargs["repo_name"] = request["repo_name"]
+    if "seed" in request and request["seed"] is not None:
+        kwargs["seed"] = request["seed"]
+    generator = SyntheticDataGenerator(**kwargs)
+    teams = generator.generate_teams(count=int(request["count"]))
+    return {
+        "teams": [
+            {
+                "id": leaf(team.id),
+                "name": leaf(team.name),
+                "members": [leaf(m) for m in (team.members or [])],
+            }
+            for team in teams
+        ]
+    }
+
+
 def run_synthetic_orgs(request):
     # The fallback ids of `fixtures product-telemetry`, computed as its source does
     # (runner.py run_product_telemetry_fixtures).
@@ -140,6 +184,10 @@ def main():
                 answer = run_synthetic_orgs(request)
             elif request["kind"] == "product_telemetry":
                 answer = run_product_telemetry(request)
+            elif request["kind"] == "shuffle":
+                answer = run_shuffle(request)
+            elif request["kind"] == "teams":
+                answer = run_teams(request)
             else:
                 raise ValueError(request["kind"])
         except Exception as exc:  # reported, never swallowed: the Go side fails on it

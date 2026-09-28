@@ -103,3 +103,16 @@ func (r *Rand) Random() float64 {
 	b := float64(r.GetRandBits(26))
 	return (a*67108864.0 + b) * (1.0 / 9007199254740992.0)
 }
+
+// Shuffle is random.shuffle(x) (CPython random.py): for i from n-1 down to 1,
+// draw j = _randbelow(i+1) and swap positions i and j. n <= 1 draws nothing,
+// matching Python's `reversed(range(1, len(x)))` being empty. Same in-place
+// contract as the standard library's sort.Slice/rand.Shuffle: the caller
+// supplies swap(i, j); this does not touch the underlying slice itself so it
+// works over any indexable sequence.
+func (r *Rand) Shuffle(n int, swap func(i, j int)) {
+	for i := n - 1; i >= 1; i-- {
+		j := int(r.RandBelow(uint64(i + 1)))
+		swap(i, j)
+	}
+}

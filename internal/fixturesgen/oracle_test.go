@@ -352,6 +352,160 @@ func TestProductTelemetryMatchesLivePython(t *testing.T) {
 	writeProofs(t, "fixtures-product-telemetry")
 }
 
+// shuffleCorpus is class-generated over seed values (matching randomCorpus's shape/sign/
+// boundary coverage) and slice lengths spanning 0, 1, len(DemoAuthors), and beyond it.
+func shuffleCorpus() ([]string, []int) {
+	seeds := []string{"0", "1", "2", "42", "-7", "20260219", "4294967295", "4294967296",
+		"-4294967296", "9223372036854775807", "18446744073709551615"}
+	ns := []int{0, 1, 2, len(DemoAuthors), len(DemoAuthors) + 5, 40}
+	return seeds, ns
+}
+
+// TestShuffleMatchesLivePython drives Rand.Shuffle and a REAL random.Random(seed).shuffle
+// over list(range(n)) for the same seed and compares the resulting permutation exactly
+// (CHAOS-7037: the Shuffle port GenerateSyntheticTeams' author-shuffle step depends on).
+func TestShuffleMatchesLivePython(t *testing.T) {
+	python := requireOracleEnv(t)
+	seeds, ns := shuffleCorpus()
+	var requests []any
+	for _, seed := range seeds {
+		for _, n := range ns {
+			requests = append(requests, map[string]any{"kind": "shuffle", "seed": seed, "n": n})
+		}
+	}
+	answers := askPython(t, python, requests)
+	index := 0
+	compared := 0
+	for _, seed := range seeds {
+		for _, n := range ns {
+			label := fmt.Sprintf("seed=%s n=%d", seed, n)
+			var want struct {
+				Order []int  `json:"order"`
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(answers[index], &want); err != nil {
+				t.Fatal(err)
+			}
+			if want.Error != "" {
+				t.Fatalf("%s: python: %s", label, want.Error)
+			}
+			seedInt, _ := new(big.Int).SetString(seed, 10)
+			rng := NewRand(seedInt)
+			order := make([]int, n)
+			for i := range order {
+				order[i] = i
+			}
+			rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+			if err := rng.Err(); err != nil {
+				t.Fatalf("%s: %v", label, err)
+			}
+			if len(order) != len(want.Order) {
+				t.Fatalf("%s: go produced %d elements, python %d", label, len(order), len(want.Order))
+			}
+			for i := range order {
+				if order[i] != want.Order[i] {
+					t.Fatalf("%s: order[%d] go=%d python=%d (full: go=%v python=%v)", label, i, order[i], want.Order[i], order, want.Order)
+				}
+			}
+			compared++
+			index++
+		}
+	}
+	t.Logf("%d shuffle cases match the live CPython generator", compared)
+	writeProofs(t, "fixtures-shuffle")
+}
+
+// teamsCorpus exercises GenerateSyntheticTeams' actual CLI shape (repo_name/seed both
+// omitted, count=8 -- providers/teams.py:573-574) plus a spread of explicit repo_name/
+// seed/count combinations, including count values that exceed DemoTeams' 10 curated
+// entries (forcing the legacy "team-{n}" fallback) and DemoAuthors' 16 entries (forcing
+// empty trailing chunks).
+func teamsCorpus() []map[string]any {
+	corpus := []map[string]any{
+		// The exact CLI call: no repo_name, no seed, count=8.
+		{"repo_name": nil, "count": 8},
+	}
+	repoNames := []string{"meridian/web-app", "meridian/core-api", "acme/demo-app", ""}
+	seeds := []any{nil, 0, 1, 42, -7, 20260219}
+	counts := []int{1, 2, 3, 8, 10, 11, 16, 20}
+	for _, repoName := range repoNames {
+		var rn any = repoName
+		if repoName == "" {
+			rn = nil
+		}
+		for _, seed := range seeds {
+			for _, count := range counts {
+				corpus = append(corpus, map[string]any{"repo_name": rn, "seed": seed, "count": count})
+			}
+		}
+	}
+	return corpus
+}
+
+// TestSyntheticTeamsMatchLivePython runs GenerateSyntheticTeams and the REAL
+// SyntheticDataGenerator(...).generate_teams(count) -- the exact call providers/
+// teams.py's synthetic branch makes -- and compares every team's id, name and member
+// list exactly (CHAOS-7037).
+func TestSyntheticTeamsMatchLivePython(t *testing.T) {
+	python := requireOracleEnv(t)
+	corpus := teamsCorpus()
+	requests := make([]any, len(corpus))
+	for i, c := range corpus {
+		requests[i] = map[string]any{"kind": "teams", "repo_name": c["repo_name"], "seed": c["seed"], "count": c["count"]}
+	}
+	answers := askPython(t, python, requests)
+	teamsCompared := 0
+	for index, c := range corpus {
+		label := fmt.Sprintf("repo_name=%v seed=%v count=%v", c["repo_name"], c["seed"], c["count"])
+		var want struct {
+			Teams []struct {
+				ID      leaf   `json:"id"`
+				Name    leaf   `json:"name"`
+				Members []leaf `json:"members"`
+			} `json:"teams"`
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(answers[index], &want); err != nil {
+			t.Fatal(err)
+		}
+		if want.Error != "" {
+			t.Fatalf("%s: python: %s", label, want.Error)
+		}
+		var repoName string
+		if c["repo_name"] != nil {
+			repoName = c["repo_name"].(string)
+		}
+		var seed *big.Int
+		if c["seed"] != nil {
+			seed = big.NewInt(int64(c["seed"].(int)))
+		}
+		got := GenerateSyntheticTeams(repoName, seed, c["count"].(int))
+		if len(got) != len(want.Teams) {
+			t.Fatalf("%s: go produced %d teams, python %d", label, len(got), len(want.Teams))
+		}
+		for i, team := range got {
+			w := want.Teams[i]
+			if (leaf{"str", team.ID}) != w.ID {
+				t.Fatalf("%s: team %d id: go=%q python=%v", label, i, team.ID, w.ID)
+			}
+			if (leaf{"str", team.Name}) != w.Name {
+				t.Fatalf("%s: team %d name: go=%q python=%v", label, i, team.Name, w.Name)
+			}
+			if len(team.Members) != len(w.Members) {
+				t.Fatalf("%s: team %d members: go=%v python=%v", label, i, team.Members, w.Members)
+			}
+			for m, member := range team.Members {
+				if (leaf{"str", member}) != w.Members[m] {
+					t.Fatalf("%s: team %d member %d: go=%q python=%v", label, i, m, member, w.Members[m])
+				}
+			}
+			teamsCompared++
+		}
+	}
+	t.Logf("%d cases, %d teams compared field by field with the live Python producer", len(corpus), teamsCompared)
+	writeProofs(t, "fixtures-synthetic-teams")
+}
+
 // TestSyntheticOrgIDsMatchThePythonFallback compares the fallback org ids with the ones the
 // Python verb's own expression yields.
 func TestSyntheticOrgIDsMatchThePythonFallback(t *testing.T) {

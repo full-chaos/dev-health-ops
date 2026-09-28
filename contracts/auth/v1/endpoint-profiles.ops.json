@@ -11904,7 +11904,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 191,
+        "line": 194,
         "router_local_path": "/checkout"
       },
       "gaps": [
@@ -11965,7 +11965,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 252,
+        "line": 255,
         "router_local_path": "/portal"
       },
       "gaps": [
@@ -12026,7 +12026,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 341,
+        "line": 344,
         "router_local_path": "/entitlements/{org_id}"
       },
       "gaps": [
@@ -12087,7 +12087,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 357,
+        "line": 360,
         "router_local_path": "/audit"
       },
       "gaps": [
@@ -12148,7 +12148,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 394,
+        "line": 397,
         "router_local_path": "/audit/{audit_id}"
       },
       "gaps": [
@@ -12209,7 +12209,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 409,
+        "line": 412,
         "router_local_path": "/audit/{audit_id}/resolve"
       },
       "gaps": [
@@ -12270,7 +12270,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/billing/router.py",
-        "line": 433,
+        "line": 436,
         "router_local_path": "/reconcile"
       },
       "gaps": [

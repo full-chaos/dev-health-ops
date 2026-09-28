@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// CHAOS-7096, D2976 condition (2): /query/proof-write is registered ONLY on
+// CHAOS-7096: /query/proof-write is registered ONLY on
 // the internal route set, never the public one. mountProofWriteRoute is the
 // single place that decision is made, so it is proven directly here rather
 // than through a full Build() (which needs live ClickHouse/Postgres/envelope

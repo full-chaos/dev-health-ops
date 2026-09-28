@@ -15,7 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
-// CHAOS-7096, D2976 condition (3): the /query/proof-write dispatch pipeline's
+// CHAOS-7096: the /query/proof-write dispatch pipeline's
 // clauses, planted one defect at a time -- each sub-test isolates exactly ONE
 // refusal reason, so a mutation that guts one clause is caught by the ONE
 // test whose whole job is that clause, not by a shared happy-path assertion

@@ -3,8 +3,8 @@
 Revision ID: 0145
 Revises: 0144
 
-CHAOS-7096 (Option 3 of the CHAOS-6098 bootstrap write-proof design,
-D2944/D2945). ``/query/proof-write`` executes a registered MUTATION
+CHAOS-7096 (Option 3 of the CHAOS-6098 bootstrap
+write-proof design). ``/query/proof-write`` executes a registered MUTATION
 document, through the real deployed HTTP/gqlgen/auth stack, without the
 operation being routed to Go for real traffic -- exactly the capability
 CHAOS-6098 found missing (a saved-report mutation could never get a

@@ -304,7 +304,7 @@ func Build(get func(string) string) (*Plane, error) {
 		mountProofRoute(getenv, mux, handlers.Proof)
 		// CHAOS-7096: mounted on internalMux ONLY -- never on mux, which the
 		// public listener is built from (CHAOS-7097's Listeners split).
-		// This is condition (2) of D2976: a test proves the public route
+		// A test proves the public route
 		// set has no /query/proof-write.
 		mountProofWriteRoute(getenv, internalMux, handlers.ProofWrite)
 		ready = readyFn

@@ -12,7 +12,7 @@ package goapiproof
 // envelope to verify, unlike enable/repoint, and recording a weaker claim
 // accurately beats recording a stronger one nothing checked.
 //
-// D2976 condition (4): the CLI verb writes an actor + reason row, never a
+// The CLI verb writes an actor + reason row, never a
 // bare insert -- enforced twice over, structurally (go_api_proof_orgs.added_by
 // and .reason are NOT NULL, bounded CHECK constraints, alembic 0145) and
 // here (ProofOrgRequest's own validation refuses an empty actor/reason

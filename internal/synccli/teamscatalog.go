@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -35,7 +36,7 @@ type teamCatalogLease struct{}
 func (teamCatalogLease) Assert(ctx context.Context) error { return ctx.Err() }
 
 // catalogProviders are the `--provider` values that run a catalog (jira runs Atlassian Teams).
-var catalogProviders = []string{"github"}
+var catalogProviders = []string{"github", "gitlab"}
 
 func isCatalogProvider(name string) bool {
 	for _, provider := range catalogProviders {
@@ -44,6 +45,23 @@ func isCatalogProvider(name string) bool {
 		}
 	}
 	return false
+}
+
+// catalogProviderSpec is the per-provider text Python's refusals use
+// (providers/teams.py): "--owner is required for <provider> provider
+// (<ownerNoun>)." and "<label> token required. Use --auth or set <tokenEnv>
+// env var." -- verified against both the github and gitlab branches, which
+// share this exact shape with only the provider name, the owner's noun and
+// the token env var spelled differently.
+type catalogProviderSpec struct {
+	label     string
+	ownerNoun string
+	tokenEnv  string
+}
+
+var catalogProviderSpecs = map[string]catalogProviderSpec{
+	"github": {label: "GitHub", ownerNoun: "org name", tokenEnv: "GITHUB_TOKEN"},
+	"gitlab": {label: "GitLab", ownerNoun: "group path", tokenEnv: "GITLAB_TOKEN"},
 }
 
 // catalogRequest is what the verb read from its flags and environment.
@@ -55,62 +73,102 @@ type catalogRequest struct {
 	allowEmpty bool
 	structure  bool
 	members    bool
+	projects   bool
 	dsn        string
+}
+
+// buildCatalogCollector resolves the provider's credential, HTTP client and
+// TeamCatalogCollector -- everything that differs between providers. The
+// caller (runCatalogTeams) owns the refusals shared by every provider
+// (owner/token/ClickHouse) and the shared collection/reporting flow.
+func buildCatalogCollector(env cli.Env, d deps, request catalogRequest, owner, token string, conn driver.Conn) (providersync.TeamCatalogCollector, providerfoundation.Credential, *providerfoundation.HTTPClient, int) {
+	doer := d.doer
+	if doer == nil {
+		doer = &http.Client{Timeout: 45 * time.Second}
+	}
+	switch request.provider {
+	case "github":
+		config := map[string]string{"org": owner}
+		// The GitHub Enterprise base URL, spelled as `dho sync <target>` reads it (Python's
+		// team verb does not read one: a named difference).
+		for _, key := range []string{"GITHUB_URL", "GITHUB_BASE_URL"} {
+			if value, _ := env.Lookup(key); strings.TrimSpace(value) != "" {
+				config["base_url"] = strings.TrimSpace(value)
+				break
+			}
+		}
+		credential := providerfoundation.NewCredential("github", "cli", config,
+			map[string]secrets.Value{"token": secrets.NewValue(token)})
+		client, err := providerfoundation.NewGitHubClient(credential, doer, providerfoundation.DefaultRetryPolicy(), teamCatalogLease{})
+		if err != nil {
+			return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitFailure, "client_invalid", "the GitHub client could not be built")
+		}
+		collector := providersync.GitHubTeamCatalogCollector{
+			Client: providersync.GitHubTeamCatalogRouteHandler{ResolveEmail: true},
+			Sink:   providersync.GitHubTeamCatalogClickHouseEffects{Conn: conn},
+		}
+		return collector, credential, client, 0
+	case "gitlab":
+		// group_path outranks group outranks owner (gitlabTeamCatalogGroupPath's
+		// precedence) -- "owner" is Python's own flag name for the group path, so
+		// it is carried under all three keys the collector's route handler reads.
+		config := map[string]string{"group_path": owner, "group": owner, "owner": owner}
+		// GITLAB_URL, the same spelling `dho sync <target>` and the Python verb
+		// both read (default https://gitlab.com, applied by NewGitLabClient/
+		// gitLabCredentialBaseURL when unset).
+		if value, _ := env.Lookup("GITLAB_URL"); strings.TrimSpace(value) != "" {
+			config["gitlab_url"] = strings.TrimSpace(value)
+		}
+		credential := providerfoundation.NewCredential("gitlab", "cli", config,
+			map[string]secrets.Value{"token": secrets.NewValue(token)})
+		client, err := providerfoundation.NewGitLabClient(credential, doer, providerfoundation.DefaultRetryPolicy(), teamCatalogLease{})
+		if err != nil {
+			return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitFailure, "client_invalid", "the GitLab client could not be built")
+		}
+		collector := providersync.GitLabTeamCatalogCollector{
+			Handler: providersync.GitLabTeamCatalogRouteHandler{},
+			Sink:    providersync.GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: teamCatalogLease{}},
+		}
+		return collector, credential, client, 0
+	default:
+		return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitUsage, "unsupported_provider", "provider "+request.provider+" has no team catalog verb")
+	}
 }
 
 // runCatalogTeams runs one provider's catalog into the ClickHouse the DSN names.
 func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRequest) int {
 	boundary := secrets.NewBoundary(request.dsn)
 	redact := func(err error) string { return boundary.Redact(err).Error() }
-	switch request.provider {
-	case "github":
-	default:
+	spec, ok := catalogProviderSpecs[request.provider]
+	if !ok {
 		return writeError(env.Stderr, cli.ExitUsage, "unsupported_provider", "provider "+request.provider+" has no team catalog verb")
 	}
 
-	// Python's own refusals, in its order (providers/teams.py, github branch): all exit 1.
+	// Python's own refusals, in its order (providers/teams.py, github/gitlab branches): all exit 1.
 	owner := strings.TrimSpace(request.owner)
 	if owner == "" {
-		return writeError(env.Stderr, cli.ExitFailure, "owner_required", "--owner is required for github provider (org name).")
+		return writeError(env.Stderr, cli.ExitFailure, "owner_required", "--owner is required for "+request.provider+" provider ("+spec.ownerNoun+").")
 	}
 	token := request.auth
 	if token == "" {
-		token, _ = env.Lookup("GITHUB_TOKEN")
+		token, _ = env.Lookup(spec.tokenEnv)
 	}
 	if token == "" {
-		return writeError(env.Stderr, cli.ExitFailure, "token_required", "GitHub token required. Use --auth or set GITHUB_TOKEN env var.")
+		return writeError(env.Stderr, cli.ExitFailure, "token_required", spec.label+" token required. Use --auth or set "+spec.tokenEnv+" env var.")
 	}
 
-	config := map[string]string{"org": owner}
-	// The GitHub Enterprise base URL, spelled as `dho sync <target>` reads it (Python's
-	// team verb does not read one: a named difference).
-	for _, key := range []string{"GITHUB_URL", "GITHUB_BASE_URL"} {
-		if value, _ := env.Lookup(key); strings.TrimSpace(value) != "" {
-			config["base_url"] = strings.TrimSpace(value)
-			break
-		}
-	}
-	credential := providerfoundation.NewCredential("github", "cli", config,
-		map[string]secrets.Value{"token": secrets.NewValue(token)})
-	doer := d.doer
-	if doer == nil {
-		doer = &http.Client{Timeout: 45 * time.Second}
-	}
-	client, err := providerfoundation.NewGitHubClient(credential, doer, providerfoundation.DefaultRetryPolicy(), teamCatalogLease{})
-	if err != nil {
-		return writeError(env.Stderr, cli.ExitFailure, "client_invalid", "the GitHub client could not be built")
-	}
 	conn, err := d.openStore(ctx, request.dsn)
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "clickhouse_unavailable", redact(err))
 	}
 	defer func() { _ = conn.Close() }()
 
-	selections := providersync.TeamCatalogSelections{Teams: request.structure, Members: request.members}
-	collector := providersync.GitHubTeamCatalogCollector{
-		Client: providersync.GitHubTeamCatalogRouteHandler{ResolveEmail: true},
-		Sink:   providersync.GitHubTeamCatalogClickHouseEffects{Conn: conn},
+	collector, credential, client, exitCode := buildCatalogCollector(env, d, request, owner, token, conn)
+	if collector == nil {
+		return exitCode
 	}
+
+	selections := providersync.TeamCatalogSelections{Teams: request.structure, Members: request.members, Projects: request.projects}
 	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
 	started := time.Now()
 	now := d.now()
@@ -119,10 +177,16 @@ func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRe
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "sync_failed", redact(err))
 	}
-	// An empty catalog is a provider that returned no teams. A team the catalog found but did not
-	// write (its sync policy leaves it untouched, or its changes were staged for review) is not
-	// empty; teams the catalog could not confirm the rosters of are a failure, not an empty answer.
-	found := result.TeamsWritten + result.TeamsSkippedPolicy + result.TeamsStagedForReview
+	// An empty catalog is a provider that returned no teams AND wrote nothing else. A team the
+	// catalog found but did not write (its sync policy leaves it untouched, or its changes were
+	// staged for review) is not empty; teams the catalog could not confirm the rosters of are a
+	// failure, not an empty answer. A selective run (e.g. --members alone, with --structure off)
+	// can commit real membership/ownership/project rows while TeamsWritten stays zero (no Teams
+	// row was ever in scope) -- counting only team-shaped outcomes here reported that write as an
+	// empty sync (codex r1, CHAOS-6907: an executed `--members`-only run committed a membership
+	// row and still exited 1 with "No teams found/generated").
+	found := result.TeamsWritten + result.TeamsSkippedPolicy + result.TeamsStagedForReview +
+		result.MembershipsWritten + result.OwnershipWritten + result.ProjectsWritten
 	if result.RosterPreservationFailed && result.TeamsWritten == 0 {
 		return writeError(env.Stderr, cli.ExitFailure, "roster_unconfirmed",
 			"the current team rosters could not be confirmed, so no team row was written this run")
@@ -131,12 +195,12 @@ func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRe
 		return writeError(env.Stderr, cli.ExitFailure, "empty_result",
 			"No teams found/generated. Pass --allow-empty to exit successfully on an empty sync.")
 	}
-	logger.Info("github team catalog synced", "org_id", request.orgID, "teams", result.TeamsWritten,
+	logger.Info(request.provider+" team catalog synced", "org_id", request.orgID, "teams", result.TeamsWritten,
 		"teams_skipped_policy", result.TeamsSkippedPolicy, "teams_staged_for_review", result.TeamsStagedForReview,
-		"memberships", result.MembershipsWritten, "repo_ownership", result.RepoOwnershipWritten,
-		"roster_preservation_failed", result.RosterPreservationFailed, "duration_ms", time.Since(started).Milliseconds())
-	if _, err := fmt.Fprintf(env.Stdout, "provider=github teams=%d teams_skipped_policy=%d teams_staged_for_review=%d memberships=%d repo_ownership=%d\n",
-		result.TeamsWritten, result.TeamsSkippedPolicy, result.TeamsStagedForReview, result.MembershipsWritten, result.RepoOwnershipWritten); err != nil {
+		"memberships", result.MembershipsWritten, "ownership", result.OwnershipWritten, "repo_ownership", result.RepoOwnershipWritten,
+		"projects", result.ProjectsWritten, "roster_preservation_failed", result.RosterPreservationFailed, "duration_ms", time.Since(started).Milliseconds())
+	if _, err := fmt.Fprintf(env.Stdout, "provider=%s teams=%d teams_skipped_policy=%d teams_staged_for_review=%d memberships=%d ownership=%d repo_ownership=%d projects=%d\n",
+		request.provider, result.TeamsWritten, result.TeamsSkippedPolicy, result.TeamsStagedForReview, result.MembershipsWritten, result.OwnershipWritten, result.RepoOwnershipWritten, result.ProjectsWritten); err != nil {
 		return cli.ExitFailure
 	}
 	return cli.ExitOK

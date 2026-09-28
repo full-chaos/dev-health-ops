@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.llm_settings import (
@@ -46,7 +47,13 @@ from dev_health_ops.llm.agent.readiness import (
     readiness_failure_state,
 )
 from dev_health_ops.llm.agent.role_readiness import RoleReadinessService
-from dev_health_ops.llm.agent.roles import AgentRole, SettingsRoleCertificationStore
+from dev_health_ops.llm.agent.roles import (
+    AgentRole,
+    RoleCertificationProfile,
+    RoleCertificationRecord,
+    RoleCertificationState,
+    SettingsRoleCertificationStore,
+)
 from dev_health_ops.llm.credentials import (
     evaluate_org_llm_status,
     latest_recent_org_byo_base_url_fallback_at,
@@ -55,13 +62,133 @@ from dev_health_ops.metrics.schemas import LLMTokenSpendSummaryRecord
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.models.settings import SettingCategory
 
-from .ask_dev import _checked_at, _role_readiness_list
 from .common import get_session
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 LLMSpendReader = Callable[..., LLMTokenSpendSummaryRecord | None]
+
+# Moved from the deleted ask_dev.py (CHAOS-6262): this org-role-readiness
+# projection is shared with /llm-settings/status below, which is not part of
+# the Ask Dev route deletion.
+_ROLE_ORDER: tuple[AgentRole, ...] = (
+    AgentRole.LEGACY_AGENT,
+    AgentRole.INTENT_CLASSIFICATION,
+    AgentRole.ANSWER_FRAME_NARRATIVE,
+)
+
+RoleReadinessState = Literal[
+    "ready",
+    "unsupported_model",
+    "missing_credentials",
+    "disabled",
+    "degraded",
+    "stale_readiness",
+    "not_yet_certified",
+]
+
+
+class _StrictAdminModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class AskDevRoleReadiness(_StrictAdminModel):
+    schema_version: Literal["ask_dev_role_readiness.v1"] = "ask_dev_role_readiness.v1"
+    role: Literal["legacy_agent", "intent_classification", "answer_frame_narrative"]
+    state: RoleReadinessState
+    checked_at: AwareDatetime | None = None
+    safe_remediation: str | None = Field(default=None, max_length=2_048)
+
+
+def _checked_at(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _role_readiness_entry(
+    role: AgentRole,
+    record: RoleCertificationRecord | None,
+    *,
+    certification_key: str | None,
+) -> AskDevRoleReadiness:
+    """Project one role's stored certification record into the safe wire
+    vocabulary. ``certification_key`` is the CURRENT capability-input
+    fingerprint for that role (e.g. from ``_readiness_fingerprint``); when
+    unavailable (a role with no probe yet) a stored record's state is
+    reported as-is, without a staleness check against a key we cannot
+    compute here.
+    """
+
+    if record is None:
+        return AskDevRoleReadiness(
+            role=role.value,
+            state="not_yet_certified",
+            checked_at=None,
+            safe_remediation="This Ask Dev role has not been certified yet.",
+        )
+    # Deliberately NOT record.is_current() -- that method also requires
+    # state is COMPATIBLE, which is right for runtime *selection* but wrong
+    # for admin *display*: a FAILED/INCOMPATIBLE record whose capability
+    # inputs still match the current configuration must show its actual
+    # failure reason (e.g. unsupported_model), not be recolored as merely
+    # "stale" just because it never became COMPATIBLE. Staleness here means
+    # only one thing: the record was computed against a DIFFERENT
+    # certification_key than the one in effect now.
+    if certification_key is not None and record.certification_key != certification_key:
+        return AskDevRoleReadiness(
+            role=role.value,
+            state="stale_readiness",
+            checked_at=_checked_at(record.checked_at),
+            safe_remediation=(
+                "This role's certification is stale for the current "
+                "configuration. Run preflight again."
+            ),
+        )
+    if record.state is RoleCertificationState.COMPATIBLE:
+        return AskDevRoleReadiness(
+            role=role.value,
+            state="ready",
+            checked_at=_checked_at(record.checked_at),
+            safe_remediation=None,
+        )
+    state, remediation = readiness_failure_state(record.safe_error_code)
+    return AskDevRoleReadiness(
+        role=role.value,
+        state=state,
+        checked_at=_checked_at(record.checked_at),
+        safe_remediation=remediation,
+    )
+
+
+def _role_readiness_list(
+    profile: RoleCertificationProfile,
+    *,
+    legacy_agent_certification_key: str | None,
+) -> list[AskDevRoleReadiness]:
+    """Build the full three-role projection. Only ``legacy_agent`` has a
+    live certification_key today (CHAOS-3285 PR3's probe); intent/narrative
+    have no probe yet (PR4) so their entries fall back to reporting whatever
+    is stored (ordinarily nothing -> not_yet_certified)."""
+
+    certification_keys: dict[AgentRole, str | None] = {
+        AgentRole.LEGACY_AGENT: legacy_agent_certification_key,
+        AgentRole.INTENT_CLASSIFICATION: None,
+        AgentRole.ANSWER_FRAME_NARRATIVE: None,
+    }
+    return [
+        _role_readiness_entry(
+            role, profile.for_role(role), certification_key=certification_keys[role]
+        )
+        for role in _ROLE_ORDER
+    ]
 
 
 def read_llm_token_spend_summary(

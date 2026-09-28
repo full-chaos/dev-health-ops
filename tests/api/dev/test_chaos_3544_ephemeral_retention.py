@@ -435,21 +435,21 @@ async def test_the_grace_is_far_longer_than_any_run_can_live(retention) -> None:
     """The derivation, asserted rather than left in a comment.
 
     The grace is only safe because it is far beyond any run that could still
-    be genuinely in flight. Both bounds are imported from where they are
-    actually defined, so if either grows past the grace this fails instead of
-    silently reintroducing the "purged while in use" failure mode.
+    be genuinely in flight. The bound is imported from where it is actually
+    defined, so if it grows past the grace this fails instead of silently
+    reintroducing the "purged while in use" failure mode.
+
+    CHAOS-6262 deleted ``router.py`` and with it
+    ``_STALE_NON_TERMINAL_RUN_THRESHOLD`` (the REST replay-triggered recovery
+    bound this test used to also assert against); only the still-live
+    ``DevRunLimits.wall_seconds`` bound remains enforced here.
     """
 
     from dev_health_ops.api.dev.orchestrator import DevRunLimits
     from dev_health_ops.api.dev.persistence.service import (
         EPHEMERAL_ABANDONED_GRACE,
     )
-    from dev_health_ops.api.dev.router import _STALE_NON_TERMINAL_RUN_THRESHOLD
 
-    assert EPHEMERAL_ABANDONED_GRACE >= 10 * _STALE_NON_TERMINAL_RUN_THRESHOLD, (
-        "the grace must stay an order of magnitude above the threshold at "
-        "which a non-terminal run is considered impossible-to-still-be-live"
-    )
     assert (
         EPHEMERAL_ABANDONED_GRACE.total_seconds() >= 50 * DevRunLimits().wall_seconds
     ), "and far beyond a single run's own wall-clock limit"

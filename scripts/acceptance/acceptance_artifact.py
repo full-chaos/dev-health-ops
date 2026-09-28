@@ -192,7 +192,6 @@ RUNTIME_DEPENDENCY_PATHS: tuple[str, ...] = (
     "requirements.txt",
     "scripts/acceptance/acceptance_artifact.py",
     "scripts/acceptance/prepare_ask_dev_acceptance.py",
-    "scripts/acceptance/run_ask_dev_compose.sh",
     "src/dev_health_ops/llm/agent/scripted_openai_service.py",
     "tests/acceptance/compose.ask-dev-acr.yml",
     "tests/acceptance/compose.ask-dev-provider-profile.yml",

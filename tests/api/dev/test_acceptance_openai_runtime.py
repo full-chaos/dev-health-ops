@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-import uuid
 from collections.abc import AsyncIterator, Iterator
 from copy import deepcopy
 from pathlib import Path
@@ -29,10 +28,8 @@ from dev_health_ops.api.dev.production_runtime import (
     resolve_certification_provider,
     resolve_production_provider,
 )
-from dev_health_ops.api.dev.router import get_dev_capability_runtime
 from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
 from dev_health_ops.api.dev.tool_registry import AskDevToolRegistry
-from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.llm.agent.contracts import (
     AgentFinalAnswer,
@@ -377,19 +374,6 @@ async def test_acceptance_openai_runs_real_readiness_grounding_and_capabilities(
     with pytest.raises(AssertionError):
         assert changed_summary.direct_summary == expected_summary
 
-    capability = await get_dev_capability_runtime(
-        AuthenticatedUser(
-            user_id=str(uuid.uuid4()),
-            email="acceptance@example.com",
-            org_id=_ORG_ID,
-            role="admin",
-        ),
-        settings_session,
-    )
-    assert capability.readiness == "ready"
-    assert capability.effective_provider_label == "OpenAI compatible"
-    assert capability.effective_model_label == ACCEPTANCE_OPENAI_MODEL
-    assert capability.provider_source == "platform"
     # CHAOS-3285: 4 more requests than the pre-role-probe baseline of 8 --
     # the new production-sized legacy_agent role probe's two independent,
     # complete chains (CHAOS-3285 round 4, Codex HIGH): round 1 + round 2

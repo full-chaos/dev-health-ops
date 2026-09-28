@@ -4,10 +4,11 @@ outside ``CORE_PLANS_BY_INTENT``.
 CHAOS-3303/3304/3305 built ProjectHealthService/TeamHealthService/
 PortfolioStatusService/TeamWorkloadService/OperationalDeficiencyService, but
 their DevInvestigationPlan/StepRegistry wiring is a ratified, sequenced
-deferral to the CHAOS-3297 stack-3 lane (see wave31_manifest.py's
-``_blocking_matrix_blocked`` for the full citation). Before this test, the
-manifest's honest answer for "what happens when someone asks a project-health
-question today" was "presumably UNSUPPORTED" -- an unverified guess. Traced
+deferral to the CHAOS-3297 stack-3 lane (the full citation lived in
+``wave31_manifest.py``'s ``_blocking_matrix_blocked``, retired with the
+Ask Dev routes under CHAOS-6262). Before this test, the honest answer for
+"what happens when someone asks a project-health question today" was
+"presumably UNSUPPORTED" -- an unverified guess. Traced
 here instead: ``DevOrchestrator.run`` (``orchestrator.py:967-969``) looks up
 ``self._plan_registry.get(intent.intent_id)``, gets ``None`` for
 ``PROJECT_HEALTH`` (absent from the 6-entry ``CORE_PLANS_BY_INTENT``), sets
@@ -94,9 +95,8 @@ async def test_project_health_question_falls_through_to_the_legacy_loop_not_a_pl
     # assertion is what must be updated, not silently left describing a
     # fallback that no longer happens.
     assert QuestionIntentID.PROJECT_HEALTH not in CORE_PLANS_BY_INTENT, (
-        "PROJECT_HEALTH is now wired -- this test's fallback premise is "
-        "stale; update wave31_manifest.py's blocked-item evidence and "
-        "flip the corresponding rows to proven"
+        "PROJECT_HEALTH is now wired -- this test's fallback premise is stale, "
+        "update this test's docstring accordingly"
     )
 
 

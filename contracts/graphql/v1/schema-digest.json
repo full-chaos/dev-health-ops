@@ -17,6 +17,6 @@
     "Cross-checked by: go run ./cmd/registrydump -schema-digest"
   ],
   "sdl": "contracts/graphql/v1/schema.graphql",
-  "schema_digest": "sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e",
+  "schema_digest": "sha256:d5ba09b1f460953482518ae4f5653ba6350b085bdc39621c5888756741118117",
   "history_doc": "docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md"
 }

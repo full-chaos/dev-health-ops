@@ -190,6 +190,12 @@ def test_inventory_row_count_matches_the_baseline():
     transfer-ownership`, a ruled intentional divergence), so nothing calls
     the Python path any more. The rows stand at 345 (289 REST + 56 GraphQL),
     recounted from the file.
+    = 320, -17 REST -8 GraphQL under CHAOS-6262: the 17 Ask Dev REST routes
+    (`ask_dev.py` x4, `platform_ask_dev.py` x3, `api/dev/router.py` x10) and
+    the 8 `dev*` GraphQL fields are deleted with their rows in the same
+    change -- chris's ruling ("dead route"), the whole surface is gone, not
+    migrated. The rows stand at 320 (272 REST + 48 GraphQL), recounted from
+    the file.
 
     MERGE HAZARD, recorded because it has now nearly landed silently more
     than once. Each change edited these same asserts, and each was correct
@@ -210,9 +216,9 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 289, len(rest)
-    assert len(graphql) == 56, len(graphql)
-    assert len(rows) == 345, len(rows)
+    assert len(rest) == 272, len(rest)
+    assert len(graphql) == 48, len(graphql)
+    assert len(rows) == 320, len(rows)
 
 
 def test_no_graphql_subscription_is_profiled():
@@ -286,7 +292,11 @@ def test_classification_summary_matches_the_baseline():
     # from the file.
     # - 1 more under CHAOS-6250: the deleted transfer-ownership/{from_user_id}
     # row was protected (require_admin).
-    assert len(protected) == 320, len(protected)
+    # - 25 more under CHAOS-6262: the 17 deleted Ask Dev REST rows and the 8
+    # deleted dev* GraphQL field rows were ALL protected (ops_access_token_hs256
+    # / the same GraphQL-wide auth, respectively); none were public. Recounted
+    # from the file.
+    assert len(protected) == 295, len(protected)
     # 20 + the four fastapi doc routes + /metrics.
     assert len(public) == 25, len(public)
     assert len(protected) + len(public) == len(rows)

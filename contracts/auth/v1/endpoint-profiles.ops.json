@@ -200,266 +200,6 @@
       "disclosure_behavior": "403 for a non-admin authenticated user; 401 for no/invalid token (OrgIdMiddleware degrades an invalid JWT to anonymous, so get_current_user's own 401 is what actually fires)."
     },
     {
-      "id": "GET /api/v1/admin/ask-dev [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/admin/ask-dev",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/admin/routers/ask_dev.py",
-        "line": 630,
-        "router_local_path": "/ask-dev"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "require_admin (router-level dependency on admin.router:39-43, applies to every nested sub-router included after it) requires current_user.is_admin via get_current_user.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/admin/middleware.py",
-          "line": 9,
-          "line_end": 14,
-          "note": "require_admin(current_user=Depends(get_current_user))"
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": "org_id from JWT / X-Org-Id (superuser may cross-org)",
-      "tenant_requirement": "cross_org_superuser_only",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "403 for a non-admin authenticated user; 401 for no/invalid token (OrgIdMiddleware degrades an invalid JWT to anonymous, so get_current_user's own 401 is what actually fires)."
-    },
-    {
-      "id": "PATCH /api/v1/admin/ask-dev/settings [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "PATCH",
-      "route": "/api/v1/admin/ask-dev/settings",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/admin/routers/ask_dev.py",
-        "line": 638,
-        "router_local_path": "/ask-dev/settings"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "require_admin (router-level dependency on admin.router:39-43, applies to every nested sub-router included after it) requires current_user.is_admin via get_current_user.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/admin/middleware.py",
-          "line": 9,
-          "line_end": 14,
-          "note": "require_admin(current_user=Depends(get_current_user))"
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": "org_id from JWT / X-Org-Id (superuser may cross-org)",
-      "tenant_requirement": "cross_org_superuser_only",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "403 for a non-admin authenticated user; 401 for no/invalid token (OrgIdMiddleware degrades an invalid JWT to anonymous, so get_current_user's own 401 is what actually fires)."
-    },
-    {
-      "id": "POST /api/v1/admin/ask-dev/readiness [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/admin/ask-dev/readiness",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/admin/routers/ask_dev.py",
-        "line": 708,
-        "router_local_path": "/ask-dev/readiness"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "require_admin (router-level dependency on admin.router:39-43, applies to every nested sub-router included after it) requires current_user.is_admin via get_current_user.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/admin/middleware.py",
-          "line": 9,
-          "line_end": 14,
-          "note": "require_admin(current_user=Depends(get_current_user))"
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": "org_id from JWT / X-Org-Id (superuser may cross-org)",
-      "tenant_requirement": "cross_org_superuser_only",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "403 for a non-admin authenticated user; 401 for no/invalid token (OrgIdMiddleware degrades an invalid JWT to anonymous, so get_current_user's own 401 is what actually fires)."
-    },
-    {
-      "id": "GET /api/v1/admin/ask-dev/usage [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/admin/ask-dev/usage",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/admin/routers/ask_dev.py",
-        "line": 742,
-        "router_local_path": "/ask-dev/usage"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "require_admin (router-level dependency on admin.router:39-43, applies to every nested sub-router included after it) requires current_user.is_admin via get_current_user.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/admin/middleware.py",
-          "line": 9,
-          "line_end": 14,
-          "note": "require_admin(current_user=Depends(get_current_user))"
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": "org_id from JWT / X-Org-Id (superuser may cross-org)",
-      "tenant_requirement": "cross_org_superuser_only",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "403 for a non-admin authenticated user; 401 for no/invalid token (OrgIdMiddleware degrades an invalid JWT to anonymous, so get_current_user's own 401 is what actually fires)."
-    },
-    {
       "id": "GET /api/v1/admin/audit-logs [dev-health-ops-api]",
       "surface_kind": "rest",
       "method": "GET",
@@ -5920,201 +5660,6 @@
       "disclosure_behavior": "403 for a non-admin authenticated user; 401 for no/invalid token (OrgIdMiddleware degrades an invalid JWT to anonymous, so get_current_user's own 401 is what actually fires)."
     },
     {
-      "id": "GET /api/v1/admin/platform/ask-dev/readiness [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/admin/platform/ask-dev/readiness",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/admin/routers/platform_ask_dev.py",
-        "line": 229,
-        "router_local_path": "/platform/ask-dev/readiness"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "require_admin (router-level dependency on admin.router:39-43, applies to every nested sub-router included after it) requires current_user.is_admin via get_current_user.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/admin/middleware.py",
-          "line": 9,
-          "line_end": 14,
-          "note": "require_admin(current_user=Depends(get_current_user))"
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": "org_id from JWT / X-Org-Id (superuser may cross-org)",
-      "tenant_requirement": "cross_org_superuser_only",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "403 for a non-admin authenticated user; 401 for no/invalid token (OrgIdMiddleware degrades an invalid JWT to anonymous, so get_current_user's own 401 is what actually fires)."
-    },
-    {
-      "id": "POST /api/v1/admin/platform/ask-dev/readiness [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/admin/platform/ask-dev/readiness",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/admin/routers/platform_ask_dev.py",
-        "line": 240,
-        "router_local_path": "/platform/ask-dev/readiness"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "require_admin (router-level dependency on admin.router:39-43, applies to every nested sub-router included after it) requires current_user.is_admin via get_current_user.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/admin/middleware.py",
-          "line": 9,
-          "line_end": 14,
-          "note": "require_admin(current_user=Depends(get_current_user))"
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": "org_id from JWT / X-Org-Id (superuser may cross-org)",
-      "tenant_requirement": "cross_org_superuser_only",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "403 for a non-admin authenticated user; 401 for no/invalid token (OrgIdMiddleware degrades an invalid JWT to anonymous, so get_current_user's own 401 is what actually fires)."
-    },
-    {
-      "id": "POST /api/v1/admin/platform/ask-dev/organizations/{org_id}/platform-allowance/reconcile [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/admin/platform/ask-dev/organizations/{org_id}/platform-allowance/reconcile",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/admin/routers/platform_ask_dev.py",
-        "line": 288,
-        "router_local_path": "/platform/ask-dev/organizations/{org_id}/platform-allowance/reconcile"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "require_admin (router-level dependency on admin.router:39-43, applies to every nested sub-router included after it) requires current_user.is_admin via get_current_user.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/admin/middleware.py",
-          "line": 9,
-          "line_end": 14,
-          "note": "require_admin(current_user=Depends(get_current_user))"
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": "org_id from JWT / X-Org-Id (superuser may cross-org)",
-      "tenant_requirement": "cross_org_superuser_only",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "403 for a non-admin authenticated user; 401 for no/invalid token (OrgIdMiddleware degrades an invalid JWT to anonymous, so get_current_user's own 401 is what actually fires)."
-    },
-    {
       "id": "GET /api/v1/admin/retention-policies [dev-health-ops-api]",
       "surface_kind": "rest",
       "method": "GET",
@@ -6578,7 +6123,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 90,
+        "line": 217,
         "router_local_path": "/settings/categories"
       },
       "gaps": [],
@@ -6643,7 +6188,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 95,
+        "line": 222,
         "router_local_path": "/settings/{category}"
       },
       "gaps": [],
@@ -6708,7 +6253,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 103,
+        "line": 230,
         "router_local_path": "/llm-settings"
       },
       "gaps": [],
@@ -6773,7 +6318,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 213,
+        "line": 340,
         "router_local_path": "/llm-settings/status"
       },
       "gaps": [],
@@ -6838,7 +6383,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 225,
+        "line": 352,
         "router_local_path": "/llm-settings/readiness"
       },
       "gaps": [],
@@ -6903,7 +6448,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 342,
+        "line": 469,
         "router_local_path": "/llm-settings/budget"
       },
       "gaps": [],
@@ -6968,7 +6513,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 352,
+        "line": 479,
         "router_local_path": "/llm-settings/spend"
       },
       "gaps": [],
@@ -7033,7 +6578,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 365,
+        "line": 492,
         "router_local_path": "/llm-settings"
       },
       "gaps": [],
@@ -7098,7 +6643,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 378,
+        "line": 505,
         "router_local_path": "/llm-settings"
       },
       "gaps": [],
@@ -7163,7 +6708,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 388,
+        "line": 515,
         "router_local_path": "/settings/{category}/{key}"
       },
       "gaps": [],
@@ -7228,7 +6773,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 397,
+        "line": 524,
         "router_local_path": "/settings/{category}/{key}"
       },
       "gaps": [],
@@ -7293,7 +6838,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 407,
+        "line": 534,
         "router_local_path": "/settings"
       },
       "gaps": [],
@@ -7358,7 +6903,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/settings.py",
-        "line": 415,
+        "line": 542,
         "router_local_path": "/settings/{category}/{key}"
       },
       "gaps": [],
@@ -13203,596 +12748,6 @@
       "disclosure_behavior": null
     },
     {
-      "id": "GET /api/v1/dev/capabilities [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/dev/capabilities",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/dev/router.py",
-        "line": 979,
-        "router_local_path": "/capabilities"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "_authenticated_user (local wrapper) calls get_current_user and remaps its HTTPException to Ask Dev's own error envelope.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/dev/router.py",
-          "line": 217,
-          "line_end": 229
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/dev/conversations [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/dev/conversations",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/dev/router.py",
-        "line": 1037,
-        "router_local_path": "/conversations"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "_authenticated_user (local wrapper) calls get_current_user and remaps its HTTPException to Ask Dev's own error envelope.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/dev/router.py",
-          "line": 217,
-          "line_end": 229
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/dev/conversations [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/dev/conversations",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/dev/router.py",
-        "line": 1067,
-        "router_local_path": "/conversations"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "_authenticated_user (local wrapper) calls get_current_user and remaps its HTTPException to Ask Dev's own error envelope.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/dev/router.py",
-          "line": 217,
-          "line_end": 229
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/dev/conversations/{conversation_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/dev/conversations/{conversation_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/dev/router.py",
-        "line": 1113,
-        "router_local_path": "/conversations/{conversation_id}"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "_authenticated_user (local wrapper) calls get_current_user and remaps its HTTPException to Ask Dev's own error envelope.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/dev/router.py",
-          "line": 217,
-          "line_end": 229
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/dev/conversations/{conversation_id}/transcript [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/dev/conversations/{conversation_id}/transcript",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/dev/router.py",
-        "line": 1135,
-        "router_local_path": "/conversations/{conversation_id}/transcript"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "_authenticated_user (local wrapper) calls get_current_user and remaps its HTTPException to Ask Dev's own error envelope.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/dev/router.py",
-          "line": 217,
-          "line_end": 229
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "PATCH /api/v1/dev/conversations/{conversation_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "PATCH",
-      "route": "/api/v1/dev/conversations/{conversation_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/dev/router.py",
-        "line": 1226,
-        "router_local_path": "/conversations/{conversation_id}"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "_authenticated_user (local wrapper) calls get_current_user and remaps its HTTPException to Ask Dev's own error envelope.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/dev/router.py",
-          "line": 217,
-          "line_end": 229
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "DELETE /api/v1/dev/conversations/{conversation_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "DELETE",
-      "route": "/api/v1/dev/conversations/{conversation_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/dev/router.py",
-        "line": 1255,
-        "router_local_path": "/conversations/{conversation_id}"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "_authenticated_user (local wrapper) calls get_current_user and remaps its HTTPException to Ask Dev's own error envelope.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/dev/router.py",
-          "line": 217,
-          "line_end": 229
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/dev/conversations/{conversation_id}/messages [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/dev/conversations/{conversation_id}/messages",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/dev/router.py",
-        "line": 1286,
-        "router_local_path": "/conversations/{conversation_id}/messages"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "_authenticated_user (local wrapper) calls get_current_user and remaps its HTTPException to Ask Dev's own error envelope.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/dev/router.py",
-          "line": 217,
-          "line_end": 229
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "GET /api/v1/dev/evidence/{evidence_ref_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/api/v1/dev/evidence/{evidence_ref_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/dev/router.py",
-        "line": 1664,
-        "router_local_path": "/evidence/{evidence_ref_id}"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "_authenticated_user (local wrapper) calls get_current_user and remaps its HTTPException to Ask Dev's own error envelope.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/dev/router.py",
-          "line": 217,
-          "line_end": 229
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "POST /api/v1/dev/answers/{answer_id}/feedback [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/dev/answers/{answer_id}/feedback",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/dev/router.py",
-        "line": 1762,
-        "router_local_path": "/answers/{answer_id}/feedback"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "_authenticated_user (local wrapper) calls get_current_user and remaps its HTTPException to Ask Dev's own error envelope.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/dev/router.py",
-          "line": 217,
-          "line_end": 229
-        }
-      },
-      "token_shape": null,
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
       "id": "GET /api/v1/external-ingest/schemas [dev-health-ops-api]",
       "surface_kind": "rest",
       "method": "GET",
@@ -14823,7 +13778,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 143,
+        "line": 130,
         "router_local_path": "/health"
       },
       "gaps": [],
@@ -14873,7 +13828,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 190,
+        "line": 177,
         "router_local_path": "/ready"
       },
       "gaps": [],
@@ -14923,7 +13878,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 201,
+        "line": 188,
         "router_local_path": "/health/workers"
       },
       "gaps": [],
@@ -14973,7 +13928,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 318,
+        "line": 305,
         "router_local_path": "/api/v1/meta"
       },
       "gaps": [],
@@ -15023,7 +13978,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 324,
+        "line": 311,
         "router_local_path": "/api/v1/home"
       },
       "gaps": [],
@@ -15082,7 +14037,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 334,
+        "line": 321,
         "router_local_path": "/api/v1/home"
       },
       "gaps": [],
@@ -15141,7 +14096,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 350,
+        "line": 337,
         "router_local_path": "/api/v1/explain"
       },
       "gaps": [],
@@ -15200,7 +14155,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 357,
+        "line": 344,
         "router_local_path": "/api/v1/explain"
       },
       "gaps": [],
@@ -15259,7 +14214,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 374,
+        "line": 361,
         "router_local_path": "/api/v1/heatmap"
       },
       "gaps": [],
@@ -15318,7 +14273,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 393,
+        "line": 380,
         "router_local_path": "/api/v1/work-units"
       },
       "gaps": [],
@@ -15377,7 +14332,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 401,
+        "line": 388,
         "router_local_path": "/api/v1/work-units"
       },
       "gaps": [],
@@ -15436,7 +14391,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 416,
+        "line": 403,
         "router_local_path": "/api/v1/work-units/{work_unit_id}/explain"
       },
       "gaps": [],
@@ -15495,7 +14450,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 437,
+        "line": 424,
         "router_local_path": "/api/v1/flame"
       },
       "gaps": [],
@@ -15554,7 +14509,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 448,
+        "line": 435,
         "router_local_path": "/api/v1/flame/aggregated"
       },
       "gaps": [],
@@ -15613,7 +14568,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 468,
+        "line": 455,
         "router_local_path": "/api/v1/quadrant"
       },
       "gaps": [],
@@ -15672,7 +14627,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 484,
+        "line": 471,
         "router_local_path": "/api/v1/drilldown/prs"
       },
       "gaps": [],
@@ -15731,7 +14686,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 494,
+        "line": 481,
         "router_local_path": "/api/v1/drilldown/prs"
       },
       "gaps": [],
@@ -15790,7 +14745,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 509,
+        "line": 496,
         "router_local_path": "/api/v1/drilldown/issues"
       },
       "gaps": [],
@@ -15849,7 +14804,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 519,
+        "line": 506,
         "router_local_path": "/api/v1/drilldown/issues"
       },
       "gaps": [],
@@ -15908,7 +14863,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 534,
+        "line": 521,
         "router_local_path": "/api/v1/people"
       },
       "gaps": [],
@@ -15967,7 +14922,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 545,
+        "line": 532,
         "router_local_path": "/api/v1/people/{person_id}/summary"
       },
       "gaps": [],
@@ -16026,7 +14981,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 557,
+        "line": 544,
         "router_local_path": "/api/v1/people/{person_id}/metric"
       },
       "gaps": [],
@@ -16085,7 +15040,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 569,
+        "line": 556,
         "router_local_path": "/api/v1/people/{person_id}/drilldown/prs"
       },
       "gaps": [],
@@ -16144,7 +15099,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 585,
+        "line": 572,
         "router_local_path": "/api/v1/people/{person_id}/drilldown/issues"
       },
       "gaps": [],
@@ -16203,7 +15158,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 601,
+        "line": 588,
         "router_local_path": "/api/v1/opportunities"
       },
       "gaps": [],
@@ -16262,7 +15217,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 617,
+        "line": 604,
         "router_local_path": "/api/v1/opportunities"
       },
       "gaps": [],
@@ -16321,7 +15276,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 627,
+        "line": 614,
         "router_local_path": "/api/v1/investment"
       },
       "gaps": [],
@@ -16380,7 +15335,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 642,
+        "line": 629,
         "router_local_path": "/api/v1/investment"
       },
       "gaps": [],
@@ -16439,7 +15394,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 652,
+        "line": 639,
         "router_local_path": "/api/v1/investment/sunburst"
       },
       "gaps": [],
@@ -16498,7 +15453,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 669,
+        "line": 656,
         "router_local_path": "/api/v1/investment/explain"
       },
       "gaps": [],
@@ -16557,7 +15512,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 691,
+        "line": 678,
         "router_local_path": "/api/v1/investment/flow"
       },
       "gaps": [],
@@ -16616,7 +15571,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 701,
+        "line": 688,
         "router_local_path": "/api/v1/investment/flow/repo-team"
       },
       "gaps": [],
@@ -16675,7 +15630,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 709,
+        "line": 696,
         "router_local_path": "/api/v1/sankey"
       },
       "gaps": [],
@@ -16734,7 +15689,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 727,
+        "line": 714,
         "router_local_path": "/api/v1/sankey"
       },
       "gaps": [],
@@ -16793,7 +15748,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 737,
+        "line": 724,
         "router_local_path": "/api/v1/filters/options"
       },
       "gaps": [],
@@ -17572,534 +16527,6 @@
         "file": "src/dev_health_ops/api/graphql/models/data_health.py",
         "line": 197,
         "qualname": "dev_health_ops.api.graphql.models.data_health.DataHealth.metric_lineage"
-      },
-      "gaps": [
-        "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "GraphQLContext.__post_init__ raises AuthorizationError unless org_id is set (or the user is a superuser); org_id is only ever populated from OrgIdMiddleware's validated-JWT+membership contextvar, so an unauthenticated/anonymous request has no path to a usable context.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/graphql/context.py",
-          "line": 74,
-          "line_end": 82
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "graphql:field:dev_scope_search",
-      "surface_kind": "graphql_field",
-      "method": null,
-      "route": null,
-      "graphql_field_name": "dev_scope_search",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 177,
-        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_scope_search"
-      },
-      "gaps": [
-        "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "GraphQLContext.__post_init__ raises AuthorizationError unless org_id is set (or the user is a superuser); org_id is only ever populated from OrgIdMiddleware's validated-JWT+membership contextvar, so an unauthenticated/anonymous request has no path to a usable context.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/graphql/context.py",
-          "line": 74,
-          "line_end": 82
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "graphql:field:dev_metric_catalog",
-      "surface_kind": "graphql_field",
-      "method": null,
-      "route": null,
-      "graphql_field_name": "dev_metric_catalog",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 191,
-        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_metric_catalog"
-      },
-      "gaps": [
-        "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "GraphQLContext.__post_init__ raises AuthorizationError unless org_id is set (or the user is a superuser); org_id is only ever populated from OrgIdMiddleware's validated-JWT+membership contextvar, so an unauthenticated/anonymous request has no path to a usable context.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/graphql/context.py",
-          "line": 74,
-          "line_end": 82
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "graphql:field:dev_metric",
-      "surface_kind": "graphql_field",
-      "method": null,
-      "route": null,
-      "graphql_field_name": "dev_metric",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 202,
-        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_metric"
-      },
-      "gaps": [
-        "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "GraphQLContext.__post_init__ raises AuthorizationError unless org_id is set (or the user is a superuser); org_id is only ever populated from OrgIdMiddleware's validated-JWT+membership contextvar, so an unauthenticated/anonymous request has no path to a usable context.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/graphql/context.py",
-          "line": 74,
-          "line_end": 82
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "graphql:field:dev_evidence_search",
-      "surface_kind": "graphql_field",
-      "method": null,
-      "route": null,
-      "graphql_field_name": "dev_evidence_search",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 216,
-        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_evidence_search"
-      },
-      "gaps": [
-        "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "GraphQLContext.__post_init__ raises AuthorizationError unless org_id is set (or the user is a superuser); org_id is only ever populated from OrgIdMiddleware's validated-JWT+membership contextvar, so an unauthenticated/anonymous request has no path to a usable context.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/graphql/context.py",
-          "line": 74,
-          "line_end": 82
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "graphql:field:dev_data_health",
-      "surface_kind": "graphql_field",
-      "method": null,
-      "route": null,
-      "graphql_field_name": "dev_data_health",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 231,
-        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_data_health"
-      },
-      "gaps": [
-        "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "GraphQLContext.__post_init__ raises AuthorizationError unless org_id is set (or the user is a superuser); org_id is only ever populated from OrgIdMiddleware's validated-JWT+membership contextvar, so an unauthenticated/anonymous request has no path to a usable context.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/graphql/context.py",
-          "line": 74,
-          "line_end": 82
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "graphql:field:dev_status_snapshot",
-      "surface_kind": "graphql_field",
-      "method": null,
-      "route": null,
-      "graphql_field_name": "dev_status_snapshot",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 246,
-        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_status_snapshot"
-      },
-      "gaps": [
-        "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "GraphQLContext.__post_init__ raises AuthorizationError unless org_id is set (or the user is a superuser); org_id is only ever populated from OrgIdMiddleware's validated-JWT+membership contextvar, so an unauthenticated/anonymous request has no path to a usable context.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/graphql/context.py",
-          "line": 74,
-          "line_end": 82
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "graphql:field:dev_change_summary",
-      "surface_kind": "graphql_field",
-      "method": null,
-      "route": null,
-      "graphql_field_name": "dev_change_summary",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 260,
-        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_change_summary"
-      },
-      "gaps": [
-        "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "GraphQLContext.__post_init__ raises AuthorizationError unless org_id is set (or the user is a superuser); org_id is only ever populated from OrgIdMiddleware's validated-JWT+membership contextvar, so an unauthenticated/anonymous request has no path to a usable context.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/graphql/context.py",
-          "line": 74,
-          "line_end": 82
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "graphql:field:dev_work_graph_neighbors",
-      "surface_kind": "graphql_field",
-      "method": null,
-      "route": null,
-      "graphql_field_name": "dev_work_graph_neighbors",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 274,
-        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_work_graph_neighbors"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."

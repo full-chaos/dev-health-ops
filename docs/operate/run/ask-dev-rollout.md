@@ -128,4 +128,3 @@ Unset `ASK_DEV_QUA_SHADOW_ENABLED` (or set it to any value other than `1`) and r
 - [Workers, jobs, retries, and schedules](workers-and-jobs.md)
 - [Safe operational controls](operational-controls.md)
 - [Feature flags and availability](../../reference/configuration/feature-flags.md)
-- [Ask Dev web proxy or browser failure](../runbooks/ask-dev-web-proxy-or-browser-failure.md)

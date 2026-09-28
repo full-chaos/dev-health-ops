@@ -709,9 +709,12 @@ async def test_llm_settings_readiness_succeeds_independent_of_ask_dev_selection(
 ):
     """CHAOS-3265 acceptance criterion: BYO readiness is available based on
     BYO configuration being set up, not on BYO currently being selected or
-    enabled for Ask Dev. Ask Dev is forced emergency-disabled here (so Ask
-    Dev's own provider_source resolves to None) and the BYO check must still
-    run -- and must not touch DevRun or change Ask Dev's selection."""
+    enabled for Ask Dev -- and must not touch DevRun.
+
+    CHAOS-6262 deleted the ``GET /api/v1/admin/ask-dev`` route this test used
+    to also check before/after (to confirm the readiness POST left Ask Dev's
+    own provider_source unchanged); that surface no longer exists, so only
+    the still-live DevRun-count invariant remains checked here."""
 
     state = await _seed_org(session_maker, "team")
     await _set_llm_settings(
@@ -721,13 +724,6 @@ async def test_llm_settings_readiness_succeeds_independent_of_ask_dev_selection(
         api_key="sk-org",
         base_url="https://api.openai.com/v1",
     )
-    async with session_maker() as session:
-        await SettingsService(session, state["org_id"]).set(
-            "ask_dev_emergency_disabled",
-            "true",
-            SettingCategory.ASK_DEV.value,
-        )
-        await session.commit()
 
     app = _make_app(session_maker, state)
     provider = FakeReadinessProvider()
@@ -753,11 +749,6 @@ async def test_llm_settings_readiness_succeeds_independent_of_ask_dev_selection(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as ac:
-        before = await ac.get("/api/v1/admin/ask-dev")
-        assert before.status_code == 200
-        before_source = before.json()["provider_source"]
-        assert before_source is None  # forced emergency-disabled above
-
         before_dev_run_count = await _dev_run_count(session_maker, state["org_id"])
 
         response = await ac.post("/api/v1/admin/llm-settings/readiness")
@@ -776,10 +767,6 @@ async def test_llm_settings_readiness_succeeds_independent_of_ask_dev_selection(
         after_dev_run_count = await _dev_run_count(session_maker, state["org_id"])
         assert before_dev_run_count == 0
         assert after_dev_run_count == 0
-
-        after = await ac.get("/api/v1/admin/ask-dev")
-        assert after.status_code == 200
-        assert after.json()["provider_source"] == before_source
 
 
 @pytest.mark.asyncio

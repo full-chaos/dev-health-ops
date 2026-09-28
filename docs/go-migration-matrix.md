@@ -242,7 +242,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-20T13:31:59Z against main merge-base `aa1a19fd8d9cecb65f0e9b0fd7512cad67cee8be`; SDL digest pin `sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-20T13:31:59Z against main merge-base `92a0be52d0821d90118ea39e0eac7cc76f464015`; SDL digest pin `sha256:d5ba09b1f460953482518ae4f5653ba6350b085bdc39621c5888756741118117`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **2845**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **25**._
 

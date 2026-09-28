@@ -1259,7 +1259,16 @@ func (r *queryResolver) Recommendations(ctx context.Context, orgID string, team 
 			},
 		}
 	}
-	if orgID != "" && orgID != claims.OrgID {
+	if orgID == "" || orgID != strings.TrimSpace(orgID) {
+		return nil, &gqlerror.Error{
+			Message: "A valid organization ID is required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if orgID != claims.OrgID {
 		return nil, &gqlerror.Error{
 			Message: "Access denied: cannot query org '" + orgID + "'",
 			Path:    graphql.GetPath(ctx),

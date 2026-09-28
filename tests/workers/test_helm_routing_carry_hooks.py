@@ -79,10 +79,22 @@ def test_absent_when_query_api_disabled() -> None:
     assert _REPOINT not in jobs
 
 
-def test_absent_when_migrations_hook_disabled() -> None:
+def test_present_even_when_migrations_hook_disabled() -> None:
+    """D2829 P2-a (#3369 r1 P2): these two Jobs gate on `queryApi.enabled` ONLY. They are
+    not migrations (values.yaml's migrations.hook.goApiRoutingTools comment: no
+    enable/disable knob, this is a gate) -- an operator disabling migrations.hook for an
+    unrelated reason (e.g. a release with no schema change to apply) must not silently
+    disable the routing safety gate as a side effect. Before this fix, BOTH hooks were
+    absent whenever migrations.hook.enabled=false, regardless of queryApi.enabled."""
     jobs = _jobs("migrations.hook.enabled=false", *_ENABLED)
-    assert _CARRY not in jobs
-    assert _REPOINT not in jobs
+    assert _CARRY in jobs, (
+        "the carry hook must still render with migrations.hook.enabled=false as long as "
+        "queryApi.enabled=true -- it gates on queryApi.enabled only"
+    )
+    assert _REPOINT in jobs, (
+        "the repoint hook must still render with migrations.hook.enabled=false as long as "
+        "queryApi.enabled=true -- it gates on queryApi.enabled only"
+    )
 
 
 def test_present_with_no_dedicated_enable_flag() -> None:
@@ -135,40 +147,69 @@ def test_missing_mint_org_is_refused() -> None:
     assert "mintOrg is required" in stderr
 
 
+def test_tools_image_pinned_to_a_different_commit_than_query_api_is_refused() -> None:
+    """D2829 P2-b (#3369 r1 P2): the tools image's commit must be cross-checked against
+    `queryApi.image` (the image actually being rolled), not `.Values.image` (the Python
+    api image -- what `dev-health.lockstepImageCheck` hardcodes). Before this fix, a tools
+    image and a query-api image pinned to DIFFERENT commits rendered clean as long as they
+    each happened to agree with the unrelated Python api image (or didn't have one to
+    disagree with at all) -- `carry` would then compute a target digest for a commit the
+    actual roll never runs."""
+    rc, stderr = _render_stderr(
+        "queryApi.enabled=true",
+        "queryApi.image.tag=sha-aaaaaaaaaaaa",
+        "migrations.hook.goApiRoutingTools.image=ghcr.io/full-chaos/dev-health-go-api-tools:sha-bbbbbbbbbbbb",
+        f"migrations.hook.goApiRoutingTools.mintOrg={_MINT_ORG}",
+    )
+    assert rc != 0, "a tools/query-api commit mismatch must fail the render"
+    assert "are pinned to different commits" in stderr
+    assert "queryApi.image" in stderr
+
+
+def test_tools_image_pinned_to_the_same_commit_as_query_api_renders_clean() -> None:
+    """Positive control for the test above: proves the lockstep check compares against
+    queryApi.image (and passes when they DO agree), not that it always fails."""
+    rc, stderr = _render_stderr(
+        "queryApi.enabled=true",
+        "queryApi.image.tag=sha-cccccccccccc",
+        "migrations.hook.goApiRoutingTools.image=ghcr.io/full-chaos/dev-health-go-api-tools:sha-cccccccccccc",
+        f"migrations.hook.goApiRoutingTools.mintOrg={_MINT_ORG}",
+    )
+    assert rc == 0, (
+        f"a matching tools/query-api commit must render clean, got: {stderr}"
+    )
+
+
 # --- carry's own control flow: refuse-not-skip, with the one documented self-heal --------
 
 
 def test_carry_script_treats_digest_agreement_as_a_pass() -> None:
-    """The digest-agreement text matches the CLI's OWN early "Preflight 2" refusal
-    (internal/goapicli/routing/carry.go), not goapiproof.CarryRequest's separate,
-    differently-worded ErrCarryDigestUnchanged -- that package-level error is dead code
-    from this caller's perspective, since the CLI's preflight returns first. Confirmed by
-    running the real dho CLI end to end against a stub registry/buildinfo server
-    (TestCarryRefusesWhenTheDeployedProcessAlreadyComputesThisDigest,
-    internal/goapicli/routing/carry_integration_test.go) -- the live text is exactly what
-    this grep already matched. (An earlier pass at this fix wrongly "corrected" this text
-    by testing goapiproof.CarryRequest.validate() directly, which bypasses the CLI's own
-    earlier preflight and exercises a path this caller never reaches -- reverted once the
-    real CLI's own integration test proved the original text was already right.)
-    """
+    """D2828/D2829: the digest-agreement branch keys off `dho ... -json`'s `reason` field
+    ("digest_unchanged"), extracted with grep+sed (no `jq` in this image -- see the chart's
+    own file-level comment), never off the raw error TEXT. That text was wrong twice during
+    this ticket's own review before landing on this structural fix -- see
+    tests/tooling/test_bigboy_cut_carry_refusal_text_behavior.py (CHAOS-7022) for the
+    end-to-end proof against the REAL dho binary and a real fake registry server."""
     script = _script(_jobs(*_ENABLED)[_CARRY])
-    assert (
-        "this binary's SDL is the one the deployed process already computes" in script
+    assert '"$REASON" = "digest_unchanged"' in script, (
+        "the digest-unchanged branch must key off -json's reason field, not off any "
+        "particular error text"
     )
     assert "not a failure" in script or "nothing to carry" in script
 
 
 def test_carry_script_has_the_repoint_then_retry_fallback() -> None:
     """The documented, real exception (rev196, both bigboy's re-cut and the actual prod
-    roll): a refusal naming the stale-build text triggers ONE repoint-then-retry before
+    roll): a refusal naming the stale-build reason triggers ONE repoint-then-retry before
     anything is treated as fatal.
 
-    r1 P1 (#3369): the real Go text is backtick-quoted -- "run `repoint` first"
-    (internal/goapiproof/routing_carry.go:172, ErrCarryBuildNotRunning) -- not the plain
-    "run repoint first" this test originally asserted, which never matched real output.
+    D2828/D2829: keyed off -json's `reason="stale_build"`, not off carry's raw error text.
     """
     script = _script(_jobs(*_ENABLED)[_CARRY])
-    assert "run `repoint` first" in script
+    assert '"$REASON" = "stale_build"' in script, (
+        "the stale-build repoint-then-retry branch must key off -json's reason field, not "
+        "off any particular error text"
+    )
     assert script.count("dho goapi routing repoint") == 1
     assert script.count("dho goapi routing carry") == 2, (
         "exactly two carry attempts: the first, and the one retry after repoint"

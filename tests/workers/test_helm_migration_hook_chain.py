@@ -360,6 +360,54 @@ def test_river_migrate_applies_and_checks_with_no_shell() -> None:
     )
 
 
+def _river_env(jobs: dict[str, dict]) -> dict[str, dict]:
+    container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
+    return {item["name"]: item for item in container["env"]}
+
+
+def test_query_api_database_role_defaults_to_an_empty_noop() -> None:
+    """CHAOS-7113/CHAOS-6804 rollout step 1: shipping this env wire must not,
+    by itself, change what `dho migrate river` does on any existing
+    deployment. rivermigrate.queryAPILeg treats a blank value as "apply
+    nothing" (returns ("", nil, nil)), so the chart's own default must stay
+    the empty string, unlike the three REQUIRED runtime roles above it which
+    default to real names.
+    """
+    env = _river_env(_jobs(*_BOTH_ON))
+    assert env["QUERY_API_DATABASE_ROLE"]["value"] == ""
+
+
+def test_query_api_database_role_is_wired_through_to_the_river_job() -> None:
+    """Rollout step 3 (deploy/go-workers/README.md "query-api role"): once an
+    operator has created the login (step 2, out of band) and sets this
+    value, `dho migrate river` must actually receive it as plain env -- no
+    secretKeyRef, since this Job only grants an EXISTING role and never
+    creates one or needs its password.
+    """
+    env = _river_env(
+        _jobs(*_BOTH_ON, "config.QUERY_API_DATABASE_ROLE=devhealth_query_api")
+    )
+    item = env["QUERY_API_DATABASE_ROLE"]
+    assert item["value"] == "devhealth_query_api"
+    assert "valueFrom" not in item
+
+
+def test_query_api_database_role_is_absent_from_the_provisioning_job(
+    tmp_path: Path,
+) -> None:
+    """Rollout step 2 creates the login out of band (`dho migrate roles` run
+    directly, or the provisioning script) -- deliberately NOT through this
+    chart's weight-5 provisioning Job, "until the chart moves" (the README's
+    own words). Wiring the role into the weight-10 river-migrate Job must not
+    leak it into the weight-5 Job too, which would let a role that was never
+    actually created reach a grant statement that assumes it exists.
+    """
+    job = _provision_job(tmp_path)
+    container = job["spec"]["template"]["spec"]["containers"][0]
+    names = {item["name"] for item in container["env"]}
+    assert "QUERY_API_DATABASE_ROLE" not in names, sorted(names)
+
+
 def test_role_passwords_never_appear_in_the_rendered_manifest() -> None:
     """Passwords reach psql through env from the pooler Secret, not argv.
 

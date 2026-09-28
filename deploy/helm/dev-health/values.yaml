@@ -957,6 +957,15 @@ config:
   RIVER_DOMAIN_DATABASE_ROLE: "devhealth_domain"
   RIVER_QUEUE_DATABASE_ROLE: "devhealth_queue"
   RIVER_COORDINATOR_DATABASE_ROLE: "devhealth_coordinator"
+  # -- CHAOS-7113/CHAOS-6804: query-api's own least-privilege Postgres role,
+  #    opt-in (empty = no-op; see the river-migrate Job's own comment and
+  #    deploy/go-workers/README.md "query-api role" for the full rollout
+  #    order). Unlike the three roles above, this stays empty by default --
+  #    it is not required for a fresh install, only for the full
+  #    least-privilege posture on an already-running cluster. Set it (and
+  #    queryApi.extraEnv + the GO_API_REGISTRY_POSTGRES_URI Secret value)
+  #    only after `dho migrate roles` has created the login.
+  QUERY_API_DATABASE_ROLE: ""
   # -- CHAOS-5594: KEDA's postgresql scaler reads river_job backlog through
   #    this role, over the EXISTING transaction pooler (no new pooler
   #    deployment). SELECT-only on river_job -- grant it nothing else. Same

@@ -386,6 +386,18 @@ spec:
               value: {{ .Values.config.RIVER_QUEUE_DATABASE_ROLE | quote }}
             - name: RIVER_COORDINATOR_DATABASE_ROLE
               value: {{ .Values.config.RIVER_COORDINATOR_DATABASE_ROLE | quote }}
+            {{- /*
+            CHAOS-7113/CHAOS-6804 rollout step 3 (deploy/go-workers/README.md
+            "query-api role"): unlike the three roles above, an empty value is
+            a real no-op, not a misconfiguration -- rivermigrate.queryAPILeg
+            returns ("", nil, nil) when this is blank, so `dho migrate river`
+            applies zero query-api grants and the leg does nothing until an
+            operator sets this AND has already created the login with
+            `dho migrate roles` (rollout step 2). No password here: this Job
+            only APPLIES grants to an EXISTING role, it never creates one.
+            */}}
+            - name: QUERY_API_DATABASE_ROLE
+              value: {{ .Values.config.QUERY_API_DATABASE_ROLE | default "" | quote }}
           envFrom:
             - secretRef:
                 {{- if .Values.secrets.create }}

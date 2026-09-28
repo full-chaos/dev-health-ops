@@ -607,11 +607,13 @@ func buildSyncCoordinatorWorker(
 		// the Python bridge's TeamAutoImport is unreachable for all of them.
 		// CHAOS-7002/D2770: jira's entry composes the project-as-team catalog
 		// above with a real Atlassian Teams collection (internal/
-		// atlassianteams), additive and org-opt-in on the credential's own
-		// atlassian_organization_id config -- see
-		// jira_atlassian_teams_collector.go's doc comment. Before this, the
-		// real collector was reachable only from the standalone `dho sync
-		// teams --provider jira` CLI verb, never from an automatic sync.
+		// atlassianteams), additive alongside it whenever team import is
+		// selected at all -- atlassian_organization_id resolves live via the
+		// AGG gateway when the credential's config doesn't override it
+		// (D2817/CHAOS-7020) -- see jira_atlassian_teams_collector.go's doc
+		// comment. Before this, the real collector was reachable only from
+		// the standalone `dho sync teams --provider jira` CLI verb, never
+		// from an automatic sync.
 		"jira": jiraCombinedTeamCatalogCollector{
 			ProjectAsTeam: providersync.JiraTeamCatalogCollector{
 				Handler: providersync.JiraTeamCatalogRouteHandler{},

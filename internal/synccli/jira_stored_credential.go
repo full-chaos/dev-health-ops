@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"atlassian/atlassian"
+
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -41,13 +43,23 @@ var jiraTeamsTokenAliases = []string{"api_token", "apiToken", "token"}
 // live from the tenant's own base URL via atlassianteams.ResolveCloudID --
 // shared with the automatic post-sync team-catalog collector
 // (internal/workerservice), so the two paths can never derive it two
-// different ways.
+// different ways. Organization id, when not stored, is likewise derived live
+// via atlassianteams.ResolveOrganizationID (D2817/CHAOS-7020): the stored
+// config value is an OVERRIDE only now, never the sole path -- newResolver
+// builds the AGG gateway client that call needs (nil production default: a
+// real *graph.Client; tests inject a fake). overrides carries the caller's
+// already-parsed ATLASSIAN_* environment: an explicit ATLASSIAN_ORGANIZATION_ID/
+// ATLASSIAN_CLOUD_ID is checked BEFORE any live resolution is attempted, not
+// only reapplied by the caller afterward -- a resolution failure must never
+// block an override the operator already supplied (P1, CHAOS-7020 r1).
 func resolveJiraStoredSettings(
 	ctx context.Context,
 	pool *pgxpool.Pool,
 	decryptor providerfoundation.CredentialDecryptor,
 	doer providerfoundation.HTTPDoer,
+	newResolver func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.OrganizationResolver,
 	orgID string,
+	overrides envOverrides,
 ) (settings, error) {
 	if pool == nil {
 		return settings{}, errors.New(PostgresURIKey + " is not set: required to resolve the org's stored jira credential")
@@ -74,13 +86,18 @@ func resolveJiraStoredSettings(
 		return settings{}, fmt.Errorf("the stored jira credential's base url is not valid: %w", err)
 	}
 
-	organizationID := strings.TrimSpace(credential.Config["atlassian_organization_id"])
-	if organizationID == "" {
-		return settings{}, fmt.Errorf(
-			"the stored jira integration's config has no atlassian_organization_id (set it on the integration, or set %s)",
-			OrganizationIDKey)
-	}
+	// An explicit env override wins before any live resolution is even
+	// attempted (P1, CHAOS-7020 r1): resolveTeamsSettings applies
+	// overrides.cloudID/organizationID again below AFTER this function
+	// returns, but only on a SUCCESSFUL return -- a live resolution failure
+	// here used to return before the caller ever got a chance to apply the
+	// override that would have made the failure moot. Checking both here
+	// first means a documented override always works, never mind whether the
+	// network resolution it exists to bypass would have failed.
 	cloudID := strings.TrimSpace(credential.Config["atlassian_cloud_id"])
+	if cloudID == "" {
+		cloudID = strings.TrimSpace(overrides.cloudID)
+	}
 	if cloudID == "" {
 		cloudID, err = atlassianteams.ResolveCloudID(ctx, doer, tenant)
 		if err != nil {
@@ -99,12 +116,36 @@ func resolveJiraStoredSettings(
 	if !email.Configured() || token == "" {
 		return settings{}, errors.New("the stored jira credential is missing email or an api token")
 	}
+	gatewayURL := tenant.String() + gatewayPath
+
+	// atlassian_organization_id is now an OVERRIDE only (D2817/CHAOS-7020):
+	// when the integration's config doesn't carry one, resolve it live via
+	// the AGG tenantContexts query using the SAME stored credential, rather
+	// than refusing outright the way this verb always used to.
+	organizationID := strings.TrimSpace(credential.Config["atlassian_organization_id"])
+	if organizationID == "" {
+		organizationID = strings.TrimSpace(overrides.organizationID)
+	}
+	if organizationID == "" {
+		if newResolver == nil {
+			return settings{}, fmt.Errorf(
+				"the stored jira integration's config has no atlassian_organization_id and no resolver is configured to derive one (set it on the integration, or set %s)",
+				OrganizationIDKey)
+		}
+		auth := atlassian.BasicAPITokenAuth{Email: email.Reveal(), Token: token}
+		organizationID, err = atlassianteams.ResolveOrganizationID(ctx, newResolver(gatewayURL, auth), cloudID)
+		if err != nil {
+			return settings{}, fmt.Errorf(
+				"the stored jira integration's config has no atlassian_organization_id, and resolving one failed: %w (set it on the integration, or set %s)",
+				err, OrganizationIDKey)
+		}
+	}
 	return settings{
 		organizationID: organizationID,
 		cloudID:        cloudID,
 		email:          email.Reveal(),
 		token:          token,
-		gatewayURL:     tenant.String() + gatewayPath,
+		gatewayURL:     gatewayURL,
 	}, nil
 }
 

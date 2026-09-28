@@ -1,6 +1,7 @@
 package credentials
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,57 @@ func dump(t *testing.T, object *pyjson.Object) string {
 		t.Fatal(err)
 	}
 	return text
+}
+
+// TestValidateJiraConfig is the CHAOS-7020 "validate on save" proof: a
+// malformed config.atlassian_organization_id override is rejected, but its
+// absence (the now-default auto-resolve path) and an explicit empty string
+// (clearing a previous override) are both valid.
+func TestValidateJiraConfig(t *testing.T) {
+	cases := []struct {
+		name     string
+		json     string
+		wantErr  bool
+		wantText string
+	}{
+		{name: "absent key is valid", json: `{}`},
+		{name: "nil config is valid", json: ``},
+		{name: "empty string clears the override", json: `{"atlassian_organization_id": ""}`},
+		{name: "whitespace-only clears the override", json: `{"atlassian_organization_id": "   "}`},
+		{name: "bare UUID is valid", json: `{"atlassian_organization_id": "22125a4d-0000-4000-8000-000000000001"}`},
+		{name: "uppercase UUID is valid", json: `{"atlassian_organization_id": "22125A4D-0000-4000-8000-000000000001"}`},
+		{name: "ARI-wrapped UUID is valid", json: `{"atlassian_organization_id": "ari:cloud:platform::org/22125a4d-0000-4000-8000-000000000001"}`},
+		{
+			name: "a bare word is rejected", json: `{"atlassian_organization_id": "not-a-uuid"}`,
+			wantErr: true, wantText: "config.atlassian_organization_id",
+		},
+		{
+			name: "a wrong-provider ARI shape is rejected", json: `{"atlassian_organization_id": "ari:cloud:identity::team/22125a4d-0000-4000-8000-000000000001"}`,
+			wantErr: true,
+		},
+		{
+			name: "a non-string value is rejected", json: `{"atlassian_organization_id": 12345}`,
+			wantErr: true, wantText: "must be a string",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var config *pyjson.Object
+			if tc.json != "" {
+				config = decodeObject(t, tc.json)
+			}
+			detail := validateJiraConfig(config)
+			if tc.wantErr && detail == "" {
+				t.Fatal("expected a validation error, got none")
+			}
+			if !tc.wantErr && detail != "" {
+				t.Fatalf("expected no validation error, got %q", detail)
+			}
+			if tc.wantText != "" && !strings.Contains(detail, tc.wantText) {
+				t.Errorf("detail = %q, want it to contain %q", detail, tc.wantText)
+			}
+		})
+	}
 }
 
 func TestNormalizeCredentialKeys(t *testing.T) {

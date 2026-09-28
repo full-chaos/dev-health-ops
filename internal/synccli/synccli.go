@@ -64,11 +64,12 @@ const (
 		"gitlab, not used for linear); see docs/reference/cli/index.md for its exact flags, refusals\n" +
 		"and env vars, which differ per provider.\n\n" +
 		"--provider jira resolves the org's stored jira integration credential from Postgres\n" +
-		"(--db, else POSTGRES_URI or _FILE) by default -- the atlassian_organization_id (required) and\n" +
-		"atlassian_cloud_id (optional; else derived live from the tenant) come from that same\n" +
-		"integration's config. The environment below overrides individual fields, or (when\n" +
-		"ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN and ATLASSIAN_JIRA_BASE_URL are ALL set) replaces\n" +
-		"the stored credential entirely, for an offline/test path with no database at all:\n\n" +
+		"(--db, else POSTGRES_URI or _FILE) by default -- atlassian_organization_id and\n" +
+		"atlassian_cloud_id (both optional; else derived live from the tenant via the AGG gateway)\n" +
+		"come from that same integration's config, when set. The environment below overrides\n" +
+		"individual fields, or (when ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN and ATLASSIAN_JIRA_BASE_URL\n" +
+		"are ALL set) replaces the stored credential entirely, for an offline/test path with no\n" +
+		"database at all:\n\n" +
 		"environment (names only):\n" +
 		"  CLICKHOUSE_URI (or _FILE)             ClickHouse DSN\n" +
 		"  POSTGRES_URI (or _FILE)               the domain database the stored jira credential is read from\n" +
@@ -96,8 +97,15 @@ func Command() cli.Command {
 // deps are the verb's outside connections, replaceable in tests.
 type deps struct {
 	newClient func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.Client
-	openStore func(ctx context.Context, dsn string) (driver.Conn, error)
-	now       func() time.Time
+	// newOrganizationResolver builds the AGG gateway client
+	// resolveJiraStoredSettings uses to derive atlassian_organization_id when
+	// the stored credential's config doesn't carry an override
+	// (D2817/CHAOS-7020); nil (production default) builds a real
+	// *graph.Client, exactly like newClient. Tests replace it with a fake
+	// atlassianteams.OrganizationResolver.
+	newOrganizationResolver func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.OrganizationResolver
+	openStore               func(ctx context.Context, dsn string) (driver.Conn, error)
+	now                     func() time.Time
 	// doer is the HTTP client of a catalog provider, and (for --provider
 	// jira) the stored-credential resolution's jira/tenant-info client (nil:
 	// a 45 s client); tests replace it.
@@ -116,6 +124,12 @@ func defaultDeps() deps {
 			// Strict: GraphQL errors next to partial data fail the read (the
 			// client otherwise returns the partial data). CompletePagesOnly: a
 			// page that promises a next page without a cursor fails it too.
+			return &graph.Client{
+				BaseURL: gatewayURL, Auth: auth, Strict: true,
+				HTTPClient: &http.Client{Timeout: 30 * time.Second, Transport: atlassianteams.CompletePagesOnly(nil)},
+			}
+		},
+		newOrganizationResolver: func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.OrganizationResolver {
 			return &graph.Client{
 				BaseURL: gatewayURL, Auth: auth, Strict: true,
 				HTTPClient: &http.Client{Timeout: 30 * time.Second, Transport: atlassianteams.CompletePagesOnly(nil)},
@@ -373,7 +387,7 @@ func resolveTeamsSettings(ctx context.Context, env cli.Env, d deps, orgID string
 		if err != nil {
 			return settings{}, err
 		}
-		s, err = resolveJiraStoredSettings(ctx, pool, decryptor, d.doer, orgID)
+		s, err = resolveJiraStoredSettings(ctx, pool, decryptor, d.doer, d.newOrganizationResolver, orgID, overrides)
 		if err != nil {
 			return settings{}, err
 		}

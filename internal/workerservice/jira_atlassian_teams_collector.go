@@ -29,12 +29,18 @@ import (
 // (sync_dispatch.go) in ProjectAsTeam's place, so both writers run from the
 // same automatic post-sync/reference-discovery dispatch.
 //
-// The Atlassian Teams step is additive and org-opt-in: it runs only when the
-// resolved credential's config carries atlassian_organization_id (set on the
-// same jira integration row the credential itself lives on -- see
-// internal/synccli/jira_stored_credential.go's identical read). An org that
-// has not configured it yet is completely unaffected: ProjectAsTeam's result
-// passes through unchanged. Both writers target the SAME physical tables
+// The Atlassian Teams step is additive: it always runs alongside ProjectAsTeam
+// whenever the org has selected team import at all (selections.Any(), the
+// existing auto_import_teams/auto_import_projects/auto_import_members gate --
+// unchanged by this collector). atlassian_organization_id, when the resolved
+// credential's config carries one, is an OVERRIDE; otherwise it is derived
+// live via the AGG tenantContexts query (atlassianteams.ResolveOrganizationID,
+// D2817/CHAOS-7020) using the same stored credential -- no manual config step
+// is required for a jira integration to get real ARI-shaped Atlassian Teams
+// rows. A resolution failure (e.g. no organization context, or no permission)
+// degrades the same as any other Atlassian Teams read failure: non-strict
+// logs and keeps ProjectAsTeam's result, strict propagates. Both writers
+// target the SAME physical tables
 // (teams / team_memberships / team_project_ownership); team-attribution's
 // specificity ranking (110 for a real Atlassian team vs 100 for the
 // project-as-team fallback) resolves precedence automatically -- see
@@ -57,11 +63,27 @@ type jiraCombinedTeamCatalogCollector struct {
 	// verb's own test harness uses, so this collector needs no live tenant
 	// or AGG GraphQL response fixture to unit test.
 	NewClient func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.Client
+	// NewOrganizationResolver builds the AGG gateway client used to derive
+	// atlassian_organization_id when the resolved credential's config
+	// doesn't carry an override (D2817/CHAOS-7020); nil (production) builds
+	// the real *graph.Client, exactly like NewClient. Tests replace it with a
+	// fake atlassianteams.OrganizationResolver.
+	NewOrganizationResolver func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.OrganizationResolver
 }
 
 func (collector jiraCombinedTeamCatalogCollector) newClient(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.Client {
 	if collector.NewClient != nil {
 		return collector.NewClient(gatewayURL, auth)
+	}
+	return &graph.Client{
+		BaseURL: gatewayURL, Auth: auth, Strict: true,
+		HTTPClient: &http.Client{Timeout: 45 * time.Second, Transport: atlassianteams.CompletePagesOnly(nil)},
+	}
+}
+
+func (collector jiraCombinedTeamCatalogCollector) newOrganizationResolver(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.OrganizationResolver {
+	if collector.NewOrganizationResolver != nil {
+		return collector.NewOrganizationResolver(gatewayURL, auth)
 	}
 	return &graph.Client{
 		BaseURL: gatewayURL, Auth: auth, Strict: true,
@@ -90,11 +112,10 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 	if !selections.Any() {
 		return result, nil
 	}
-	organizationID := strings.TrimSpace(credential.Config["atlassian_organization_id"])
-	if organizationID == "" || client == nil || client.BaseURL == nil {
+	if client == nil || client.BaseURL == nil {
 		return result, nil
 	}
-	atlassianResult, err := collector.collectAtlassianTeams(ctx, ref, credential, client, selections, normalizedAt, organizationID)
+	atlassianResult, err := collector.collectAtlassianTeams(ctx, ref, credential, client, selections, normalizedAt)
 	if err != nil {
 		if ref.Strict {
 			return result, err
@@ -126,7 +147,6 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	client *providerfoundation.HTTPClient,
 	selections providersync.TeamCatalogSelections,
 	normalizedAt time.Time,
-	organizationID string,
 ) (atlassianteams.Result, error) {
 	if collector.Conn == nil {
 		return atlassianteams.Result{}, providersync.ErrInvalidConfiguration
@@ -157,7 +177,21 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	if !email.Configured() || token == "" {
 		return atlassianteams.Result{}, providersync.ErrInvalidConfiguration
 	}
-	gatewayClient := collector.newClient(tenant.String()+"/gateway/api", atlassian.BasicAPITokenAuth{Email: email.Reveal(), Token: token})
+	gatewayURL := tenant.String() + "/gateway/api"
+	auth := atlassian.BasicAPITokenAuth{Email: email.Reveal(), Token: token}
+
+	// atlassian_organization_id is an OVERRIDE only (D2817/CHAOS-7020):
+	// when the resolved credential's config doesn't carry one, derive it
+	// live via the AGG tenantContexts query using this same credential --
+	// no manual config step is required.
+	organizationID := strings.TrimSpace(credential.Config["atlassian_organization_id"])
+	if organizationID == "" {
+		organizationID, err = atlassianteams.ResolveOrganizationID(ctx, collector.newOrganizationResolver(gatewayURL, auth), cloudID)
+		if err != nil {
+			return atlassianteams.Result{}, err
+		}
+	}
+	gatewayClient := collector.newClient(gatewayURL, auth)
 	atlassianSelections := atlassianteams.Selections{
 		Structure: selections.Teams, Members: selections.Members, Projects: selections.Projects,
 	}

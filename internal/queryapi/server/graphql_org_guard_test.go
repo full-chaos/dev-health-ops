@@ -27,20 +27,23 @@ func TestGraphQLServerRefusesAQueryNamingAnotherOrg(t *testing.T) {
 		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-own"}))
 		rec := httptest.NewRecorder()
 		server.ServeHTTP(rec, req)
-		var out struct {
-			Data   json.RawMessage `json:"data"`
-			Errors []struct {
-				Message string `json:"message"`
-			} `json:"errors"`
-		}
+		var out map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 			t.Fatalf("response %q: %v", rec.Body.String(), err)
 		}
 		var messages []string
-		for _, e := range out.Errors {
-			messages = append(messages, e.Message)
+		if errs, ok := out["errors"].([]any); ok {
+			for _, e := range errs {
+				entry, _ := e.(map[string]any)
+				if len(entry) != 1 {
+					t.Errorf("orgId %q: wire error %v carries more than a message (Python's refusal is the message alone)", orgID, entry)
+				}
+				message, _ := entry["message"].(string)
+				messages = append(messages, message)
+			}
 		}
-		return rec.Code, messages, string(out.Data)
+		data, _ := json.Marshal(out["data"])
+		return rec.Code, messages, string(data)
 	}
 	for orgID, want := range map[string]string{
 		"org-other": "Access denied: cannot query org 'org-other'",

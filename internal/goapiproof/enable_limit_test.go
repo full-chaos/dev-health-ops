@@ -39,6 +39,7 @@ func TestCompiledLedgerAdmitsExactlyTheDeclaredUnprovableOperations(t *testing.T
 		"mappingCoverageHealth",
 		"metricLineage",
 		"productTelemetryPlatformDashboard",
+		"recommendations",
 		"reportRuns",
 		"savedReport",
 		"savedReports",
@@ -48,6 +49,7 @@ func TestCompiledLedgerAdmitsExactlyTheDeclaredUnprovableOperations(t *testing.T
 		"workGraphArtifacts",
 		"workGraphEdges",
 		"workGraphFlow",
+		"workItemTeamAttributions",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("operations the compiled ledger lets enable write with no proof run:\n got %v\nwant %v", got, want)

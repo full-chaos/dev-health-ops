@@ -1506,3 +1506,35 @@ func TestEnableAbortsOnAGenuineBeforeStateReadFailure(t *testing.T) {
 		t.Fatalf("Enable's error did not name the operation: %v", err)
 	}
 }
+
+// The prod question, executed (CHAOS-7186): on production /query/proof is not
+// mounted, so an operation seeded in shadow has NO deployed_executed receipt.
+// With the COMPILED ledger (request.Ledger left nil) `enable` must still admit
+// recommendations, workItemTeamAttributions and home to canary with no receipt
+// at all, each through its written limit -- and write exactly those rows.
+func TestEnableAdmitsTheRev199ReadOperationsOnTheCompiledLedgerAlone(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	operations := []string{"home", "recommendations", "workItemTeamAttributions"}
+
+	request := enableRequest(operations...)
+	outcomes, err := Enable(ctx, pool, request)
+	if err != nil {
+		t.Fatalf("Enable with no receipt and the compiled ledger = %v, want the written limits to admit all of %v", err, operations)
+	}
+	if len(outcomes) != len(operations) {
+		t.Fatalf("outcomes = %d, want %d", len(outcomes), len(operations))
+	}
+	for _, outcome := range outcomes {
+		if outcome.Proven || outcome.NamedLimit == "" || outcome.Mode != "canary" {
+			t.Fatalf("%s: outcome = %+v, want a named-limit (unproven) canary row", outcome.Operation, outcome)
+		}
+	}
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state WHERE mode = 'canary' AND selected_operation = ANY($1)`, operations).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != len(operations) {
+		t.Fatalf("canary rows = %d, want %d", rows, len(operations))
+	}
+}

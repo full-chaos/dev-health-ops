@@ -35,6 +35,8 @@ func TestOperationOrgViolationOverItsInputDomain(t *testing.T) {
 	queryNested := `query Q($orgId: String) { doIt(orgId: $orgId) { inner(orgId: "other") } }`
 	queryTwo := `query Q($orgId: String!, $x: String) { a: doIt(orgId: $orgId) b: doIt(org_id: $x) }`
 	claims := authctx.Claims{OrgID: own}
+	superuser := authctx.Claims{OrgID: own, IsSuperuser: true}
+	impersonating := authctx.Claims{OrgID: own, IsSuperuser: true, ImpersonationActive: true}
 	for _, tc := range []struct {
 		name      string
 		document  string
@@ -64,6 +66,10 @@ func TestOperationOrgViolationOverItsInputDomain(t *testing.T) {
 		{"query: two different orgs", queryTwo, map[string]any{"orgId": own, "x": "org-other"}, &claims, "Only one organization may be queried per operation"},
 		{"query: nested field argument", queryNested, map[string]any{"orgId": own}, &claims, "Only one organization may be queried per operation"},
 		{"query: no identity", querySingle, map[string]any{"orgId": own}, nil, "Authorization required"},
+		{"superuser naming another org", single, map[string]any{"orgId": "org-other"}, &superuser, ""},
+		{"superuser with an empty orgId", single, map[string]any{"orgId": ""}, &superuser, "A valid organization ID is required"},
+		{"superuser naming two orgs", byVariable, map[string]any{"orgId": own, "x": "org-other"}, &superuser, "Only one organization may be queried per operation"},
+		{"impersonating superuser naming another org", single, map[string]any{"orgId": "org-other"}, &impersonating, "Access denied: cannot query org 'org-other'"},
 		{"no identity", single, map[string]any{"orgId": own}, nil, "Authorization required"},
 		{"identity without an org", single, map[string]any{"orgId": own}, &authctx.Claims{}, "Authorization required"},
 	} {
@@ -113,5 +119,41 @@ func TestOperationOrgGuardCoversEveryOrgIDField(t *testing.T) {
 	}
 	if covered < 30 {
 		t.Fatalf("only %d org-scoped fields found in the schema; the sweep is not reading it", covered)
+	}
+}
+
+// A verified, non-impersonating superuser naming another org runs the whole
+// operation against that org (Python rebinds the context org); anyone else runs
+// against their own.
+func TestOperationOrgGuardRunsTheOperationAgainstTheNamedOrgForASuperuser(t *testing.T) {
+	t.Parallel()
+	operation := guardOperation(t, `query Q($orgId: String) { doIt(orgId: $orgId) }`, map[string]any{"orgId": "org-other"})
+	run := func(claims authctx.Claims) (org string, ran bool) {
+		ctx := graphql.WithOperationContext(authctx.WithClaims(context.Background(), claims), operation)
+		handler := OperationOrgGuard{}.InterceptOperation(ctx, func(inner context.Context) graphql.ResponseHandler {
+			ran = true
+			seen, _ := authctx.FromContext(inner)
+			org = seen.OrgID
+			return func(context.Context) *graphql.Response { return &graphql.Response{} }
+		})
+		handler(ctx)
+		return org, ran
+	}
+	if org, ran := run(authctx.Claims{OrgID: "org-own", IsSuperuser: true}); !ran || org != "org-other" {
+		t.Errorf("superuser: ran=%v org=%q, want the operation to run as org-other", ran, org)
+	}
+	if _, ran := run(authctx.Claims{OrgID: "org-own"}); ran {
+		t.Error("an ordinary caller naming another org must not run the operation")
+	}
+	own := guardOperation(t, `query Q($orgId: String) { doIt(orgId: $orgId) }`, map[string]any{"orgId": "org-own"})
+	ctx := graphql.WithOperationContext(authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-own", IsSuperuser: true}), own)
+	var seenOrg string
+	OperationOrgGuard{}.InterceptOperation(ctx, func(inner context.Context) graphql.ResponseHandler {
+		seen, _ := authctx.FromContext(inner)
+		seenOrg = seen.OrgID
+		return func(context.Context) *graphql.Response { return &graphql.Response{} }
+	})(ctx)
+	if seenOrg != "org-own" {
+		t.Errorf("superuser naming their own org: ran as %q, want org-own", seenOrg)
 	}
 }

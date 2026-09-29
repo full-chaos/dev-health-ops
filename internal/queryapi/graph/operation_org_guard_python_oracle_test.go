@@ -9,8 +9,6 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/99designs/gqlgen/graphql"
-
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
@@ -35,29 +33,45 @@ class Inner:
 @strawberry.type
 class Query:
     @strawberry.field
-    def do_it(self, org_id: str | None = None) -> Inner:
-        ran.append("doIt")
+    def do_it(self, info: strawberry.Info, org_id: str | None = None) -> Inner:
+        ran.append(info.context.org_id)
         return Inner()
 
 @strawberry.type
 class Mutation:
     @strawberry.mutation
-    def write(self, org_id: str | None = None) -> int:
-        ran.append("write")
+    def write(self, info: strawberry.Info, org_id: str | None = None) -> int:
+        ran.append(info.context.org_id)
         return 1
 
 schema = strawberry.Schema(query=Query, mutation=Mutation, extensions=[OrgIdAuthExtension])
 
-def make_context():
+def make_context(caller):
     return types.SimpleNamespace(
         org_id="org-own",
-        user=types.SimpleNamespace(is_superuser=False, is_superuser_verified=False),
+        user=types.SimpleNamespace(
+            is_superuser=caller["superuser"], is_superuser_verified=caller["superuser"] and caller["verified"]
+        ),
     )
 
 async def run(case):
+    from dev_health_ops.api.services.auth import _impersonation_ctx, set_impersonation_context
     del ran[:]
-    result = await schema.execute(case["document"], variable_values=case["variables"], context_value=make_context())
-    return {"errors": [e.message for e in (result.errors or [])], "resolverRan": bool(ran)}
+    caller = case["caller"]
+    token = None
+    if caller["impersonating"]:
+        token = set_impersonation_context("target-user", "org-own", "member", "real-user")
+    try:
+        result = await schema.execute(case["document"], variable_values=case["variables"], context_value=make_context(caller))
+    finally:
+        if token is not None:
+            _impersonation_ctx.reset(token)
+    return {
+        "errors": [e.message for e in (result.errors or [])],
+        "formatted": [e.formatted for e in (result.errors or [])],
+        "resolverRan": bool(ran),
+        "seenOrg": ran[0] if ran else "",
+    }
 
 async def main():
     cases = json.loads(sys.stdin.read())
@@ -91,25 +105,48 @@ func TestOperationOrgViolationMatchesLivePythonExtension(t *testing.T) {
 		"own": own, "other": "org-other", "empty": "", "left pad": " " + own, "right pad": own + "\n",
 		"tab": "\t" + own, "number": 7, "null": nil,
 	}
+	type caller struct {
+		Superuser     bool `json:"superuser"`
+		Verified      bool `json:"verified"`
+		Impersonating bool `json:"impersonating"`
+	}
 	type oracleCase struct {
 		Label     string         `json:"label"`
 		Document  string         `json:"document"`
 		Variables map[string]any `json:"variables"`
+		Caller    caller         `json:"caller"`
+	}
+	callers := map[string]caller{
+		"ordinary":                 {},
+		"verified superuser":       {Superuser: true, Verified: true},
+		"unverified superuser":     {Superuser: true},
+		"impersonating superuser":  {Superuser: true, Verified: true, Impersonating: true},
+		"impersonating unverified": {Superuser: true, Impersonating: true},
 	}
 	var cases []oracleCase
-	for docName, document := range docs {
-		if docName == "query literal" || docName == "query no org" || docName == "mutation nested" {
-			cases = append(cases, oracleCase{docName, document, map[string]any{}})
-			continue
-		}
-		for valueName, value := range values {
-			variables := map[string]any{"orgId": value}
-			if docName == "query two" {
-				variables["x"] = "org-other"
+	for callerName, who := range callers {
+		for docName, document := range docs {
+			if callerName != "ordinary" && docName != "query" && docName != "mutation" && docName != "query two" && docName != "query nested" {
+				continue
 			}
-			cases = append(cases, oracleCase{docName + "/" + valueName, document, variables})
+			if docName == "query literal" || docName == "query no org" || docName == "mutation nested" {
+				cases = append(cases, oracleCase{callerName + "/" + docName, document, map[string]any{}, who})
+				continue
+			}
+			for valueName, value := range values {
+				if callerName != "ordinary" && valueName != "own" && valueName != "other" && valueName != "empty" {
+					continue
+				}
+				variables := map[string]any{"orgId": value}
+				if docName == "query two" {
+					variables["x"] = "org-other"
+				}
+				cases = append(cases, oracleCase{callerName + "/" + docName + "/" + valueName, document, variables, who})
+			}
+			if callerName == "ordinary" {
+				cases = append(cases, oracleCase{callerName + "/" + docName + "/absent", document, map[string]any{}, who})
+			}
 		}
-		cases = append(cases, oracleCase{docName + "/absent", document, map[string]any{}})
 	}
 
 	payload, err := json.Marshal(cases)
@@ -124,8 +161,10 @@ func TestOperationOrgViolationMatchesLivePythonExtension(t *testing.T) {
 		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
 	}
 	var results []struct {
-		Errors      []string `json:"errors"`
-		ResolverRan bool     `json:"resolverRan"`
+		Errors      []string         `json:"errors"`
+		Formatted   []map[string]any `json:"formatted"`
+		ResolverRan bool             `json:"resolverRan"`
+		SeenOrg     string           `json:"seenOrg"`
 	}
 	for _, line := range bytes.Split(output, []byte("\n")) {
 		if rest, ok := bytes.CutPrefix(line, []byte("RESULT ")); ok {
@@ -138,31 +177,39 @@ func TestOperationOrgViolationMatchesLivePythonExtension(t *testing.T) {
 		t.Fatalf("python answered %d of %d cases", len(results), len(cases))
 	}
 
-	claims := authctx.WithClaims(t.Context(), authctx.Claims{OrgID: own})
-	refused, allowed := 0, 0
+	refused, allowed, rebound := 0, 0, 0
 	for i, c := range cases {
-		var operation *graphql.OperationContext = guardOperation(t, c.Document, c.Variables)
-		got := operationOrgViolation(claims, operation)
+		claims := authctx.WithClaims(t.Context(), authctx.Claims{
+			OrgID: own, IsSuperuser: c.Caller.Superuser && c.Caller.Verified, ImpersonationActive: c.Caller.Impersonating,
+		})
+		got, rebindTo := operationOrgDecision(claims, guardOperation(t, c.Document, c.Variables))
 		py := results[i]
 		switch {
 		case len(py.Errors) == 0:
 			allowed++
-			if got != "" || !py.ResolverRan {
-				t.Errorf("%s: python ran the operation (errors none, resolver ran %v); Go guard answered %q", c.Label, py.ResolverRan, got)
+			effective := own
+			if rebindTo != "" {
+				effective = rebindTo
+				rebound++
+			}
+			if got != "" || !py.ResolverRan || py.SeenOrg != effective {
+				t.Errorf("%s: python ran the operation as org %q (resolver ran %v); Go guard answered %q, runs as %q", c.Label, py.SeenOrg, py.ResolverRan, got, effective)
 			}
 		case len(py.Errors) == 1:
 			refused++
-			if got != py.Errors[0] || py.ResolverRan {
-				t.Errorf("%s: python refused with %q (resolver ran %v); Go guard answered %q", c.Label, py.Errors[0], py.ResolverRan, got)
+			// The wire error is the message alone: Python's extension refusal
+			// carries no extensions.code, and neither does Go's.
+			if got != py.Errors[0] || py.ResolverRan || len(py.Formatted) != 1 || len(py.Formatted[0]) != 1 || py.Formatted[0]["message"] != got {
+				t.Errorf("%s: python refused with %v (resolver ran %v); Go guard answered %q", c.Label, py.Formatted, py.ResolverRan, got)
 			}
 		default:
 			t.Errorf("%s: python answered %d errors %v", c.Label, len(py.Errors), py.Errors)
 		}
 	}
-	if refused == 0 || allowed == 0 {
-		t.Fatalf("one-sided comparison: %d refused, %d allowed", refused, allowed)
+	if refused == 0 || allowed == 0 || rebound == 0 {
+		t.Fatalf("one-sided comparison: %d refused, %d allowed, %d rebound", refused, allowed, rebound)
 	}
-	t.Logf("%d cases match the live OrgIdAuthExtension: %d refused, %d allowed", len(cases), refused, allowed)
+	t.Logf("%d cases match the live OrgIdAuthExtension: %d refused, %d allowed (%d of them as the named org)", len(cases), refused, allowed, rebound)
 	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" && !t.Failed() {
 		if err := os.WriteFile(filepath.Join(proof, "query-api-org-guard"), []byte("executed"), 0o600); err != nil {
 			t.Fatal(err)

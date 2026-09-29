@@ -26,10 +26,12 @@ import (
 // read. An organization id carried inside an input object (for example
 // `input: { orgId }`) is not seen here, in Python or in Go.
 //
-// Named divergence: Python lets a verified, non-impersonating superuser name
-// another organization. The identity query-api verifies carries no "verified"
-// flag for a superuser, so the guard refuses that case where Python allows it:
-// the safe direction.
+// A verified, non-impersonating superuser may name another org, as in Python
+// (`(not is_superuser or is_impersonating) and requested != original` is the
+// refusal there): the operation is then run against the named org, which the
+// guard does by carrying it in the request's claims. Claims.IsSuperuser is
+// copied from the verified envelope only, so it is Python's verified
+// superuser. An impersonating superuser is refused like anyone else.
 type OperationOrgGuard struct{}
 
 var _ interface {
@@ -46,16 +48,32 @@ func (OperationOrgGuard) InterceptOperation(ctx context.Context, next graphql.Op
 	if operation == nil || operation.Operation == nil {
 		return next(ctx)
 	}
-	if message := operationOrgViolation(ctx, operation); message != "" {
+	message, rebindTo := operationOrgDecision(ctx, operation)
+	if message != "" {
 		return func(context.Context) *graphql.Response {
 			return &graphql.Response{Errors: gqlerror.List{{Message: message}}}
 		}
+	}
+	if rebindTo != "" {
+		// A verified, non-impersonating superuser named another org: as in
+		// Python, every field of this operation runs against that org.
+		claims, _ := authctx.FromContext(ctx)
+		claims.OrgID = rebindTo
+		ctx = authctx.WithClaims(ctx, claims)
 	}
 	return next(ctx)
 }
 
 // operationOrgViolation is the refusal message for the operation, or "".
 func operationOrgViolation(ctx context.Context, operation *graphql.OperationContext) string {
+	message, _ := operationOrgDecision(ctx, operation)
+	return message
+}
+
+// operationOrgDecision is the guard's whole decision: the refusal message ("" when
+// the operation may run) and, when a verified, non-impersonating superuser named
+// an org other than their own, that org (the operation then runs against it).
+func operationOrgDecision(ctx context.Context, operation *graphql.OperationContext) (message, rebindTo string) {
 	var requested []string
 	invalid := false
 	visited := map[string]bool{}
@@ -91,25 +109,28 @@ func operationOrgViolation(ctx context.Context, operation *graphql.OperationCont
 	}
 	collect(operation.Operation.SelectionSet)
 	if invalid {
-		return "A valid organization ID is required"
+		return "A valid organization ID is required", ""
 	}
 	if len(requested) == 0 {
-		return ""
+		return "", ""
 	}
 	first := requested[0]
 	for _, other := range requested[1:] {
 		if other != first {
-			return "Only one organization may be queried per operation"
+			return "Only one organization may be queried per operation", ""
 		}
 	}
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
-		return "Authorization required"
+		return "Authorization required", ""
 	}
-	if claims.OrgID != first {
-		return "Access denied: cannot query org '" + first + "'"
+	if claims.OrgID == first {
+		return "", ""
 	}
-	return ""
+	if claims.IsSuperuser && !claims.ImpersonationActive {
+		return "", first
+	}
+	return "Access denied: cannot query org '" + first + "'", ""
 }
 
 // orgArgumentValue is the string an orgId argument carries: a string literal,

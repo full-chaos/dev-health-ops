@@ -130,3 +130,48 @@ def test_the_metrics_comment_no_longer_points_the_scrape_at_the_public_port() ->
     text = (_CHART / "templates" / "query-api-deployment.yaml").read_text()
     assert "Scrape via `http`" not in text
     assert "listener only (queryApi.internal.enabled)" in text
+
+
+_TOOLS_POD_SELECTOR = '[{"matchLabels":{"run":"dev-health-go-api-tools-oneoff"}}]'
+
+
+def test_the_documented_tools_pod_selector_renders_as_an_extra_source() -> None:
+    """The bootstrap runbook tells the operator to admit the tools pod (which runs
+    `dho goapi prove-write`) with this exact value; the default policy does not admit it."""
+    runbook = (
+        Path(__file__).resolve().parents[2]
+        / "docs"
+        / "operate"
+        / "runbooks"
+        / "query-api-bootstrap.md"
+    ).read_text()
+    assert f"queryApi.internal.allowedFrom={_TOOLS_POD_SELECTOR}" in runbook
+
+    default = _named(
+        _docs("queryApi.internal.enabled=true"),
+        "NetworkPolicy",
+        f"{_FULLNAME}-query-api-internal",
+    )
+    tools = {"podSelector": {"matchLabels": {"run": "dev-health-go-api-tools-oneoff"}}}
+    assert tools not in default["spec"]["ingress"][1]["from"]
+
+    completed = subprocess.run(
+        [
+            "helm",
+            "template",
+            _RELEASE,
+            str(_CHART),
+            "--set",
+            "queryApi.enabled=true",
+            "--set",
+            "queryApi.internal.enabled=true",
+            "--set-json",
+            f"queryApi.internal.allowedFrom={_TOOLS_POD_SELECTOR}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    docs = [d for d in yaml.safe_load_all(completed.stdout) if d]
+    policy = _named(docs, "NetworkPolicy", f"{_FULLNAME}-query-api-internal")
+    assert tools in policy["spec"]["ingress"][1]["from"], policy["spec"]["ingress"]

@@ -190,11 +190,26 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 		out, err := exec.Command("helm", args...).CombinedOutput()
 		return string(out), err
 	}
-	// use-regex annotation with a go-api route.
-	if out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
-		"--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/use-regex=true`,
-		"--set-json", `ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`).CombinedOutput(); err == nil || !strings.Contains(string(out), "use-regex is true") {
-		t.Errorf("use-regex with a go-api route must fail the render: err=%v\n%s", err, out)
+	// rewrite/regex/snippet-class annotations with a go-api route.
+	for _, ann := range []string{"use-regex", "rewrite-target", "app-root", "configuration-snippet", "server-snippet", "permanent-redirect", "temporal-redirect"} {
+		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
+			"--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/`+ann+`=/$1`,
+			"--set-json", `ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "ingress.annotations "+ann+" on an Ingress that routes to go-api") {
+			t.Errorf("%s with a go-api route must fail the render: err=%v\n%s", ann, err, out)
+		}
+	}
+	// A referenced backend Service must exist.
+	for name, args := range map[string][]string{
+		"goApi disabled": {"--set", "goApi.enabled=false"},
+		"api disabled":   {"--set", "goApi.enabled=true", "--set", "api.enabled=false"},
+	} {
+		full := append([]string{"template", "b", ".", "--set", "ingress.enabled=true", "--set-json",
+			`ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`}, args...)
+		out, err := exec.Command("helm", full...).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "enabled is false") {
+			t.Errorf("%s: a route to a disabled Service must fail the render: err=%v\n%s", name, err, out)
+		}
 	}
 	catchAll := `[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
 	if out, err := render(catchAll, ""); err != nil {

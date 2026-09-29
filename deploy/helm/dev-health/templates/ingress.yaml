@@ -43,8 +43,13 @@ spec:
           {{- if and (eq .service "go-api") (or (not (regexMatch "^/[A-Za-z0-9_/-]*$" .path)) (not (has .pathType (list "Prefix" "Exact")))) }}
           {{- fail (printf "ingress.hosts %q path %q pathType %q routes to go-api: only literal Prefix/Exact paths may (a regex path can out-match the Python allow-list and expose /api/v1/internal/acr/*)" $host.host .path .pathType) }}
           {{- end }}
-          {{- if and (eq .service "go-api") (eq (toString (get (default (dict) $.Values.ingress.annotations) "nginx.ingress.kubernetes.io/use-regex")) "true") }}
-          {{- fail "ingress.annotations use-regex is true on an Ingress that routes to go-api: every path becomes a regex and the allow-list precedence is no longer segment-exact" }}
+          {{- if eq .service "go-api" }}
+          {{- if not $.Values.goApi.enabled }}{{- fail (printf "ingress.hosts %q routes to go-api but goApi.enabled is false (the Service would not exist)" $host.host) }}{{- end }}
+          {{- range $ann := list "use-regex" "rewrite-target" "app-root" "configuration-snippet" "server-snippet" "permanent-redirect" "temporal-redirect" }}
+          {{- if hasKey (default (dict) $.Values.ingress.annotations) (printf "nginx.ingress.kubernetes.io/%s" $ann) }}
+          {{- fail (printf "ingress.annotations %s on an Ingress that routes to go-api: a rewrite/regex/snippet-class annotation can map a public path onto /api/v1/internal/* or change how paths match, so the allow-list precedence no longer holds" $ann) }}
+          {{- end }}
+          {{- end }}
           {{- end }}
           {{- if and (eq .service "go-api") (regexMatch "^/api(/v1(/internal.*)?)?/?$" .path) }}
           {{- fail (printf "ingress.hosts %q path %q routes to go-api but covers /api/v1/internal (the Go api serves /api/v1/internal/acr/* with no credential check)" $host.host .path) }}
@@ -70,6 +75,7 @@ spec:
                 {{- end }}
           {{- end }}
           {{- if $host.pythonAllowList }}
+          {{- if not $.Values.api.enabled }}{{- fail (printf "ingress.hosts %q pythonAllowList routes to the Python api but api.enabled is false (the Service would not exist)" $host.host) }}{{- end }}
           {{- $coversInternal := false }}
           {{- range $.Values.ingress.pythonAllowList }}
           {{- if and (eq .pathType "Prefix") (has (trimSuffix "/" .path) (list "" "/api" "/api/v1" "/api/v1/internal")) }}{{- $coversInternal = true }}{{- end }}

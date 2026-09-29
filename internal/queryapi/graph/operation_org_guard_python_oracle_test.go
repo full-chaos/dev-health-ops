@@ -2,12 +2,15 @@ package graph
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/99designs/gqlgen/graphql"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
@@ -182,7 +185,29 @@ func TestOperationOrgViolationMatchesLivePythonExtension(t *testing.T) {
 		claims := authctx.WithClaims(t.Context(), authctx.Claims{
 			OrgID: own, IsSuperuser: c.Caller.Superuser && c.Caller.Verified, ImpersonationActive: c.Caller.Impersonating,
 		})
-		got, rebindTo := operationOrgDecision(claims, guardOperation(t, c.Document, c.Variables))
+		// Drive the real interceptor: the response it answers with, and the org
+		// its next handler (the resolvers) would run as.
+		operation := guardOperation(t, c.Document, c.Variables)
+		ctx := graphql.WithOperationContext(claims, operation)
+		ran, effective := false, ""
+		handler := OperationOrgGuard{}.InterceptOperation(ctx, func(inner context.Context) graphql.ResponseHandler {
+			ran = true
+			seen, _ := authctx.FromContext(inner)
+			effective = seen.OrgID
+			return func(context.Context) *graphql.Response { return &graphql.Response{} }
+		})
+		response := handler(ctx)
+		got := ""
+		if !ran && len(response.Errors) == 1 {
+			got = response.Errors[0].Message
+			if response.Errors[0].Extensions != nil || response.Errors[0].Path != nil || response.Data != nil {
+				t.Errorf("%s: Go refusal is not message-only: %+v", c.Label, response)
+			}
+		}
+		rebindTo := ""
+		if ran && effective != own {
+			rebindTo = effective
+		}
 		py := results[i]
 		switch {
 		case len(py.Errors) == 0:

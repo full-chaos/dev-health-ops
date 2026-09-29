@@ -23,13 +23,15 @@ import (
 	"sort"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // SeedMode is the only mode `seed` writes.
 const SeedMode = "shadow"
 
-// Seed actions, one per operation.
+// Seed actions, one per operation. would-create is a dry run, or a created
+// row that was rolled back because another operation in the run was refused.
 const (
 	SeedActionCreated        = "created"
 	SeedActionAlreadyPresent = "already-present"
@@ -68,6 +70,8 @@ type SeedOutcome struct {
 	// Reason is set on a refusal, and on already-present (which mode/digest
 	// was found).
 	Reason string
+	// CorrelationID ties every row this run created to its audit rows.
+	CorrelationID string
 }
 
 const seedLockedRowsSQL = `
@@ -140,10 +144,16 @@ func (r SeedRequest) validate() error {
 	return nil
 }
 
-// Seed creates the first shadow row for each named operation, one
-// transaction per operation. It returns a non-nil error wrapping
-// ErrSeedRefused if any operation was refused; outcomes are always
-// returned.
+// SeedEvidencePrefix opens review_evidence on every row and audit entry seed
+// writes, so a reader of either table can tell a seeded row from an enabled one
+// (the audit action vocabulary admits only enable|disable|repoint).
+const SeedEvidencePrefix = "seed: "
+
+// Seed creates the first shadow row for each named operation in ONE
+// transaction: if any operation is refused, nothing is written for any of them
+// (a half-applied batch is a state an operator cannot describe). It returns a
+// non-nil error wrapping ErrSeedRefused if any operation was refused; outcomes
+// are always returned, and after a refusal none of them was written.
 func Seed(ctx context.Context, pool *pgxpool.Pool, request SeedRequest) ([]SeedOutcome, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("%w: nil pool", ErrSeedRequestRefused)
@@ -153,20 +163,66 @@ func Seed(ctx context.Context, pool *pgxpool.Pool, request SeedRequest) ([]SeedO
 	}
 	operations := append([]string(nil), request.Operations...)
 	sort.Strings(operations)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("goapiproof: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	now := time.Now().UTC()
+	evidence := SeedEvidencePrefix + request.ReviewEvidence
 	outcomes := make([]SeedOutcome, 0, len(operations))
+	var entries []RoutingAuditEntry
 	refused := 0
 	for _, operation := range operations {
-		outcome, err := seedOne(ctx, pool, request, operation)
+		outcome, err := seedOne(ctx, tx, request, evidence, operation, now)
 		if err != nil {
 			return outcomes, err
 		}
-		if outcome.Action == SeedActionRefused {
+		switch outcome.Action {
+		case SeedActionRefused:
 			refused++
+		case SeedActionCreated:
+			entries = append(entries, RoutingAuditEntry{
+				DocumentDigest:      outcome.DocumentDigest,
+				Operation:           operation,
+				CandidateBuildAfter: request.RunningBuild,
+				ModeAfter:           SeedMode,
+			})
 		}
 		outcomes = append(outcomes, outcome)
 	}
 	if refused > 0 {
-		return outcomes, fmt.Errorf("%w: %d of %d operation(s) refused", ErrSeedRefused, refused, len(outcomes))
+		for i := range outcomes {
+			if outcomes[i].Action == SeedActionCreated {
+				outcomes[i].Action = SeedActionWouldCreate
+				outcomes[i].Reason = "not written: another operation in this run was refused"
+			}
+		}
+		return outcomes, fmt.Errorf("%w: %d of %d operation(s) refused; nothing was written", ErrSeedRefused, refused, len(outcomes))
+	}
+	if len(entries) == 0 || request.DryRun {
+		return outcomes, nil
+	}
+	correlationID, err := writeRoutingAudit(ctx, tx, RoutingAudit{
+		Action:          AuditActionEnable,
+		CredentialClass: CredentialClassEnvelope,
+		PrincipalID:     request.PrincipalID,
+		RecordedBy:      request.RecordedBy,
+		ReviewEvidence:  evidence,
+		SchemaDigest:    request.SchemaDigest,
+		Entries:         entries,
+	}, now)
+	if err != nil {
+		return outcomes, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return outcomes, fmt.Errorf("goapiproof: commit: %w", err)
+	}
+	for i := range outcomes {
+		if outcomes[i].Action == SeedActionCreated {
+			outcomes[i].CorrelationID = correlationID
+		}
 	}
 	return outcomes, nil
 }
@@ -204,14 +260,8 @@ func classifySeed(rows []seedStateRow, request SeedRequest, operation, documentD
 	return outcome, true
 }
 
-func seedOne(ctx context.Context, pool *pgxpool.Pool, request SeedRequest, operation string) (SeedOutcome, error) {
+func seedOne(ctx context.Context, tx pgx.Tx, request SeedRequest, evidence, operation string, now time.Time) (SeedOutcome, error) {
 	documentDigest := request.DocumentDigest[operation]
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return SeedOutcome{}, fmt.Errorf("goapiproof: begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
 	read := func() ([]seedStateRow, error) {
 		rs, err := tx.Query(ctx, seedLockedRowsSQL, operation)
 		if err != nil {
@@ -239,8 +289,6 @@ func seedOne(ctx context.Context, pool *pgxpool.Pool, request SeedRequest, opera
 	if request.DryRun {
 		return SeedOutcome{Operation: operation, DocumentDigest: documentDigest, Action: SeedActionWouldCreate}, nil
 	}
-
-	now := time.Now().UTC()
 	// Candidate build first: the routing row's 4-column foreign key makes it
 	// mandatory, and it is the lock order every writer in this package uses.
 	if _, err := tx.Exec(ctx, registerCandidateBuildSQL,
@@ -249,7 +297,7 @@ func seedOne(ctx context.Context, pool *pgxpool.Pool, request SeedRequest, opera
 	}
 	tag, err := tx.Exec(ctx, seedInsertRoutingStateSQL,
 		request.SchemaDigest, documentDigest, operation, request.RunningBuild,
-		request.ReviewEvidence, request.RecordedBy, now)
+		evidence, request.RecordedBy, now)
 	if err != nil {
 		return SeedOutcome{}, fmt.Errorf("goapiproof: seed %s: %w", operation, err)
 	}
@@ -264,28 +312,6 @@ func seedOne(ctx context.Context, pool *pgxpool.Pool, request SeedRequest, opera
 			return outcome, nil
 		}
 		return SeedOutcome{}, fmt.Errorf("goapiproof: seed %s inserted 0 rows and no row is readable", operation)
-	}
-	{
-		audit := RoutingAudit{
-			Action:          AuditActionEnable,
-			CredentialClass: CredentialClassEnvelope,
-			PrincipalID:     request.PrincipalID,
-			RecordedBy:      request.RecordedBy,
-			ReviewEvidence:  request.ReviewEvidence,
-			SchemaDigest:    request.SchemaDigest,
-			Entries: []RoutingAuditEntry{{
-				DocumentDigest:      documentDigest,
-				Operation:           operation,
-				CandidateBuildAfter: request.RunningBuild,
-				ModeAfter:           SeedMode,
-			}},
-		}
-		if _, err := writeRoutingAudit(ctx, tx, audit, now); err != nil {
-			return SeedOutcome{}, err
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return SeedOutcome{}, fmt.Errorf("goapiproof: commit: %w", err)
 	}
 	return SeedOutcome{Operation: operation, DocumentDigest: documentDigest, Action: SeedActionCreated}, nil
 }

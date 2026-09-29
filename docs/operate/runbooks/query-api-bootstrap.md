@@ -132,7 +132,7 @@ dho goapi routing seed -operations home,recommendations \
 dho goapi routing seed -all-unrouted -recorded-by <operator> -review-evidence "<why>"
 ```
 
-Per operation it prints `created`, `already-present` (a shadow row is already at the running digest; zero writes) or `refused` (exit 2, nothing written for that operation): a row at the running digest in any other mode, or a row only at an older schema digest (run `routing carry`). A schema digest mismatch, an operation the running query-api does not register, or a catalog digest divergence refuses the whole run before any write. It needs only Postgres, `/registry` and `/buildinfo`; it does not need the internal listener or the proof allowlist.
+Per operation it prints `created`, `already-present` (a shadow row is already at the running digest; zero writes) or `refused` (exit 2): a row at the running digest in any other mode, or a row only at an older schema digest (run `routing carry`). One refused operation refuses the whole run: nothing is written for any operation. Every created row and its audit row carry a `seed: ` evidence prefix, and one run shares one audit correlation id (printed in the `go_api_routing.seeded` event). A schema digest mismatch, an operation the running query-api does not register, or a catalog digest divergence refuses the whole run before any write. It needs only Postgres, `/registry` and `/buildinfo`; it does not need the internal listener or the proof allowlist.
 
 **Shadow set (3 ops) intentionally NOT seeded** — enabling known-mismatch operations as canary first is a stop condition. Canary operations route to the real query-api against the baseline API. Real proof compares both planes; shadow refused-by-name (expected on prod) is never compared.
 

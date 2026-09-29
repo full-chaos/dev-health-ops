@@ -118,7 +118,7 @@ func TestSeedCreatesExactlyOneShadowRowAndASecondRunChangesNothing(t *testing.T)
 		t.Fatalf("output must say created: %s", out)
 	}
 	rows := readSeedRows(t, pool)
-	want := seededRow{localSchemaDigest(), seedDigA, seedOpA, verbTestBuild, "go", "shadow", "CHAOS-7165 seed fixture", "lane-seed-test", 0}
+	want := seededRow{localSchemaDigest(), seedDigA, seedOpA, verbTestBuild, "go", "shadow", "seed: CHAOS-7165 seed fixture", "lane-seed-test", 0}
 	if len(rows) != 1 || rows[0] != (seededRow{schema: want.schema, doc: want.doc, op: want.op, build: want.build, owner: "go", mode: "shadow", evidence: want.evidence, by: want.by, rollout: 0}) {
 		t.Fatalf("want exactly one shadow row %+v, got %+v", want, rows)
 	}
@@ -268,29 +268,73 @@ func TestSeedAllUnroutedSeedsExactlyTheOperationsWithNoRowAtAnyDigest(t *testing
 func TestSeedNeedsExactlyOneOfOperationsOrAllUnrouted(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	for name, extra := range map[string][]string{"neither": nil, "both": {"-operations", seedOpA, "-all-unrouted"}} {
-		if _, _, err := captureVerb(t, seedCmd("http://127.0.0.1:1", dsn, writeCatalog(t, seedDigests()), extra...)...); err == nil {
-			t.Fatalf("%s must refuse", name)
+		_, _, err := captureVerb(t, seedCmd("http://127.0.0.1:1", dsn, writeCatalog(t, seedDigests()), extra...)...)
+		if err == nil || !strings.Contains(err.Error(), "exactly one of -operations") {
+			t.Fatalf("%s must refuse on the selector rule itself, got %v", name, err)
 		}
 	}
 }
 
-// A refusal on one operation does not stop the others (one transaction per
-// operation), but the exit is non-zero.
-func TestSeedMixedRunSeedsTheCleanOperationAndExitsNonZero(t *testing.T) {
+// One refused operation refuses the WHOLE invocation: nothing is written for
+// any operation (a half-applied batch is a state nobody can describe).
+func TestSeedARefusedOperationLeavesTheWholeInvocationUnwritten(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
 	catalog := writeCatalog(t, seedDigests())
 	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), seedDigests())
 	insertRowAt(t, pool, localSchemaDigest(), seedDigA, seedOpA, "canary")
-	if _, _, err := captureVerb(t, seedCmd(server.URL, dsn, catalog, "-operations", seedOpA+","+seedOpB)...); err == nil {
+	out, stderrOut, err := captureVerb(t, seedCmd(server.URL, dsn, catalog, "-operations", seedOpA+","+seedOpB)...)
+	if err == nil {
 		t.Fatal("exit must be non-zero when any operation is refused")
 	}
-	got := map[string]string{}
-	for _, r := range readSeedRows(t, pool) {
-		got[r.op] = r.mode
+	rows := readSeedRows(t, pool)
+	if len(rows) != 1 || rows[0].op != seedOpA || rows[0].mode != "canary" {
+		t.Fatalf("nothing may be written for the clean operation either: %+v", rows)
 	}
-	if got[seedOpA] != "canary" || got[seedOpB] != "shadow" {
-		t.Fatalf("rows = %v", got)
+	if countTable(t, pool, "go_api_routing_audits") != 0 || countTable(t, pool, "go_api_candidate_build") != 1 {
+		t.Fatal("no audit row and no new candidate build may survive a refused run")
+	}
+	if !strings.Contains(out, "refused") || !strings.Contains(out, "would-create") || strings.Contains(stderrOut, "go_api_routing.seeded") {
+		t.Fatalf("output must not claim a created row: %s / %s", out, stderrOut)
+	}
+}
+
+// The durable audit of one invocation: one correlation id across its rows,
+// the same id in the stderr event, and evidence that says it was a seed.
+func TestSeedAuditRowsShareOneCorrelationIDAndSayItWasASeed(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	catalog := writeCatalog(t, seedDigests())
+	t.Setenv(bearerEnvVar, verbTestBearer)
+	server := startQueryAPI(t, localSchemaDigest(), seedDigests())
+	_, stderrOut, err := captureVerb(t, seedCmd(server.URL, dsn, catalog, "-operations", seedOpA+","+seedOpB)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := pool.Query(context.Background(), `SELECT correlation_id::text, review_evidence, mode_after FROM go_api_routing_audits ORDER BY selected_operation`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	ids := map[string]bool{}
+	n := 0
+	for rows.Next() {
+		var id, evidence, mode string
+		if err := rows.Scan(&id, &evidence, &mode); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(evidence, goapiproof.SeedEvidencePrefix) || mode != "shadow" {
+			t.Fatalf("audit row must say seed/shadow: %q %q", evidence, mode)
+		}
+		ids[id] = true
+		n++
+	}
+	if n != 2 || len(ids) != 1 {
+		t.Fatalf("want 2 audit rows under 1 correlation id, got %d rows, %d ids", n, len(ids))
+	}
+	for id := range ids {
+		if strings.Count(stderrOut, "correlation_id="+id) != 2 {
+			t.Fatalf("stderr events must carry the audit correlation id %s:\n%s", id, stderrOut)
+		}
 	}
 }
 

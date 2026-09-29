@@ -153,8 +153,8 @@ func runSeed(argv []string) error {
 	for _, o := range outcomes {
 		fmt.Fprintf(stdout, "go-api-routing:   %-28s %-16s digest=%s %s\n", o.Operation, o.Action, o.DocumentDigest, o.Reason)
 		if o.Action == goapiproof.SeedActionCreated {
-			fmt.Fprintf(stderr, "go_api_routing.seeded operation=%s mode_after=shadow build_after=%s schema_digest=%s document_digest=%s recorded_by=%s\n",
-				o.Operation, running, registry.SchemaDigest, o.DocumentDigest, common.recordedBy)
+			fmt.Fprintf(stderr, "go_api_routing.seeded operation=%s mode_after=shadow build_after=%s schema_digest=%s document_digest=%s recorded_by=%s audit_action=enable correlation_id=%s\n",
+				o.Operation, running, registry.SchemaDigest, o.DocumentDigest, common.recordedBy, o.CorrelationID)
 		}
 	}
 	if err != nil {

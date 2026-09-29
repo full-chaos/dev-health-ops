@@ -704,6 +704,23 @@ a git worktree therefore needs no `ci/bigboy` symlink under the root; set `BIGBO
 run the tools from a different checkout. The first log line prints both (`root=... tools=...`), and
 the cut refuses a tools directory that is not one (`is not a directory`, or no `bigboy-repin.sh`).
 
+### go-api's ClickHouse login on bigboy (CHAOS-7162)
+
+`dho_api_ch` is declared to ClickHouse as a `users.d` file, not created inside the running container: the
+compose overlay `ci/bigboy/compose.bigboy.clickhouse-users.yml` mounts the host file `DHO_API_CH_USERS_XML`
+(default `$BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml`) read-only at
+`/etc/clickhouse-server/users.d/dho_api_ch.xml`, so recreating the ClickHouse container no longer loses the
+user (a recreate that did, after the login was `docker cp`ed in, is what made go-api fail every ClickHouse call
+with code 516). `ci/bigboy/render-dho-api-ch-users.py <rendered-release.yaml> <out>` writes the file from a
+rendered release's `clickhouse-usersd` ConfigMap (the grants follow the ops sha it was rendered from) with the
+SHA-256 of the password in `API_CH_PASSWORD` (environment only, never printed).
+
+The file must be world-readable (0644): it holds only the password hash and grants, and clickhouse-server runs as
+uid 101 in the container and **exits** on a mounted file it cannot read, so a 0600 file owned by the host user
+takes ClickHouse down. `ci/bigboy/check-dho-api-ch-user.sh` refuses such a file (or a missing one, which Docker
+would turn into a directory) and checks `dho_api_ch` is in `system.users`; `bigboy-cut.sh` runs it as the STEP
+`ch-api-user` and aborts before go-api is recreated when it fails. Run it by hand before recreating ClickHouse.
+
 ### Automated in `bigboy-cut.sh` (CHAOS-7022): digest change = carry before swap; repoint after
 
 The rule above -- **carry BEFORE the roll, re-enable after** -- was, until CHAOS-7022, something

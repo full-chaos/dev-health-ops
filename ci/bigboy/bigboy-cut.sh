@@ -33,7 +33,10 @@ done
 # calls 500'd and the auth callback/logout used the wrong origin. It stays last so its web.environment wins.
 # It is a tools file, so it is named from $HERE (absolute), not from the root: the other entries are relative
 # to $R, where compose runs, and a root without ci/bigboy (CHAOS-7135) would not find it.
-export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:compose/compose.metrics-api.local.yml:.remember/lanes/team-lead/reconciler-sweep-override.yml:compose/compose.bigboy.images.yml:compose/compose.bigboy.workers.yml:$HERE/compose.bigboy.router.yml
+# CHAOS-7162: dho_api_ch is declared by a host file mounted into ClickHouse's users.d (compose.bigboy.clickhouse-users.yml), so a
+# ClickHouse recreate no longer loses it. The overlay requires the path; the default is the credentials directory's file.
+export DHO_API_CH_USERS_XML="${DHO_API_CH_USERS_XML:-$R/.go-api-dev/dho_api_ch.xml}"
+export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:compose/compose.metrics-api.local.yml:.remember/lanes/team-lead/reconciler-sweep-override.yml:compose/compose.bigboy.images.yml:compose/compose.bigboy.workers.yml:$HERE/compose.bigboy.clickhouse-users.yml:$HERE/compose.bigboy.router.yml
 cd "$R"
 st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
 echo "cut start $(date -u +%T) new=$NEW root=$R tools=$HERE"
@@ -233,6 +236,11 @@ fi
 # GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY}) silently resolves to a blank string with no
 # error -- caught live tonight when a first apply went out with an empty edge-JWT secret.
 docker compose --env-file ops/.env run --rm --no-deps migrate > $REC/migrate.out 2>&1; st migrate $?
+# CHAOS-7162: go-api's ClickHouse login must be declared durably and be live BEFORE go-api is recreated: without
+# `dho_api_ch` in system.users every ClickHouse call fails with code 516 (rev 198, after a ClickHouse recreate rebuilt
+# users.d from the image). Names only; the check refuses a file ClickHouse could not read (it would exit on it).
+"$HERE/check-dho-api-ch-user.sh" "$DHO_API_CH_USERS_XML" > $REC/ch-api-user.out 2>&1; rc_chu=$?; st ch-api-user $rc_chu
+[ "$rc_chu" = 0 ] || { echo "FAIL: dho_api_ch is not usable (see $REC/ch-api-user.out); ABORTING before go-api is recreated" >&2; cat $REC/ch-api-user.out >&2; exit 1; }
 docker compose --env-file ops/.env up -d --no-deps --no-build api query-api go-api web > $REC/up.out 2>&1; st up $?   # CHAOS-7019: web recreated from its repinned digest here too, never a host build
 # CHAOS-7131: the recreated web must still carry the names the router overlay sets (names only, never values).
 "$HERE/container-env-names.sh" dev-health-web-1 > "$REC.web-env-names-after-up" 2>/dev/null

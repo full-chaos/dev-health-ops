@@ -155,3 +155,27 @@ func TestConfigureServesInternalRoutesOnlyOnTheInternalListener(t *testing.T) {
 		}
 	}
 }
+
+// TestACRPublicCompatBridgeServesBothListeners: with the one-roll bridge on
+// (Deps.ACRPublicCompat), the public mux also serves both acr routes; off (the
+// default) it serves neither (TestPublicListenerNeverServesInternalRoutes).
+func TestACRPublicCompatBridgeServesBothListeners(t *testing.T) {
+	cfg := config.Config{APIAddress: "127.0.0.1:0"}
+	server, err := NewServer(cfg, quietLog(), Routes(Deps{ACRPublicCompat: true}, quietLog()))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	public := server.Handler()
+	for _, path := range internalPaths {
+		rec := httptest.NewRecorder()
+		public.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("compat public GET %s = %d, want 503 (route present, no store)", path, rec.Code)
+		}
+	}
+	for _, route := range Routes(Deps{ACRPublicCompat: true}, quietLog()) {
+		if strings.Contains(route.Pattern, "/api/v1/internal") && !strings.HasPrefix(route.Pattern, "/api/v1/internal/acr/") {
+			t.Errorf("compat mounts a non-acr internal route %s", route.Pattern)
+		}
+	}
+}

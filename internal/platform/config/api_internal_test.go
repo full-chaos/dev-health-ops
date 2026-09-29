@@ -53,3 +53,27 @@ func TestInternalAddressIsAnAPIOnlyOption(t *testing.T) {
 		}
 	}
 }
+
+func TestACRPublicCompatResolution(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		env  map[string]string
+		want bool
+		err  bool
+	}{
+		{name: "default off"},
+		{name: "on", env: map[string]string{"DEV_HEALTH_API_ACR_PUBLIC_COMPAT": "true"}, want: true},
+		{name: "off", env: map[string]string{"DEV_HEALTH_API_ACR_PUBLIC_COMPAT": "false"}},
+		{name: "malformed", env: map[string]string{"DEV_HEALTH_API_ACR_PUBLIC_COMPAT": "maybe"}, err: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := Load(Spec{Service: APIServiceName, LookupEnv: lookupFrom(test.env)})
+			if (err != nil) != test.err {
+				t.Fatalf("err = %v, want error %t", err, test.err)
+			}
+			if err == nil && cfg.APIACRPublicCompat != test.want {
+				t.Fatalf("APIACRPublicCompat = %t, want %t", cfg.APIACRPublicCompat, test.want)
+			}
+		})
+	}
+}

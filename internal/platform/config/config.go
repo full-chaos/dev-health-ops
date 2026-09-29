@@ -344,6 +344,10 @@ type Config struct {
 	// public api listener never serves those paths. Empty = the listener is
 	// off and those paths answer nowhere.
 	APIInternalAddress string
+	// APIACRPublicCompat keeps the two acr routes on the PUBLIC api listener
+	// too (default false). It is a one-roll bridge for acr's move to the
+	// internal Service and is removed by the CHAOS-7181 follow-up.
+	APIACRPublicCompat bool
 	// QueryAPIAddress is the host:port of the query routes' listener and
 	// QueryAPIInternalAddress that of the internal one (dho query-api only; empty
 	// otherwise, and the internal one empty means no internal listener).
@@ -956,6 +960,10 @@ func Load(spec Spec) (Config, error) {
 				}
 			}
 		}
+		var compatErr error
+		if cfg.APIACRPublicCompat, compatErr = boolEnv(lookup, "DEV_HEALTH_API_ACR_PUBLIC_COMPAT", false); compatErr != nil {
+			return Config{}, fmt.Errorf("%s must be true or false", settingLabel("DEV_HEALTH_API_ACR_PUBLIC_COMPAT"))
+		}
 		// os.getenv("CORS_ALLOWED_ORIGINS", default): the default only when
 		// the variable is absent. A present empty or blank value is an empty
 		// allow-list, never the default.
@@ -1141,6 +1149,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		attrs = append(attrs,
 			slog.String("api_billing_edge_address", c.APIBillingEdgeAddress),
 			slog.String("api_internal_address", c.APIInternalAddress),
+			slog.Bool("api_acr_public_compat", c.APIACRPublicCompat),
 			slog.String("api_address", c.APIAddress),
 			slog.Int("cors_allowed_origin_count", len(c.CORSAllowedOrigins)),
 		)

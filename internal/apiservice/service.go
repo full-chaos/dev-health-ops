@@ -156,7 +156,8 @@ var (
 // Routes is the route set the api mounts, built from deps (the shared
 // Postgres pool and Valkey client every area package is handed rather than
 // opening its own). deps.Pool is nil when APIDatabaseURI is not configured.
-// The /api/v1/internal/* routes are not here: see InternalRoutes (CHAOS-7181).
+// The /api/v1/internal/* routes are here only with deps.ACRPublicCompat (the
+// CHAOS-7181 one-roll bridge, default off); see InternalRoutes.
 // webhookintake's routes register unconditionally too: a handler that
 // needs a live Pool/Valkey/Producer/Decryptor answers 500 at request time
 // (its own Deps doc comment). Each area package contributes its own
@@ -170,6 +171,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		limits = httpapi.NewMemoryCounters(deps.Now)
 	}
 	var routes []httpapi.Route
+	if deps.ACRPublicCompat {
+		routes = append(routes, InternalRoutes(deps, logger)...)
+	}
 	routes = append(routes, externalingest.Routes(externalingest.Deps{
 		Cipher:   deps.Decryptor,
 		Pool:     deps.Pool,
@@ -342,6 +346,7 @@ func configureWith(
 	// stored token.
 	deps.Stripe = stripeclient.New(stripeclient.Options{Key: cfg.StripeSecretKey.Reveal()})
 	deps.BillingConfig = cfg.APIBilling
+	deps.ACRPublicCompat = cfg.APIACRPublicCompat
 	deps.StripeWebhookSecret = cfg.StripeWebhookSecret
 	deps.StripeSecretKey = cfg.StripeSecretKey
 	deps.LicensePrivateKey = cfg.LicensePrivateKey

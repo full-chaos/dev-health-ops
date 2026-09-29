@@ -225,6 +225,11 @@ var coreOptions = []Option{
 		Usage: "host:port for the internal HTTP server (the unauthenticated /api/v1/internal/* routes; no Ingress may route to it, the NetworkPolicy is the boundary); empty = off; must differ from --api-addr, --http-addr and --api-billing-edge-addr",
 	},
 	{
+		Flag: "api-acr-public-compat", Env: "DEV_HEALTH_API_ACR_PUBLIC_COMPAT", Kind: KindBool,
+		Default: "false", Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "also serve the two unauthenticated /api/v1/internal/acr/* routes on the PUBLIC api listener (one-roll bridge for acr's move to the internal listener; default false)",
+	},
+	{
 		Flag: "cors-allowed-origins", Env: "CORS_ALLOWED_ORIGINS", Kind: KindString,
 		Default: defaultCORSAllowedOrigins, Services: []string{APIServiceName}, Group: GroupRuntime,
 		Usage: "comma-separated CORS allow-list for the api (same format as the Python api)",

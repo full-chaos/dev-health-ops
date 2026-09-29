@@ -78,6 +78,22 @@ func TestGoAPIInternalListenerChart(t *testing.T) {
 	if !found {
 		t.Errorf("go-api args lack --api-internal-addr=:8091: %v", args)
 	}
+	compat := false
+	for _, arg := range args {
+		if arg == "--api-acr-public-compat=true" {
+			compat = true
+		}
+	}
+	if !compat {
+		t.Errorf("acrPublicCompat defaults true in the chart (one-roll bridge): args %v", args)
+	}
+	off := render("--set", "goApi.internal.acrPublicCompat=false")
+	offArgs := dig(dig(named(off, "Deployment", "b-dev-health-go-api"), "spec", "template", "spec", "containers", 0), "args").([]any)
+	for _, arg := range offArgs {
+		if strings.Contains(arg.(string), "acr-public-compat") {
+			t.Errorf("acrPublicCompat=false still passes %v", arg)
+		}
+	}
 	hasInternalPort := false
 	for _, p := range dig(container, "ports").([]any) {
 		if dig(p, "name") == "internal" && dig(p, "containerPort") == 8091 {

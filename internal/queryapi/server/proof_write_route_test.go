@@ -3,7 +3,6 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
@@ -12,10 +11,10 @@ import (
 // the internal route set, never the public one. mountProofWriteRoute is the
 // single place that decision is made, so it is proven directly here rather
 // than through a full Build() (which needs live ClickHouse/Postgres/envelope
-// config to populate handlers.ProofWrite at all) -- and pinned a second way,
-// at the call-site level, by TestBuildCallsMountProofWriteRouteOnInternalMuxOnly
-// below, so a future edit that passes Build's PUBLIC mux by mistake fails even
-// before any HTTP request is made.
+// config to populate handlers.ProofWrite at all) -- and pinned end to end, at
+// runtime, by TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute
+// (build_routes_integration_test.go): a real Build answers 404 for this path on
+// the public handler and mounts it on the internal one.
 
 func mpwGetenv(enabled string) func(string) string {
 	return func(key string) string {
@@ -93,28 +92,5 @@ func TestMountProofWriteRouteRegistersOnlyOnTheMuxItIsGiven(t *testing.T) {
 	otherMux.ServeHTTP(rec2, httptest.NewRequest(http.MethodPost, "/query/proof-write", nil))
 	if rec2.Code == http.StatusTeapot {
 		t.Fatal("a DIFFERENT mux answered 418 -- mountProofWriteRoute must only touch the mux it was given")
-	}
-}
-
-// TestBuildCallsMountProofWriteRouteOnInternalMuxOnly is a source-text pin,
-// the same technique posture_readiness_test.go already uses in this package:
-// it fails the moment a future edit passes Build's PUBLIC mux to
-// mountProofWriteRoute instead of internalMux, without needing a full,
-// live-dependency Build() to prove it at the HTTP level.
-func TestBuildCallsMountProofWriteRouteOnInternalMuxOnly(t *testing.T) {
-	t.Parallel()
-	src, err := os.ReadFile("server.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(src)
-	if strings.Count(text, "mountProofWriteRoute(getenv, internalMux, handlers.ProofWrite)") != 1 {
-		t.Fatal(`server.go must call mountProofWriteRoute(getenv, internalMux, handlers.ProofWrite) exactly once`)
-	}
-	if strings.Count(text, "mountProofWriteRoute(getenv, internalMux, nil)") != 1 {
-		t.Fatal(`server.go must call mountProofWriteRoute(getenv, internalMux, nil) exactly once (the unconfigured branch)`)
-	}
-	if strings.Contains(text, "mountProofWriteRoute(getenv, mux,") {
-		t.Fatal("server.go must NEVER call mountProofWriteRoute with the public mux")
 	}
 }

@@ -265,8 +265,11 @@ queryApi:
     port: 8091
     # -- Extra pod selectors (each `{matchLabels: {...}}`) allowed to reach the internal port,
     #    beside this release's api pods. The internal listener trusts X-DH-Internal-* identity
-    #    headers from any peer that can connect, so add only the pods that must call it (for
-    #    example the tools pod that runs `dho goapi prove-write`).
+    #    headers from any peer that can connect, so add only the pods that must call it, and
+    #    only while they must. The tools pod that runs `dho goapi prove-write` is NOT admitted
+    #    by default; to admit it for a proof run:
+    #    `--set-json 'queryApi.internal.allowedFrom=[{"matchLabels":{"run":"dev-health-go-api-tools-oneoff"}}]'`
+    #    (the `run` label `kubectl run` gives the one-off tools pod), then remove it again.
     allowedFrom: []
   image:
     # -- The dho image (docker/go-worker.Dockerfile target `dho`); the

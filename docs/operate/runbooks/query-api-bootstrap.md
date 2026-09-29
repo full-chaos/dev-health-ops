@@ -234,6 +234,15 @@ first run, on the query-api Deployment: enable the internal listener (`queryApi.
 `dho goapi routing proof-org add -org <fixture org id> -recorded-by <operator> -review-evidence "<why>"` (with `POSTGRES_URI` in the environment, never on the command line). The route refuses every org not
 on that list, every document that is not a registered mutation, and everything when the allowlist cannot be read.
 
+The internal port is reachable only from the pods the network policy admits, and the tools pod that runs `prove-write` is not
+one of them by default (the internal listener trusts unsigned `X-DH-Internal-*` identity headers, so the policy is its
+authentication boundary and admits only the release's api pods). Add the tools pod's selector deliberately before the run:
+`--set-json 'queryApi.internal.allowedFrom=[{"matchLabels":{"run":"dev-health-go-api-tools-oneoff"}}]'` (the `run` label
+that `kubectl run` gives the one-off tools pod), and remove it afterwards; every entry grants that pod set org and admin
+forgery power against the internal listener. The umbrella deploy chart's own `queryApiInternal` policy admits only the api
+pods, so it must be widened the same way, in the deploy repo, before `prove-write` can reach the internal Service from the
+tools pod.
+
 The verb writes only in the Fixture Org named by the environment (it never creates an org), posts the mutation once,
 compares the persisted effects with the case's committed baseline digest, and refuses to call a run a match unless the
 response carries the candidate build. A match removes its dataset; anything else keeps it and names it. `-via query-api`

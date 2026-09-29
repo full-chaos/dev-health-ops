@@ -251,9 +251,14 @@ def test_the_go_served_ledger_names_exactly_the_raising_fields() -> None:
         "testOpsTest": "analytics",
         "testOpsCoverage": "analytics",
     }
+    # Operations whose Python field was deleted outright (not left raising):
+    # the ledger names them for the enable/prove tooling, and there is no
+    # Strawberry field left to raise.
+    no_python_field = {"home"}
     fields = {
         named_documents.get(entry["operation"], entry["operation"])
         for entry in ledger["entries"]
+        if entry["operation"] not in no_python_field
     }
     assert sorted(fields) == sorted(_QUERIES)
 

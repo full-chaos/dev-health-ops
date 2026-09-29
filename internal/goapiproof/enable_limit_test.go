@@ -22,15 +22,32 @@ func TestCompiledLedgerAdmitsExactlyTheDeclaredUnprovableOperations(t *testing.T
 		}
 	}
 	want := []string{
+		"acrRepositoryScopes",
+		"capacityForecast",
+		"capacityForecasts",
+		"catalogValues",
+		"cognitiveLoad",
+		"complexityTimeseries",
+		"compoundingRisk",
 		"connectorsDataHealth",
 		"dataHealthIdentity",
 		"featureFlagTimeseries",
+		"home",
+		"hotspots",
+		"investmentBreakdown",
+		"investmentFull",
 		"mappingCoverageHealth",
 		"metricLineage",
 		"productTelemetryPlatformDashboard",
 		"reportRuns",
 		"savedReport",
 		"savedReports",
+		"securityAlerts",
+		"securityOverview",
+		"throughputForecast",
+		"workGraphArtifacts",
+		"workGraphEdges",
+		"workGraphFlow",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("operations the compiled ledger lets enable write with no proof run:\n got %v\nwant %v", got, want)

@@ -70,6 +70,11 @@ func goTestFuncDeclared(t *testing.T, path, name string) bool {
 	return false
 }
 
+// pythonFieldDeletedOutright are ledger operations with no Strawberry field left
+// in schema.py at all: `home` (CHAOS-7070) was removed from the Python schema
+// rather than left raising, so the ledger-vs-schema.py check skips it.
+var pythonFieldDeletedOutright = map[string]bool{"home": true}
+
 // The ledger names exactly the operations whose Strawberry field body raises
 // the deletion error, and its message template is the text that field body
 // raises. A ledger entry with a live Python path, or a deleted path with no
@@ -96,6 +101,12 @@ func TestLedgerMatchesTheDeletedFieldBodiesInSchemaPy(t *testing.T) {
 	// document over one (its response root is the root field that raises).
 	roots := map[string]bool{}
 	for _, operation := range ledger.Operations() {
+		// An operation whose Python field was deleted outright (not left
+		// raising the deletion error) is named in the ledger for the
+		// enable/prove tooling only; schema.py has no field to raise.
+		if pythonFieldDeletedOutright[operation] {
+			continue
+		}
 		spec, err := SpecFor(operation)
 		if err != nil {
 			t.Fatalf("ledger operation %s: %v", operation, err)

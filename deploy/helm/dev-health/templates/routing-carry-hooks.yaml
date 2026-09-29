@@ -269,18 +269,20 @@ spec:
               # A post-upgrade hook runs when the Deployment is updated, not when its rollout has
               # finished: the pods that answer /buildinfo can still be the OLD build, and a repoint
               # against them rewrites nothing (running_build old, changed=0) yet the hook succeeds.
+              # During a rolling update old and new pods serve side by side, so separate invocations
+              # can reach different pods: there is no probe whose answer holds for the next call.
               # This image is pinned to the same commit as query-api, so its own commit is the build
-              # the rollout must reach. Probe with a dry run that cross-checks it (-expect-build
-              # refuses while the running build differs) and retry a bounded number of times; fail
-              # the hook when the new build never answers; never repoint against the wrong one.
+              # the rollout must reach. The repoint itself carries that cross-check (-expect-build
+              # refuses, writing nothing, while the running build differs), and is retried under a
+              # bounded number of attempts until it succeeds; the hook fails when it never does.
               EXPECT_BUILD=$(dho version | sed -n 's/.*"commit":"\([0-9a-f]\{40\}\)".*/\1/p')
               [ -n "$EXPECT_BUILD" ] || { echo "FAIL: this image reports no 40-hex commit, so the build to wait for is unknown" >&2; exit 1; }
               attempt=1
               until GO_API_ROUTING_BEARER="$BEARER" dho goapi routing repoint \
                 -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
                 -operations all-registered -recorded-by helm-post-upgrade \
-                -review-evidence "post-upgrade repoint readiness probe, release ${RELEASE_NAME}" \
-                -expect-build "$EXPECT_BUILD" -dry-run
+                -review-evidence "post-upgrade repoint, release ${RELEASE_NAME}" \
+                -expect-build "$EXPECT_BUILD"
               do
                 [ "$attempt" -lt "$REPOINT_MAX_ATTEMPTS" ] || {
                   echo "FAIL: query-api never reported build $EXPECT_BUILD after $attempt attempts; the rollout did not finish, so nothing was repointed" >&2
@@ -290,11 +292,6 @@ spec:
                 attempt=$((attempt + 1))
                 sleep "$REPOINT_RETRY_INTERVAL_SECONDS"
               done
-              GO_API_ROUTING_BEARER="$BEARER" dho goapi routing repoint \
-                -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
-                -operations all-registered -recorded-by helm-post-upgrade \
-                -review-evidence "post-upgrade repoint, release ${RELEASE_NAME}" \
-                -expect-build "$EXPECT_BUILD"
           env:
             - name: MINT_ORG
               value: {{ $mintOrg | quote }}

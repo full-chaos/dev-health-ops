@@ -16,8 +16,6 @@ import stat
 import subprocess
 from pathlib import Path
 
-import yaml
-
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "ci" / "bigboy"
 OVERLAY = TOOLS / "compose.bigboy.clickhouse-users.yml"
@@ -26,7 +24,6 @@ RENDER = TOOLS / "render-dho-api-ch-users.py"
 CUT = TOOLS / "bigboy-cut.sh"
 
 _HASH = hashlib.sha256(b"the-api-password").hexdigest()
-_PLACEHOLDER = "a" * 64  # the chart's stand-in hash, replaced by the renderer
 _XML = (
     "<clickhouse><users><dho_api_ch><password_sha256_hex>"
     + _HASH
@@ -155,58 +152,6 @@ def test_a_user_missing_from_the_live_server_fails_with_its_own_code(
         assert "CH_API_USER_LIVE_FAIL" in proc.stderr and "516" in proc.stderr
 
 
-def _release(tmp_path: Path, *, key: str = "dho_api_ch.xml") -> Path:
-    release = tmp_path / "release.yaml"
-    release.write_text(
-        yaml.safe_dump(
-            {
-                "apiVersion": "v1",
-                "kind": "ConfigMap",
-                "metadata": {"name": "dev-health-ops-clickhouse-usersd"},
-                "data": {key: _XML.replace(_HASH, _PLACEHOLDER)},
-            }
-        )
-    )
-    return release
-
-
-def _render(tmp_path: Path, release: Path, **env: str):
-    return subprocess.run(
-        ["python3", str(RENDER), str(release), str(tmp_path / "out.xml")],
-        capture_output=True,
-        text=True,
-        env={"PATH": os.environ["PATH"], **env},
-        timeout=30,
-    )
-
-
-def test_render_writes_the_hash_of_the_password_0644_and_prints_no_secret(
-    tmp_path: Path,
-) -> None:
-    password = "the-api-password"
-    proc = _render(tmp_path, _release(tmp_path), API_CH_PASSWORD=password)
-    assert proc.returncode == 0, (proc.stdout, proc.stderr)
-    out = tmp_path / "out.xml"
-    assert stat.S_IMODE(out.stat().st_mode) == 0o644
-    digest = hashlib.sha256(password.encode()).hexdigest()
-    text = out.read_text()
-    assert f"<password_sha256_hex>{digest}</password_sha256_hex>" in text
-    assert _PLACEHOLDER not in text and password not in text
-    assert password not in proc.stdout + proc.stderr and digest not in proc.stdout
-    assert "grants=1" in proc.stdout
-    # The rendered file passes the check the cut runs.
-    assert _check(tmp_path, out).returncode == 0
-
-
-def test_render_refuses_a_missing_password_and_a_release_without_the_file(
-    tmp_path: Path,
-) -> None:
-    assert _render(tmp_path, _release(tmp_path)).returncode == 2
-    proc = _render(tmp_path, _release(tmp_path, key="other.xml"), API_CH_PASSWORD="x")
-    assert proc.returncode != 0 and "dho_api_ch.xml" in proc.stderr
-    assert not (tmp_path / "out.xml").exists()
-
-
 def test_the_overlay_mounts_the_host_file_into_users_d_and_requires_the_path(
     tmp_path: Path,
 ) -> None:
@@ -310,31 +255,6 @@ def test_the_api_credential_never_reaches_an_argument_list_or_the_output(
     assert secret not in args and secret not in proc.stdout + proc.stderr
 
 
-def test_the_renderer_refuses_a_source_with_a_plaintext_password_and_writes_nothing(
-    tmp_path: Path,
-) -> None:
-    body = _XML.replace(
-        "</dho_api_ch>", "<password>hunter2-plain</password></dho_api_ch>"
-    )
-    release = tmp_path / "release.yaml"
-    release.write_text(
-        yaml.safe_dump(
-            {
-                "apiVersion": "v1",
-                "kind": "ConfigMap",
-                "metadata": {"name": "dev-health-ops-clickhouse-usersd"},
-                "data": {"dho_api_ch.xml": body},
-            }
-        )
-    )
-    proc = _render(tmp_path, release, API_CH_PASSWORD="the-api-password")
-    assert proc.returncode != 0, (proc.stdout, proc.stderr)
-    assert "nothing written" in proc.stderr and "password" in proc.stderr
-    assert "hunter2-plain" not in proc.stdout + proc.stderr
-    assert not (tmp_path / "out.xml").exists()
-    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".out.xml")]
-
-
 def _cut_with_a_fake_check(
     tmp_path: Path, check_rc: int
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
@@ -414,73 +334,6 @@ def test_the_declared_hash_must_match_the_api_credential_before_any_live_check(
     assert "ch_api_user_auth=ok" not in proc.stdout
 
 
-def _release_with(tmp_path: Path, body: str) -> Path:
-    release = tmp_path / "release.yaml"
-    release.write_text(
-        yaml.safe_dump(
-            {
-                "apiVersion": "v1",
-                "kind": "ConfigMap",
-                "metadata": {"name": "dev-health-ops-clickhouse-usersd"},
-                "data": {"dho_api_ch.xml": body},
-            }
-        )
-    )
-    return release
-
-
-def test_the_renderer_never_writes_the_password_even_from_an_xml_comment(
-    tmp_path: Path,
-) -> None:
-    """An XML comment is invisible to the shape validator but copied by a text substitution."""
-    password = "throwaway-credential-value"
-    body = _XML.replace("</clickhouse>", f"<!-- old note: {password} --></clickhouse>")
-    proc = _render(tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD=password)
-    out = tmp_path / "out.xml"
-    assert proc.returncode == 0, (proc.stdout, proc.stderr)
-    assert password not in out.read_text()
-    assert "<!--" not in out.read_text()
-    assert password not in proc.stdout + proc.stderr
-
-
-def test_the_renderer_refuses_when_the_password_is_anywhere_in_the_output(
-    tmp_path: Path,
-) -> None:
-    password = "throwaway-credential-value"
-    body = _XML.replace(
-        "</dho_api_ch>", f"<networks><ip>{password}</ip></networks></dho_api_ch>"
-    )
-    proc = _render(tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD=password)
-    assert proc.returncode != 0, (proc.stdout, proc.stderr)
-    assert "nothing written" in proc.stderr
-    assert password not in proc.stdout + proc.stderr
-    assert not (tmp_path / "out.xml").exists()
-
-
-def test_the_renderer_emits_from_the_parsed_tree_only(tmp_path: Path) -> None:
-    """Comments and processing instructions are not copied."""
-    body = "<?xml version='1.0'?><!-- head note -->" + _XML.replace(
-        "</dho_api_ch>", "<!-- inner note --></dho_api_ch>"
-    )
-    proc = _render(tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD="pw-1")
-    assert proc.returncode == 0, (proc.stdout, proc.stderr)
-    text = (tmp_path / "out.xml").read_text()
-    for banned in ("<!--", "<?", "note"):
-        assert banned not in text, (banned, text)
-    assert text.count("<password_sha256_hex>") == 1
-
-
-def test_the_renderer_refuses_text_between_and_after_elements(tmp_path: Path) -> None:
-    """Text after a closing tag (an element's tail) is refused, and nothing is written."""
-    body = _XML.replace("</grants>", "</grants>TAIL-BETWEEN").replace(
-        "</dho_api_ch>", "</dho_api_ch>TAIL-AFTER-USER"
-    )
-    proc = _render(tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD="pw-1")
-    assert proc.returncode != 0, (proc.stdout, proc.stderr)
-    assert "nothing written" in proc.stderr and "TAIL" not in proc.stderr
-    assert not (tmp_path / "out.xml").exists()
-
-
 _ATTRIBUTE_SITES = {
     "root": ("<clickhouse>", '<clickhouse x="{v}">'),
     "users": ("<users>", '<users x="{v}">'),
@@ -492,7 +345,7 @@ _ATTRIBUTE_SITES = {
 }
 
 
-def test_no_element_may_carry_an_attribute_in_a_declaration_or_a_render(
+def test_no_element_may_carry_an_attribute_in_a_declaration(
     tmp_path: Path,
 ) -> None:
     """A plaintext value in an attribute passed the element-name checks and was copied into the 0644 file."""
@@ -507,13 +360,6 @@ def test_no_element_may_carry_an_attribute_in_a_declaration_or_a_render(
         checked = _check(tmp_path, _users_file(tmp_path, body=body))
         assert checked.returncode == 1, (name, checked.stdout, checked.stderr)
         assert value not in checked.stdout + checked.stderr, name
-        rendered = _render(
-            tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD="pw-1"
-        )
-        assert rendered.returncode != 0, (name, rendered.stdout, rendered.stderr)
-        assert "nothing written" in rendered.stderr, name
-        assert value not in rendered.stdout + rendered.stderr, name
-        assert not (tmp_path / "out.xml").exists(), name
 
 
 def test_containers_hold_only_elements_and_leaves_only_their_own_kind_of_text(
@@ -540,3 +386,135 @@ def test_containers_hold_only_elements_and_leaves_only_their_own_kind_of_text(
     for name, body in cases.items():
         proc = _check(tmp_path, _users_file(tmp_path, body=body))
         assert proc.returncode == 1, (name, proc.stdout, proc.stderr)
+
+
+_MANIFEST = """package clickhouse
+
+// func APIPosture is quoted here in comments: password="leaked" clickhouse://u:p@h/db
+func APIPosture(database string) Posture {
+	return Posture{RequiredTables: []TableGrant{
+		{Database: database, Table: "teams", AllowInsert: true, AllowSelect: true, AllowDelete: true},
+		// marker-comment: <password>plain</password> Table: "hidden"
+		{Database: database, Table: "team_sync_policies", AllowSelect: true},
+		{Database: database, Table: "team_memberships", AllowInsert: true},
+		{Database: database, Table: "no_privileges"},
+	}}
+}
+
+func other() {
+	_ = TableGrant{Database: database, Table: "outside", AllowSelect: true}
+}
+"""
+
+
+def _manifest(tmp_path: Path, text: str = _MANIFEST) -> Path:
+    file = tmp_path / "authorization.go"
+    file.write_text(text)
+    return file
+
+
+def _render(tmp_path: Path, manifest: Path, **env: str):
+    return subprocess.run(
+        ["python3", str(RENDER), str(manifest), str(tmp_path / "out.xml")],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], **env},
+        timeout=30,
+    )
+
+
+def test_render_output_is_exactly_the_fixed_table_with_the_hash_and_the_manifest_grants(
+    tmp_path: Path,
+) -> None:
+    """Whole-output equality: any element, attribute, comment or text beyond the table would differ."""
+    password = "the-api-password"
+    proc = _render(tmp_path, _manifest(tmp_path), API_CH_PASSWORD=password)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    out = tmp_path / "out.xml"
+    assert stat.S_IMODE(out.stat().st_mode) == 0o644
+    digest = hashlib.sha256(password.encode()).hexdigest()
+    assert out.read_text() == (
+        "<clickhouse><users><dho_api_ch><networks><ip>::/0</ip></networks>"
+        "<profile>default</profile><quota>default</quota>"
+        "<access_management>0</access_management>"
+        f"<password_sha256_hex>{digest}</password_sha256_hex><grants>"
+        "<query>GRANT SELECT, INSERT, ALTER DELETE ON default.teams</query>"
+        "<query>GRANT SELECT ON default.team_sync_policies</query>"
+        "<query>GRANT INSERT ON default.team_memberships</query>"
+        "</grants></dho_api_ch></users></clickhouse>\n"
+    )
+    assert password not in proc.stdout + proc.stderr and digest not in proc.stdout
+    assert "grants=3" in proc.stdout
+    assert _check(tmp_path, out).returncode == 0
+
+
+def test_no_text_of_the_manifest_outside_its_table_rows_reaches_the_output(
+    tmp_path: Path,
+) -> None:
+    """There is no channel from the input to the file except the (validated) table rows."""
+    proc = _render(tmp_path, _manifest(tmp_path), API_CH_PASSWORD="pw-1")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    text = (tmp_path / "out.xml").read_text()
+    for banned in (
+        "leaked",
+        "clickhouse://",
+        "marker",
+        "plain",
+        "hidden",
+        "outside",
+        "<!--",
+        "<?",
+    ):
+        assert banned not in text, banned
+    assert "=" not in text  # no attribute anywhere
+
+
+def test_the_real_manifest_renders_one_grant_per_table_with_a_privilege(
+    tmp_path: Path,
+) -> None:
+    source = ROOT / "internal" / "storage" / "clickhouse" / "authorization.go"
+    text = source.read_text()
+    body = text.split("func APIPosture(", 1)[1].split("\n}\n", 1)[0]
+    rows = [
+        line
+        for line in body.splitlines()
+        if "{Database: database, Table:" in line
+        and any(
+            f"{flag}: true" in line
+            for flag in ("AllowSelect", "AllowInsert", "AllowDelete")
+        )
+    ]
+    assert rows, "the manifest could not be read: this test would prove nothing"
+    proc = _render(tmp_path, source, API_CH_PASSWORD="pw-1")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    out = (tmp_path / "out.xml").read_text()
+    assert out.count("<query>") == len(rows)
+    assert "<query>GRANT SELECT, INSERT, ALTER DELETE ON default.teams</query>" in out
+
+
+def test_render_refuses_when_the_password_would_appear_in_the_output(
+    tmp_path: Path,
+) -> None:
+    """The password 'default' is also the profile name: the file would then hold the credential."""
+    proc = _render(tmp_path, _manifest(tmp_path), API_CH_PASSWORD="default")
+    assert proc.returncode != 0, (proc.stdout, proc.stderr)
+    assert "nothing written" in proc.stderr
+    assert not (tmp_path / "out.xml").exists()
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".out.xml")]
+
+
+def test_render_refuses_missing_inputs_and_an_unreadable_manifest(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(tmp_path)
+    assert _render(tmp_path, manifest).returncode == 2
+    assert (
+        _render(tmp_path, tmp_path / "absent.go", API_CH_PASSWORD="x").returncode == 2
+    )
+    for name, text in (
+        ("no posture", "package clickhouse\n"),
+        ("no rows", "func APIPosture(d string) {\n}\n"),
+    ):
+        proc = _render(tmp_path, _manifest(tmp_path, text), API_CH_PASSWORD="x")
+        assert proc.returncode != 0 and "nothing written" in proc.stderr, name
+        assert not (tmp_path / "out.xml").exists(), name

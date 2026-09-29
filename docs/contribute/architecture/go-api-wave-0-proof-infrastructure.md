@@ -711,9 +711,11 @@ compose overlay `ci/bigboy/compose.bigboy.clickhouse-users.yml` mounts the host 
 (default `$BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml`) read-only at
 `/etc/clickhouse-server/users.d/dho_api_ch.xml`, so recreating the ClickHouse container no longer loses the
 user (a recreate that did, after the login was `docker cp`ed in, is what made go-api fail every ClickHouse call
-with code 516). `ci/bigboy/render-dho-api-ch-users.py <rendered-release.yaml> <out>` writes the file from a
-rendered release's `clickhouse-usersd` ConfigMap (the grants follow the ops sha it was rendered from) with the
-SHA-256 of the password in `API_CH_PASSWORD` (environment only, never printed).
+with code 516). `ci/bigboy/render-dho-api-ch-users.py <authorization.go> <out>` writes the file. It takes no XML: it builds a fixed
+element table (`networks/ip`, `profile`, `quota`, `access_management`, `password_sha256_hex`, `grants/query`) whose only
+variable parts are the SHA-256 of the password in `API_CH_PASSWORD` (environment only, never printed) and the grants,
+read from the `APIPosture` manifest in the given `authorization.go` (the file at the ops sha being cut). No attribute,
+comment or text from any input reaches the output, which is checked against the same grammar the checker uses.
 
 The file must be world-readable (0644): it holds only the password hash and grants, and clickhouse-server runs as
 uid 101 in the container and **exits** on a mounted file it cannot read, so a 0600 file owned by the host user

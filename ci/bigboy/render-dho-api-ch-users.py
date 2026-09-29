@@ -42,6 +42,17 @@ KEY = "dho_api_ch.xml"
 HASH = re.compile(r"<password_sha256_hex>[0-9a-f]*</password_sha256_hex>")
 
 
+def _copy(node: ET.Element) -> ET.Element:
+    """A new element with the same tag and (stripped) leaf text; attributes and tails are never copied."""
+    fresh = ET.Element(node.tag)
+    if len(node):
+        for child in node:
+            fresh.append(_copy(child))
+    else:
+        fresh.text = (node.text or "").strip()
+    return fresh
+
+
 def render(rendered_release: Path, password: str) -> str:
     for doc in yaml.safe_load_all(rendered_release.read_text()):
         if (
@@ -63,17 +74,13 @@ def render(rendered_release: Path, password: str) -> str:
                     f"{KEY} in {rendered_release} is refused, nothing written: {error}"
                 ) from None
             digest = hashlib.sha256(password.encode()).hexdigest()
-            # Emit from the PARSED tree, never from the source text: comments and processing instructions do not
-            # survive parsing, and text between elements is cleared, so the output holds exactly the declared elements.
-            root = ET.fromstring(xml)
-            for element in root.iter():
-                if len(element):
-                    element.text = None
-                element.tail = None
-            hash_element = root.find("users/dho_api_ch/password_sha256_hex")
-            assert hash_element is not None  # validate() above guarantees exactly one
-            hash_element.text = digest
-            rendered = ET.tostring(root, encoding="unicode") + "\n"
+            # Emit a FRESH tree built from the validated values: only tag and stripped text are copied, so no
+            # attribute, comment, processing instruction or stray text from the source can reach the output.
+            source = ET.fromstring(xml)
+            hash_source = source.find("users/dho_api_ch/password_sha256_hex")
+            assert hash_source is not None  # validate() above guarantees exactly one
+            hash_source.text = digest
+            rendered = ET.tostring(_copy(source), encoding="unicode") + "\n"
             validate(rendered)
             if password in rendered:
                 raise SystemExit(

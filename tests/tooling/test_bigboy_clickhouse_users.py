@@ -458,24 +458,85 @@ def test_the_renderer_refuses_when_the_password_is_anywhere_in_the_output(
 
 
 def test_the_renderer_emits_from_the_parsed_tree_only(tmp_path: Path) -> None:
-    """Comments, processing instructions and stray text between elements are not copied."""
+    """Comments and processing instructions are not copied."""
     body = "<?xml version='1.0'?><!-- head note -->" + _XML.replace(
-        "<users>", "<users>stray text "
-    ).replace("</dho_api_ch>", "<!-- inner note --></dho_api_ch>")
-    proc = _render(tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD="pw-1")
-    assert proc.returncode == 0, (proc.stdout, proc.stderr)
-    text = (tmp_path / "out.xml").read_text()
-    for banned in ("<!--", "<?", "note", "stray"):
-        assert banned not in text, (banned, text)
-    assert text.count("<password_sha256_hex>") == 1
-
-
-def test_the_renderer_drops_text_between_and_after_elements(tmp_path: Path) -> None:
-    """Text after a closing tag (an element's tail) is not copied either."""
-    body = _XML.replace("</grants>", "</grants>TAIL-BETWEEN").replace(
-        "</dho_api_ch>", "</dho_api_ch>TAIL-AFTER-USER"
+        "</dho_api_ch>", "<!-- inner note --></dho_api_ch>"
     )
     proc = _render(tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD="pw-1")
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     text = (tmp_path / "out.xml").read_text()
-    assert "TAIL" not in text, text
+    for banned in ("<!--", "<?", "note"):
+        assert banned not in text, (banned, text)
+    assert text.count("<password_sha256_hex>") == 1
+
+
+def test_the_renderer_refuses_text_between_and_after_elements(tmp_path: Path) -> None:
+    """Text after a closing tag (an element's tail) is refused, and nothing is written."""
+    body = _XML.replace("</grants>", "</grants>TAIL-BETWEEN").replace(
+        "</dho_api_ch>", "</dho_api_ch>TAIL-AFTER-USER"
+    )
+    proc = _render(tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD="pw-1")
+    assert proc.returncode != 0, (proc.stdout, proc.stderr)
+    assert "nothing written" in proc.stderr and "TAIL" not in proc.stderr
+    assert not (tmp_path / "out.xml").exists()
+
+
+_ATTRIBUTE_SITES = {
+    "root": ("<clickhouse>", '<clickhouse x="{v}">'),
+    "users": ("<users>", '<users x="{v}">'),
+    "user": ("<dho_api_ch>", '<dho_api_ch x="{v}">'),
+    "hash": ("<password_sha256_hex>", '<password_sha256_hex x="{v}">'),
+    "grants": ("<grants>", '<grants x="{v}">'),
+    "query": ("<query>", '<query x="{v}">'),
+    "networks": ("</password_sha256_hex>", "</password_sha256_hex><networks x='{v}'>"),
+}
+
+
+def test_no_element_may_carry_an_attribute_in_a_declaration_or_a_render(
+    tmp_path: Path,
+) -> None:
+    """A plaintext value in an attribute passed the element-name checks and was copied into the 0644 file."""
+    value = "attr-plaintext-value"
+    for name, (old, new) in _ATTRIBUTE_SITES.items():
+        body = _XML.replace(old, new.replace("{v}", value), 1)
+        if name == "networks":
+            body = body.replace(
+                "<networks x='attr-plaintext-value'>",
+                "<networks x='attr-plaintext-value'></networks>",
+            )
+        checked = _check(tmp_path, _users_file(tmp_path, body=body))
+        assert checked.returncode == 1, (name, checked.stdout, checked.stderr)
+        assert value not in checked.stdout + checked.stderr, name
+        rendered = _render(
+            tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD="pw-1"
+        )
+        assert rendered.returncode != 0, (name, rendered.stdout, rendered.stderr)
+        assert "nothing written" in rendered.stderr, name
+        assert value not in rendered.stdout + rendered.stderr, name
+        assert not (tmp_path / "out.xml").exists(), name
+
+
+def test_containers_hold_only_elements_and_leaves_only_their_own_kind_of_text(
+    tmp_path: Path,
+) -> None:
+    cases = {
+        "text in a container": _XML.replace("<grants>", "<grants>STRAY"),
+        "element inside a leaf": _XML.replace(
+            "<password_sha256_hex>", "<password_sha256_hex><x/>"
+        ),
+        "unknown element in networks": _XML.replace(
+            "</password_sha256_hex>",
+            "</password_sha256_hex><networks><secret>v</secret></networks>",
+        ),
+        "leaf of another container": _XML.replace(
+            "</password_sha256_hex>",
+            "</password_sha256_hex><networks><query>GRANT SELECT ON a.b</query></networks>",
+        ),
+        "free text in profile": _XML.replace(
+            "</password_sha256_hex>",
+            "</password_sha256_hex><profile>a b c</profile>",
+        ),
+    }
+    for name, body in cases.items():
+        proc = _check(tmp_path, _users_file(tmp_path, body=body))
+        assert proc.returncode == 1, (name, proc.stdout, proc.stderr)

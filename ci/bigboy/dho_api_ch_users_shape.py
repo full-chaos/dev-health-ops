@@ -29,6 +29,51 @@ ALLOWED = {
     "quota",
 }
 _HEX64 = re.compile(r"[0-9a-f]{64}")
+#: The whole tree, as an allow-list (CHAOS-7162): no element may carry an attribute, containers hold only
+#: element children (no text at all), leaves hold only text that matches their pattern. Nothing outside this
+#: table is a valid element, so a value cannot ride in an attribute, a stray node or a comment-like place.
+_NAME = re.compile(r"[A-Za-z0-9_.\-]{1,64}")
+_NET = re.compile(r"[A-Za-z0-9_.:/*+?|()\[\]^$\\\-]{1,255}")
+_CONTAINERS = {
+    "clickhouse": {"users"},
+    "users": {USER},
+    USER: ALLOWED,
+    "networks": {"ip", "host", "host_regexp", "name"},
+    "grants": {"query"},
+}
+_LEAVES: dict[str, re.Pattern[str]] = {
+    "password_sha256_hex": _HEX64,
+    "access_management": re.compile(r"[01]"),
+    "profile": _NAME,
+    "quota": _NAME,
+    "ip": _NET,
+    "host": _NET,
+    "host_regexp": _NET,
+    "name": _NET,
+    "query": re.compile(r"GRANT [^<>]{1,2000}", re.IGNORECASE),
+}
+
+
+def _check_node(node: ET.Element) -> None:
+    if node.attrib:
+        raise ValueError(f"<{node.tag}> has an attribute: attributes are not allowed")
+    if node.tag in _CONTAINERS:
+        if (node.text or "").strip():
+            raise ValueError(f"<{node.tag}> holds text: it may hold only elements")
+        for child in node:
+            if child.tag not in _CONTAINERS[node.tag]:
+                raise ValueError(f"<{child.tag}> is not allowed inside <{node.tag}>")
+            if (child.tail or "").strip():
+                raise ValueError(f"text after <{child.tag}> is not allowed")
+            _check_node(child)
+        return
+    pattern = _LEAVES.get(node.tag)
+    if pattern is None:
+        raise ValueError(f"<{node.tag}> is not an allowed element")
+    if len(node):
+        raise ValueError(f"<{node.tag}> may not hold elements")
+    if not pattern.fullmatch((node.text or "").strip()):
+        raise ValueError(f"<{node.tag}> holds text that is not an allowed value")
 
 
 def validate(text: str) -> None:
@@ -71,6 +116,7 @@ def validate(text: str) -> None:
             raise ValueError(
                 "<grants> may hold only <query>GRANT ...</query> statements"
             )
+    _check_node(root)
     if "://" in text:
         raise ValueError('the file contains a URI ("://")')
 

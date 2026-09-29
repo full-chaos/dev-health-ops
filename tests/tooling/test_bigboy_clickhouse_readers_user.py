@@ -49,3 +49,14 @@ def test_clickhouse_enables_access_management_so_the_readers_sql_can_apply() -> 
     """The image writes access_management=0 for the default user; CREATE USER needs 1."""
     env = _compose()["services"]["clickhouse"]["environment"]
     assert env["CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT"] == "1"
+
+
+def test_readers_profile_forbids_writes_but_allows_per_query_settings_within_pinned_ceilings() -> (
+    None
+):
+    """readonly = 1 refuses the per-query SETTINGS the MCP caller sends; readonly = 2 allows them,
+    and only the MAX pins keep the ceilings from being raised."""
+    sql = READERS_SQL.read_text()
+    assert re.search(r"readonly\s*=\s*2\b", sql)
+    assert re.search(r"max_execution_time\s*=\s*30\s+MAX\s+30\b", sql)
+    assert re.search(r"max_memory_usage\s*=\s*4000000000\s+MAX\s+4000000000\b", sql)

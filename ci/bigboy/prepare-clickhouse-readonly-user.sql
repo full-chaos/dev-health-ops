@@ -27,10 +27,15 @@
 -- anywhere else. Database name is bigboy's `default` (verified above by
 -- table lookup, never by reading a DSN secret).
 
+-- readonly = 2, not 1: readonly = 1 refuses any per-query SETTINGS clause (Code 164), which the
+-- MCP caller class sends on every query. readonly = 2 still forbids every write and forbids
+-- changing `readonly` itself, and allows changing the other settings within their MAX bounds.
+-- The MAX pins below are what keep those per-query changes bounded: the caller may lower the
+-- limits, never raise them.
 CREATE SETTINGS PROFILE IF NOT EXISTS mcp_readonly_profile
-    SETTINGS readonly = 1,
-             max_memory_usage = 4000000000,   -- 4 GiB ceiling, named so the MCP lead can tune it
-             max_execution_time = 30;         -- seconds; matches "a bytes-read ceiling for the MCP caller class" intent (DESIGN-r5-clean.md J.7 #7)
+    SETTINGS readonly = 2,
+             max_memory_usage = 4000000000 MAX 4000000000,   -- 4 GiB ceiling, named so the MCP lead can tune it
+             max_execution_time = 30 MAX 30;                 -- seconds; matches "a bytes-read ceiling for the MCP caller class" intent (DESIGN-r5-clean.md J.7 #7)
 
 -- Password/auth method chosen and set at apply time (never written here).
 -- The literal string below is a syntax placeholder, not a real value.

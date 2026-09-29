@@ -187,3 +187,18 @@ def test_subset_check_reports_a_changed_field_or_argument_type() -> None:
     assert python_members_missing_from_pin(python_sdl, changed_arg) == [
         "argument Query.home(orgId): type String! in Python, Int! in the pin"
     ]
+
+
+def test_subset_check_reports_a_changed_input_field_type() -> None:
+    """Observe the guard failing on a same-name input field with another type."""
+    pinned = _PINNED_SDL_PATH.read_text()
+    marker = "input AIAttributionScopeInput {"
+    assert marker in pinned
+    head, _, tail = pinned.partition(marker)
+    assert "  repoId: String" in tail.split("}", 1)[0]
+    changed = head + marker + tail.replace("  repoId: String", "  repoId: Int", 1)
+    assert changed != pinned
+    assert python_members_missing_from_pin(schema.as_str(), changed) == [
+        "input field AIAttributionScopeInput.repoId: type String in Python, "
+        "Int in the pin"
+    ]

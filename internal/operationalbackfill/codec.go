@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -28,6 +30,8 @@ const (
 	orderingContract = 2
 	// rankActiveUpdate is the operation rank of a live (not deleted) entity.
 	rankActiveUpdate = 1
+	// rankTombstone is the operation rank of a deleted or inactive entity.
+	rankTombstone = 2
 )
 
 var (
@@ -141,6 +145,16 @@ func encodeField(out *bytes.Buffer, name string, value any) error {
 			return fmt.Errorf("invalid operational ordering field %s: invalid UTF-8 text", name)
 		}
 		valueType, encoded = "string", []byte(typed)
+	case UUIDText:
+		// Python holds source_id and repo_id as UUID; the codec writes it as its
+		// lower-case canonical text under its own type tag.
+		valueType, encoded = "uuid", []byte(strings.ToLower(string(typed)))
+	case int64:
+		valueType, encoded = "integer", []byte(strconv.FormatInt(typed, 10))
+	case float64:
+		var packed [8]byte
+		binary.BigEndian.PutUint64(packed[:], math.Float64bits(typed))
+		valueType, encoded = "float64", packed[:]
 	case time.Time:
 		if _, err := utcMicroseconds(typed, name); err != nil {
 			return err
@@ -216,4 +230,57 @@ func pyStrip(text string) string {
 // U+0130 lowers to "i" plus a combining dot.
 func pyLower(text string) string {
 	return strings.ToLower(strings.ReplaceAll(text, "İ", "i̇"))
+}
+
+// UUIDText is a UUID field value (source_id, repo_id): the type tag differs
+// from a string's, so the conflict key differs.
+type UUIDText string
+
+// OrderingField is one named value of an operational entity, in the dataclass
+// declaration order. A value is nil, bool, string, UUIDText, int64, float64 or time.Time.
+type OrderingField struct {
+	Name  string
+	Value any
+}
+
+// Ordering is the contract-2 values of one entity: the three derived
+// columns; OrderingContract is always 2.
+type Ordering struct {
+	SourceRevision *big.Int
+	ConflictKey    string
+	IngestRevision *big.Int
+}
+
+// DeriveOrdering is build_entity_ordering (operational_ordering.py) for an
+// entity a caller holds as named fields: the conflict key over every field but
+// the id, the four ordering columns and the two observation timestamps, the
+// source revision at the operation rank the tombstone state fixes, and the
+// ingest revision. It exists so a loader of frozen legacy-shape rows can stamp
+// them for a contract-2 table with the values the producer would have written.
+func DeriveOrdering(family string, fields []OrderingField, sourceVersionAt, lastSynced, observedAt time.Time, tombstone bool) (Ordering, error) {
+	conflictFields := make([]field, 0, len(fields))
+	for _, item := range fields {
+		switch item.Name {
+		case "id", "observed_at", "last_synced", "source_revision", "source_conflict_key", "ingest_revision", "ordering_contract":
+			continue
+		}
+		conflictFields = append(conflictFields, field{item.Name, item.Value})
+	}
+	key, err := conflictKey(family, conflictFields)
+	if err != nil {
+		return Ordering{}, err
+	}
+	rank := uint8(rankActiveUpdate)
+	if tombstone {
+		rank = rankTombstone
+	}
+	revision, err := sourceRevision(sourceVersionAt, rank, key)
+	if err != nil {
+		return Ordering{}, err
+	}
+	ingest, err := ingestRevision(lastSynced, observedAt)
+	if err != nil {
+		return Ordering{}, err
+	}
+	return Ordering{SourceRevision: revision, ConflictKey: key, IngestRevision: ingest}, nil
 }

@@ -303,6 +303,170 @@ const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!
   }
 }`
 
+// registeredHomeDocument is the registered document for the home
+// operation: the wire form of the web app's HOME_QUERY (variables orgId,
+// filters, window), kept byte-identical in
+// testdata/wire_capture/home_captured.graphql (see that directory's
+// README for how the wire form is produced from the web repo's own
+// pinned urql). Its selection set covers the schema's own
+// type declarations (contracts/graphql/v1/schema.graphql: HomeResult,
+// Freshness, HomeFreshnessSource, Coverage, MetricDelta, SparkPoint,
+// ReworkThemeAllocation, SummarySentence, HomeTileEntry, HomeTile,
+// ConstraintCard, ConstraintEvidence, EventItem, HealthState, HomeSignal,
+// ScopeEntityRef, HomeLimitingFactor, HomeDataConfidence -- every field
+// each type declares, not a hand-picked subset), formatted to match
+// this file's other entries' urql-print convention (multi-line,
+// `__typename` on every object selection). The digest of the captured
+// wire fixture must equal this constant's
+// (query_route_wire_capture_test.go's
+// TestRegisteredHomeDocument_MatchesCapturedWireFixture); the web repo's
+// graphql-wire-parity check runs the current HOME_QUERY against the
+// digest registered here. query_route_integration_test.go's
+// TestHomeRoute_ReachableOnlyWhenSwitchEnabled proves an in-process
+// request built from THIS EXACT constant reaches queryResolver.Home
+// (routing/auth gating only -- it does not assert response content),
+// and registered_home_document_schema_parity_test.go's
+// TestRegisteredHomeDocumentSelectsEveryHomeResultField is the content
+// side: it fails the moment this constant's selection set falls behind
+// what contracts/graphql/v1/schema.graphql's HomeResult (recursively)
+// declares -- the defect class where the schema grows but the registered
+// document does not (see the comment below).
+//
+// Why the selection must track the schema: growing HomeResult's SDL and
+// homeResultFromResponse's mapping to the full home payload while leaving
+// THIS constant selecting only the original 3 fields
+// (freshness/deltas/reworkThemeAllocation) would leave every new field the SDL
+// and the resolver now support (summary/tiles/constraint/events/
+// healthState/signals/limitingFactor/dataConfidence,
+// freshness.latestSuccessfulSyncAt, freshness.sources)
+// UNREACHABLE through /query: operationForDocument matches by exact
+// document digest (see that function below), so any client selecting a
+// new field got a 404 digest-miss even though queryResolver.Home mapped
+// it correctly. So this selection set is exhaustive per type.
+const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      spark {
+        ts
+        value
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredWorkGraphEdgesDocument is CHAOS-4352 Wave 4 Lane A's
 // (CHAOS-4504) registered document for the workGraphEdges operation --
 // same "registered documents only" contract, same "sourced from the real
@@ -2832,6 +2996,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"complexityTimeseries":              digestHex(registeredComplexityTimeseriesDocument),
 		"hotspots":                          digestHex(registeredHotspotsDocument),
 		"operatingReview":                   digestHex(registeredOperatingReviewDocument),
+		"home":                              digestHex(registeredHomeDocument),
 		"releaseImpact":                     digestHex(registeredReleaseImpactDocument),
 		"workGraphEdges":                    digestHex(registeredWorkGraphEdgesDocument),
 		"workGraphFlow":                     digestHex(registeredWorkGraphFlowDocument),

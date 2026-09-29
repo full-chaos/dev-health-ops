@@ -15,12 +15,16 @@ package graph
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
 
 // recordingHomeCHClient records how many times it was reached and always
@@ -62,7 +66,7 @@ func (p *recordingHomePGClient) Query(_ context.Context, _ string, _ ...any) (pg
 func TestHome_RejectsMissingClaims(t *testing.T) {
 	ch := &recordingHomeCHClient{}
 	r := &Resolver{ClickHouse: ch}
-	_, err := r.Query().Home(context.Background(), "org-1", nil)
+	_, err := r.Query().Home(context.Background(), "org-1", nil, nil)
 	asAuthorizationError(t, err)
 	if ch.calls != 0 {
 		t.Fatal("ClickHouse must not be reached when claims are missing")
@@ -73,7 +77,7 @@ func TestHome_RejectsEmptyOrgIDClaim(t *testing.T) {
 	ch := &recordingHomeCHClient{}
 	r := &Resolver{ClickHouse: ch}
 	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: ""})
-	_, err := r.Query().Home(ctx, "org-1", nil)
+	_, err := r.Query().Home(ctx, "org-1", nil, nil)
 	asAuthorizationError(t, err)
 	if ch.calls != 0 {
 		t.Fatal("ClickHouse must not be reached when the OrgID claim is empty")
@@ -93,7 +97,7 @@ func TestHome_UsesAuthenticatedOrgIDNotArgument(t *testing.T) {
 	pg := &recordingHomePGClient{}
 	r := &Resolver{ClickHouse: ch, Postgres: pg}
 	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-authenticated"})
-	_, err := r.Query().Home(ctx, "org-argument-different", nil)
+	_, err := r.Query().Home(ctx, "org-argument-different", nil, nil)
 	requireNotAuthorizationError(t, err)
 	if len(pg.args) != 1 {
 		t.Fatalf("expected exactly one Postgres QueryRow call, got %d", len(pg.args))
@@ -115,11 +119,73 @@ func TestHome_PostgresTypeAssertionFailureIsAnError(t *testing.T) {
 	ch := &recordingHomeCHClient{}
 	r := &Resolver{ClickHouse: ch}
 	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-authenticated"})
-	_, err := r.Query().Home(ctx, "org-authenticated", nil)
+	_, err := r.Query().Home(ctx, "org-authenticated", nil, nil)
 	if err == nil {
 		t.Fatal("expected an error when Postgres is nil, got nil")
 	}
 	if ch.calls != 0 {
 		t.Fatalf("ClickHouse must not be reached when the Postgres dependency is missing, got %d calls", ch.calls)
 	}
+}
+
+// bindingRecordingCHClient records the bindings of every query and fails it.
+type bindingRecordingCHClient struct {
+	mu       sync.Mutex
+	bindings []clickhouse.Binding
+}
+
+func (c *bindingRecordingCHClient) Query(_ context.Context, _ string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.bindings = append(c.bindings, b...)
+	return nil, errors.New("bindingRecordingCHClient: recorded")
+}
+
+func (c *bindingRecordingCHClient) values(name string) map[any]bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[any]bool{}
+	for _, b := range c.bindings {
+		if b.Name == name {
+			out[b.Value] = true
+		}
+	}
+	return out
+}
+
+// A requested window reaches the ClickHouse reads: 90 days ending 2026-03-31
+// is queried as start_day 2026-01-01 .. end_day 2026-04-01, and a request
+// without a window is queried for the default 14 days.
+func TestHome_RequestedWindowIsTheWindowQueried(t *testing.T) {
+	run := func(window *model.HomeWindowInput) *bindingRecordingCHClient {
+		ch := &bindingRecordingCHClient{}
+		pg := &recordingHomePGClient{}
+		r := &Resolver{ClickHouse: ch, Postgres: pgNoRows{pg}}
+		ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
+		_, _ = r.Query().Home(ctx, "org-1", nil, window)
+		return ch
+	}
+	days := 90
+	end := graphqldate.Date(time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC))
+	ch := run(&model.HomeWindowInput{RangeDays: &days, EndDate: &end})
+	if got := ch.values("start_day"); !got["2026-01-01"] {
+		t.Fatalf("start_day bindings = %v, want 2026-01-01 among them (90-day window)", got)
+	}
+	if got := ch.values("end_day"); !got["2026-04-01"] {
+		t.Fatalf("end_day bindings = %v, want 2026-04-01 among them", got)
+	}
+
+	defaults := run(nil)
+	starts := defaults.values("start_day")
+	if len(starts) == 0 || starts["2026-01-01"] {
+		t.Fatalf("default window start_day bindings = %v, want a 14-day window", starts)
+	}
+}
+
+// pgNoRows makes the freshness read succeed with no row, so BuildResponse
+// proceeds to its ClickHouse reads.
+type pgNoRows struct{ *recordingHomePGClient }
+
+func (p pgNoRows) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
+	return failingRow{err: pgx.ErrNoRows}
 }

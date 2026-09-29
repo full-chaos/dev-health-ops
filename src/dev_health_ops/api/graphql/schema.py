@@ -47,7 +47,6 @@ from .models.outputs import (
     CatalogResult,
     FeatureFlagEventsResult,
     FeatureFlagRegistryResult,
-    HomeResult,
     OperatingReview,
     ProductTelemetryDashboardType,
     ProductTelemetryPlatformDashboardType,
@@ -220,60 +219,6 @@ class Query:
         input: ProductTelemetryDashboardInput,
     ) -> ProductTelemetryPlatformDashboardType:
         _raise_served_by_query_api("productTelemetryPlatformDashboard", "", info)
-
-    @strawberry.field(description="Get home dashboard metrics")
-    async def home(
-        self,
-        info: Info,
-        org_id: str,
-        filters: FilterInput | None = None,
-    ) -> HomeResult:
-        """
-        Fetch home dashboard metrics and freshness info.
-
-        Args:
-            org_id: Required organization ID for scoping.
-            filters: Optional filters to apply.
-
-        Returns:
-            HomeResult with freshness and metric deltas.
-        """
-        from .models.outputs import Freshness, MetricDelta, ReworkThemeAllocation
-        from .models.outputs import HomeResult as HR
-        from .resolvers.home import resolve_home
-
-        context = get_context(info)
-        data = await resolve_home(context, filters)
-
-        return HR(
-            freshness=Freshness(
-                last_ingested_at=str(data["freshness"]["last_ingested_at"])
-                if data["freshness"]["last_ingested_at"]
-                else None,
-            ),
-            deltas=[
-                MetricDelta(
-                    metric=d["metric"],
-                    label=d["label"],
-                    value=d["value"],
-                    unit=d["unit"],
-                    delta_pct=d["delta_pct"],
-                    spark=[],
-                )
-                for d in data["deltas"]
-            ],
-            rework_theme_allocation=[
-                ReworkThemeAllocation(
-                    theme=row["theme"],
-                    label=row["label"],
-                    allocation=row["allocation"],
-                    allocation_pct=row["allocation_pct"],
-                    prs_merged=row["prs_merged"],
-                    churn_loc=row["churn_loc"],
-                )
-                for row in data.get("rework_theme_allocation", [])
-            ],
-        )
 
     @strawberry.field(description="Query work graph edges with optional filters")
     async def work_graph_edges(

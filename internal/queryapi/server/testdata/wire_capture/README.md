@@ -227,3 +227,43 @@ to the query source text.
 | `saved_reports_captured.graphql` | `095ac91596b0baea1b8100074d7f8c0beb39291c999274d1e978444e8d25f6a5` |
 | `saved_report_captured.graphql` | `02fc81f826285965c94a564e490d1dec4e4831079bb3788ff7f742dd06aa6a22` |
 | `report_runs_captured.graphql` | `16fbdefaa0f4f095d43b934b5fefb3eaed5878aeb20685303aba6f3a67c4a8de` |
+
+# home wire-capture fixture
+
+`home_captured.graphql` (`Home`) is the wire-form text of `HOME_QUERY`
+(`web/src/lib/graphql/queries.ts`, CHAOS-7064's real caller of this
+field), produced the same way `pr_captured.graphql` above was: importing
+the web repo's own, live, pinned `wireForm()`
+(`scripts/graphql-wire-parity.ts`) and applying it directly to the
+`HOME_QUERY` export via `tsx`, so `@urql/core` resolved from the web
+repo's own pinned `node_modules` (`createRequest` -> `formatDocument` ->
+`stringifyDocument`, the same three real functions `fetchExchange`
+calls in production). CHAOS-7070's own r1 review found the first cut of
+this PR authored `registeredHomeDocument` by hand from the schema
+instead of registering `HOME_QUERY`'s real wire form -- this fixture,
+and `query_route_wire_capture_test.go`'s
+`TestRegisteredHomeDocument_MatchesCapturedWireFixture`, are the fix:
+proof against the actual client text, not proof against the const's own
+claim about itself.
+
+The wire-form digest happens to equal the hand-authored const's digest
+from that first cut (both are `9776798e8090...`) -- HOME_QUERY's own
+field order and nesting were written to match `HomeResult`'s SDL
+exhaustively, same as the hand-authored version was, so urql's
+`__typename` injection landed on the identical selection tree. That is a
+coincidence of this operation's specific history, not something a
+future change may rely on: the registered const's source of truth is,
+and must stay, this captured fixture, never a hand-derivation from the
+schema.
+
+| fixture | sha256(wire form) |
+| --- | --- |
+| `home_captured.graphql` | `9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554` |
+
+(For contrast, `sha256(HOME_QUERY.trim())` on the raw, unprinted source
+text is `d4bb71ec7a9f667b5801fb23487bc3479628a11695eafa0e85507ae43c12a04b`
+-- different from the wire-form digest above, because the source text
+has no `__typename` at all; the negative control in
+`TestRegisteredHomeDocument_MatchesCapturedWireFixture` pins this
+difference the same way the featureFlags/featureFlagEvents tests above
+do.)

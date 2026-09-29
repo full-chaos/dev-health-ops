@@ -44,18 +44,6 @@ ResolverSQLFixture = Callable[[CapturingSink], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
-# home
-# ---------------------------------------------------------------------------
-
-
-async def _fixture_home(sink: CapturingSink) -> None:
-    from dev_health_ops.api.graphql.resolvers.home import resolve_home
-
-    context = FakeGraphQLContext(client=sink, org_id=SAMPLE_ORG_ID)
-    await resolve_home(context)
-
-
-# ---------------------------------------------------------------------------
 # recommendations
 # ---------------------------------------------------------------------------
 
@@ -274,7 +262,6 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
 # lives on the Go side: cmd/query-api/capacity_forecast_seeded_integration_
 # test.go runs those reads against a real, migrated ClickHouse.
 ALL_RESOLVER_SQL_FIXTURES: list[tuple[str, ResolverSQLFixture]] = [
-    ("home", _fixture_home),
     ("recommendations", _fixture_recommendations),
     ("bus_factor", _fixture_bus_factor),
     ("analytics", _fixture_analytics),

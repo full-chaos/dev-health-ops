@@ -621,6 +621,18 @@ type ConnectorStatus struct {
 	LastFailure  *ConnectorFailure `json:"lastFailure,omitempty"`
 }
 
+type ConstraintCard struct {
+	Title       string               `json:"title"`
+	Claim       string               `json:"claim"`
+	Evidence    []ConstraintEvidence `json:"evidence"`
+	Experiments []string             `json:"experiments"`
+}
+
+type ConstraintEvidence struct {
+	Label string `json:"label"`
+	Link  string `json:"link"`
+}
+
 type Coverage struct {
 	ReposCoveredPct          float64 `json:"reposCoveredPct"`
 	PrsLinkedToIssuesPct     float64 `json:"prsLinkedToIssuesPct"`
@@ -647,6 +659,13 @@ type CreateSavedReportInput struct {
 type DateRangeInput struct {
 	StartDate graphqldate.Date `json:"startDate"`
 	EndDate   graphqldate.Date `json:"endDate"`
+}
+
+type EventItem struct {
+	Ts   string `json:"ts"`
+	Type string `json:"type"`
+	Text string `json:"text"`
+	Link string `json:"link"`
 }
 
 type EvidenceQualityStats struct {
@@ -738,14 +757,97 @@ type FlowMatrixResult struct {
 }
 
 type Freshness struct {
-	LastIngestedAt *string   `json:"lastIngestedAt,omitempty"`
-	Coverage       *Coverage `json:"coverage,omitempty"`
+	LastIngestedAt *string `json:"lastIngestedAt,omitempty"`
+	// ISO timestamp of the most recent sync that succeeded across every connected source, or null when none ever has.
+	LatestSuccessfulSyncAt *string `json:"latestSuccessfulSyncAt,omitempty"`
+	// One entry per connected source (provider name and its own sync status) -- not a fixed set of keys.
+	Sources  []HomeFreshnessSource `json:"sources"`
+	Coverage *Coverage             `json:"coverage,omitempty"`
+}
+
+type HealthState struct {
+	Status   string  `json:"status"`
+	Headline string  `json:"headline"`
+	Summary  string  `json:"summary"`
+	AsOf     *string `json:"asOf,omitempty"`
+}
+
+type HomeDataConfidence struct {
+	Level string `json:"level"`
+	// Null when coverage could not be computed for this window.
+	CoveragePct      *float64 `json:"coveragePct,omitempty"`
+	ConnectedSources []string `json:"connectedSources"`
+	MissingSources   []string `json:"missingSources"`
+	Caveats          []string `json:"caveats"`
+}
+
+type HomeFreshnessSource struct {
+	Provider string `json:"provider"`
+	Status   string `json:"status"`
+}
+
+type HomeLimitingFactor struct {
+	Claim             string  `json:"claim"`
+	WhyItMatters      string  `json:"whyItMatters"`
+	RecommendedAction string  `json:"recommendedAction"`
+	Confidence        string  `json:"confidence"`
+	EvidenceRef       *string `json:"evidenceRef,omitempty"`
 }
 
 type HomeResult struct {
 	Freshness             *Freshness              `json:"freshness"`
 	Deltas                []MetricDelta           `json:"deltas"`
 	ReworkThemeAllocation []ReworkThemeAllocation `json:"reworkThemeAllocation"`
+	Summary               []SummarySentence       `json:"summary"`
+	Tiles                 []HomeTileEntry         `json:"tiles"`
+	Constraint            *ConstraintCard         `json:"constraint"`
+	Events                []EventItem             `json:"events"`
+	HealthState           *HealthState            `json:"healthState"`
+	Signals               []HomeSignal            `json:"signals"`
+	LimitingFactor        *HomeLimitingFactor     `json:"limitingFactor"`
+	DataConfidence        *HomeDataConfidence     `json:"dataConfidence"`
+}
+
+type HomeSignal struct {
+	ID            string  `json:"id"`
+	Title         string  `json:"title"`
+	Metric        string  `json:"metric"`
+	CurrentValue  string  `json:"currentValue"`
+	PriorValue    *string `json:"priorValue,omitempty"`
+	Delta         *string `json:"delta,omitempty"`
+	Direction     string  `json:"direction"`
+	Severity      string  `json:"severity"`
+	Confidence    string  `json:"confidence"`
+	AffectedScope string  `json:"affectedScope"`
+	EvidenceCount int     `json:"evidenceCount"`
+	WhyItMatters  string  `json:"whyItMatters"`
+	// The action the builder recommends, verbatim -- deterministic output of home.BuildResponse, not an LLM suggestion and not re-ranked here.
+	RecommendedAction string `json:"recommendedAction"`
+	// Opaque reference into the evidence store, or null when the signal carries none.
+	EvidenceRef *string `json:"evidenceRef,omitempty"`
+	Category    string  `json:"category"`
+	// Null when the signal is not scoped to one entity (e.g. an org-wide signal).
+	ScopeEntity *ScopeEntityRef `json:"scopeEntity,omitempty"`
+}
+
+type HomeTile struct {
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle"`
+	Link     string `json:"link"`
+}
+
+// One entry of HomeResult.tiles -- a list, not a map, so field order matches the builder's own ordering.
+type HomeTileEntry struct {
+	Key   string    `json:"key"`
+	Value *HomeTile `json:"value"`
+}
+
+// Time window of the `home` query, the same members as `filters.time` of the REST home endpoint (range_days, compare_days, start_date, end_date). An unset member takes the REST default: 14, 14, no explicit dates.
+type HomeWindowInput struct {
+	RangeDays   *int              `json:"rangeDays,omitempty"`
+	CompareDays *int              `json:"compareDays,omitempty"`
+	StartDate   *graphqldate.Date `json:"startDate,omitempty"`
+	EndDate     *graphqldate.Date `json:"endDate,omitempty"`
 }
 
 type HotspotRow struct {
@@ -1156,6 +1258,11 @@ type SavedReportType struct {
 	CreatedBy        *string          `json:"createdBy,omitempty"`
 }
 
+type ScopeEntityRef struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+}
+
 type ScopeFilterInput struct {
 	Level ScopeLevelInput `json:"level"`
 	Ids   []string        `json:"ids"`
@@ -1229,6 +1336,12 @@ type SeverityBucket struct {
 type SparkPoint struct {
 	Ts    string  `json:"ts"`
 	Value float64 `json:"value"`
+}
+
+type SummarySentence struct {
+	ID           string `json:"id"`
+	Text         string `json:"text"`
+	EvidenceLink string `json:"evidenceLink"`
 }
 
 type TestOpsRiskBreakdownItem struct {

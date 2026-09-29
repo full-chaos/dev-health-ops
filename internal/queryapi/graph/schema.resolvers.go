@@ -263,15 +263,14 @@ func (r *queryResolver) ProductTelemetryPlatformDashboard(ctx context.Context, i
 }
 
 // Home is the resolver for the home field (CHAOS-6084 / CHAOS-7042).
-// This field has zero web callers (CHAOS-6084's caller check); the data
-// this ported is the same already golden-parity-proven home.BuildResponse
-// GET/POST /api/v1/home uses, NOT resolve_home's own dead computation --
-// see home_translate.go's doc comment for why. Authorization mirrors
-// resolve_home's ACTUAL behavior (require_org_id: raise if the envelope
+// The web home page reads the same data; the data this ported is the same already golden-parity-proven home.BuildResponse
+// GET/POST /api/v1/home uses, NOT the former Python resolve_home's own
+// (deleted) computation -- see home_translate.go's doc comment for why.
+// Authorization mirrors that resolver's behavior (require_org_id: raise if the envelope
 // carries no org, else always use the authorized org, never the orgId
 // argument) via requestOrg, the same helper WorkGraphEdges documents this
 // convention with above.
-func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.FilterInput) (*model.HomeResult, error) {
+func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.FilterInput, window *model.HomeWindowInput) (*model.HomeResult, error) {
 	authorizedOrgID, err := requestOrg(ctx)
 	if err != nil {
 		return nil, err
@@ -282,7 +281,7 @@ func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.F
 		return nil, fmt.Errorf("home: postgres client does not support QueryRow")
 	}
 
-	resp, err := home.BuildResponse(ctx, r.ClickHouse, pgClient, authorizedOrgID, homeFiltersFromGraphQL(filters), time.Now().UTC())
+	resp, err := home.BuildResponse(ctx, r.ClickHouse, pgClient, authorizedOrgID, homeFiltersFromGraphQL(filters, window), time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("home: %w", err)
 	}

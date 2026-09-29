@@ -48,7 +48,7 @@ VALUES = [
 def run(unit, value):
     try:
         start, end = module._window_to_dates(WindowInput(value=value, unit=unit))
-    except BaseException as exc:
+    except Exception as exc:
         return {"unit": unit.name, "value": value, "exception": type(exc).__name__}
     return {
         "unit": unit.name,

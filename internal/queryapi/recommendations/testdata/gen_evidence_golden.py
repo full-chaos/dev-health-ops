@@ -92,7 +92,7 @@ def run(raw):
     }
     try:
         rec = _row_to_recommendation(row)
-    except BaseException as exc:  # an exception the resolver would not catch
+    except Exception as exc:  # an exception the resolver would not catch
         return {"raw": raw, "python_exception": type(exc).__name__}
     if rec is None:
         return {"raw": raw, "keep_row": False, "evidence": []}

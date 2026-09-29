@@ -59,7 +59,7 @@ async def run(window, mode):
     context = cast(Any, types.SimpleNamespace(org_id="test-org", client=object()))
     try:
         rows = await module.resolve_recommendations(context, "team-a", window)
-    except BaseException as exc:
+    except Exception as exc:
         return {"exception": type(exc).__name__}
     return {"rows": len(rows)}
 

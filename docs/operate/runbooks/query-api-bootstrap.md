@@ -119,30 +119,26 @@ kubectl patch deployment dev-health-ops -p '{"spec":{"template":{"spec":{"contai
 
 Or use `--patch-file` to avoid credential exposure (Trap #121).
 
-## Step 6: First-time routing rows (canary set only)
+## Step 6: First-time routing rows
 
-The routing state table is empty on first deploy, and nothing that reads it can create a row: `dho goapi prove` routes a `shadow` operation through the proof route only when a row exists, `dho goapi routing disable` never inserts one, and `dho goapi routing enable` refuses an operation with no recorded proof run for the running build (there is no waiver flag; the only exception is a written limit in the compiled go-served ledger). So the first rows are seeded by hand in `shadow` mode, at the digests the running query-api reports, then proven (Step 7), then enabled (end of Step 7).
+An operation that has no routing row cannot be proven or enabled on production: `dho goapi prove` routes through the proof route only when a row exists, `dho goapi routing disable` never inserts one, and `dho goapi routing enable` refuses an operation with no recorded proof run for the running build (there is no waiver flag; the only exception is a written limit in the compiled go-served ledger). `dho goapi routing seed` creates that first row. It writes **shadow only** (owner `go`, rollout 0), never changes an existing row, and never moves a row between schema digests (that is `dho goapi routing carry`). A first row comes only from `seed`: `carry` moves existing rows to a new schema digest and never creates one.
 
-Read the digests from the running query-api (`/registry` is unauthenticated; `/buildinfo` takes the envelope) and insert one row per canary operation, candidate build first:
+Nothing is typed but the operation names. The schema digest and each document digest come from the running query-api's `/registry` (checked against this binary's SDL and the edge catalog), and the build comes from `/buildinfo`. Run it from the tools image of the same cut, with the Postgres DSN and the envelope key in the environment (never argv):
 
-```sql
--- <schema> and <document> come from GET /registry (schema_digest, and the
--- operation's document_digest); <build> is the candidate_build /buildinfo reports.
-INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
-VALUES ('<schema>', '<document>', '<operation>', '<build>') ON CONFLICT DO NOTHING;
-
-INSERT INTO go_api_routing_state
-  (schema_digest, document_digest, selected_operation, current_candidate_build,
-   owner, mode, rollout_percentage, review_evidence, recorded_by, updated_at)
-VALUES ('<schema>', '<document>', '<operation>', '<build>',
-        'go', 'shadow', 0, 'first-time bootstrap: shadow row for the proof run', '<operator>', now())
-ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE
-  SET current_candidate_build = EXCLUDED.current_candidate_build, mode = EXCLUDED.mode, updated_at = EXCLUDED.updated_at;
+```bash
+dho goapi routing seed -operations home,recommendations \
+  -recorded-by <operator> -review-evidence "CHAOS-7165 first-time shadow row" -dry-run
+# then again without -dry-run; or seed every registered operation with no row at any digest:
+dho goapi routing seed -all-unrouted -recorded-by <operator> -review-evidence "<why>"
 ```
+
+Per operation it prints `created`, `already-present` (a shadow row is already at the running digest; zero writes) or `refused` (exit 2): a row at the running digest in any other mode, or a row only at an older schema digest (run `dho goapi routing carry`). One refused operation refuses the whole run: nothing is written for any operation. Every created row and its audit row carry a `seed: ` evidence prefix, and one run shares one audit correlation id (printed in the `go_api_routing.seeded` event). A schema digest mismatch, an operation the running query-api does not register, or a catalog digest divergence refuses the whole run before any write. It needs only Postgres, `/registry` and `/buildinfo`; it does not need the internal listener or the proof allowlist.
 
 **Shadow set (3 ops) intentionally NOT seeded** — enabling known-mismatch operations as canary first is a stop condition. Canary operations route to the real query-api against the baseline API. Real proof compares both planes; shadow refused-by-name (expected on prod) is never compared.
 
 ## Step 7: Real proof (go-api-prove)
+
+**Production note.** The proof route (`/query/proof`) does not mount on a production posture, and the edge dispatches only routed rows, so a read operation on production has no proof path before it is routed. A shadow row from Step 6 does not make it reachable. Moving it to canary goes through `dho goapi routing enable`, which needs a proof receipt for the running build or a reviewed `enable_limit` in the compiled go-served ledger (`internal/goapiproof/goserved_ledger.json`). Mutations use `dho goapi prove-write` on the internal listener and need no ledger entry.
 
 ### Grant the proof service principal read access to the org (once per org)
 

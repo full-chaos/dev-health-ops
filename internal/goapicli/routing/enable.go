@@ -311,7 +311,7 @@ func runEnable(argv []string) error {
 			if outcome.HadRowBefore {
 				modeBefore, buildBefore = outcome.ModeBefore, outcome.CandidateBuildBefore
 			}
-			fmt.Fprintf(stderr, "go_api_routing.enabled operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s document_digest=%s recorded_by=%s\n",
+			fmt.Fprintf(stderr, "go_api_routing.enabled operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s document_digest=%s recorded_by=%q\n",
 				outcome.Operation, modeBefore, outcome.Mode, buildBefore, outcome.CandidateBuild, registry.SchemaDigest, outcome.DocumentDigest, common.recordedBy)
 		}
 	}

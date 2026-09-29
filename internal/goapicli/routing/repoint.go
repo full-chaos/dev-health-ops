@@ -231,7 +231,7 @@ func runRepoint(argv []string) (err error) {
 		// for every unchanged row on a large rollout would bury the ones
 		// that actually moved.
 		if outcome.Changed && !dryRun {
-			fmt.Fprintf(stderr, "go_api_routing.repointed operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s document_digest=%s recorded_by=%s\n",
+			fmt.Fprintf(stderr, "go_api_routing.repointed operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s document_digest=%s recorded_by=%q\n",
 				outcome.Operation, outcome.ModeBefore, outcome.ModeAfter, outcome.BuildFrom, outcome.BuildTo, registry.SchemaDigest, outcome.DocumentDigest, common.recordedBy)
 		}
 	}

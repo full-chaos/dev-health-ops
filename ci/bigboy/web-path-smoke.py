@@ -671,7 +671,11 @@ def check_work_graph_flow(ctx: Ctx) -> dict[str, Any]:
 
 
 def _check_seeded_read(
-    ctx: Ctx, op: str, variables: dict[str, Any], shape: type
+    ctx: Ctx,
+    op: str,
+    variables: dict[str, Any],
+    shape: type,
+    required_field: str | None = None,
 ) -> dict[str, Any]:
     """CHAOS-7190: a seeded read op must be answered by the Go plane through the web path.
 
@@ -686,6 +690,10 @@ def _check_seeded_read(
     value = (data or {}).get(op)
     if not isinstance(value, shape):
         raise SmokeFailure(f"{op}_data_shape")
+    if required_field is not None and (
+        not isinstance(value, dict) or value.get(required_field) is None
+    ):
+        raise SmokeFailure(f"{op}_field_missing={required_field}")
     if isinstance(value, list):
         result["row_count"] = len(value)
     return result
@@ -696,7 +704,8 @@ def check_home(ctx: Ctx) -> dict[str, Any]:
         "orgId": ctx.org_id,
         "window": {"rangeDays": 14, "compareDays": 14},
     }
-    return _check_seeded_read(ctx, "home", variables, dict)
+    # `freshness` is the block the home page renders first (toHomeResponse in web).
+    return _check_seeded_read(ctx, "home", variables, dict, "freshness")
 
 
 def check_recommendations(ctx: Ctx) -> dict[str, Any]:
@@ -709,7 +718,13 @@ def check_recommendations(ctx: Ctx) -> dict[str, Any]:
 
 
 def check_work_item_team_attributions(ctx: Ctx) -> dict[str, Any]:
-    variables: dict[str, Any] = {"orgId": ctx.org_id, "workItemIds": [], "teamId": None}
+    # A non-empty id that matches no row: an empty list would skip the resolver's work-item
+    # filter and scan the whole org on every run (mirrors internal/goapiproof/operations.go).
+    variables: dict[str, Any] = {
+        "orgId": ctx.org_id,
+        "workItemIds": ["smoke-probe-no-such-item"],
+        "teamId": None,
+    }
     return _check_seeded_read(ctx, "workItemTeamAttributions", variables, list)
 
 

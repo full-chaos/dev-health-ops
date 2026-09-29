@@ -140,6 +140,11 @@ closes the loop for a REAL browser session, not a hand-minted token: it logs in 
 web-path-smoke-receipt.json` from `bigboy-cut.sh`, structural facts only -- status/plane/row
 counts, never a token or a body value).
 
+CHAOS-7190: it also sends the three seeded read documents (`HOME_QUERY`, `RECOMMENDATIONS_QUERY`,
+`WORK_ITEM_TEAM_ATTRIBUTIONS_QUERY`, verbatim from the same file) and asserts 200 + `X-Dev-Health-Plane:
+go` + no GraphQL errors + the expected `data.<op>` shape; a Python-plane answer fails as `<op>_plane_python`.
+The web source mounted at `./web/src` must be the deployed web build (it must define those constants).
+
 Credentials: `DHO_SMOKE_ADMIN_EMAIL` + `DHO_SMOKE_ADMIN_PASSWORD_FILE` (0600, the `*_FILE`
 convention, CHAOS-6972) in `ops/.env`. **This STEP fails loud (rc=1, named reason) while either is
 absent or resolves blank** -- presence/blank is checked through `compose-config-redacted.sh`

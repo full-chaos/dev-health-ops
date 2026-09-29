@@ -97,6 +97,13 @@ GRAPHQL_SOURCES: dict[str, tuple[str, str]] = {
     "complexityTimeseries": ("lib/graphql/queries.ts", "COMPLEXITY_TIMESERIES_QUERY"),
     "workGraphFlow": ("lib/graphql/queries.ts", "WORK_GRAPH_FLOW_QUERY"),
     "testopsRisk": ("lib/testops/queries.ts", "TESTOPS_RISK_QUERY"),
+    # CHAOS-7190: the three read operations seeded by `routing seed` (CHAOS-7165).
+    "home": ("lib/graphql/queries.ts", "HOME_QUERY"),
+    "recommendations": ("lib/graphql/queries.ts", "RECOMMENDATIONS_QUERY"),
+    "workItemTeamAttributions": (
+        "lib/graphql/queries.ts",
+        "WORK_ITEM_TEAM_ATTRIBUTIONS_QUERY",
+    ),
 }
 
 
@@ -397,6 +404,7 @@ class Ctx:
     documents: dict[str, str] = field(default_factory=dict)
     known_missing: dict[str, str] = field(default_factory=dict)
     flame_entity: str | None = None
+    team_id: str | None = None
 
 
 def check_web_source(ctx: Ctx) -> dict[str, Any]:
@@ -534,6 +542,10 @@ def check_filter_options(ctx: Ctx) -> dict[str, Any]:
     r = request("GET", "/api/v1/filters/options", jar=ctx.jar)
     body = r.body if isinstance(r.body, dict) else {}
     nonempty = sum(1 for v in body.values() if isinstance(v, list) and v)
+    teams = body.get("teams")
+    if isinstance(teams, list) and teams:
+        first = teams[0]
+        ctx.team_id = str(first.get("id")) if isinstance(first, dict) else str(first)
     return _assert_go("filters_options", r, nonempty)
 
 
@@ -658,6 +670,49 @@ def check_work_graph_flow(ctx: Ctx) -> dict[str, Any]:
     return result
 
 
+def _check_seeded_read(
+    ctx: Ctx, op: str, variables: dict[str, Any], shape: type
+) -> dict[str, Any]:
+    """CHAOS-7190: a seeded read op must be answered by the Go plane through the web path.
+
+    Order matters: status and plane first (a Python-plane answer to a Go-only field is the
+    D3057 signature and is named `<op>_plane_python`), then GraphQL errors, then the shape
+    of `data.<op>`. Row counts are reported, not gated (thin history is legitimate)."""
+    r = _graphql(ctx, op, variables)
+    result = _assert_go(op, r, None)
+    if isinstance(r.body, dict) and r.body.get("errors"):
+        raise SmokeFailure(f"{op}_graphql_errors")
+    data = r.body.get("data") if isinstance(r.body, dict) else None
+    value = (data or {}).get(op)
+    if not isinstance(value, shape):
+        raise SmokeFailure(f"{op}_data_shape")
+    if isinstance(value, list):
+        result["row_count"] = len(value)
+    return result
+
+
+def check_home(ctx: Ctx) -> dict[str, Any]:
+    variables = {
+        "orgId": ctx.org_id,
+        "window": {"rangeDays": 14, "compareDays": 14},
+    }
+    return _check_seeded_read(ctx, "home", variables, dict)
+
+
+def check_recommendations(ctx: Ctx) -> dict[str, Any]:
+    variables = {
+        "orgId": ctx.org_id,
+        "team": ctx.team_id or "smoke-probe",
+        "window": {"unit": "DAY", "value": 14},
+    }
+    return _check_seeded_read(ctx, "recommendations", variables, list)
+
+
+def check_work_item_team_attributions(ctx: Ctx) -> dict[str, Any]:
+    variables: dict[str, Any] = {"orgId": ctx.org_id, "workItemIds": [], "teamId": None}
+    return _check_seeded_read(ctx, "workItemTeamAttributions", variables, list)
+
+
 def check_testops_risk(ctx: Ctx) -> dict[str, Any]:
     """testops/risk page: fetchRiskMetrics (lib/testops/fetchers.ts) with the page's dateRange."""
     today = datetime.now(timezone.utc).date()
@@ -771,6 +826,12 @@ def run() -> tuple[list[dict[str, Any]], list[str], list[str]]:
         step("rest:flame", check_flame)
         step("graphql:complexityTimeseries", check_complexity)
         step("graphql:workGraphFlow", check_work_graph_flow)
+        step("graphql:home", check_home)
+        step("graphql:recommendations", check_recommendations)
+        step(
+            "graphql:workItemTeamAttributions",
+            check_work_item_team_attributions,
+        )
         step("graphql:testopsRisk", check_testops_risk)
         step("page:testops_risk", check_testops_risk_page)
         step("logout", logout)

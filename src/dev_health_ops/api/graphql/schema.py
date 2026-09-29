@@ -301,14 +301,7 @@ class Query:
         work_item_ids: list[str] | None = None,
         team_id: str | None = None,
     ) -> list[WorkItemTeamAttribution]:
-        from .resolvers.team_attribution import (
-            resolve_work_item_team_attributions,
-        )
-
-        context = get_context(info)
-        return await resolve_work_item_team_attributions(
-            context, work_item_ids=work_item_ids, team_id=team_id
-        )
+        _raise_served_by_query_api("workItemTeamAttributions", org_id, info)
 
     @strawberry.field(
         description=(
@@ -553,10 +546,7 @@ class Query:
         team: strawberry.ID,
         window: WindowInput,
     ) -> list[Recommendation]:
-        from .resolvers.recommendations import resolve_recommendations
-
-        context = get_context(info)
-        return await resolve_recommendations(context, str(team), window)
+        _raise_served_by_query_api("recommendations", org_id, info)
 
     @strawberry.field(
         description=(

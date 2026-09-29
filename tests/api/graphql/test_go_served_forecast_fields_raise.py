@@ -131,6 +131,15 @@ _QUERIES = {
         'query { workUnitTeamAttributions(orgId: "org-1") { workUnitId } }',
         None,
     ),
+    "workItemTeamAttributions": (
+        'query { workItemTeamAttributions(orgId: "org-1") { workItemId } }',
+        None,
+    ),
+    "recommendations": (
+        'query { recommendations(orgId: "org-1", team: "team-1", '
+        "window: {value: 4, unit: WEEK}) { ruleId } }",
+        None,
+    ),
     "securityOverview": (
         'query { securityOverview(orgId: "org-1") { kpis { openTotal } } }',
         None,

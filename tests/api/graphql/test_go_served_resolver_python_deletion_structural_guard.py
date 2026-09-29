@@ -113,6 +113,16 @@ TEAM_ATTRIBUTION_RESOLVER_SOURCE = (
     / "team_attribution.py"
 )
 
+RECOMMENDATIONS_RESOLVER_SOURCE = (
+    ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "recommendations.py"
+)
+
 DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     # dataHealth (connectors, identity, mapping coverage, metric lineage): the
     # resolver module is deleted (modules ledger below); the lineage
@@ -141,12 +151,17 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
             "_build_filter_clauses",
         }
     ),
-    # workUnitTeamAttributions: the work-item attribution resolver stays.
+    # workUnitTeamAttributions and workItemTeamAttributions: the module is
+    # deleted (modules ledger below), and the symbols stay named here.
     TEAM_ATTRIBUTION_RESOLVER_SOURCE: frozenset(
         {
             "resolve_work_unit_team_attributions",
             "_row_to_unit_attribution",
             "_SOURCE_RANK_SQL",
+            "resolve_work_item_team_attributions",
+            "_row_to_attribution",
+            "_map_source",
+            "_map_confidence",
         }
     ),
     # The operator repair and bulk-redrive routes: the Go workerctl verbs run
@@ -246,6 +261,8 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
 # operations. Their Strawberry field bodies raise; there is no Python code to
 # call.
 DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
+    # workItemTeamAttributions + workUnitTeamAttributions.
+    "team attribution resolver": TEAM_ATTRIBUTION_RESOLVER_SOURCE,
     # capacityForecast + capacityForecasts.
     "capacity resolver": ROOT
     / "src"
@@ -579,6 +596,8 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "data_health",
             "security_overview",
             "work_unit_team_attributions",
+            "work_item_team_attributions",
+            "recommendations",
             "experiments",
             "ai_opportunities",
             "product_telemetry_dashboard",
@@ -651,6 +670,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "SecurityAlertEdge",
             "SecurityAlertConnection",
             "WorkUnitTeamAttribution",
+            "WorkItemTeamAttribution",
             "ProductTelemetryDashboardType",
             "ProductTelemetryPlatformDashboardType",
             "ProductTelemetrySessionSummaryType",
@@ -795,6 +815,34 @@ def test_sdl_load_bearing_declarations_still_exist() -> None:
             "schema-change PR with a regenerated pin and a routing-row "
             "migration, not a Python cleanup."
         )
+
+
+def test_recommendations_resolver_is_a_retained_oracle_with_no_production_importer() -> (
+    None
+):
+    """resolvers/recommendations.py is kept ONLY as the parity oracle.
+
+    The three golden generators under internal/queryapi/recommendations/testdata
+    run its real functions and ``TestGoldensAreWhatPythonProducesNow`` re-runs
+    them, so deleting it would delete the proof the Go port agrees with
+    anything. The field body raises; nothing under ``src/`` may import the
+    module, or the Python executes beside the Go that serves the operation.
+    """
+    assert RECOMMENDATIONS_RESOLVER_SOURCE.exists(), (
+        f"{RECOMMENDATIONS_RESOLVER_SOURCE} was deleted; it is the oracle for "
+        "the Go recommendations goldens."
+    )
+    dotted = "dev_health_ops.api.graphql.resolvers.recommendations"
+    importers = [
+        str(candidate.relative_to(ROOT))
+        for candidate in (ROOT / "src").rglob("*.py")
+        if candidate != RECOMMENDATIONS_RESOLVER_SOURCE
+        and _imports_module(candidate, dotted)
+    ]
+    assert not importers, (
+        f"{dotted} is imported from production code by {', '.join(sorted(importers))}"
+        ": it is retained only as the Go port's parity oracle."
+    )
 
 
 def test_retained_oracles_exist_and_have_no_production_importer() -> None:

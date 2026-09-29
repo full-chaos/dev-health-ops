@@ -127,8 +127,13 @@ spec:
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       restartPolicy: Never
+      # runAsNonRoot needs a NUMERIC uid to verify: the tools image's `USER toolsuser` is a name,
+      # so the kubelet refuses to start the pod (CreateContainerConfigError) unless the uid is
+      # pinned here. 10001 is the uid docker/go-api-tools.Dockerfile creates.
       securityContext:
         runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
       containers:
         - name: routing-carry
           image: {{ $toolsImage }}
@@ -243,8 +248,13 @@ spec:
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       restartPolicy: Never
+      # runAsNonRoot needs a NUMERIC uid to verify: the tools image's `USER toolsuser` is a name,
+      # so the kubelet refuses to start the pod (CreateContainerConfigError) unless the uid is
+      # pinned here. 10001 is the uid docker/go-api-tools.Dockerfile creates.
       securityContext:
         runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
       containers:
         - name: routing-repoint
           image: {{ $toolsImage }}

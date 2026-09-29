@@ -283,9 +283,9 @@ func TestEnableDryRunRunsTheGateAndWritesNothing(t *testing.T) {
 	}
 
 	request.DryRun = false
-	request.Operations = []string{"featureFlags", "hotspots"}
-	request.OperationKinds = queryKinds("featureFlags", "hotspots")
-	request.DocumentDigest["hotspots"] = "1111111111111111111111111111111111111111111111111111111111111111"
+	request.Operations = []string{"featureFlags", "flowMatrix"}
+	request.OperationKinds = queryKinds("featureFlags", "flowMatrix")
+	request.DocumentDigest["flowMatrix"] = "1111111111111111111111111111111111111111111111111111111111111111"
 	if _, err := Enable(ctx, pool, request); !errors.Is(err, ErrEnableUnproven) {
 		t.Fatalf("Enable = %v, want ErrEnableUnproven for the unproven half", err)
 	}

@@ -202,13 +202,17 @@ def test_default_backend_is_go_and_allow_list_stays_python(
     assert _route(doc, "/health") == "http://go-api:8000"
     for py in (
         "/graphql",
-        "/api/v1/admin/llm-settings/readiness",
         "/api/v1/internal/acr/health",
         "/docs",
         "/openapi.json",
     ):
         assert _route(doc, py) == "http://api:8000", py
-    assert _route(doc, "/api/v1/admin/llm-settings/readiness/x") == "http://go-api:8000"
+    # CHAOS-7198: llm-settings/readiness is Go-served, no longer on the Python allow-list.
+    assert _route(doc, "/api/v1/admin/llm-settings/readiness") == "http://go-api:8000"
+    assert (
+        "/api/v1/admin/llm-settings/readiness",
+        "Exact",
+    ) not in gen.DEFAULT_PYTHON_ALLOW_LIST
 
 
 def test_allow_list_override_must_cover_internal(gen: ModuleType) -> None:
@@ -235,6 +239,29 @@ def test_allow_list_cover_is_segment_exact(
 ) -> None:
     doc = {
         "ops": {"ingress": {"pythonAllowList": [{"path": path, "pathType": path_type}]}}
+    }
+    with pytest.raises(SystemExit):
+        gen.python_allow_list_from_doc(doc)
+
+
+def test_allow_list_path_also_served_by_go_is_refused(gen: ModuleType) -> None:
+    """CHAOS-7198: an allow-list entry that goApiPaths/queryApiPaths also serve is refused."""
+    doc = {
+        "ingress": {
+            "goApiPaths": [{"path": "/api/v1/admin/llm-settings/readiness"}],
+            "queryApiPaths": [],
+        },
+        "ops": {
+            "ingress": {
+                "pythonAllowList": [
+                    {
+                        "path": "/api/v1/admin/llm-settings/readiness",
+                        "pathType": "Exact",
+                    },
+                    {"path": "/api/v1/internal", "pathType": "Prefix"},
+                ]
+            }
+        },
     }
     with pytest.raises(SystemExit):
         gen.python_allow_list_from_doc(doc)

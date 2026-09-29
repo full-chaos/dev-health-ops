@@ -169,7 +169,6 @@ def emit_labels(go_regex: str, query_regex: str) -> str:
 # (path, pathType).
 DEFAULT_PYTHON_ALLOW_LIST: list[tuple[str, str]] = [
     ("/graphql", "Prefix"),
-    ("/api/v1/admin/llm-settings/readiness", "Exact"),
     ("/api/v1/internal", "Prefix"),
 ]
 # Kept on Python on bigboy/local ONLY (D2983: prod blocks these at the ingress; local keeps
@@ -187,6 +186,18 @@ def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
     if entries is None:
         return list(DEFAULT_PYTHON_ALLOW_LIST)
     out = [(e["path"], e["pathType"]) for e in entries]
+    # CHAOS-7198: an allow-list path that go-api/query-api also serve is Go-served (the regex
+    # split wins), so listing it sends the operator's intent the wrong way: refuse it.
+    ingress = doc.get("ingress") or {}
+    served = {e["path"] for e in (ingress.get("goApiPaths") or [])} | {
+        e["path"] for e in (ingress.get("queryApiPaths") or [])
+    }
+    clash = sorted(p for p, _ in out if p in served)
+    if clash:
+        raise SystemExit(
+            "generate-plane-split-router: ops.ingress.pythonAllowList paths also served by"
+            f" go-api/query-api: {clash}"
+        )
     # Segment-exact, like ingress-nginx Prefix: only these Prefix paths cover /api/v1/internal.
     if not any(
         t == "Prefix" and p.rstrip("/") in ("", "/api", "/api/v1", "/api/v1/internal")

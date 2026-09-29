@@ -989,7 +989,7 @@ func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _, _, _ := newQueryHandler(emptyHomeCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(emptyHomeCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
 	documentDigest := digestHex(registeredHomeDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 

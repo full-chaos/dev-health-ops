@@ -231,7 +231,7 @@ func runDisable(argv []string) error {
 		}
 		// One structured line per row, so a log search finds the specific
 		// operation and not merely that "something was disabled".
-		fmt.Fprintf(stderr, "go_api_routing.disabled operation=%s from=%s to=%s schema_digest=%s document_digest=%s recorded_by=%s\n",
+		fmt.Fprintf(stderr, "go_api_routing.disabled operation=%s from=%s to=%s schema_digest=%s document_digest=%s recorded_by=%q\n",
 			change.Operation, change.CurrentMode, change.NewMode, local, change.DocumentDigest, common.recordedBy)
 	}
 	fmt.Fprintf(stdout, "\napplied: %d row(s) now mode=%s\n", summary.Applied, mode)

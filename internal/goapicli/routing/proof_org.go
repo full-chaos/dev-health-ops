@@ -113,7 +113,7 @@ func runProofOrgAdd(argv []string) error {
 	}); err != nil {
 		return classifyWriteError(err)
 	}
-	fmt.Fprintf(stderr, "go_api_proof_orgs.added org_id=%s recorded_by=%s\n", orgID, common.recordedBy)
+	fmt.Fprint(stderr, proofOrgAddedEvent(orgID, common.recordedBy))
 	fmt.Fprintf(stdout, "go-api-routing: %s is now allowlisted for /query/proof-write\n", orgID)
 	return nil
 }
@@ -158,7 +158,7 @@ func runProofOrgRemove(argv []string) error {
 	if err != nil {
 		return classifyWriteError(err)
 	}
-	fmt.Fprintf(stderr, "go_api_proof_orgs.removed org_id=%s recorded_by=%s existed=%t\n", orgID, common.recordedBy, removed)
+	fmt.Fprint(stderr, proofOrgRemovedEvent(orgID, common.recordedBy, removed))
 	if removed {
 		fmt.Fprintf(stdout, "go-api-routing: %s removed from the /query/proof-write allowlist\n", orgID)
 	} else {
@@ -199,7 +199,24 @@ func runProofOrgList(argv []string) error {
 	}
 	fmt.Fprintf(stdout, "%-24s %-20s %s\n", "ORG_ID", "ADDED_BY", "REASON")
 	for _, row := range rows {
-		fmt.Fprintf(stdout, "%-24s %-20s %s\n", row.OrgID, row.AddedBy, row.Reason)
+		fmt.Fprint(stdout, proofOrgListRow(row.OrgID, row.AddedBy, row.Reason))
 	}
 	return nil
+}
+
+// The structured one-line events and the list table print operator-supplied
+// values (-org, -recorded-by, review evidence stored as the reason). Each is
+// quoted (%q) so a value carrying spaces, `key=value` text or control
+// characters cannot forge a second field or a second line (CHAOS-7174).
+
+func proofOrgAddedEvent(orgID, recordedBy string) string {
+	return fmt.Sprintf("go_api_proof_orgs.added org_id=%q recorded_by=%q\n", orgID, recordedBy)
+}
+
+func proofOrgRemovedEvent(orgID, recordedBy string, existed bool) string {
+	return fmt.Sprintf("go_api_proof_orgs.removed org_id=%q recorded_by=%q existed=%t\n", orgID, recordedBy, existed)
+}
+
+func proofOrgListRow(orgID, addedBy, reason string) string {
+	return fmt.Sprintf("%-24s %-20q %q\n", orgID, addedBy, reason)
 }

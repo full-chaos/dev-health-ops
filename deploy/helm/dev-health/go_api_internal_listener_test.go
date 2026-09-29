@@ -163,9 +163,15 @@ func TestGoAPIInternalListenerChart(t *testing.T) {
 			t.Errorf("containerPort %d is denied by the NetworkPolicy (open: %v)", port, open)
 		}
 	}
-	withEdge := render("--set", "goApi.internal.openPorts[0]=8010")
-	if !openPorts(withEdge)[8010] || openPorts(withEdge)[8091] {
-		t.Errorf("openPorts must open 8010 and never the internal port: %v", openPorts(withEdge))
+	// An extra listener added through extraArgs (the umbrella's billing edge) is
+	// derived into the policy from the same args; the internal port never is.
+	withEdge := render("--set", "goApi.extraArgs[0]=--api-billing-edge-addr=:8010", "--set", "goApi.extraArgs[1]=--log-level=debug")
+	if got := openPorts(withEdge); !got[8010] || got[8091] || len(got) != 3 {
+		t.Errorf("the billing-edge extraArgs listener must be open, the internal port never: %v", got)
+	}
+	viaInternal := render("--set", "goApi.extraArgs[0]=--api-billing-edge-addr=:8091")
+	if openPorts(viaInternal)[8091] {
+		t.Errorf("an extraArgs listener on the internal port opened it to every source")
 	}
 
 	// Default allowedFrom (empty): the internal port has NO admitting rule.

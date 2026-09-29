@@ -192,17 +192,27 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # The public and operator listeners, and goApi.internal.openPorts (extra listeners the
-    # process serves, e.g. the billing-edge port): open to every source, exactly as before this policy
+    # The public and operator listeners, and every extraArgs `--...-addr` listener port: open to every source, exactly as before this policy
     # existed (Ingress, probes and scrapes).
     - ports:
         - protocol: TCP
           port: {{ .Values.goApi.port }}
         - protocol: TCP
           port: {{ .Values.goApi.operatorPort }}
-        {{- range .Values.goApi.internal.openPorts }}
+        {{- /*
+        Every other listener the process is started with (extraArgs `--...-addr=host:port`, e.g. the
+        billing-edge listener `--api-billing-edge-addr=:8010`) is derived from the SAME args the
+        container gets, so a new listener is never silently denied. The internal port is never
+        opened here.
+        */}}
+        {{- $seen := list (int .Values.goApi.port) (int .Values.goApi.operatorPort) (int .Values.goApi.internal.port) }}
+        {{- range .Values.goApi.extraArgs }}
+        {{- $port := regexFind "^--[a-z-]+-addr=[^:]*:[0-9]+$" . | regexFind "[0-9]+$" }}
+        {{- if and $port (not (has (int $port) $seen)) }}
+        {{- $seen = append $seen (int $port) }}
         - protocol: TCP
-          port: {{ . }}
+          port: {{ $port }}
+        {{- end }}
         {{- end }}
     {{- /*
     The internal listener trusts every peer that can connect, so the network is the boundary:

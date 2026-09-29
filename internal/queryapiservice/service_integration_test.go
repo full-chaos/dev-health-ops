@@ -64,7 +64,8 @@ func TestConfiguredServiceReportsItsDependenciesOnTheOperatorListener(t *testing
 		t.Fatal(err)
 	}
 
-	query, operator := freeAddr(t), freeAddr(t)
+	addrs := freeAddrs(t, 2)
+	query, operator := addrs[0], addrs[1]
 	r := start(t, []string{"--query-addr", query, "--http-addr", operator}, map[string]string{
 		"CLICKHOUSE_URI":               ch.URI,
 		"GO_API_REGISTRY_POSTGRES_URI": pg.URI,

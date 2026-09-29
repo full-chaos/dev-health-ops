@@ -190,6 +190,12 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 		out, err := exec.Command("helm", args...).CombinedOutput()
 		return string(out), err
 	}
+	// use-regex annotation with a go-api route.
+	if out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
+		"--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/use-regex=true`,
+		"--set-json", `ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`).CombinedOutput(); err == nil || !strings.Contains(string(out), "use-regex is true") {
+		t.Errorf("use-regex with a go-api route must fail the render: err=%v\n%s", err, out)
+	}
 	catchAll := `[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
 	if out, err := render(catchAll, ""); err != nil {
 		t.Fatalf("default allow-list must render: %v\n%s", err, out)
@@ -201,6 +207,9 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 		"sibling -x":                {catchAll, `[{"path":"/api/v1/internal-x","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
 		"sibling s":                 {catchAll, `[{"path":"/api/v1/internals","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
 		"exact internal only":       {catchAll, `[{"path":"/api/v1/internal","pathType":"Exact"}]`, "must cover /api/v1/internal"},
+		"regex path":                {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"^/api/v1/(internal|internal/acr/.*)","pathType":"ImplementationSpecific","service":"go-api"}]}]`, "", "only literal Prefix/Exact"},
+		"regex chars in prefix":     {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api/v1/(internal)","pathType":"Prefix","service":"go-api"}]}]`, "", "only literal Prefix/Exact"},
+		"implementation specific":   {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/x","pathType":"ImplementationSpecific","service":"go-api"}]}]`, "", "only literal Prefix/Exact"},
 		"go-api /api":               {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api","pathType":"Prefix","service":"go-api"}]}]`, "", "covers /api/v1/internal"},
 		"go-api internal":           {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api/v1/internal/acr","pathType":"Prefix","service":"go-api"}]}]`, "", "covers /api/v1/internal"},
 	} {

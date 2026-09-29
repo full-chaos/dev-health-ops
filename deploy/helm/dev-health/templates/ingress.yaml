@@ -40,6 +40,12 @@ spec:
           {{- if and (eq .path "/") (eq .service "go-api") (not $host.pythonAllowList) }}
           {{- fail (printf "ingress.hosts %q routes \"/\" to go-api without pythonAllowList: true (paths only Python serves would 404)" $host.host) }}
           {{- end }}
+          {{- if and (eq .service "go-api") (or (not (regexMatch "^/[A-Za-z0-9_/-]*$" .path)) (not (has .pathType (list "Prefix" "Exact")))) }}
+          {{- fail (printf "ingress.hosts %q path %q pathType %q routes to go-api: only literal Prefix/Exact paths may (a regex path can out-match the Python allow-list and expose /api/v1/internal/acr/*)" $host.host .path .pathType) }}
+          {{- end }}
+          {{- if and (eq .service "go-api") (eq (toString (get (default (dict) $.Values.ingress.annotations) "nginx.ingress.kubernetes.io/use-regex")) "true") }}
+          {{- fail "ingress.annotations use-regex is true on an Ingress that routes to go-api: every path becomes a regex and the allow-list precedence is no longer segment-exact" }}
+          {{- end }}
           {{- if and (eq .service "go-api") (regexMatch "^/api(/v1(/internal.*)?)?/?$" .path) }}
           {{- fail (printf "ingress.hosts %q path %q routes to go-api but covers /api/v1/internal (the Go api serves /api/v1/internal/acr/* with no credential check)" $host.host .path) }}
           {{- end }}

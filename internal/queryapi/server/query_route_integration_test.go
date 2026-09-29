@@ -933,6 +933,134 @@ func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 	})
 }
 
+func homeVariables() map[string]any {
+	return map[string]any{"orgId": "org-1"}
+}
+
+// emptyHomeRowScanner is a clickhouse.RowScanner with zero rows -- Next()
+// always false, so no caller's Scan(...) is ever reached regardless of
+// how many columns that particular query selects. home.BuildResponse
+// fires many differently-shaped queries (fetchLastIngestedAt,
+// fetchCoverage, fetchSourceStatuses, computeMetricDeltas,
+// fetchReworkThemeAllocation, fetchRecommendationSignals,
+// fetchRiskSignals, and conditionally fetchMetricDriverDelta), so a
+// fake that had to match each shape's column count would be as large as
+// the package's own golden fixtures; a zero-row scanner sidesteps that
+// entirely and is honest about what it proves -- reachability through
+// the real routing switch, not a claim about ClickHouse data shape,
+// which internal/queryapi/home's own golden_test.go et al already prove
+// against the real Python producer.
+type emptyHomeRowScanner struct{}
+
+func (emptyHomeRowScanner) Next() bool        { return false }
+func (emptyHomeRowScanner) Scan(...any) error { return nil }
+func (emptyHomeRowScanner) Err() error        { return nil }
+func (emptyHomeRowScanner) Close() error      { return nil }
+
+type emptyHomeCHClient struct{}
+
+func (emptyHomeCHClient) Query(_ context.Context, _ string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	return emptyHomeRowScanner{}, nil
+}
+
+// TestHomeRoute_ReachableOnlyWhenSwitchEnabled is CHAOS-6084/CHAOS-7042's
+// extension of the same reachability contract to home: real Mux, real
+// PostgresSwitch reading a real (migrated, testcontainer) Postgres
+// table, real gqlgen server, real principal.Verifier, and -- unlike
+// every sibling test above -- Postgres is ALSO home.PGQueryClient's own
+// dependency (FetchLatestSuccessfulSyncAt), so this test exercises that
+// real pool too, not a fake; an empty, migrated table answers
+// pgx.ErrNoRows, which FetchLatestSuccessfulSyncAt already maps to
+// (nil, nil). Proves home's reachability is gated independently by its
+// OWN go_api_routing_state row, using registeredHomeDocument's own
+// AUTHORED text (see that const's doc comment for why it is authored
+// rather than captured from a real client file: CHAOS-6084 found zero
+// web callers of this field).
+func TestHomeRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwksPath := writeTestJWKS(t, pub)
+	verifier, err := principal.NewVerifier(jwksPath, itTestIssuer, itTestAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler, _, _, _ := newQueryHandler(emptyHomeCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	documentDigest := digestHex(registeredHomeDocument)
+	token := signTestEnvelope(t, priv, "org-1")
+
+	t.Run("disabled_by_default", func(t *testing.T) {
+		rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, token, homeVariables())
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "home", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, token, homeVariables())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), `"errors"`) {
+			t.Fatalf("expected a clean response with no GraphQL errors, got %s", rec.Body.String())
+		}
+		// deltas is a FIXED metric list (computeMetricDeltas always
+		// reports every tracked metric, value=0/deltaPct=0 when the
+		// fake ClickHouse client's zero rows leave nothing to compute
+		// from) -- reworkThemeAllocation, by contrast, only ever holds
+		// rows a query actually returned, so it stays empty. Both are
+		// genuine shapes of "no data", not a copy-paste of one
+		// assertion for the other.
+		if !strings.Contains(rec.Body.String(), `"reworkThemeAllocation":[]`) {
+			t.Fatalf("expected an empty reworkThemeAllocation array (the fake ClickHouse client returns zero rows for every query), got %s", rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"metric":"throughput"`) || !strings.Contains(rec.Body.String(), `"value":0`) {
+			t.Fatalf("expected the fixed metric-delta list with zero values, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "home", "canary")
+		rec := postGraphQLWithVariables(t, handler, "query { __typename }", token, nil)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "home", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, "", homeVariables())
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("no token: got %d, want 401", rec.Code)
+		}
+	})
+
+	t.Run("enabling_home_does_not_enable_featureFlags", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "home", "canary")
+		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("featureFlags should stay unreachable when only home is canaried: got %d", rec.Code)
+		}
+	})
+
+	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "home", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, token, homeVariables())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
+		}
+		setRoutingMode(t, pool, documentDigest, "home", "disabled")
+		if rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, token, homeVariables()); rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
+		}
+	})
+}
+
 // resolves to a DIFFERENT port for a Go process (native wire protocol)
 // than for a Python process (HTTP) despite sharing the same env var name
 // across this repo's deployments (deploy/go-workers/README.md, "ClickHouse:

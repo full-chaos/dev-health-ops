@@ -3000,6 +3000,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"complexityTimeseries":              digestHex(registeredComplexityTimeseriesDocument),
 		"hotspots":                          digestHex(registeredHotspotsDocument),
 		"operatingReview":                   digestHex(registeredOperatingReviewDocument),
+		"home":                              digestHex(registeredHomeDocument),
 		"releaseImpact":                     digestHex(registeredReleaseImpactDocument),
 		"workGraphEdges":                    digestHex(registeredWorkGraphEdgesDocument),
 		"workGraphFlow":                     digestHex(registeredWorkGraphFlowDocument),

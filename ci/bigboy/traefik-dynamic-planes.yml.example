@@ -13,10 +13,17 @@ http:
       entryPoints: [web]
       priority: 1000
       service: query-api-paths
+    # CHAOS-7047: the paths Python still answers (ops chart ingress.pythonAllowList + the
+    # local-only docs/metrics paths), below the two plane routers, above the default backend.
+    python-allowlist:
+      rule: "Host(`traefik`) && (Path(`/graphql`) || PathPrefix(`/graphql/`) || Path(`/api/v1/admin/llm-settings/readiness`) || Path(`/api/v1/internal`) || PathPrefix(`/api/v1/internal/`) || Path(`/docs`) || PathPrefix(`/docs/`) || Path(`/redoc`) || Path(`/openapi.json`) || Path(`/metrics`))"
+      entryPoints: [web]
+      priority: 500
+      service: python-allowlist
     # Everything else on the internal traefik hostname (web's own server-side BACKEND_URL calls)
-    # falls through to the Python api, mirroring compose.yml's own browser-origin web router
-    # (which only matches commanderkeen.dev/localhost, never the internal `traefik` hostname).
-    # Without this, a non-split path called via BACKEND_URL=http://traefik:3000 would 404.
+    # falls through to the GO api (its native 404 answers an unknown path), mirroring prod's
+    # default backend. Without a rule, a non-split path called via BACKEND_URL=http://traefik:3000
+    # would 404 at traefik itself, with no plane header.
     api-internal-catchall:
       rule: "Host(`traefik`)"
       entryPoints: [web]
@@ -31,8 +38,12 @@ http:
       loadBalancer:
         servers:
           - url: "http://query-api:8090"
-    api-internal-catchall:
+    python-allowlist:
       loadBalancer:
         servers:
           - url: "http://api:8000"
+    api-internal-catchall:
+      loadBalancer:
+        servers:
+          - url: "http://go-api:8000"
 

@@ -985,6 +985,18 @@ ingress:
         - path: /
           pathType: Prefix
           service: web
+  # -- CHAOS-7047: paths the Python api still answers when a host routes "/" to
+  #    `service: go-api` (set `pythonAllowList: true` on that host). Everything
+  #    else on such a host reaches the Go api, whose own 404 answers unknown
+  #    paths. Must cover /api/v1/internal (unauthenticated Go acr routes).
+  #    Nothing renders unless a host opts in, so the default changes no route.
+  pythonAllowList:
+    - path: /graphql
+      pathType: Prefix
+    - path: /api/v1/admin/llm-settings/readiness
+      pathType: Exact
+    - path: /api/v1/internal
+      pathType: Prefix
   tls: []
   #  - secretName: dev-health-tls
   #    hosts:

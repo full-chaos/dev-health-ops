@@ -1,3 +1,10 @@
+{{- /*
+CHAOS-7047: a host can route its "/" catch-all to the Go api (service: go-api), so an unknown path is answered by Go's native 404 (x-dev-health-plane: go) and
+never by the Python api. The paths Python must still answer are ingress.pythonAllowList (each -> the Python api Service); a host opts in with
+`pythonAllowList: true`. Render guards: a "/" path to go-api requires the opt-in (no allow-list = Python-only paths silently 404), and the allow-list must
+cover /api/v1/internal, because the Go api serves /api/v1/internal/acr/* WITHOUT a credential check (the network boundary is the control, see
+internal_acr_boundary_test.go): the Go default backend must never receive them from the public host.
+*/}}
 {{- if .Values.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -25,11 +32,28 @@ spec:
     {{- end }}
   {{- end }}
   rules:
-    {{- range .Values.ingress.hosts }}
-    - host: {{ .host | quote }}
+    {{- range $host := .Values.ingress.hosts }}
+    - host: {{ $host.host | quote }}
       http:
         paths:
           {{- range .paths }}
+          {{- if and (eq .path "/") (eq .service "go-api") (not $host.pythonAllowList) }}
+          {{- fail (printf "ingress.hosts %q routes \"/\" to go-api without pythonAllowList: true (paths only Python serves would 404)" $host.host) }}
+          {{- end }}
+          {{- if and (eq .service "go-api") (or (not (regexMatch "^/[A-Za-z0-9_/-]*$" .path)) (not (has .pathType (list "Prefix" "Exact")))) }}
+          {{- fail (printf "ingress.hosts %q path %q pathType %q routes to go-api: only literal Prefix/Exact paths may (a regex path can out-match the Python allow-list and expose /api/v1/internal/acr/*)" $host.host .path .pathType) }}
+          {{- end }}
+          {{- if eq .service "go-api" }}
+          {{- if not $.Values.goApi.enabled }}{{- fail (printf "ingress.hosts %q routes to go-api but goApi.enabled is false (the Service would not exist)" $host.host) }}{{- end }}
+          {{- range $ann := list "use-regex" "rewrite-target" "app-root" "configuration-snippet" "server-snippet" "permanent-redirect" "temporal-redirect" }}
+          {{- if hasKey (default (dict) $.Values.ingress.annotations) (printf "nginx.ingress.kubernetes.io/%s" $ann) }}
+          {{- fail (printf "ingress.annotations %s on an Ingress that routes to go-api: a rewrite/regex/snippet-class annotation can map a public path onto /api/v1/internal/* or change how paths match, so the allow-list precedence no longer holds" $ann) }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- if and (eq .service "go-api") (regexMatch "^/api(/v1(/internal.*)?)?/?$" .path) }}
+          {{- fail (printf "ingress.hosts %q path %q routes to go-api but covers /api/v1/internal (the Go api serves /api/v1/internal/acr/* with no credential check)" $host.host .path) }}
+          {{- end }}
           - path: {{ .path }}
             pathType: {{ .pathType }}
             backend:
@@ -38,6 +62,10 @@ spec:
                 name: {{ include "dev-health.fullname" $ }}-api
                 port:
                   number: {{ $.Values.api.port }}
+                {{- else if eq .service "go-api" }}
+                name: {{ include "dev-health.fullname" $ }}-go-api
+                port:
+                  number: {{ $.Values.goApi.port }}
                 {{- else if eq .service "web" }}
                 name: {{ include "dev-health.fullname" $ }}-web
                 port:
@@ -45,6 +73,23 @@ spec:
                 {{- else if eq .service "billing-edge" }}
                 {{- fail "ingress.hosts service \"billing-edge\" is gone (CHAOS-6903): the Python billing edge was removed; the go-api billing-edge listener serves the billing host (deploy chart: goApiBillingEdge + ingress.goApiHosts entry with billingEdge: true)" }}
                 {{- end }}
+          {{- end }}
+          {{- if $host.pythonAllowList }}
+          {{- if not $.Values.api.enabled }}{{- fail (printf "ingress.hosts %q pythonAllowList routes to the Python api but api.enabled is false (the Service would not exist)" $host.host) }}{{- end }}
+          {{- $coversInternal := false }}
+          {{- range $.Values.ingress.pythonAllowList }}
+          {{- if and (eq .pathType "Prefix") (has (trimSuffix "/" .path) (list "" "/api" "/api/v1" "/api/v1/internal")) }}{{- $coversInternal = true }}{{- end }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "dev-health.fullname" $ }}-api
+                port:
+                  number: {{ $.Values.api.port }}
+          {{- end }}
+          {{- if not $coversInternal }}
+          {{- fail (printf "ingress.pythonAllowList must cover /api/v1/internal (Prefix): the Go api serves /api/v1/internal/acr/* without a credential check; host %q" $host.host) }}
+          {{- end }}
           {{- end }}
     {{- end }}
 {{- end }}

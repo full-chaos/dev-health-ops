@@ -163,7 +163,61 @@ def emit_labels(go_regex: str, query_regex: str) -> str:
     return "\n".join(lines)
 
 
-def emit_dynamic_config(go_regex: str, query_regex: str) -> str:
+# CHAOS-7047: the paths the Python api still answers when the default backend is the Go api.
+# Mirrors the ops chart's ingress.pythonAllowList default (deploy/helm/dev-health/values.yaml);
+# a deploy values file may override it at ops.ingress.pythonAllowList. Each entry is
+# (path, pathType).
+DEFAULT_PYTHON_ALLOW_LIST: list[tuple[str, str]] = [
+    ("/graphql", "Prefix"),
+    ("/api/v1/admin/llm-settings/readiness", "Exact"),
+    ("/api/v1/internal", "Prefix"),
+]
+# Kept on Python on bigboy/local ONLY (D2983: prod blocks these at the ingress; local keeps
+# them). Never part of the ops chart's allow-list.
+BIGBOY_LOCAL_PYTHON_PATHS: list[tuple[str, str]] = [
+    ("/docs", "Prefix"),
+    ("/redoc", "Exact"),
+    ("/openapi.json", "Exact"),
+    ("/metrics", "Exact"),
+]
+
+
+def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
+    entries = ((doc.get("ops") or {}).get("ingress") or {}).get("pythonAllowList")
+    if entries is None:
+        return list(DEFAULT_PYTHON_ALLOW_LIST)
+    out = [(e["path"], e["pathType"]) for e in entries]
+    # Segment-exact, like ingress-nginx Prefix: only these Prefix paths cover /api/v1/internal.
+    if not any(
+        t == "Prefix" and p.rstrip("/") in ("", "/api", "/api/v1", "/api/v1/internal")
+        for p, t in out
+    ):
+        raise SystemExit(
+            "generate-plane-split-router: ops.ingress.pythonAllowList must carry /api/v1/internal"
+            " (Prefix): the Go api serves /api/v1/internal/acr/* with no credential check"
+        )
+    return out
+
+
+def _traefik_path_rule(entries: list[tuple[str, str]]) -> str:
+    # Prefix = the path itself OR anything under it (whole segment), like ingress-nginx.
+    terms: list[str] = []
+    for path, path_type in entries:
+        terms.append(f"Path(`{path}`)")
+        if path_type == "Prefix":
+            terms.append(f"PathPrefix(`{path.rstrip('/')}/`)")
+    return "(" + " || ".join(terms) + ")"
+
+
+def emit_dynamic_config(
+    go_regex: str,
+    query_regex: str,
+    python_allow: list[tuple[str, str]] | None = None,
+) -> str:
+    python_rule = _traefik_path_rule(
+        (python_allow if python_allow is not None else DEFAULT_PYTHON_ALLOW_LIST)
+        + BIGBOY_LOCAL_PYTHON_PATHS
+    )
     """Traefik FILE-PROVIDER dynamic config (not docker labels): go-api/query-api/api are named
     by address only (http://go-api:8000 etc) -- this file is the only thing that needs to change
     to add/adjust routing, so applying it only touches traefik (which reloads the file live) and
@@ -184,10 +238,17 @@ http:
       entryPoints: [web]
       priority: 1000
       service: query-api-paths
+    # CHAOS-7047: the paths Python still answers (ops chart ingress.pythonAllowList + the
+    # local-only docs/metrics paths), below the two plane routers, above the default backend.
+    python-allowlist:
+      rule: "{HOST_RULE} && {python_rule}"
+      entryPoints: [web]
+      priority: 500
+      service: python-allowlist
     # Everything else on the internal traefik hostname (web's own server-side BACKEND_URL calls)
-    # falls through to the Python api, mirroring compose.yml's own browser-origin web router
-    # (which only matches commanderkeen.dev/localhost, never the internal `traefik` hostname).
-    # Without this, a non-split path called via BACKEND_URL=http://traefik:3000 would 404.
+    # falls through to the GO api (its native 404 answers an unknown path), mirroring prod's
+    # default backend. Without a rule, a non-split path called via BACKEND_URL=http://traefik:3000
+    # would 404 at traefik itself, with no plane header.
     api-internal-catchall:
       rule: "Host(`traefik`)"
       entryPoints: [web]
@@ -202,10 +263,14 @@ http:
       loadBalancer:
         servers:
           - url: "http://query-api:8090"
-    api-internal-catchall:
+    python-allowlist:
       loadBalancer:
         servers:
           - url: "http://api:8000"
+    api-internal-catchall:
+      loadBalancer:
+        servers:
+          - url: "http://go-api:8000"
 """
 
 
@@ -232,6 +297,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if a.values:
         go_paths, query_paths = load_paths(a.values)
+        with open(a.values) as f:
+            python_allow = python_allow_list_from_doc(yaml.safe_load(f))
     elif all(pinned):
         try:
             full, vendored, text = values_at_sha(
@@ -240,7 +307,9 @@ def main(argv: list[str] | None = None) -> int:
         except PinError as e:
             print(f"REFUSED: {e}", file=sys.stderr)
             return 3
-        go_paths, query_paths = paths_from_doc(yaml.safe_load(text))
+        doc = yaml.safe_load(text)
+        go_paths, query_paths = paths_from_doc(doc)
+        python_allow = python_allow_list_from_doc(doc)
         if a.values_out:
             with open(a.values_out, "w", encoding="utf-8") as f:
                 f.write(text)
@@ -251,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
     go_regex = combined_regex(go_paths)
     query_regex = combined_regex(query_paths)
     if a.format == "dynamic":
-        out = emit_dynamic_config(go_regex, query_regex)
+        out = emit_dynamic_config(go_regex, query_regex, python_allow)
     else:
         out = emit_labels(go_regex, query_regex)
     print(out)

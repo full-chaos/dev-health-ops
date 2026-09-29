@@ -142,50 +142,118 @@ func TestGoAPIInternalListenerChart(t *testing.T) {
 		}
 	}
 
-	// The policy keeps every other listener reachable: every go-api containerPort
-	// except the internal one is open to all sources, plus goApi.internal.openPorts.
-	openPorts := func(docs []map[string]any) map[int]bool {
-		open := map[int]bool{}
-		for _, rule := range dig(named(docs, "NetworkPolicy", "b-dev-health-go-api-internal"), "spec", "ingress").([]any) {
-			if dig(rule, "from") != nil {
-				continue
+	// Every port except the internal one is open to every source (two ranges around it),
+	// so no listener the process is started with can be silently denied, however it is
+	// configured (extraArgs, extraEnv, envFrom, IPv6 host).
+	covers := func(rule any, port int) bool {
+		ports, has := dig(rule, "ports").([]any)
+		if !has {
+			return true // no ports = every port
+		}
+		for _, p := range ports {
+			low := dig(p, "port").(int)
+			high := low
+			if end, ok := dig(p, "endPort").(int); ok {
+				high = end
 			}
-			for _, p := range dig(rule, "ports").([]any) {
-				open[dig(p, "port").(int)] = true
+			if port >= low && port <= high {
+				return true
 			}
 		}
-		return open
+		return false
 	}
-	open := openPorts(docs)
+	openToAll := func(docs []map[string]any, port int) bool {
+		for _, rule := range dig(named(docs, "NetworkPolicy", "b-dev-health-go-api-internal"), "spec", "ingress").([]any) {
+			if dig(rule, "from") == nil && covers(rule, port) {
+				return true
+			}
+		}
+		return false
+	}
 	for _, p := range dig(container, "ports").([]any) {
 		port := dig(p, "containerPort").(int)
-		if port != 8091 && !open[port] {
-			t.Errorf("containerPort %d is denied by the NetworkPolicy (open: %v)", port, open)
+		if port != 8091 && !openToAll(docs, port) {
+			t.Errorf("containerPort %d is denied by the NetworkPolicy", port)
 		}
 	}
-	// An extra listener added through extraArgs (the umbrella's billing edge) is
-	// derived into the policy from the same args; the internal port never is.
-	withEdge := render("--set", "goApi.extraArgs[0]=--api-billing-edge-addr=:8010", "--set", "goApi.extraArgs[1]=--log-level=debug")
-	if got := openPorts(withEdge); !got[8010] || got[8091] || len(got) != 3 {
-		t.Errorf("the billing-edge extraArgs listener must be open, the internal port never: %v", got)
+	for _, port := range []int{1, 8000, 8010, 8080, 8090, 8092, 18010, 65535} {
+		if !openToAll(docs, port) {
+			t.Errorf("port %d is not open to every source", port)
+		}
 	}
-	// The prod shape: the billing edge declared in extraEnv.
-	withEnv := render("--set-json", `goApi.extraEnv=[{"name":"DEV_HEALTH_API_BILLING_EDGE_ADDR","value":":8010"},{"name":"OTHER","value":":9999"}]`)
-	if got := openPorts(withEnv); !got[8010] || got[8091] || got[9999] || len(got) != 3 {
-		t.Errorf("the extraEnv billing-edge listener must be open (and only listener addresses): %v", got)
+	if openToAll(docs, 8091) {
+		t.Errorf("the internal port is open to every source")
 	}
-	if out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set-json",
-		`goApi.extraEnv=[{"name":"DEV_HEALTH_API_BILLING_EDGE_ADDR","valueFrom":{"configMapKeyRef":{"name":"c","key":"k"}}}]`).CombinedOutput(); err == nil ||
-		!strings.Contains(string(out), "DEV_HEALTH_API_BILLING_EDGE_ADDR sets a listener address by valueFrom") {
-		t.Errorf("a valueFrom listener address must fail the render: err=%v\n%s", err, out)
+	// A second --api-internal-addr (extraArgs/extraEnv) would move the listener off the
+	// gated port; an empty selector entry would admit every pod.
+	for _, bad := range []struct {
+		want string
+		args []string
+	}{
+		{"must not set --api-internal-addr", []string{"--set", "goApi.extraArgs[0]=--api-internal-addr=:18092"}},
+		{"must not set DEV_HEALTH_API_INTERNAL_ADDR", []string{"--set-json", `goApi.extraEnv=[{"name":"DEV_HEALTH_API_INTERNAL_ADDR","value":":18092"}]`}},
+		{"non-empty matchLabels or matchExpressions", []string{"--set-json", "goApi.internal.allowedFrom=[{}]"}},
+		{"non-empty matchLabels or matchExpressions", []string{"--set-json", `goApi.internal.allowedFrom=[{"matchLabels":{}}]`}},
+	} {
+		argv := append([]string{"template", "b", ".", "--set", "goApi.enabled=true"}, bad.args...)
+		if out, err := exec.Command("helm", argv...).CombinedOutput(); err == nil || !strings.Contains(string(out), bad.want) {
+			t.Errorf("%v must fail the render with %q: err=%v\n%s", bad.args, bad.want, err, out)
+		}
 	}
-	envInternal := render("--set-json", `goApi.extraEnv=[{"name":"DEV_HEALTH_API_BILLING_EDGE_ADDR","value":":8091"},{"name":"DEV_HEALTH_API_X_ADDR","value":"noport"}]`)
-	if got := openPorts(envInternal); got[8091] || len(got) != 2 {
-		t.Errorf("an extraEnv listener on the internal port, or a value with no port, must open nothing: %v", got)
+	// The chart-wide policy (networkPolicy.enabled) admits every pod on every port; policies are
+	// additive, so it must not select the go-api pods, or it would bypass the allowlist above.
+	np := render("--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/8",
+		"--set-json", "goApi.internal.allowedFrom=["+acr+"]")
+	goLabels := dig(named(np, "Deployment", "b-dev-health-go-api"), "spec", "template", "metadata", "labels").(map[string]any)
+	selecting := 0
+	for _, doc := range np {
+		if doc["kind"] != "NetworkPolicy" {
+			continue
+		}
+		sel := dig(doc, "spec", "podSelector")
+		matched := true
+		for k, v := range dig(sel, "matchLabels").(map[string]any) {
+			if goLabels[k] != v {
+				matched = false
+			}
+		}
+		if exprs, ok := dig(sel, "matchExpressions").([]any); ok {
+			for _, e := range exprs {
+				if dig(e, "operator") == "NotIn" && dig(e, "key") == "app.kubernetes.io/component" {
+					for _, v := range dig(e, "values").([]any) {
+						if v == goLabels["app.kubernetes.io/component"] {
+							matched = false
+						}
+					}
+				}
+			}
+		}
+		if !matched {
+			continue
+		}
+		selecting++
+		ingress := false
+		for _, t := range dig(doc, "spec", "policyTypes").([]any) {
+			ingress = ingress || t == "Ingress"
+		}
+		if !ingress {
+			continue
+		}
+		for _, rule := range dig(doc, "spec", "ingress").([]any) {
+			if !covers(rule, 8091) {
+				continue
+			}
+			from, ok := dig(rule, "from").([]any)
+			if !ok || len(from) != 1 || dig(from[0], "podSelector", "matchLabels", "app.kubernetes.io/name") != "acr" {
+				name := dig(doc, "metadata", "name")
+				if name != "b-dev-health-go-api-internal" || ok {
+					t.Errorf("policy %v admits the internal port from %v", name, dig(rule, "from"))
+				}
+			}
+		}
 	}
-	viaInternal := render("--set", "goApi.extraArgs[0]=--api-billing-edge-addr=:8091")
-	if openPorts(viaInternal)[8091] {
-		t.Errorf("an extraArgs listener on the internal port opened it to every source")
+	if selecting < 2 {
+		t.Errorf("expected the go-api-internal and go-api-egress policies to select the go-api pods, got %d", selecting)
 	}
 
 	// Default allowedFrom (empty): the internal port has NO admitting rule.

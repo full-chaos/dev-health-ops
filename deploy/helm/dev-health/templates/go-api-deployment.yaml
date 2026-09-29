@@ -21,6 +21,19 @@ dev-health-api.
 {{- if and .Values.goApi.internal.enabled (or (eq (int .Values.goApi.internal.port) (int .Values.goApi.port)) (eq (int .Values.goApi.internal.port) (int .Values.goApi.operatorPort))) }}
 {{- fail "goApi.internal.port must differ from goApi.port and goApi.operatorPort: each listener has its own port" }}
 {{- end }}
+{{- if .Values.goApi.internal.enabled }}
+{{- range .Values.goApi.extraArgs }}
+{{- if regexMatch "^--?api-internal-addr" . }}{{- fail "goApi.extraArgs must not set --api-internal-addr: the chart owns the internal listener (goApi.internal.port); a second flag moves it onto a port the internal Service and NetworkPolicy do not gate" }}{{- end }}
+{{- end }}
+{{- range .Values.goApi.extraEnv }}
+{{- if eq .name "DEV_HEALTH_API_INTERNAL_ADDR" }}{{- fail "goApi.extraEnv must not set DEV_HEALTH_API_INTERNAL_ADDR: the chart owns the internal listener (goApi.internal.port)" }}{{- end }}
+{{- end }}
+{{- range .Values.goApi.internal.allowedFrom }}
+{{- if not (or (and .matchLabels (gt (len .matchLabels) 0)) (and .matchExpressions (gt (len .matchExpressions) 0))) }}
+{{- fail "goApi.internal.allowedFrom entries need a non-empty matchLabels or matchExpressions: an empty podSelector admits every pod in the namespace" }}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -192,40 +205,22 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # The public and operator listeners, and every extraArgs `--...-addr` listener port: open to every source, exactly as before this policy
-    # existed (Ingress, probes and scrapes).
+    # Every TCP port EXCEPT the internal one is open to every source, exactly as before this
+    # policy existed (Ingress, probes, scrapes, and any other listener the process is started
+    # with, e.g. the billing edge). It is written as the two ranges around the internal port
+    # (endPort), not derived from the args/env the process gets: a derived list can miss a
+    # listener configured a way the template does not parse and silently deny it.
     - ports:
+        {{- $ip := int .Values.goApi.internal.port }}
+        {{- if gt $ip 1 }}
         - protocol: TCP
-          port: {{ .Values.goApi.port }}
+          port: 1
+          endPort: {{ sub $ip 1 }}
+        {{- end }}
+        {{- if lt $ip 65535 }}
         - protocol: TCP
-          port: {{ .Values.goApi.operatorPort }}
-        {{- /*
-        Every other listener the process is started with (extraArgs `--...-addr=host:port` or extraEnv
-        `DEV_HEALTH_API_*_ADDR`, e.g. the billing-edge listener `DEV_HEALTH_API_BILLING_EDGE_ADDR=:8010`) is derived from the SAME args the
-        container gets, so a new listener is never silently denied. The internal port is never
-        opened here.
-        */}}
-        {{- $seen := list (int .Values.goApi.port) (int .Values.goApi.operatorPort) (int .Values.goApi.internal.port) }}
-        {{- range .Values.goApi.extraEnv }}
-        {{- if regexMatch "^DEV_HEALTH_API_.*_ADDR$" .name }}
-        {{- if not (hasKey . "value") }}
-        {{- fail (printf "goApi.extraEnv %s sets a listener address by valueFrom: the NetworkPolicy derives open ports from literal values, so set a literal host:port" .name) }}
-        {{- end }}
-        {{- $envPort := regexFind "[0-9]+$" (toString .value) }}
-        {{- if and $envPort (ne .name "DEV_HEALTH_API_INTERNAL_ADDR") (not (has (int $envPort) $seen)) }}
-        {{- $seen = append $seen (int $envPort) }}
-        - protocol: TCP
-          port: {{ $envPort }}
-        {{- end }}
-        {{- end }}
-        {{- end }}
-        {{- range .Values.goApi.extraArgs }}
-        {{- $port := regexFind "^--[a-z-]+-addr=[^:]*:[0-9]+$" . | regexFind "[0-9]+$" }}
-        {{- if and $port (not (has (int $port) $seen)) }}
-        {{- $seen = append $seen (int $port) }}
-        - protocol: TCP
-          port: {{ $port }}
-        {{- end }}
+          port: {{ add $ip 1 }}
+          endPort: 65535
         {{- end }}
     {{- /*
     The internal listener trusts every peer that can connect, so the network is the boundary:

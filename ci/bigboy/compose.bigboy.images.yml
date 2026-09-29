@@ -192,6 +192,10 @@ services:
   clickhouse:
     networks:
       - dho-clickhouse-readers
+    # CHAOS-7079: the image entrypoint writes access_management=0 for the default user, so no
+    # CREATE USER/PROFILE/GRANT can run (Code 497). 1 lets the readers-user SQL apply.
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
 
 # CHAOS-7079 (D2930/D2938/D2939/D2943): two dedicated networks, fixed `name:` so another
 # compose project (a separate `docker compose -p ...`) can reference them `external: true`

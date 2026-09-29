@@ -401,8 +401,12 @@ def test_the_declared_hash_must_match_the_api_credential_before_any_live_check(
     red only after ClickHouse was recreated with the file mounted (login code 516)."""
     other = _XML.replace(_HASH, hashlib.sha256(b"another-password").hexdigest())
     proc = _check(tmp_path, _users_file(tmp_path, body=other))
-    assert proc.returncode == 3, (proc.stdout, proc.stderr)
-    assert "CH_API_USER_AUTH_FAIL" in proc.stderr and "does not match" in proc.stderr
+    assert proc.returncode == 4, (proc.stdout, proc.stderr)
+    assert (
+        "CH_API_USER_HASH_MISMATCH" in proc.stderr and "does not match" in proc.stderr
+    )
+    # A stale live user that accepts the credential (the stub logs in fine) must not mask the wrong file.
+    assert "ch_api_user_live=ok" not in proc.stdout
     assert "another-password" not in proc.stdout + proc.stderr
     assert hashlib.sha256(b"another-password").hexdigest() not in (
         proc.stdout + proc.stderr
@@ -451,3 +455,16 @@ def test_the_renderer_refuses_when_the_password_is_anywhere_in_the_output(
     assert "nothing written" in proc.stderr
     assert password not in proc.stdout + proc.stderr
     assert not (tmp_path / "out.xml").exists()
+
+
+def test_the_renderer_emits_from_the_parsed_tree_only(tmp_path: Path) -> None:
+    """Comments, processing instructions and stray text between elements are not copied."""
+    body = "<?xml version='1.0'?><!-- head note -->" + _XML.replace(
+        "<users>", "<users>stray text "
+    ).replace("</dho_api_ch>", "<!-- inner note --></dho_api_ch>")
+    proc = _render(tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD="pw-1")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    text = (tmp_path / "out.xml").read_text()
+    for banned in ("<!--", "<?", "note", "stray"):
+        assert banned not in text, (banned, text)
+    assert text.count("<password_sha256_hex>") == 1

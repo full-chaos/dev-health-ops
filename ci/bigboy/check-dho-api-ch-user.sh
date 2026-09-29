@@ -9,7 +9,7 @@
 # 2. LIVE: `dho_api_ch` is in system.users of the running ClickHouse container, and it AUTHENTICATES with API_CH_PASSWORD. Without it go-api's every
 #    ClickHouse call fails with code 516 (rev 198, after the CHAOS-7079 recreate lost the user).
 #
-# Exit: 0 ok; 1 the file is unusable; 2 the user is not live; 3 the file's hash is not API_CH_PASSWORD's, or dho_api_ch cannot log in with it. CH_CONTAINER overrides the container name.
+# Exit: 0 ok; 1 the file is unusable; 2 the user is not live; 3 API_CH_PASSWORD is unset or dho_api_ch cannot log in with it; 4 the file's hash is not sha256(API_CH_PASSWORD) (checked first, so a stale hand-made live user cannot mask a wrong file). CH_CONTAINER overrides the container name.
 set -u
 FILE=${1:-${DHO_API_CH_USERS_XML:-}}
 CH=${CH_CONTAINER:-dev-health-clickhouse-1}
@@ -26,17 +26,11 @@ esac
 HERE=$(cd "$(dirname "$0")" && pwd)
 reason=$(python3 "$HERE/dho_api_ch_users_shape.py" "$FILE" 2>&1 >/dev/null) || { echo "CH_API_USER_FILE_FAIL: $FILE is not a valid dho_api_ch users.d declaration: $reason" >&2; exit 1; }
 echo "ch_api_user_file=ok path=$FILE mode=$mode"
-count=$(docker exec "$CH" clickhouse-client -q "SELECT count() FROM system.users WHERE name='dho_api_ch'" 2>/dev/null) || count=""
-[ "$count" = "1" ] || { echo "CH_API_USER_LIVE_FAIL: dho_api_ch is not in system.users of $CH (count=${count:-unreadable}); go-api would fail every ClickHouse call with code 516" >&2; exit 2; }
-echo "ch_api_user_live=ok container=$CH"
-# Present is not usable: prove the API's own credential authenticates. The password comes from API_CH_PASSWORD in this
-# process's environment and reaches the container as CLICKHOUSE_PASSWORD through `docker exec -e NAME` (no value), so it is
-# never in an argument list, and nothing here prints it.
 [ -n "${API_CH_PASSWORD:-}" ] || { echo "CH_API_USER_AUTH_FAIL: API_CH_PASSWORD is not set, so dho_api_ch's login cannot be proven" >&2; exit 3; }
 # The file is what a recreated ClickHouse will load: its declared hash must be the SHA-256 of API_CH_PASSWORD. Compared here,
 # before the live login, because a live user made by hand can accept the credential while the file declares another one (the
 # mismatch then shows only after a recreate, as code 516). The password is read from the environment inside python, never argv.
-python3 - "$FILE" <<'PY' || { echo "CH_API_USER_AUTH_FAIL: the hash declared in $FILE does not match the credential go-api uses (API_CH_PASSWORD); a ClickHouse recreate would load it and every login would fail with code 516" >&2; exit 3; }
+python3 - "$FILE" <<'PY' || { echo "CH_API_USER_HASH_MISMATCH: the hash declared in $FILE does not match the credential go-api uses (API_CH_PASSWORD); a ClickHouse recreate would load it and every login would fail with code 516" >&2; exit 4; }
 import hashlib, os, re, sys
 text = open(sys.argv[1]).read()
 found = re.findall(r"<password_sha256_hex>([0-9a-f]{64})</password_sha256_hex>", text)
@@ -44,6 +38,12 @@ want = hashlib.sha256(os.environ["API_CH_PASSWORD"].encode()).hexdigest()
 sys.exit(0 if found == [want] else 1)
 PY
 echo "ch_api_user_hash=ok path=$FILE"
+count=$(docker exec "$CH" clickhouse-client -q "SELECT count() FROM system.users WHERE name='dho_api_ch'" 2>/dev/null) || count=""
+[ "$count" = "1" ] || { echo "CH_API_USER_LIVE_FAIL: dho_api_ch is not in system.users of $CH (count=${count:-unreadable}); go-api would fail every ClickHouse call with code 516" >&2; exit 2; }
+echo "ch_api_user_live=ok container=$CH"
+# Present is not usable: prove the API's own credential authenticates. The password comes from API_CH_PASSWORD in this
+# process's environment and reaches the container as CLICKHOUSE_PASSWORD through `docker exec -e NAME` (no value), so it is
+# never in an argument list, and nothing here prints it.
 who=$(CLICKHOUSE_PASSWORD="$API_CH_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD "$CH" clickhouse-client --user dho_api_ch -q "SELECT currentUser()" 2>/dev/null) || who=""
 [ "$who" = "dho_api_ch" ] || { echo "CH_API_USER_AUTH_FAIL: logging in to $CH as dho_api_ch with API_CH_PASSWORD failed; the declared hash does not match the credential go-api uses (ClickHouse code 516)" >&2; exit 3; }
 echo "ch_api_user_auth=ok container=$CH"

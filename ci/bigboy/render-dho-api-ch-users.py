@@ -18,6 +18,7 @@ import os
 import re
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from pathlib import Path
 
@@ -39,9 +40,6 @@ validate = _load_validate()
 
 KEY = "dho_api_ch.xml"
 HASH = re.compile(r"<password_sha256_hex>[0-9a-f]*</password_sha256_hex>")
-# XML comments and processing instructions carry no declaration ClickHouse reads, and the shape validator
-# cannot see them: they are dropped, never copied into the world-readable file.
-NOISE = re.compile(r"<!--.*?-->|<\?.*?\?>", re.DOTALL)
 
 
 def render(rendered_release: Path, password: str) -> str:
@@ -52,7 +50,7 @@ def render(rendered_release: Path, password: str) -> str:
             and doc["metadata"]["name"].endswith("clickhouse-usersd")
             and KEY in (doc.get("data") or {})
         ):
-            xml = NOISE.sub("", doc["data"][KEY])
+            xml = doc["data"][KEY]
             # Refuse first: a source that carries a plaintext <password> (or any authentication element but the
             # hash) must never be copied into a world-readable file, so it is checked BEFORE the hash is set.
             hashed = HASH.sub(
@@ -65,9 +63,17 @@ def render(rendered_release: Path, password: str) -> str:
                     f"{KEY} in {rendered_release} is refused, nothing written: {error}"
                 ) from None
             digest = hashlib.sha256(password.encode()).hexdigest()
-            rendered, _ = HASH.subn(
-                f"<password_sha256_hex>{digest}</password_sha256_hex>", xml
-            )
+            # Emit from the PARSED tree, never from the source text: comments and processing instructions do not
+            # survive parsing, and text between elements is cleared, so the output holds exactly the declared elements.
+            root = ET.fromstring(xml)
+            for element in root.iter():
+                if len(element):
+                    element.text = None
+                element.tail = None
+            hash_element = root.find("users/dho_api_ch/password_sha256_hex")
+            assert hash_element is not None  # validate() above guarantees exactly one
+            hash_element.text = digest
+            rendered = ET.tostring(root, encoding="unicode") + "\n"
             validate(rendered)
             if password in rendered:
                 raise SystemExit(

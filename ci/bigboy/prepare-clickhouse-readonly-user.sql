@@ -4,7 +4,7 @@
 -- the same network and use this same user later).
 --
 -- Table list source: .remember/acr-mcp/lanes/lane-mcp-venue-plan/TABLES.md,
--- Grant (a), 31 objects (30 tables + 1 view), ALL VERIFIED there at exact
+-- Grant (a), 34 objects (33 tables + 1 view; 31 from TABLES.md plus three work-unit membership tables added later), ALL VERIFIED there at exact
 -- file:line. Grant (b) (8 objects, `context_for_task` evidence reads) is
 -- explicitly NOT included -- (a) and (b) are DISJOINT sets (grant (a) rows
 -- 1-31, grant (b) rows 32-39 in TABLES.md's own numbering; (b) is not a
@@ -12,13 +12,13 @@
 -- is ever needed for this venue, it is a separate, explicit ask.
 --
 -- Existence check (2026-09-28, gwc-bigboy-ops-3, read-only, names only):
--- all 31 objects of grant (a) exist in bigboy ClickHouse database `default`
+-- all 31 TABLES.md objects of grant (a) exist in bigboy ClickHouse database `default`
 -- today (`system.tables`, name+engine only, no data read). None missing.
 --
 -- Column lists: TABLES.md gives exact columns only for grant (b) (which is
 -- excluded here). Grant (a)'s "Columns" field cites schema.go line ranges,
 -- not a hand-picked list -- so this file grants whole-table/whole-view
--- SELECT for each of the 31 objects, not a column subset. Narrow further
+-- SELECT for each of the 34 objects, not a column subset. Narrow further
 -- only on an explicit ask with a real column list, the same way grant (b)
 -- was verified.
 --
@@ -54,7 +54,7 @@ CREATE USER IF NOT EXISTS mcp_readonly
     DEFAULT DATABASE default
     SETTINGS PROFILE mcp_readonly_profile;
 
--- Grant (a), 31 objects, SELECT only, table-by-table (never a database-wide
+-- Grant (a), 34 objects, SELECT only, table-by-table (never a database-wide
 -- GRANT SELECT ON default.* shortcut).
 GRANT SELECT ON default.backfill_log TO mcp_readonly;
 GRANT SELECT ON default.capacity_forecasts TO mcp_readonly;
@@ -81,6 +81,9 @@ GRANT SELECT ON default.teams TO mcp_readonly;
 GRANT SELECT ON default.project_membership_transitions TO mcp_readonly;
 GRANT SELECT ON default.projects TO mcp_readonly;
 GRANT SELECT ON default.work_unit_investments TO mcp_readonly;
+GRANT SELECT ON default.work_unit_membership_runs TO mcp_readonly;
+GRANT SELECT ON default.work_unit_supersessions TO mcp_readonly;
+GRANT SELECT ON default.work_unit_membership TO mcp_readonly;
 GRANT SELECT ON default.work_item_team_attributions TO mcp_readonly;
 GRANT SELECT ON default.team_project_ownership TO mcp_readonly;
 GRANT SELECT ON default.team_repo_ownership TO mcp_readonly;

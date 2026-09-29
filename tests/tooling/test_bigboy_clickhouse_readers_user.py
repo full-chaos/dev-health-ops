@@ -60,3 +60,23 @@ def test_readers_profile_forbids_writes_but_allows_per_query_settings_within_pin
     assert re.search(r"readonly\s*=\s*2\b", sql)
     assert re.search(r"max_execution_time\s*=\s*30\s+MAX\s+30\b", sql)
     assert re.search(r"max_memory_usage\s*=\s*4000000000\s+MAX\s+4000000000\b", sql)
+
+
+def test_readers_user_is_granted_select_on_exactly_34_distinct_default_objects() -> (
+    None
+):
+    """Whole-table SELECT only; the work-unit membership tables are part of the grant."""
+    sql = READERS_SQL.read_text()
+    grants = re.findall(
+        r"^GRANT SELECT ON default\.(\w+) TO mcp_readonly;", sql, re.MULTILINE
+    )
+    assert len(grants) == len(set(grants)) == 34
+    for name in (
+        "work_unit_membership_runs",
+        "work_unit_supersessions",
+        "work_unit_membership",
+    ):
+        assert name in grants
+    assert not re.search(
+        r"^GRANT (?!SELECT ON default\.\w+ TO mcp_readonly;)", sql, re.MULTILINE
+    )

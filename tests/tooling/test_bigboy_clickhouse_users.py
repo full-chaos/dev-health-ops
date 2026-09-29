@@ -76,7 +76,7 @@ def _docker(
     login_ok: bool = True,
     password: str = "the-api-password",
 ) -> dict[str, str]:
-    """A stub `docker exec ... clickhouse-client`: answers the system.users count, and a login as
+    """A stub `docker compose ... exec ... clickhouse-client`: answers the system.users count, and a login as
     dho_api_ch (`--user dho_api_ch`) succeeds only when the CLICKHOUSE_PASSWORD it was handed through the
     environment equals `password`. Every call's arguments are logged (never the environment)."""
     bin_dir = tmp_path / "bin"
@@ -221,6 +221,11 @@ def test_the_api_credential_never_reaches_an_argument_list_or_the_output(
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     args = (tmp_path / "docker-args.log").read_text()
     assert "--user dho_api_ch" in args and "-e CLICKHOUSE_PASSWORD" in args, args
+    # compose verbs on the service, never a bare `docker exec` on a container name
+    for line in args.splitlines():
+        assert line.startswith("compose --env-file "), line
+        assert " exec -T " in line and " clickhouse clickhouse-client " in line, line
+    assert "dev-health-clickhouse-1" not in args
     assert secret not in args and secret not in proc.stdout + proc.stderr
 
 

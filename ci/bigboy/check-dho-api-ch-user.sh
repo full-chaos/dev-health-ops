@@ -12,10 +12,13 @@
 # Exit: 0 ok; 1 the file is unusable (missing, not a regular file, not world-readable, or the canonical render cannot be
 # computed); 2 the user is not live; 3 API_CH_PASSWORD is unset or dho_api_ch cannot log in with it; 4 the file is not the
 # canonical render (checked before any live check, so a stale hand-made live user cannot mask a wrong file).
-# CH_CONTAINER overrides the container name; DHO_API_CH_POSTURE_GO the manifest (default: this checkout's authorization.go).
+# ClickHouse is reached with `docker compose exec` on the service `clickhouse` (COMPOSE_FILE set as in bigboy-cut.sh, run from
+# BIGBOY_ROOT; BIGBOY_ENV_FILE overrides ops/.env), never by container name. DHO_API_CH_POSTURE_GO overrides the manifest
+# (default: this checkout's authorization.go).
 set -u
 FILE=${1:-${DHO_API_CH_USERS_XML:-}}
-CH=${CH_CONTAINER:-dev-health-clickhouse-1}
+CH=clickhouse
+ENVF=${BIGBOY_ENV_FILE:-ops/.env}
 [ -n "$FILE" ] || { echo "CH_API_USER_FILE_FAIL: no users file given (arg 1 or DHO_API_CH_USERS_XML)" >&2; exit 1; }
 [ -f "$FILE" ] && [ ! -L "$FILE" ] || { echo "CH_API_USER_FILE_FAIL: $FILE is not a regular file (a missing bind-mount source becomes a directory and ClickHouse fails to start)" >&2; exit 1; }
 mode=$(stat -c %a "$FILE")
@@ -37,12 +40,12 @@ trap 'rm -rf "$canon_dir"' EXIT
 API_CH_PASSWORD="$API_CH_PASSWORD" python3 "$HERE/render-dho-api-ch-users.py" "$POSTURE" "$canon_dir/canonical.xml" >/dev/null 2>"$canon_dir/render.err" || { echo "CH_API_USER_FILE_FAIL: the canonical render could not be computed: $(head -c 300 "$canon_dir/render.err")" >&2; exit 1; }
 cmp -s "$FILE" "$canon_dir/canonical.xml" || { echo "CH_API_USER_FILE_MISMATCH: $FILE is not the canonical render of the posture manifest and API_CH_PASSWORD (a comment, an edit, a malformed grant or a hash for another password all differ); regenerate it with ci/bigboy/render-dho-api-ch-users.py. ClickHouse would load whatever is mounted, and exits on a file it cannot parse" >&2; exit 4; }
 echo "ch_api_user_file=ok path=$FILE mode=$mode canonical=yes"
-count=$(docker exec "$CH" clickhouse-client -q "SELECT count() FROM system.users WHERE name='dho_api_ch'" 2>/dev/null) || count=""
-[ "$count" = "1" ] || { echo "CH_API_USER_LIVE_FAIL: dho_api_ch is not in system.users of $CH (count=${count:-unreadable}); go-api would fail every ClickHouse call with code 516" >&2; exit 2; }
-echo "ch_api_user_live=ok container=$CH"
+count=$(docker compose --env-file "$ENVF" exec -T "$CH" clickhouse-client -q "SELECT count() FROM system.users WHERE name='dho_api_ch'" 2>/dev/null) || count=""
+[ "$count" = "1" ] || { echo "CH_API_USER_LIVE_FAIL: dho_api_ch is not in system.users of service $CH (count=${count:-unreadable}); go-api would fail every ClickHouse call with code 516" >&2; exit 2; }
+echo "ch_api_user_live=ok service=$CH"
 # Present is not usable: prove the API's own credential authenticates. The password comes from API_CH_PASSWORD in this
-# process's environment and reaches the container as CLICKHOUSE_PASSWORD through `docker exec -e NAME` (no value), so it is
+# process's environment and reaches the container as CLICKHOUSE_PASSWORD through `docker compose exec -e NAME` (no value), so it is
 # never in an argument list, and nothing here prints it.
-who=$(CLICKHOUSE_PASSWORD="$API_CH_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD "$CH" clickhouse-client --user dho_api_ch -q "SELECT currentUser()" 2>/dev/null) || who=""
-[ "$who" = "dho_api_ch" ] || { echo "CH_API_USER_AUTH_FAIL: logging in to $CH as dho_api_ch with API_CH_PASSWORD failed; the declared hash does not match the credential go-api uses (ClickHouse code 516)" >&2; exit 3; }
-echo "ch_api_user_auth=ok container=$CH"
+who=$(CLICKHOUSE_PASSWORD="$API_CH_PASSWORD" docker compose --env-file "$ENVF" exec -T -e CLICKHOUSE_PASSWORD "$CH" clickhouse-client --user dho_api_ch -q "SELECT currentUser()" 2>/dev/null) || who=""
+[ "$who" = "dho_api_ch" ] || { echo "CH_API_USER_AUTH_FAIL: logging in to service $CH as dho_api_ch with API_CH_PASSWORD failed; the declared hash does not match the credential go-api uses (ClickHouse code 516)" >&2; exit 3; }
+echo "ch_api_user_auth=ok service=$CH"

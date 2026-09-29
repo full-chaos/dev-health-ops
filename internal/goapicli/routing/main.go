@@ -408,10 +408,8 @@ func (c *commonFlags) requireProvenance() error {
 	// -recorded-by is echoed into one-line structured events on stderr
 	// (go_api_routing.*, go_api_proof_orgs.*). A newline or other control
 	// character would let the value forge a second event line.
-	for _, r := range c.recordedBy {
-		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
-			return refuse("-recorded-by must not contain control or line-separator characters (it is echoed into structured one-line events)")
-		}
+	if err := refuseControlChars("-recorded-by", c.recordedBy); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1012,3 +1010,15 @@ func requestedOperations(raw string) ([]string, error) {
 }
 
 var errEmptyOperationFilter = goapiproof.ErrEmptyOperationFilter
+
+// refuseControlChars refuses an operator-supplied value that carries a control
+// or line-separator character. Such a value is echoed into one-line output and
+// could forge a second line (CHAOS-7174).
+func refuseControlChars(flagName, value string) error {
+	for _, r := range value {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return refuse("%s must not contain control or line-separator characters (it is echoed into one-line output)", flagName)
+		}
+	}
+	return nil
+}

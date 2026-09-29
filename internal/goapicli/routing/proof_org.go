@@ -92,6 +92,9 @@ func runProofOrgAdd(argv []string) error {
 	if orgID == "" {
 		return refuse("-org is required")
 	}
+	if err := refuseControlChars("-org", orgID); err != nil {
+		return err
+	}
 	if err := common.requireProvenance(); err != nil {
 		return err
 	}
@@ -114,7 +117,7 @@ func runProofOrgAdd(argv []string) error {
 		return classifyWriteError(err)
 	}
 	fmt.Fprint(stderr, proofOrgAddedEvent(orgID, common.recordedBy))
-	fmt.Fprintf(stdout, "go-api-routing: %s is now allowlisted for /query/proof-write\n", orgID)
+	fmt.Fprintf(stdout, "go-api-routing: %q is now allowlisted for /query/proof-write\n", orgID)
 	return nil
 }
 
@@ -135,6 +138,9 @@ func runProofOrgRemove(argv []string) error {
 	}
 	if orgID == "" {
 		return refuse("-org is required")
+	}
+	if err := refuseControlChars("-org", orgID); err != nil {
+		return err
 	}
 	if err := common.requireProvenance(); err != nil {
 		return err
@@ -160,9 +166,9 @@ func runProofOrgRemove(argv []string) error {
 	}
 	fmt.Fprint(stderr, proofOrgRemovedEvent(orgID, common.recordedBy, removed))
 	if removed {
-		fmt.Fprintf(stdout, "go-api-routing: %s removed from the /query/proof-write allowlist\n", orgID)
+		fmt.Fprintf(stdout, "go-api-routing: %q removed from the /query/proof-write allowlist\n", orgID)
 	} else {
-		fmt.Fprintf(stdout, "go-api-routing: %s was not on the allowlist (no-op on the live row; the removal is still audited)\n", orgID)
+		fmt.Fprintf(stdout, "go-api-routing: %q was not on the allowlist (no-op on the live row; the removal is still audited)\n", orgID)
 	}
 	return nil
 }
@@ -218,5 +224,5 @@ func proofOrgRemovedEvent(orgID, recordedBy string, existed bool) string {
 }
 
 func proofOrgListRow(orgID, addedBy, reason string) string {
-	return fmt.Sprintf("%-24s %-20q %q\n", orgID, addedBy, reason)
+	return fmt.Sprintf("%-24q %-20q %q\n", orgID, addedBy, reason)
 }

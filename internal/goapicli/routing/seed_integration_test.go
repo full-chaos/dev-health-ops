@@ -448,8 +448,8 @@ func TestSeedAllUnroutedRefusesWhenARoutedRowDisagreesWithTheRegistry(t *testing
 	// home's row carries a document digest the registry does not report.
 	insertRowAt(t, pool, localSchemaDigest(), seedDigC, seedOpA, "shadow")
 	_, _, err := captureVerb(t, seedCmd(server.URL, dsn, catalog, "-all-unrouted")...)
-	if err == nil || !strings.Contains(err.Error(), "DISAGREEMENT") {
-		t.Fatalf("want a document digest disagreement refusal, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "disagree") {
+		t.Fatalf("want a disagreement refusal, got %v", err)
 	}
 	if n := len(readSeedRows(t, pool)); n != 1 {
 		t.Fatalf("nothing may be written around the disagreement, rows=%d", n)
@@ -481,5 +481,58 @@ func TestSeedAnAuditFailureRollsBackAndClaimsNothingWasCreated(t *testing.T) {
 	}
 	if countTable(t, pool, "go_api_routing_state") != 0 || countTable(t, pool, "go_api_candidate_build") != 0 {
 		t.Fatal("the failed run must leave nothing behind")
+	}
+}
+
+// The three r3 repros, through the real command: -all-unrouted refuses the
+// whole run, writing nothing, when the disagreement is OUTSIDE the operations
+// it would seed.
+func TestSeedAllUnroutedRefusesEveryDisagreementOutsideItsSeedSet(t *testing.T) {
+	for name, tc := range map[string]struct {
+		catalog func() map[string]string
+		setup   func(t *testing.T, pool *pgxpool.Pool)
+		want    string
+	}{
+		"a routed op's catalog digest disagrees with the registry": {
+			catalog: func() map[string]string {
+				c := seedDigests()
+				c[seedOpA] = "4444444444444444444444444444444444444444444444444444444444444444"
+				return c
+			},
+			setup: func(t *testing.T, pool *pgxpool.Pool) {
+				insertRowAt(t, pool, localSchemaDigest(), seedDigA, seedOpA, "shadow")
+			},
+			want: seedOpA + ": catalog=",
+		},
+		"a row at the running digest for an operation the registry does not register": {
+			catalog: seedDigests,
+			setup: func(t *testing.T, pool *pgxpool.Pool) {
+				insertRowAt(t, pool, localSchemaDigest(), seedDigA, "retiredOperation", "shadow")
+			},
+			want: "retiredOperation: routing row",
+		},
+		"one operation holds a matching and a mismatching row": {
+			catalog: seedDigests,
+			setup: func(t *testing.T, pool *pgxpool.Pool) {
+				insertRowAt(t, pool, localSchemaDigest(), seedDigA, seedOpA, "shadow")
+				insertRowAt(t, pool, localSchemaDigest(), seedDigC, seedOpA, "shadow")
+			},
+			want: seedOpA + ": routing row document=",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pool, dsn := startVerbPostgres(t)
+			t.Setenv(bearerEnvVar, verbTestBearer)
+			server := startQueryAPI(t, localSchemaDigest(), seedDigests())
+			tc.setup(t, pool)
+			before := countTable(t, pool, "go_api_routing_state")
+			_, _, err := captureVerb(t, seedCmd(server.URL, dsn, writeCatalog(t, tc.catalog()), "-all-unrouted")...)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want a refusal naming %q, got %v", tc.want, err)
+			}
+			if after := countTable(t, pool, "go_api_routing_state"); after != before {
+				t.Fatalf("rows %d -> %d: nothing may be written around a disagreement", before, after)
+			}
+		})
 	}
 }

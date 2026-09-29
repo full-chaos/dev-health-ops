@@ -39,9 +39,9 @@ const (
 	SeedActionWouldCreate    = "would-create"
 )
 
-// ErrSeedRefused reports that at least one operation was refused. Rows for
-// operations that were not refused are still committed (one transaction per
-// operation); every outcome names its own reason.
+// ErrSeedRefused reports that at least one operation was refused. The whole
+// invocation is one transaction: after a refusal nothing was written for any
+// operation, and every outcome names its own reason.
 var ErrSeedRefused = errors.New("goapiproof: seed refused")
 
 // ErrSeedRequestRefused reports a request that is malformed before any row
@@ -125,27 +125,66 @@ func RoutedOperations(ctx context.Context, pool *pgxpool.Pool) (map[string]bool,
 	return out, nil
 }
 
-// RunningDigestRows reads, per operation, the document digest of its routing
-// row at schemaDigest (if any). `-all-unrouted` uses it to refuse when a row
-// already at the running schema digest disagrees with the registry.
-func RunningDigestRows(ctx context.Context, pool *pgxpool.Pool, schemaDigest string) (map[string]string, error) {
+// RunningRow is one routing row at a schema digest.
+type RunningRow struct{ Operation, DocumentDigest string }
+
+// RunningDigestRows reads EVERY routing row at schemaDigest (an operation can
+// hold several, one per document digest). `-all-unrouted` checks them all
+// against the registry and the catalog before it writes anything.
+func RunningDigestRows(ctx context.Context, pool *pgxpool.Pool, schemaDigest string) ([]RunningRow, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("%w: nil pool", ErrSeedRequestRefused)
 	}
-	rows, err := pool.Query(ctx, `SELECT selected_operation, document_digest FROM public.go_api_routing_state WHERE schema_digest = $1`, schemaDigest)
+	rows, err := pool.Query(ctx, `SELECT selected_operation, document_digest FROM public.go_api_routing_state WHERE schema_digest = $1 ORDER BY selected_operation, document_digest`, schemaDigest)
 	if err != nil {
 		return nil, fmt.Errorf("goapiproof: read routing rows at the running digest: %w", err)
 	}
 	defer rows.Close()
-	out := map[string]string{}
+	var out []RunningRow
 	for rows.Next() {
-		var operation, document string
-		if err := rows.Scan(&operation, &document); err != nil {
+		var row RunningRow
+		if err := rows.Scan(&row.Operation, &row.DocumentDigest); err != nil {
 			return nil, fmt.Errorf("goapiproof: scan routing row: %w", err)
 		}
-		out[operation] = document
+		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+// AllUnroutedDisagreements is the whole-picture preflight of `seed
+// -all-unrouted`: it does not look only at the operations about to be seeded.
+// It returns, sorted, every disagreement among the three views of the same
+// digests -- the running query-api's registry, the edge catalog, and the
+// routing rows already at the running schema digest:
+//   - a registered operation the catalog does not list, or lists under a
+//     different document digest;
+//   - a row at the running schema digest for an operation the registry does
+//     not register, or under a document digest the registry does not report
+//     (each row is checked; an operation with two rows is not collapsed).
+//
+// Any disagreement means the state is not the one seed was written for, so the
+// caller refuses the whole run before any write.
+func AllUnroutedDisagreements(registry, catalog map[string]string, rows []RunningRow) []string {
+	var out []string
+	for operation, registered := range registry {
+		switch cataloged, ok := catalog[operation]; {
+		case !ok:
+			out = append(out, fmt.Sprintf("%s: registered but outside the catalog", operation))
+		case cataloged != registered:
+			out = append(out, fmt.Sprintf("%s: catalog=%s registry=%s", operation, cataloged, registered))
+		}
+	}
+	for _, row := range rows {
+		registered, ok := registry[row.Operation]
+		switch {
+		case !ok:
+			out = append(out, fmt.Sprintf("%s: routing row at the running schema digest but the registry does not register it", row.Operation))
+		case registered != row.DocumentDigest:
+			out = append(out, fmt.Sprintf("%s: routing row document=%s registry=%s", row.Operation, row.DocumentDigest, registered))
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (r SeedRequest) validate() error {

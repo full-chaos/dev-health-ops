@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -115,23 +114,14 @@ func runSeed(argv []string) error {
 		if err != nil {
 			return classifyWriteError(err)
 		}
-		// A row already at the running schema digest under a document digest
-		// the registry does not report is a disagreement between the
-		// database and the deployed process; -all-unrouted must not write
-		// around it (`status` names it DOCUMENT_DRIFT).
-		atRunning, err := goapiproof.RunningDigestRows(ctx, pool, registry.SchemaDigest)
+		// The whole-picture preflight: registry vs catalog vs every row at the
+		// running schema digest, not only the operations about to be seeded.
+		rowsAtRunning, err := goapiproof.RunningDigestRows(ctx, pool, registry.SchemaDigest)
 		if err != nil {
 			return classifyWriteError(err)
 		}
-		var drifted []string
-		for operation, document := range atRunning {
-			if registered, ok := registry.DocumentDigest[operation]; ok && registered != document {
-				drifted = append(drifted, fmt.Sprintf("%s: row=%s registry=%s", operation, document, registered))
-			}
-		}
-		if len(drifted) > 0 {
-			sort.Strings(drifted)
-			return refuse("document digest DISAGREEMENT between the database and the running query-api for %d routed operation(s): %v.\n  -all-unrouted writes nothing around it; see `dho goapi routing status`.", len(drifted), drifted)
+		if disagreements := goapiproof.AllUnroutedDisagreements(registry.DocumentDigest, catalog, rowsAtRunning); len(disagreements) > 0 {
+			return refuse("the registry, the catalog and the routing rows disagree on %d point(s): %v.\n  -all-unrouted writes nothing around a disagreement; see `dho goapi routing status`.", len(disagreements), disagreements)
 		}
 		operations = goapiproof.UnroutedOperations(registry.DocumentDigest, routed)
 		if len(operations) == 0 {

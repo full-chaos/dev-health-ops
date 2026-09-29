@@ -303,14 +303,12 @@ const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!
   }
 }`
 
-// registeredHomeDocument is CHAOS-6084/CHAOS-7042's registered document
-// for the home operation -- NOT "sourced from the real client file"
-// like every document above: CHAOS-6084's caller check found zero web
-// callers of this GraphQL field (web reads the same data through the
-// REST twin instead -- home_route.go's GET/POST route -- not through
-// GraphQL), so there is no real client file to source it from. This
-// text is AUTHORED instead,
-// with its selection set derived exhaustively from the schema's own
+// registeredHomeDocument is the registered document for the home
+// operation: the wire form of the web app's HOME_QUERY (variables orgId,
+// filters, window), kept byte-identical in
+// testdata/wire_capture/home_captured.graphql (see that directory's
+// README for how the wire form is produced from the web repo's own
+// pinned urql). Its selection set covers the schema's own
 // type declarations (contracts/graphql/v1/schema.graphql: HomeResult,
 // Freshness, HomeFreshnessSource, Coverage, MetricDelta, SparkPoint,
 // ReworkThemeAllocation, SummarySentence, HomeTileEntry, HomeTile,
@@ -318,12 +316,12 @@ const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!
 // ScopeEntityRef, HomeLimitingFactor, HomeDataConfidence -- every field
 // each type declares, not a hand-picked subset), formatted to match
 // this file's other entries' urql-print convention (multi-line,
-// `__typename` on every object selection). Because no real urql call
-// site exists to capture a wire fixture from, this document has no
-// query_route_wire_capture_test.go counterpart the way every "sourced
-// from a real client file" document above does -- see that test file's
-// header comment for why a captured fixture is normally the evidence
-// bar. query_route_integration_test.go's
+// `__typename` on every object selection). The digest of the captured
+// wire fixture must equal this constant's
+// (query_route_wire_capture_test.go's
+// TestRegisteredHomeDocument_MatchesCapturedWireFixture); the web repo's
+// graphql-wire-parity check runs the current HOME_QUERY against the
+// digest registered here. query_route_integration_test.go's
 // TestHomeRoute_ReachableOnlyWhenSwitchEnabled proves an in-process
 // request built from THIS EXACT constant reaches queryResolver.Home
 // (routing/auth gating only -- it does not assert response content),

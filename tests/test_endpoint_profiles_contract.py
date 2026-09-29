@@ -203,6 +203,11 @@ def test_inventory_row_count_matches_the_baseline():
     recorded Python answers first, so the coverage those rows measured
     survives in Go. The rows stand at 319 (271 REST + 48 GraphQL),
     recounted from the file.
+    = 318, -1 GraphQL under CHAOS-7070: Python's `home` field (a thin
+    resolver whose answer disagreed with the REST payload) is deleted with
+    its row in the same change; the Go query-api serves the registered
+    document. The rows stand at 318 (271 REST + 47 GraphQL), recounted from
+    the file.
 
     MERGE HAZARD, recorded because it has now nearly landed silently more
     than once. Each change edited these same asserts, and each was correct
@@ -224,8 +229,8 @@ def test_inventory_row_count_matches_the_baseline():
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
     assert len(rest) == 271, len(rest)
-    assert len(graphql) == 48, len(graphql)
-    assert len(rows) == 319, len(rows)
+    assert len(graphql) == 47, len(graphql)
+    assert len(rows) == 318, len(rows)
 
 
 def test_no_graphql_subscription_is_profiled():
@@ -306,7 +311,9 @@ def test_classification_summary_matches_the_baseline():
     # - 1 more under CHAOS-7033: the deleted `POST /api/v1/billing/webhooks/
     # stripe` row was protected (stripe_webhook_signature). Recounted from
     # the file.
-    assert len(protected) == 294, len(protected)
+    # - 1 more under CHAOS-7070: the deleted `home` GraphQL field row was
+    # protected (the same GraphQL-wide auth). Recounted from the file.
+    assert len(protected) == 293, len(protected)
     # 20 + the four fastapi doc routes + /metrics.
     assert len(public) == 25, len(public)
     assert len(protected) + len(public) == len(rows)

@@ -263,11 +263,10 @@ func (r *queryResolver) ProductTelemetryPlatformDashboard(ctx context.Context, i
 }
 
 // Home is the resolver for the home field (CHAOS-6084 / CHAOS-7042).
-// This field has zero web callers (CHAOS-6084's caller check); the data
-// this ported is the same already golden-parity-proven home.BuildResponse
-// GET/POST /api/v1/home uses, NOT resolve_home's own dead computation --
-// see home_translate.go's doc comment for why. Authorization mirrors
-// resolve_home's ACTUAL behavior (require_org_id: raise if the envelope
+// The web home page reads the same data; the data this ported is the same already golden-parity-proven home.BuildResponse
+// GET/POST /api/v1/home uses, NOT the former Python resolve_home's own
+// (deleted) computation -- see home_translate.go's doc comment for why.
+// Authorization mirrors that resolver's behavior (require_org_id: raise if the envelope
 // carries no org, else always use the authorized org, never the orgId
 // argument) via requestOrg, the same helper WorkGraphEdges documents this
 // convention with above.

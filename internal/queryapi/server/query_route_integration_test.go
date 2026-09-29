@@ -934,7 +934,7 @@ func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 }
 
 func homeVariables() map[string]any {
-	return map[string]any{"orgId": "org-1"}
+	return map[string]any{"orgId": "org-1", "window": map[string]any{"rangeDays": 90}}
 }
 
 // emptyHomeRowScanner is a clickhouse.RowScanner with zero rows -- Next()

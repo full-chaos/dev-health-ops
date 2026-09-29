@@ -736,9 +736,9 @@ var operationSpecs = map[string]OperationSpec{
 	// InstanceVariable: home is a per-org aggregate, never a single
 	// stored row.
 	//
-	// No Parity/BaselineDefect entry yet: this field has zero web callers
-	// (CHAOS-6084's caller check) and its Python counterpart
-	// (resolvers/home.py resolve_home) was NEVER wired to the real
+	// No Parity/BaselineDefect entry yet: no live two-plane run has observed
+	// this field, and its former Python counterpart
+	// (resolvers/home.py resolve_home, now deleted) was NEVER wired to the real
 	// build_home_response the REST twin uses -- it computes a smaller,
 	// always-unused, hand-rolled answer (two hardcoded metrics,
 	// delta_pct hardcoded to 0). A live two-plane run WILL disagree with

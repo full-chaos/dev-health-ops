@@ -6,7 +6,10 @@
 // lookup and its InternalServiceCredentialAudit rows are not ported) -- the
 // network boundary is the control, not a per-request token
 // (deploy/helm/dev-health's TestInternalACRRoutesStayOffThePublicIngress
-// pins that no Ingress routes to the Go api). The
+// pins that no Ingress routes to the Go api). CHAOS-7181: apiservice mounts
+// these routes on the internal listener only (apiservice.InternalRoutes); the
+// public api listener has none unless the one-roll bridge
+// (Deps.ACRPublicCompat) is on. The
 // agent_context_runtime entitlement decision itself is ported in full via
 // internal/api/licensing, this package's only dependency for it.
 package acr
@@ -23,10 +26,8 @@ import (
 
 // Deps is this area's dependency set. A nil Store means the api Service was
 // started without APIDatabaseURI configured (CHAOS-6269 not yet rolled out
-// for this deployment): Routes still mounts both paths -- the ingress path
-// table switch (spec.md §4.6), not process configuration, decides whether
-// any traffic reaches them -- but the entitlement route answers 503 rather
-// than reaching a nil pool.
+// for this deployment): Routes still mounts both paths, but the entitlement
+// route answers 503 rather than reaching a nil pool.
 type Deps struct {
 	Store  EntitlementStore
 	Logger *slog.Logger

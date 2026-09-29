@@ -1252,6 +1252,7 @@ services:
       - api
       - --api-addr=:8000
       - --api-billing-edge-addr=:8010
+      - --api-internal-addr=:8091
       - *flag-http-addr
       - *flag-river-schema
       - *flag-log-level

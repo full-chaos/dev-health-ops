@@ -155,12 +155,10 @@ var (
 
 // Routes is the route set the api mounts, built from deps (the shared
 // Postgres pool and Valkey client every area package is handed rather than
-// opening its own). deps.Pool is nil when APIDatabaseURI is not configured;
-// acr.Routes still mounts both of its paths in that case (see acr.Deps's
-// doc comment) -- the ingress path table switch (spec.md §4.6), not process
-// configuration, decides whether any traffic ever reaches them, and the
-// entitlement route answers 503 rather than being silently absent from the
-// mux. webhookintake's routes register unconditionally too: a handler that
+// opening its own). deps.Pool is nil when APIDatabaseURI is not configured.
+// The /api/v1/internal/* routes are here only with deps.ACRPublicCompat (the
+// CHAOS-7181 one-roll bridge, default off); see InternalRoutes.
+// webhookintake's routes register unconditionally too: a handler that
 // needs a live Pool/Valkey/Producer/Decryptor answers 500 at request time
 // (its own Deps doc comment). Each area package contributes its own
 // []httpapi.Route; this function only concatenates them.
@@ -172,12 +170,10 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		logger.Error("api: shared rate limiter unavailable; using the in-process limiter", "error", err)
 		limits = httpapi.NewMemoryCounters(deps.Now)
 	}
-	var store acr.EntitlementStore
-	if deps.Pool != nil {
-		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
-	}
 	var routes []httpapi.Route
-	routes = append(routes, acr.Routes(acr.Deps{Store: store, Logger: logger})...)
+	if deps.ACRPublicCompat {
+		routes = append(routes, InternalRoutes(deps, logger)...)
+	}
 	routes = append(routes, externalingest.Routes(externalingest.Deps{
 		Cipher:   deps.Decryptor,
 		Pool:     deps.Pool,
@@ -350,6 +346,7 @@ func configureWith(
 	// stored token.
 	deps.Stripe = stripeclient.New(stripeclient.Options{Key: cfg.StripeSecretKey.Reveal()})
 	deps.BillingConfig = cfg.APIBilling
+	deps.ACRPublicCompat = cfg.APIACRPublicCompat
 	deps.StripeWebhookSecret = cfg.StripeWebhookSecret
 	deps.StripeSecretKey = cfg.StripeSecretKey
 	deps.LicensePrivateKey = cfg.LicensePrivateKey
@@ -393,6 +390,22 @@ func configureWith(
 		}
 		depComponents = append(depComponents, edge)
 	}
+	// The internal listener (CHAOS-7181): opt-in, its own address.
+	if cfg.APIInternalAddress != "" {
+		internal, err := NewInternalServer(cfg, logger, InternalRoutes(deps, logger.With(slog.String("listener", "internal"))))
+		if err != nil {
+			return nil, dependencyFailure(ctx, logger, "api_server", "api_internal_server_config_failed", err)
+		}
+		if err := registry.RegisterRequired("internal_listener", func(context.Context) error {
+			if internal.Address() == "" {
+				return errors.New("internal listener is not bound")
+			}
+			return nil
+		}); err != nil {
+			return nil, dependencyFailure(ctx, logger, "api_server", "api_internal_listener_check_register_failed", err)
+		}
+		depComponents = append(depComponents, internal)
+	}
 	// The rate-limit store error counter is scraped from the operator
 	// /metrics: the api installs no OTel meter provider, so this is the one
 	// place it is observable.
@@ -408,6 +421,51 @@ func configureWith(
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_listener_check_register_failed", err)
 	}
 	return append(depComponents, server), nil
+}
+
+// InternalRoutes is the internal listener's route set (CHAOS-7181): the
+// unauthenticated /api/v1/internal/* routes. They are NOT part of Routes, so
+// the public listener has no handler for them; only the listener bound to
+// APIInternalAddress serves them, and the network boundary (the chart's
+// NetworkPolicy, no Ingress) is the control.
+func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
+	var store acr.EntitlementStore
+	if deps.Pool != nil {
+		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
+	}
+	return internalRoutesFor(store, logger)
+}
+
+// internalRoutesFor is InternalRoutes over an explicit store. The routes are
+// marked with the response-model table (markResponseModels) here, at the one
+// place they are built, so every consumer (the internal listener and the
+// public compat bridge) serves them as response_model routes: an unmarked
+// route makes policy.WriteModel log a false wrong-writer violation on every
+// successful response.
+func internalRoutesFor(store acr.EntitlementStore, logger *slog.Logger) []httpapi.Route {
+	return markResponseModels(acr.Routes(acr.Deps{Store: store, Logger: logger}))
+}
+
+// NewInternalServer is the internal listener: the same transport bounds and
+// error shapes as the main listener, none of its origin check, CORS or scope
+// middleware (an intranet caller sends no Origin or org scope).
+func NewInternalServer(cfg config.Config, logger *slog.Logger, routes []httpapi.Route) (*httpapi.Server, error) {
+	return httpapi.NewServer(httpapi.ServerOptions{
+		Name:                "internal-http",
+		Address:             cfg.APIInternalAddress,
+		Logger:              logger,
+		Routes:              routes,
+		RequestTimeout:      requestTimeout,
+		MaxBodyBytes:        maxBodyBytes,
+		ErrorWriter:         WriteError,
+		StrictPaths:         true,
+		MaxHeaderBytes:      maxHeaderBytes,
+		MaxHeaderValueCount: maxHeaderValueCount,
+		IdleTimeout:         idleTimeout,
+		ExplicitHead:        true,
+		ForwardedAllowIPs:   forwardedAllowIPs(),
+		Middleware:          []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), UnhandledErrorShape, CloseHTTP10, DecodedPathRouting},
+	})
 }
 
 // protection is the protected-route runtime built over the api pool.

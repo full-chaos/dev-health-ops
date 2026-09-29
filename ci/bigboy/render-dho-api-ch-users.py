@@ -13,13 +13,29 @@ Prints names and counts only.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import os
 import re
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml
+
+
+def _load_validate() -> Callable[[str], None]:
+    """The shape module is a sibling file, loaded by path so the script runs from any directory."""
+    path = Path(__file__).resolve().parent / "dho_api_ch_users_shape.py"
+    spec = importlib.util.spec_from_file_location("dho_api_ch_users_shape", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    validator: Callable[[str], None] = module.validate
+    return validator
+
+
+validate = _load_validate()
 
 KEY = "dho_api_ch.xml"
 HASH = re.compile(r"<password_sha256_hex>[0-9a-f]*</password_sha256_hex>")
@@ -34,14 +50,22 @@ def render(rendered_release: Path, password: str) -> str:
             and KEY in (doc.get("data") or {})
         ):
             xml = doc["data"][KEY]
+            # Refuse first: a source that carries a plaintext <password> (or any authentication element but the
+            # hash) must never be copied into a world-readable file, so it is checked BEFORE the hash is set.
+            hashed = HASH.sub(
+                "<password_sha256_hex>" + "0" * 64 + "</password_sha256_hex>", xml
+            )
+            try:
+                validate(hashed)
+            except ValueError as error:
+                raise SystemExit(
+                    f"{KEY} in {rendered_release} is refused, nothing written: {error}"
+                ) from None
             digest = hashlib.sha256(password.encode()).hexdigest()
-            rendered, count = HASH.subn(
+            rendered, _ = HASH.subn(
                 f"<password_sha256_hex>{digest}</password_sha256_hex>", xml
             )
-            if count != 1 or "<dho_api_ch>" not in rendered:
-                raise SystemExit(
-                    f"{KEY} must declare <dho_api_ch> with exactly one <password_sha256_hex> (found {count})"
-                )
+            validate(rendered)
             return rendered
     raise SystemExit(
         f"no clickhouse-usersd ConfigMap with key {KEY} in {rendered_release}"

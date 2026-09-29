@@ -239,7 +239,9 @@ docker compose --env-file ops/.env run --rm --no-deps migrate > $REC/migrate.out
 # CHAOS-7162: go-api's ClickHouse login must be declared durably and be live BEFORE go-api is recreated: without
 # `dho_api_ch` in system.users every ClickHouse call fails with code 516 (rev 198, after a ClickHouse recreate rebuilt
 # users.d from the image). Names only; the check refuses a file ClickHouse could not read (it would exit on it).
-"$HERE/check-dho-api-ch-user.sh" "$DHO_API_CH_USERS_XML" > $REC/ch-api-user.out 2>&1; rc_chu=$?; st ch-api-user $rc_chu
+# API_CH_PASSWORD (the credential go-api logs in with) comes from the credentials file, sourced in a subshell that only the
+# check sees; the check proves dho_api_ch authenticates with it. Nothing prints it.
+( set -a; . "${DHO_API_CH_CREDS:-$R/.go-api-dev/go-api.creds}" 2>/dev/null; set +a; exec "$HERE/check-dho-api-ch-user.sh" "$DHO_API_CH_USERS_XML" ) > $REC/ch-api-user.out 2>&1; rc_chu=$?; st ch-api-user $rc_chu
 [ "$rc_chu" = 0 ] || { echo "FAIL: dho_api_ch is not usable (see $REC/ch-api-user.out); ABORTING before go-api is recreated" >&2; cat $REC/ch-api-user.out >&2; exit 1; }
 docker compose --env-file ops/.env up -d --no-deps --no-build api query-api go-api web > $REC/up.out 2>&1; st up $?   # CHAOS-7019: web recreated from its repinned digest here too, never a host build
 # CHAOS-7131: the recreated web must still carry the names the router overlay sets (names only, never values).

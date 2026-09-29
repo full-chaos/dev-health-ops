@@ -9,6 +9,7 @@ check refuses one. Nothing here prints or asserts on a credential value: only na
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import stat
@@ -40,13 +41,37 @@ def _users_file(tmp_path: Path, *, mode: int = 0o644, body: str = _XML) -> Path:
     return file
 
 
-def _docker(tmp_path: Path, *, count: str | None, rc: int = 0) -> dict[str, str]:
-    """A stub `docker exec ... clickhouse-client` answering `count` (or failing)."""
+def _docker(
+    tmp_path: Path,
+    *,
+    count: str | None,
+    rc: int = 0,
+    login_ok: bool = True,
+    password: str = "the-api-password",
+) -> dict[str, str]:
+    """A stub `docker exec ... clickhouse-client`: answers the system.users count, and a login as
+    dho_api_ch (`--user dho_api_ch`) succeeds only when the CLICKHOUSE_PASSWORD it was handed through the
+    environment equals `password`. Every call's arguments are logged (never the environment)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
+    args_log = tmp_path / "docker-args.log"
     docker = bin_dir / "docker"
     answer = f'echo "{count}"' if count is not None else "true"
-    docker.write_text(f"#!/usr/bin/env bash\n{answer}\nexit {rc}\n")
+    login = (
+        'if [ "${CLICKHOUSE_PASSWORD:-}" = "'
+        + password
+        + '" ]; then echo dho_api_ch; exit 0; fi; exit 1'
+        if login_ok
+        else "exit 1"
+    )
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "$*" >> "{args_log}"\n'
+        'case "$*" in *"--user dho_api_ch"*)\n'
+        f"  {login} ;;\n"
+        "esac\n"
+        f"{answer}\nexit {rc}\n"
+    )
     docker.chmod(docker.stat().st_mode | stat.S_IEXEC)
     return {"PATH": f"{bin_dir}:/usr/bin:/bin"}
 
@@ -57,8 +82,12 @@ def _check(
     *,
     count: str | None = "1",
     rc: int = 0,
+    login_ok: bool = True,
+    api_password: str | None = "the-api-password",
 ) -> subprocess.CompletedProcess[str]:
-    env = _docker(tmp_path, count=count, rc=rc)
+    env = _docker(tmp_path, count=count, rc=rc, login_ok=login_ok)
+    if api_password is not None:
+        env["API_CH_PASSWORD"] = api_password
     args = ["bash", str(CHECK)] + ([str(file)] if file is not None else [])
     return subprocess.run(args, capture_output=True, text=True, env=env, timeout=30)
 
@@ -67,6 +96,7 @@ def test_a_readable_declared_file_and_a_live_user_pass(tmp_path: Path) -> None:
     proc = _check(tmp_path, _users_file(tmp_path))
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     assert "ch_api_user_file=ok" in proc.stdout and "ch_api_user_live=ok" in proc.stdout
+    assert "ch_api_user_auth=ok" in proc.stdout
     assert _HASH not in proc.stdout + proc.stderr
 
 
@@ -95,7 +125,7 @@ def test_a_file_that_does_not_declare_the_user_with_a_hash_is_refused(
     assert _check(tmp_path, _users_file(tmp_path, body=other)).returncode == 1
     plaintext = "<clickhouse><users><dho_api_ch><password>x</password></dho_api_ch></users></clickhouse>"
     proc = _check(tmp_path, _users_file(tmp_path, body=plaintext))
-    assert proc.returncode == 1 and "64-hex" in proc.stderr
+    assert proc.returncode == 1 and "not allowed: password" in proc.stderr
 
 
 def test_a_file_holding_a_plaintext_password_or_a_uri_is_refused(
@@ -109,7 +139,7 @@ def test_a_file_holding_a_plaintext_password_or_a_uri_is_refused(
         body = _XML.replace("</dho_api_ch>", extra + "</dho_api_ch>")
         proc = _check(tmp_path, _users_file(tmp_path, body=body))
         assert proc.returncode == 1, (extra, proc.stdout, proc.stderr)
-        assert "plaintext password element or a URI" in proc.stderr
+        assert "not a valid dho_api_ch users.d declaration" in proc.stderr
         assert "hunter2" not in proc.stdout + proc.stderr
         assert "pw@" not in proc.stdout + proc.stderr
 
@@ -218,3 +248,146 @@ def test_the_cut_checks_dho_api_ch_before_it_recreates_go_api() -> None:
     assert "$HERE/compose.bigboy.clickhouse-users.yml" in chain
     assert chain.rstrip().endswith("$HERE/compose.bigboy.router.yml"), chain
     assert any(line.startswith("export DHO_API_CH_USERS_XML=") for line in lines)
+
+
+def test_the_file_is_parsed_not_grepped(tmp_path: Path) -> None:
+    """A truncated file that still contains every tag string made the old text check pass while
+    ClickHouse exits on it; the file must be well-formed with the exact shape."""
+    grants = "<grants><query>GRANT SELECT ON default.work_items</query></grants>"
+    cases = {
+        "truncated": _XML.replace("</clickhouse>", ""),
+        "second user": _XML.replace(
+            "</users>",
+            "<other><password_sha256_hex>"
+            + _HASH
+            + "</password_sha256_hex></other></users>",
+        ),
+        "extra authentication element": _XML.replace(
+            "</dho_api_ch>",
+            "<password_double_sha1_hex>"
+            + "b" * 40
+            + "</password_double_sha1_hex></dho_api_ch>",
+        ),
+        "two hashes": _XML.replace(
+            "</dho_api_ch>",
+            "<password_sha256_hex>" + _HASH + "</password_sha256_hex></dho_api_ch>",
+        ),
+        "hash not hex": _XML.replace(_HASH, "z" * 64),
+        "no grants": _XML.replace(grants, ""),
+        "query that is not a GRANT": _XML.replace("GRANT SELECT", "REVOKE SELECT"),
+    }
+    for name, body in cases.items():
+        proc = _check(tmp_path, _users_file(tmp_path, body=body))
+        assert proc.returncode == 1, (name, proc.stdout, proc.stderr)
+        assert "not a valid dho_api_ch users.d declaration" in proc.stderr, (
+            name,
+            proc.stderr,
+        )
+        assert _HASH not in proc.stdout + proc.stderr
+
+
+def test_a_user_that_cannot_log_in_with_the_api_credential_is_refused(
+    tmp_path: Path,
+) -> None:
+    """Present in system.users is not usable: the declared hash must match the credential go-api uses."""
+    file = _users_file(tmp_path)
+    wrong = _check(tmp_path, file, login_ok=False)
+    assert wrong.returncode == 3, (wrong.stdout, wrong.stderr)
+    assert "CH_API_USER_AUTH_FAIL" in wrong.stderr and "516" in wrong.stderr
+    unset = _check(tmp_path, file, api_password=None)
+    assert unset.returncode == 3 and "API_CH_PASSWORD is not set" in unset.stderr
+
+
+def test_the_api_credential_never_reaches_an_argument_list_or_the_output(
+    tmp_path: Path,
+) -> None:
+    secret = "the-api-password"
+    proc = _check(tmp_path, _users_file(tmp_path))
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    args = (tmp_path / "docker-args.log").read_text()
+    assert "--user dho_api_ch" in args and "-e CLICKHOUSE_PASSWORD" in args, args
+    assert secret not in args and secret not in proc.stdout + proc.stderr
+
+
+def test_the_renderer_refuses_a_source_with_a_plaintext_password_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    body = _XML.replace(
+        "</dho_api_ch>", "<password>hunter2-plain</password></dho_api_ch>"
+    )
+    release = tmp_path / "release.yaml"
+    release.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {"name": "dev-health-ops-clickhouse-usersd"},
+                "data": {"dho_api_ch.xml": body},
+            }
+        )
+    )
+    proc = _render(tmp_path, release, API_CH_PASSWORD="the-api-password")
+    assert proc.returncode != 0, (proc.stdout, proc.stderr)
+    assert "nothing written" in proc.stderr and "password" in proc.stderr
+    assert "hunter2-plain" not in proc.stdout + proc.stderr
+    assert not (tmp_path / "out.xml").exists()
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".out.xml")]
+
+
+def _cut_with_a_fake_check(
+    tmp_path: Path, check_rc: int
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run the real cut end to end past the carry block with a tools directory whose check is a fake
+    returning `check_rc`; the stub docker logs every call so a `compose ... up` is observable."""
+    entry = importlib.import_module("tests.tooling.test_bigboy_cut_entry_point")
+    root = entry._build_bigboy_root(tmp_path)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for source in TOOLS.iterdir():
+        if source.is_file() and source.name != CHECK.name:
+            (tools / source.name).symlink_to(source)
+    fake = tools / CHECK.name
+    fake.write_text(f"#!/usr/bin/env bash\necho fake-check\nexit {check_rc}\n")
+    fake.chmod(0o755)
+    stub_bin = tmp_path / "stubbin"
+    stub_bin.mkdir()
+    entry._docker_stub(
+        stub_bin, routing_response=entry._routing_json("digest_unchanged"), routing_rc=0
+    )
+    entry._gh_stub(stub_bin)
+    args_log = tmp_path / "docker-args.log"
+    proc = subprocess.run(
+        ["bash", str(CUT), entry._OLD8, entry._NEW],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={
+            "PATH": f"{stub_bin}:/usr/bin:/bin",
+            "BIGBOY_ROOT": str(root),
+            "BIGBOY_TOOLS_DIR": str(tools),
+            "DOCKER_STUB_ARGS_LOG": str(args_log),
+        },
+    )
+    calls = args_log.read_text().splitlines() if args_log.exists() else []
+    return proc, calls
+
+
+def test_the_cut_aborts_before_go_api_up_when_the_check_fails(tmp_path: Path) -> None:
+    """Executed, not read: with the check returning 2 the cut prints its STEP, exits non-zero and never
+    issues the compose `up` that recreates go-api."""
+    proc, calls = _cut_with_a_fake_check(tmp_path, 2)
+    assert "STEP ch-api-user rc=2" in proc.stdout, (proc.stdout, proc.stderr)
+    assert proc.returncode != 0
+    assert "ABORTING before go-api is recreated" in proc.stderr
+    assert not [c for c in calls if " up " in f" {c} " and "go-api" in c], calls
+    assert "STEP up rc=" not in proc.stdout
+
+
+def test_the_cut_goes_on_to_recreate_go_api_when_the_check_passes(
+    tmp_path: Path,
+) -> None:
+    proc, calls = _cut_with_a_fake_check(tmp_path, 0)
+    assert "STEP ch-api-user rc=0" in proc.stdout, (proc.stdout, proc.stderr)
+    assert "STEP up rc=" in proc.stdout, proc.stdout
+    assert [c for c in calls if " up " in f" {c} " and "go-api" in c], calls

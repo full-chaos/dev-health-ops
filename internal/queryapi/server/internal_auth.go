@@ -126,10 +126,9 @@ func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *p
 			// database fault -- that would let them pass a
 			// "not-impersonating" gate (e.g. RequirePlatformAdmin) exactly
 			// while genuinely impersonating. Every live check on this path
-			// fails closed; this is not the one exception. (go-api's own
-			// Scope.Impersonation, scope.go, DOES fail open on this same
-			// lookup today -- reported to team-lead as a separate finding,
-			// D2919 condition 2's own instruction: not copied here.)
+			// fails closed; this is not the one exception. go-api's own
+			// Scope.Impersonation (internal/api/policy/scope.go) refuses on
+			// this same lookup failure too.
 			log.Printf("query-api: internal request refused: reason=edge_impersonation_lookup_failed carrier=edge path=%s request_id=%s",
 				r.URL.Path, envelopeRequestID(r))
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

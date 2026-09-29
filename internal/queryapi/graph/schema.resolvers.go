@@ -1277,7 +1277,7 @@ func (r *queryResolver) Recommendations(ctx context.Context, orgID string, team 
 			},
 		}
 	}
-	return recommendations.Resolve(ctx, r.ClickHouse, claims.OrgID, team, window, time.Now().UTC()), nil
+	return recommendations.Resolve(ctx, r.ClickHouse, claims.OrgID, team, window, time.Now().UTC())
 }
 
 // Experiments is the resolver for the experiments field.

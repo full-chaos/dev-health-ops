@@ -101,8 +101,19 @@ func TestResolve_SeededRealClickHouse(t *testing.T) {
 		('team-a', '` + orgID + `', 'rule-3', '2026-04-01', '2026-04-07', true, 'warning', 'tie', 'tie', 'tie', '[]', toDateTime64('` + tNew + `',3)),
 		('team-a', '` + orgID + `', 'rule-0', '2026-03-25', '2026-04-03', true, 'warning', 'earlier', 'earlier', 'earlier', '[]', toDateTime64('` + tNew + `',3))`)
 
+	// A rule that STOPPED firing: an older fired=true run superseded by a newer
+	// fired=false run for the same (team, rule, window_end) must not be
+	// returned -- a reader that surfaces a rule whenever any run fired would.
+	exec(`INSERT INTO recommendations_daily
+		(team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, evidence_json, computed_at) VALUES
+		('team-a', '` + orgID + `', 'rule-stopped', '2026-04-01', '2026-04-07', true, 'critical', 'was firing', 'was firing', 'was firing', '[]', toDateTime64('` + tOld + `',3))`)
+	// A separate INSERT: rows of one block would be collapsed at insert time.
+	exec(`INSERT INTO recommendations_daily
+		(team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, evidence_json, computed_at) VALUES
+		('team-a', '` + orgID + `', 'rule-stopped', '2026-04-01', '2026-04-07', false, 'critical', 'stopped', 'stopped', 'stopped', '[]', toDateTime64('` + tNew + `',3))`)
+
 	now := time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC)
-	got := Resolve(ctx, client, orgID, "team-a", model.WindowInput{Value: 4, Unit: model.WindowUnitWeek}, now)
+	got, _ := Resolve(ctx, client, orgID, "team-a", model.WindowInput{Value: 4, Unit: model.WindowUnitWeek}, now)
 
 	if len(got) != 3 {
 		t.Fatalf("Resolve returned %d recommendations, want 3 (rule-1, rule-3, rule-0): %+v", len(got), got)

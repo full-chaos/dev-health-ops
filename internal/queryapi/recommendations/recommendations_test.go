@@ -8,7 +8,11 @@ package recommendations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,7 +125,7 @@ func weekWindow() model.WindowInput { return model.WindowInput{Value: 1, Unit: m
 // Port of test_resolve_recommendations_returns_list.
 func TestResolve_ReturnsList(t *testing.T) {
 	client := &fakeClient{scanner: &fakeRowScanner{rows: []fakeRow{saturationRow(), thrashRow()}}}
-	got := Resolve(context.Background(), client, "test-org", "team-alpha", weekWindow(), computedAtFixture)
+	got, _ := Resolve(context.Background(), client, "test-org", "team-alpha", weekWindow(), computedAtFixture)
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2", len(got))
 	}
@@ -130,7 +134,7 @@ func TestResolve_ReturnsList(t *testing.T) {
 // Port of test_resolve_recommendations_field_mapping.
 func TestResolve_FieldMapping(t *testing.T) {
 	client := &fakeClient{scanner: &fakeRowScanner{rows: []fakeRow{saturationRow()}}}
-	got := Resolve(context.Background(), client, "test-org", "team-alpha", weekWindow(), computedAtFixture)
+	got, _ := Resolve(context.Background(), client, "test-org", "team-alpha", weekWindow(), computedAtFixture)
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1", len(got))
 	}
@@ -161,7 +165,7 @@ func TestResolve_FieldMapping(t *testing.T) {
 // Port of test_resolve_recommendations_evidence_references_resolve.
 func TestResolve_EvidenceReferencesResolve(t *testing.T) {
 	client := &fakeClient{scanner: &fakeRowScanner{rows: []fakeRow{saturationRow()}}}
-	got := Resolve(context.Background(), client, "test-org", "team-alpha", weekWindow(), computedAtFixture)
+	got, _ := Resolve(context.Background(), client, "test-org", "team-alpha", weekWindow(), computedAtFixture)
 	rec := got[0]
 	if len(rec.Evidence) != 2 {
 		t.Fatalf("len(Evidence) = %d, want 2", len(rec.Evidence))
@@ -184,7 +188,7 @@ func TestResolve_EvidenceReferencesResolve(t *testing.T) {
 // Port of test_resolve_recommendations_empty_on_no_rows.
 func TestResolve_EmptyOnNoRows(t *testing.T) {
 	client := &fakeClient{scanner: &fakeRowScanner{rows: nil}}
-	got := Resolve(context.Background(), client, "test-org", "team-beta", model.WindowInput{Value: 7, Unit: model.WindowUnitDay}, computedAtFixture)
+	got, _ := Resolve(context.Background(), client, "test-org", "team-beta", model.WindowInput{Value: 7, Unit: model.WindowUnitDay}, computedAtFixture)
 	if len(got) != 0 {
 		t.Errorf("len(got) = %d, want 0", len(got))
 	}
@@ -193,7 +197,7 @@ func TestResolve_EmptyOnNoRows(t *testing.T) {
 // Port of test_resolve_recommendations_tolerates_db_error.
 func TestResolve_ToleratesDBError(t *testing.T) {
 	client := &fakeClient{err: errors.New("ClickHouse unavailable")}
-	got := Resolve(context.Background(), client, "test-org", "team-alpha", model.WindowInput{Value: 4, Unit: model.WindowUnitWeek}, computedAtFixture)
+	got, _ := Resolve(context.Background(), client, "test-org", "team-alpha", model.WindowInput{Value: 4, Unit: model.WindowUnitWeek}, computedAtFixture)
 	if got == nil || len(got) != 0 {
 		t.Errorf("got = %#v, want an empty (non-nil) slice", got)
 	}
@@ -202,7 +206,7 @@ func TestResolve_ToleratesDBError(t *testing.T) {
 // Port of test_resolve_recommendations_multiple_rules.
 func TestResolve_MultipleRules(t *testing.T) {
 	client := &fakeClient{scanner: &fakeRowScanner{rows: []fakeRow{saturationRow(), thrashRow()}}}
-	got := Resolve(context.Background(), client, "test-org", "team-alpha", model.WindowInput{Value: 2, Unit: model.WindowUnitCycle}, computedAtFixture)
+	got, _ := Resolve(context.Background(), client, "test-org", "team-alpha", model.WindowInput{Value: 2, Unit: model.WindowUnitCycle}, computedAtFixture)
 	ids := map[string]bool{}
 	for _, r := range got {
 		ids[r.RuleID] = true
@@ -217,7 +221,7 @@ func TestResolve_UnknownSeverityFallsBack(t *testing.T) {
 	bad := saturationRow()
 	bad.severity = "ultra-critical"
 	client := &fakeClient{scanner: &fakeRowScanner{rows: []fakeRow{bad}}}
-	got := Resolve(context.Background(), client, "test-org", "team-alpha", weekWindow(), computedAtFixture)
+	got, _ := Resolve(context.Background(), client, "test-org", "team-alpha", weekWindow(), computedAtFixture)
 	if got[0].Severity != model.SeverityWarning {
 		t.Errorf("Severity = %q, want WARNING fallback", got[0].Severity)
 	}
@@ -248,16 +252,109 @@ func TestWindowToDates_CapsReadAtTodayPlusOne(t *testing.T) {
 	}
 }
 
-// A JSON null entry inside an otherwise-valid evidence array must be
-// skipped, as Python's _parse_evidence skips every non-dict entry -- never
-// surfaced as a zero-valued evidence row (json.Unmarshal of null into a
-// struct succeeds with zero values).
-func TestParseEvidence_NullEntryIsSkipped(t *testing.T) {
-	got := parseEvidence(context.Background(), `[null,{"team_id":"team-alpha","metric_table":"work_item_metrics_daily","field":"wip_count","window_start":"2026-04-01","window_end":"2026-04-07","value":14.0}]`)
-	if len(got) != 1 || got[0].Field != "wip_count" {
-		t.Errorf("evidence = %+v, want exactly the one real entry", got)
+// evidenceGolden is one case of testdata/evidence_golden.json, produced by
+// testdata/gen_evidence_golden.py through Python's real row mapper
+// (resolvers/recommendations.py _row_to_recommendation).
+type evidenceGolden struct {
+	Raw             string `json:"raw"`
+	KeepRow         bool   `json:"keep_row"`
+	PythonException string `json:"python_exception"`
+	Evidence        []struct {
+		TeamID      string `json:"team_id"`
+		MetricTable string `json:"metric_table"`
+		WindowStart string `json:"window_start"`
+		WindowEnd   string `json:"window_end"`
+		Field       string `json:"field"`
+		Value       any    `json:"value"`
+	} `json:"evidence"`
+}
+
+// Every evidence_json in the golden file is answered as Python's row mapper
+// answers it: the same entries with the same strings, dates and floats, the
+// same skipped entries, the same dropped rows, and the same field-level error
+// for a value no float can hold.
+func TestParseEvidenceMatchesPythonRowMapper(t *testing.T) {
+	raw, err := os.ReadFile("testdata/evidence_golden.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if only := parseEvidence(context.Background(), `[null]`); len(only) != 0 {
-		t.Errorf("[null] evidence = %+v, want none", only)
+	var cases []evidenceGolden
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) < 40 {
+		t.Fatalf("golden file has %d cases, want the whole grid", len(cases))
+	}
+	for _, c := range cases {
+		refs, outcome := parseEvidence(context.Background(), c.Raw)
+		switch {
+		case c.PythonException == "OverflowError":
+			if outcome != rowOverflows {
+				t.Errorf("%q: python raised OverflowError, Go outcome %v", c.Raw, outcome)
+			}
+			continue
+		case c.PythonException != "":
+			t.Fatalf("%q: python raised %s, which this test does not know how to compare", c.Raw, c.PythonException)
+		case !c.KeepRow:
+			if outcome != rowDropped {
+				t.Errorf("%q: python dropped the row, Go outcome %v", c.Raw, outcome)
+			}
+			continue
+		}
+		if outcome != rowKept {
+			t.Errorf("%q: python kept the row, Go outcome %v", c.Raw, outcome)
+			continue
+		}
+		if len(refs) != len(c.Evidence) {
+			t.Errorf("%q: %d evidence entries, python %d", c.Raw, len(refs), len(c.Evidence))
+			continue
+		}
+		for i, want := range c.Evidence {
+			got := refs[i]
+			if got.TeamID != want.TeamID || got.MetricTable != want.MetricTable || got.Field != want.Field ||
+				got.WindowStart.String() != want.WindowStart || got.WindowEnd.String() != want.WindowEnd {
+				t.Errorf("%q entry %d: got %+v, python %+v", c.Raw, i, got, want)
+			}
+			switch v := want.Value.(type) {
+			case float64:
+				if got.Value != v {
+					t.Errorf("%q entry %d: value %v, python %v", c.Raw, i, got.Value, v)
+				}
+			case map[string]any:
+				kind := v["nonfinite"]
+				ok := (kind == "nan" && math.IsNaN(got.Value)) || (kind == "inf" && math.IsInf(got.Value, 1)) || (kind == "-inf" && math.IsInf(got.Value, -1))
+				if !ok {
+					t.Errorf("%q entry %d: value %v, python %v", c.Raw, i, got.Value, kind)
+				}
+			default:
+				t.Errorf("%q entry %d: unexpected golden value %v", c.Raw, i, want.Value)
+			}
+		}
+	}
+}
+
+// A ClickHouse stream that breaks half-way is answered as Python answers a
+// failed query -- an empty list -- not as a complete, shorter list.
+func TestResolve_AStreamErrorAnswersEmptyNotPartial(t *testing.T) {
+	scanner := &fakeRowScanner{rows: []fakeRow{saturationRow()}, err: errors.New("stream interrupted")}
+	client := &fakeClient{scanner: scanner}
+	got, err := Resolve(context.Background(), client, "test-org", "team-alpha", weekWindow(), computedAtFixture)
+	if err != nil {
+		t.Fatalf("err = %v, want nil (Python answers [])", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Errorf("got %d recommendations after a stream error, want an empty non-nil list", len(got))
+	}
+}
+
+// A value no float can hold fails the field, as Python's uncaught OverflowError
+// does; it is not answered as an empty or partial list.
+func TestResolve_AnOverflowingEvidenceValueFailsTheField(t *testing.T) {
+	row := saturationRow()
+	row.evidenceJSON = `[{"value":1` + strings.Repeat("0", 400) + `}]`
+	client := &fakeClient{scanner: &fakeRowScanner{rows: []fakeRow{row}}}
+	got, err := Resolve(context.Background(), client, "test-org", "team-alpha", weekWindow(), computedAtFixture)
+	if !errors.Is(err, errEvidenceOverflow) || got != nil {
+		t.Fatalf("got %v, err %v; want no rows and errEvidenceOverflow", got, err)
 	}
 }

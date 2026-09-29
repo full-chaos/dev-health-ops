@@ -15,15 +15,19 @@
 package recommendations
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"log/slog"
+	"math"
+	"math/big"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
@@ -106,79 +110,170 @@ func windowToDates(now time.Time, window model.WindowInput) (start, end time.Tim
 	return start, end
 }
 
-// evidenceItem is the wire shape of one entry of the evidence_json
-// column -- the engine serialises it with these exact snake_case keys
-// (recommendations.py's _parse_evidence doc comment), matching
-// model.EvidenceRef field-for-field.
-type evidenceItem struct {
-	TeamID      string  `json:"team_id"`
-	MetricTable string  `json:"metric_table"`
-	WindowStart string  `json:"window_start"`
-	WindowEnd   string  `json:"window_end"`
-	Field       string  `json:"field"`
-	Value       float64 `json:"value"`
-}
-
-// parseEvidence ports _parse_evidence exactly, including its per-entry
-// tolerance: a malformed evidence_json payload, or one malformed entry
-// inside an otherwise-valid array, is skipped (logged), never fails the
-// whole recommendation.
-func parseEvidence(ctx context.Context, raw string) []model.EvidenceRef {
+// parseEvidence ports _parse_evidence (recommendations.py) with Python's own
+// value semantics, not Go's struct decoding: the column is decoded as
+// json.loads does (pyjson), every non-object entry is skipped, str() and
+// float() are applied to each field as Python applies them, and an entry
+// whose value Python cannot convert is skipped. So a JSON null in any
+// position is never turned into a zero value: a null entry is skipped, a
+// null value skips the entry (float(None) raises), a null team_id is the
+// string "None" (str(None)).
+//
+// The row outcome follows Python's own exceptions: evidence_json that decodes
+// to a bare number, boolean or null (iterating it raises TypeError, which
+// _row_to_recommendation catches) drops the row; a value too large for a float
+// raises OverflowError, which nothing on the path catches, so the whole field
+// errors. An evidence column that decodes to a string or an object iterates
+// characters or keys, none of which is an object: no evidence.
+func parseEvidence(ctx context.Context, raw string) (refs []model.EvidenceRef, outcome rowOutcome) {
 	if raw == "" {
-		return nil
+		return nil, rowKept
 	}
-	var items []json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+	decoded, err := pyjson.DecodeString(raw)
+	if err != nil {
 		slog.WarnContext(ctx, "query-api: recommendations evidence_json unparseable, skipping",
 			"operation", "recommendations", "error", err)
-		return nil
+		return nil, rowKept
 	}
-	var out []model.EvidenceRef
-	for _, raw := range items {
-		// json.Unmarshal of a JSON null into a struct succeeds with zero
-		// values; Python skips every non-dict entry, so a null must be
-		// skipped here too, never surfaced as a zero-valued evidence row.
-		if string(bytes.TrimSpace(raw)) == "null" {
-			slog.WarnContext(ctx, "query-api: recommendations evidence entry is null, skipping",
-				"operation", "recommendations")
+	var items []pyjson.Value
+	switch typed := decoded.(type) {
+	case []pyjson.Value:
+		items = typed
+	case string, *pyjson.Object:
+		return nil, rowKept
+	default:
+		slog.WarnContext(ctx, "query-api: recommendations evidence_json is not iterable, skipping the row",
+			"operation", "recommendations")
+		return nil, rowDropped
+	}
+	for _, item := range items {
+		entry, ok := item.(*pyjson.Object)
+		if !ok {
 			continue
 		}
-		var item evidenceItem
-		if err := json.Unmarshal(raw, &item); err != nil {
+		ref, verdict := evidenceRefFromObject(entry)
+		switch verdict {
+		case entryKept:
+			refs = append(refs, ref)
+		case entrySkipped:
 			slog.WarnContext(ctx, "query-api: recommendations evidence entry malformed, skipping",
-				"operation", "recommendations", "error", err)
-			continue
+				"operation", "recommendations")
+		case entryOverflows:
+			slog.ErrorContext(ctx, "query-api: recommendations evidence value overflows a float, failing the field",
+				"operation", "recommendations")
+			return nil, rowOverflows
 		}
-		windowStart := graphqldate.Date{}
-		if item.WindowStart != "" {
-			parsed, err := graphqldate.Parse(item.WindowStart)
-			if err != nil {
-				slog.WarnContext(ctx, "query-api: recommendations evidence entry malformed, skipping",
-					"operation", "recommendations", "field", "window_start", "error", err)
-				continue
-			}
-			windowStart = parsed
-		}
-		windowEnd := graphqldate.Date{}
-		if item.WindowEnd != "" {
-			parsed, err := graphqldate.Parse(item.WindowEnd)
-			if err != nil {
-				slog.WarnContext(ctx, "query-api: recommendations evidence entry malformed, skipping",
-					"operation", "recommendations", "field", "window_end", "error", err)
-				continue
-			}
-			windowEnd = parsed
-		}
-		out = append(out, model.EvidenceRef{
-			TeamID:      item.TeamID,
-			MetricTable: item.MetricTable,
-			WindowStart: windowStart,
-			WindowEnd:   windowEnd,
-			Field:       item.Field,
-			Value:       item.Value,
-		})
 	}
-	return out
+	return refs, rowKept
+}
+
+// rowOutcome is what an evidence column does to its row.
+type rowOutcome int
+
+const (
+	rowKept rowOutcome = iota
+	rowDropped
+	rowOverflows
+)
+
+// errEvidenceOverflow is Python's uncaught OverflowError ("int too large to
+// convert to float") for an evidence value.
+var errEvidenceOverflow = errors.New("recommendations: an evidence value is too large to convert to a float")
+
+type entryVerdict int
+
+const (
+	entryKept entryVerdict = iota
+	entrySkipped
+	entryOverflows
+)
+
+func evidenceRefFromObject(entry *pyjson.Object) (model.EvidenceRef, entryVerdict) {
+	get := func(key string, fallback pyjson.Value) pyjson.Value {
+		if value, present := entry.Get(key); present {
+			return value
+		}
+		return fallback
+	}
+	date := func(key string) (graphqldate.Date, bool) {
+		value := get(key, "")
+		if !pyjson.Truthy(value) {
+			return graphqldate.Date{}, true
+		}
+		parsed, err := graphqldate.Parse(pyjson.Str(value))
+		return parsed, err == nil
+	}
+	windowStart, ok := date("window_start")
+	if !ok {
+		return model.EvidenceRef{}, entrySkipped
+	}
+	windowEnd, ok := date("window_end")
+	if !ok {
+		return model.EvidenceRef{}, entrySkipped
+	}
+	value, verdict := pyFloat(get("value", pyjson.Float(0)))
+	if verdict != entryKept {
+		return model.EvidenceRef{}, verdict
+	}
+	return model.EvidenceRef{
+		TeamID:      pyjson.Str(get("team_id", "")),
+		MetricTable: pyjson.Str(get("metric_table", "")),
+		WindowStart: windowStart,
+		WindowEnd:   windowEnd,
+		Field:       pyjson.Str(get("field", "")),
+		Value:       value,
+	}, entryKept
+}
+
+// pyNumberText is the text float() accepts for a finite decimal: optional
+// sign, digits with single underscores between digits, an optional fraction
+// and exponent.
+var pyNumberText = regexp.MustCompile(`^[+-]?(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?$`)
+
+// pyFloat is float(value) for a decoded JSON value: entrySkipped where Python
+// raises TypeError or ValueError (caught per entry), entryOverflows where it
+// raises OverflowError (not caught anywhere on the path).
+func pyFloat(value pyjson.Value) (float64, entryVerdict) {
+	switch typed := value.(type) {
+	case bool:
+		if typed {
+			return 1, entryKept
+		}
+		return 0, entryKept
+	case pyjson.Float:
+		return float64(typed), entryKept
+	case pyjson.Int:
+		if typed.Int == nil {
+			return 0, entryKept
+		}
+		f, _ := new(big.Float).SetInt(typed.Int).Float64()
+		if math.IsInf(f, 0) {
+			return 0, entryOverflows
+		}
+		return f, entryKept
+	case string:
+		text := strings.TrimSpace(typed)
+		switch strings.ToLower(strings.TrimLeft(text, "+-")) {
+		case "inf", "infinity":
+			if strings.HasPrefix(text, "-") {
+				return math.Inf(-1), entryKept
+			}
+			return math.Inf(1), entryKept
+		case "nan":
+			return math.NaN(), entryKept
+		}
+		if !pyNumberText.MatchString(text) {
+			return 0, entrySkipped
+		}
+		parsed, err := strconv.ParseFloat(strings.ReplaceAll(text, "_", ""), 64)
+		if err != nil && !errors.Is(err, strconv.ErrRange) {
+			return 0, entrySkipped
+		}
+		return parsed, entryKept
+	default:
+		// None, list, dict: float() raises TypeError.
+		return 0, entrySkipped
+	}
 }
 
 // severityFromRaw ports the Severity(raw_sev) / ValueError fallback in
@@ -221,7 +316,7 @@ type row struct {
 // `except Exception: logger.exception(...); return []` -- a transient
 // ClickHouse read failure never surfaces as a GraphQL field error here,
 // same as upstream.
-func Resolve(ctx context.Context, client QueryClient, orgID, team string, window model.WindowInput, now time.Time) []model.Recommendation {
+func Resolve(ctx context.Context, client QueryClient, orgID, team string, window model.WindowInput, now time.Time) ([]model.Recommendation, error) {
 	start, end := windowToDates(now, window)
 	bindings := []dhclickhouse.Binding{
 		{Name: "team_id", Value: team},
@@ -233,7 +328,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID, team string, window
 	if err != nil {
 		slog.ErrorContext(ctx, "query-api: recommendations query failed, answering empty",
 			"operation", "recommendations", "error", err)
-		return []model.Recommendation{}
+		return []model.Recommendation{}, nil
 	}
 	defer rs.Close()
 
@@ -248,6 +343,13 @@ func Resolve(ctx context.Context, client QueryClient, orgID, team string, window
 				"operation", "recommendations", "error", err)
 			continue
 		}
+		evidence, outcome := parseEvidence(ctx, r.evidenceJSON)
+		if outcome == rowOverflows {
+			return nil, errEvidenceOverflow
+		}
+		if outcome == rowDropped {
+			continue
+		}
 		out = append(out, model.Recommendation{
 			RuleID:           r.ruleID,
 			TeamID:           r.teamID,
@@ -259,12 +361,16 @@ func Resolve(ctx context.Context, client QueryClient, orgID, team string, window
 			Title:            r.title,
 			Rationale:        r.rationale,
 			SuccessCriterion: r.successCrit,
-			Evidence:         parseEvidence(ctx, r.evidenceJSON),
+			Evidence:         evidence,
 		})
 	}
 	if err := rs.Err(); err != nil {
-		slog.ErrorContext(ctx, "query-api: recommendations result iteration failed, answering what was read so far",
+		// Python's query_dicts either returns every row or raises, and a raise
+		// is answered as an empty list: a stream that broke half-way must not
+		// be answered as a complete, shorter list.
+		slog.ErrorContext(ctx, "query-api: recommendations result iteration failed, answering empty",
 			"operation", "recommendations", "error", err)
+		return []model.Recommendation{}, nil
 	}
-	return out
+	return out, nil
 }

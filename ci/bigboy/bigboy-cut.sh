@@ -20,7 +20,10 @@ HERE=$(cd "$(dirname "$0")" && pwd)  # sibling scripts (this family) resolve fro
 for need in ci/bigboy compose/compose.bigboy.images.yml _records; do
   [ -e "$R/$need" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing $need -- refusing to run against a root that is not a real bigboy tree" >&2; exit 1; }
 done
-export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:compose/compose.metrics-api.local.yml:.remember/lanes/team-lead/reconciler-sweep-override.yml:compose/compose.bigboy.images.yml:compose/compose.bigboy.workers.yml
+# CHAOS-7131: the router overlay is part of the chain. It sets web's BACKEND_URL (the plane-split router)
+# and AUTH_URL; without it `up` below recreated web from the base file alone and web lost both -- REST
+# calls 500'd and the auth callback/logout used the wrong origin. It stays last so its web.environment wins.
+export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:compose/compose.metrics-api.local.yml:.remember/lanes/team-lead/reconciler-sweep-override.yml:compose/compose.bigboy.images.yml:compose/compose.bigboy.workers.yml:ci/bigboy/compose.bigboy.router.yml
 cd "$R"
 st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
 echo "cut start $(date -u +%T) new=$NEW root=$R"
@@ -221,6 +224,9 @@ fi
 # error -- caught live tonight when a first apply went out with an empty edge-JWT secret.
 docker compose --env-file ops/.env run --rm --no-deps migrate > $REC/migrate.out 2>&1; st migrate $?
 docker compose --env-file ops/.env up -d --no-deps --no-build api query-api go-api web > $REC/up.out 2>&1; st up $?   # CHAOS-7019: web recreated from its repinned digest here too, never a host build
+# CHAOS-7131: the recreated web must still carry the names the router overlay sets (names only, never values).
+"$HERE/container-env-names.sh" dev-health-web-1 > "$REC.web-env-names-after-up" 2>/dev/null
+"$HERE/check-web-env-required.sh" "$REC.web-env-names-after-up" BACKEND_URL AUTH_URL; st web-env-after-up $?
 docker compose --env-file ops/.env up -d --no-deps --no-build go-worker go-worker-ops go-scheduler go-reconciler go-stream-ingest go-stream-external go-stream-pagerduty > $REC/up-workers.out 2>&1; rcw=$?; st up-workers $rcw; [ $rcw = 0 ] || { echo "ABORT: worker plane not recreated = INCOMPLETE pass (Trap #420)"; exit 1; }   # Trap #420: every plane from the cut's CI digests
 sleep 45; curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8093/ready | grep -q 200; st go-api-ready $?
 # R467: every path the router sends to a Go plane has a handler in the build just started (405/401 to a

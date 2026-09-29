@@ -14,6 +14,7 @@ import asyncio
 import json
 import types
 from datetime import date, datetime, timezone
+from typing import Any, cast
 
 from dev_health_ops.api.graphql.models.recommendations import WindowInput, WindowUnit
 from dev_health_ops.api.graphql.resolvers import recommendations as module
@@ -55,7 +56,7 @@ def scripted(mode):
 
 async def run(window, mode):
     client_module.query_dicts = scripted(mode)
-    context = types.SimpleNamespace(org_id="test-org", client=object())
+    context = cast(Any, types.SimpleNamespace(org_id="test-org", client=object()))
     try:
         rows = await module.resolve_recommendations(context, "team-a", window)
     except BaseException as exc:

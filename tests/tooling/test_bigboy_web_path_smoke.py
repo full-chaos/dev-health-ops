@@ -31,6 +31,9 @@ REGISTERED = {
     "complexityTimeseries": "registeredComplexityTimeseriesDocument",
     "workGraphFlow": "registeredWorkGraphFlowDocument",
     "testopsRisk": "registeredTestopsRiskDocument",
+    "home": "registeredHomeDocument",
+    "recommendations": "registeredRecommendationsDocument",
+    "workItemTeamAttributions": "registeredWorkItemTeamAttributionsDocument",
 }
 
 
@@ -194,6 +197,13 @@ def _fake_web(smoke: ModuleType, overrides: dict[str, Any]) -> Any:
                 200,
                 {"data": {"workGraphFlow": {"rows": [{"nodeType": "ISSUE"}]}}},
                 go,
+            ),
+            "gql:Home": _resp(smoke, 200, {"data": {"home": {"freshness": {}}}}, go),
+            "gql:Recommendations": _resp(
+                smoke, 200, {"data": {"recommendations": []}}, go
+            ),
+            "gql:WorkItemTeamAttributions": _resp(
+                smoke, 200, {"data": {"workItemTeamAttributions": []}}, go
             ),
             "gql:TestOpsRisk": _resp(
                 smoke,
@@ -577,3 +587,64 @@ def test_error_status_reported_before_shape(
     )
     assert smoke.main() == 1
     assert "rest_align_status_500" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("op", "key"),
+    [
+        ("home", "gql:Home"),
+        ("recommendations", "gql:Recommendations"),
+        ("workItemTeamAttributions", "gql:WorkItemTeamAttributions"),
+    ],
+)
+def test_seeded_read_op_on_python_plane_fails_by_name(
+    smoke: ModuleType,
+    web_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    op: str,
+    key: str,
+) -> None:
+    """D3057 shape: web sends a Go-only document, no routing row, Strawberry answers."""
+    bad = _resp(
+        smoke,
+        200,
+        {"errors": [{"message": "Cannot query field"}]},
+        {"X-Dev-Health-Plane": ["python"]},
+    )
+    monkeypatch.setattr(smoke, "request", _fake_web(smoke, {key: bad}))
+    assert smoke.main() == 1
+    assert f"{op}_plane_python" in capsys.readouterr().err
+
+
+def test_seeded_read_op_graphql_errors_on_go_plane_fail(
+    smoke: ModuleType,
+    web_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bad = _resp(
+        smoke, 200, {"errors": [{"message": "x"}]}, {"X-Dev-Health-Plane": ["go"]}
+    )
+    monkeypatch.setattr(smoke, "request", _fake_web(smoke, {"gql:Home": bad}))
+    assert smoke.main() == 1
+    assert "home_graphql_errors" in capsys.readouterr().err
+
+
+def test_seeded_read_op_wrong_data_shape_fails(
+    smoke: ModuleType,
+    web_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bad = _resp(
+        smoke,
+        200,
+        {"data": {"recommendations": None}},
+        {"X-Dev-Health-Plane": ["go"]},
+    )
+    monkeypatch.setattr(
+        smoke, "request", _fake_web(smoke, {"gql:Recommendations": bad})
+    )
+    assert smoke.main() == 1
+    assert "recommendations_data_shape" in capsys.readouterr().err

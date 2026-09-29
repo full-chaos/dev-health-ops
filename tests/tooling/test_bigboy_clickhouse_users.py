@@ -14,6 +14,7 @@ import json
 import os
 import stat
 import subprocess
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -518,3 +519,31 @@ def test_render_refuses_missing_inputs_and_an_unreadable_manifest(
         proc = _render(tmp_path, _manifest(tmp_path, text), API_CH_PASSWORD="x")
         assert proc.returncode != 0 and "nothing written" in proc.stderr, name
         assert not (tmp_path / "out.xml").exists(), name
+
+
+def test_rendered_grants_equal_the_golden_the_go_manifest_test_is_pinned_to(
+    tmp_path: Path,
+) -> None:
+    """Two implementations of one grant list (Go GrantStatements(APIPosture), this renderer) are pinned to
+    the SAME checked-in file, exact order, so neither can drift alone."""
+    golden = (
+        (
+            ROOT
+            / "internal"
+            / "storage"
+            / "clickhouse"
+            / "testdata"
+            / "api_grants.golden"
+        )
+        .read_text()
+        .splitlines()
+    )
+    assert golden, "the golden is empty: this test would prove nothing"
+    source = ROOT / "internal" / "storage" / "clickhouse" / "authorization.go"
+    password = "Zq7-throwaway-credential"
+    proc = _render(tmp_path, source, API_CH_PASSWORD=password)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    out = (tmp_path / "out.xml").read_text()
+    grants = [q.text for q in ET.fromstring(out).iter("query")]
+    assert grants == golden
+    assert password not in out

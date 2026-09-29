@@ -39,6 +39,9 @@ validate = _load_validate()
 
 KEY = "dho_api_ch.xml"
 HASH = re.compile(r"<password_sha256_hex>[0-9a-f]*</password_sha256_hex>")
+# XML comments and processing instructions carry no declaration ClickHouse reads, and the shape validator
+# cannot see them: they are dropped, never copied into the world-readable file.
+NOISE = re.compile(r"<!--.*?-->|<\?.*?\?>", re.DOTALL)
 
 
 def render(rendered_release: Path, password: str) -> str:
@@ -49,7 +52,7 @@ def render(rendered_release: Path, password: str) -> str:
             and doc["metadata"]["name"].endswith("clickhouse-usersd")
             and KEY in (doc.get("data") or {})
         ):
-            xml = doc["data"][KEY]
+            xml = NOISE.sub("", doc["data"][KEY])
             # Refuse first: a source that carries a plaintext <password> (or any authentication element but the
             # hash) must never be copied into a world-readable file, so it is checked BEFORE the hash is set.
             hashed = HASH.sub(
@@ -66,6 +69,11 @@ def render(rendered_release: Path, password: str) -> str:
                 f"<password_sha256_hex>{digest}</password_sha256_hex>", xml
             )
             validate(rendered)
+            if password in rendered:
+                raise SystemExit(
+                    f"{KEY} in {rendered_release} is refused, nothing written: "
+                    "the password would appear in the world-readable output"
+                )
             return rendered
     raise SystemExit(
         f"no clickhouse-usersd ConfigMap with key {KEY} in {rendered_release}"

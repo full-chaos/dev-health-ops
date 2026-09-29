@@ -25,7 +25,8 @@ CHECK = TOOLS / "check-dho-api-ch-user.sh"
 RENDER = TOOLS / "render-dho-api-ch-users.py"
 CUT = TOOLS / "bigboy-cut.sh"
 
-_HASH = "a" * 64
+_HASH = hashlib.sha256(b"the-api-password").hexdigest()
+_PLACEHOLDER = "a" * 64  # the chart's stand-in hash, replaced by the renderer
 _XML = (
     "<clickhouse><users><dho_api_ch><password_sha256_hex>"
     + _HASH
@@ -162,7 +163,7 @@ def _release(tmp_path: Path, *, key: str = "dho_api_ch.xml") -> Path:
                 "apiVersion": "v1",
                 "kind": "ConfigMap",
                 "metadata": {"name": "dev-health-ops-clickhouse-usersd"},
-                "data": {key: _XML},
+                "data": {key: _XML.replace(_HASH, _PLACEHOLDER)},
             }
         )
     )
@@ -182,7 +183,7 @@ def _render(tmp_path: Path, release: Path, **env: str):
 def test_render_writes_the_hash_of_the_password_0644_and_prints_no_secret(
     tmp_path: Path,
 ) -> None:
-    password = "correct horse battery staple"
+    password = "the-api-password"
     proc = _render(tmp_path, _release(tmp_path), API_CH_PASSWORD=password)
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     out = tmp_path / "out.xml"
@@ -190,7 +191,7 @@ def test_render_writes_the_hash_of_the_password_0644_and_prints_no_secret(
     digest = hashlib.sha256(password.encode()).hexdigest()
     text = out.read_text()
     assert f"<password_sha256_hex>{digest}</password_sha256_hex>" in text
-    assert _HASH not in text and password not in text
+    assert _PLACEHOLDER not in text and password not in text
     assert password not in proc.stdout + proc.stderr and digest not in proc.stdout
     assert "grants=1" in proc.stdout
     # The rendered file passes the check the cut runs.
@@ -391,3 +392,62 @@ def test_the_cut_goes_on_to_recreate_go_api_when_the_check_passes(
     assert "STEP ch-api-user rc=0" in proc.stdout, (proc.stdout, proc.stderr)
     assert "STEP up rc=" in proc.stdout, proc.stdout
     assert [c for c in calls if " up " in f" {c} " and "go-api" in c], calls
+
+
+def test_the_declared_hash_must_match_the_api_credential_before_any_live_check(
+    tmp_path: Path,
+) -> None:
+    """A file whose hash is for another password passed while the old hand-made user was live, and went
+    red only after ClickHouse was recreated with the file mounted (login code 516)."""
+    other = _XML.replace(_HASH, hashlib.sha256(b"another-password").hexdigest())
+    proc = _check(tmp_path, _users_file(tmp_path, body=other))
+    assert proc.returncode == 3, (proc.stdout, proc.stderr)
+    assert "CH_API_USER_AUTH_FAIL" in proc.stderr and "does not match" in proc.stderr
+    assert "another-password" not in proc.stdout + proc.stderr
+    assert hashlib.sha256(b"another-password").hexdigest() not in (
+        proc.stdout + proc.stderr
+    )
+    assert "ch_api_user_auth=ok" not in proc.stdout
+
+
+def _release_with(tmp_path: Path, body: str) -> Path:
+    release = tmp_path / "release.yaml"
+    release.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {"name": "dev-health-ops-clickhouse-usersd"},
+                "data": {"dho_api_ch.xml": body},
+            }
+        )
+    )
+    return release
+
+
+def test_the_renderer_never_writes_the_password_even_from_an_xml_comment(
+    tmp_path: Path,
+) -> None:
+    """An XML comment is invisible to the shape validator but copied by a text substitution."""
+    password = "throwaway-credential-value"
+    body = _XML.replace("</clickhouse>", f"<!-- old note: {password} --></clickhouse>")
+    proc = _render(tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD=password)
+    out = tmp_path / "out.xml"
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert password not in out.read_text()
+    assert "<!--" not in out.read_text()
+    assert password not in proc.stdout + proc.stderr
+
+
+def test_the_renderer_refuses_when_the_password_is_anywhere_in_the_output(
+    tmp_path: Path,
+) -> None:
+    password = "throwaway-credential-value"
+    body = _XML.replace(
+        "</dho_api_ch>", f"<networks><ip>{password}</ip></networks></dho_api_ch>"
+    )
+    proc = _render(tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD=password)
+    assert proc.returncode != 0, (proc.stdout, proc.stderr)
+    assert "nothing written" in proc.stderr
+    assert password not in proc.stdout + proc.stderr
+    assert not (tmp_path / "out.xml").exists()

@@ -558,6 +558,14 @@ func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, in
 	if execErr != nil {
 		// Swallow: analytics.py:959-961 logs and degrades to empty.
 		recordDegradation(ctx, "flowMatrix", execErr)
+		// The log line the sankey twin above has always had: telemetry
+		// (counter + span event) is operator-only and needs a tracing
+		// backend, while this is what a plain log reader sees. error_cause
+		// carries the driver's own message, which the client's fixed
+		// "ClickHouse query failed" text deliberately omits (see rootCause).
+		slog.WarnContext(ctx, "analytics: flowMatrix query failed; returning an empty flowMatrix",
+			"org_id", orgID, "dimension", req.Dimension, "use_investment", flowMatrixUsesInvestmentSource(req),
+			"error", execErr, "error_cause", rootCause(execErr).Error())
 		nodes, edges = nil, nil
 		reason := FlowMatrixExecutionFailedReason
 		degradedReason = &reason

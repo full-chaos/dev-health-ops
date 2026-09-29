@@ -11,39 +11,42 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 )
 
-// MutationOrgGuard is the Go form of the Python schema extension
-// OrgIdAuthExtension (api/graphql/extensions.py) for a MUTATION operation: it
+// OperationOrgGuard is the Go form of the Python schema extension
+// OrgIdAuthExtension (api/graphql/extensions.py) for every operation: it
 // reads every orgId/org_id argument of the operation BEFORE any field runs,
 // refuses one that is not a non-empty, unpadded string, refuses an operation
 // that names more than one organization, and refuses one that names an
 // organization other than the caller's. The refusal answers the whole
 // operation (data null, no path, no location), exactly as Python's extension
-// does, so a mutation that would have written nothing never reaches its
-// resolver.
+// does, so a field that would have run under the caller's org never answers a
+// request that named another one, and a mutation that would have written
+// nothing never reaches its resolver.
+//
+// Scope, like Python's: only fields' own arguments named orgId/org_id are
+// read. An organization id carried inside an input object (for example
+// `input: { orgId }`) is not seen here, in Python or in Go.
 //
 // Named divergence: Python lets a verified, non-impersonating superuser name
 // another organization. The identity query-api verifies carries no "verified"
 // flag for a superuser, so the guard refuses that case where Python allows it:
 // the safe direction.
-//
-// Queries are not guarded here: the read resolvers keep their own org rules.
-type MutationOrgGuard struct{}
+type OperationOrgGuard struct{}
 
 var _ interface {
 	graphql.HandlerExtension
 	graphql.OperationInterceptor
-} = MutationOrgGuard{}
+} = OperationOrgGuard{}
 
-func (MutationOrgGuard) ExtensionName() string { return "MutationOrgGuard" }
+func (OperationOrgGuard) ExtensionName() string { return "OperationOrgGuard" }
 
-func (MutationOrgGuard) Validate(graphql.ExecutableSchema) error { return nil }
+func (OperationOrgGuard) Validate(graphql.ExecutableSchema) error { return nil }
 
-func (MutationOrgGuard) InterceptOperation(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
+func (OperationOrgGuard) InterceptOperation(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
 	operation := graphql.GetOperationContext(ctx)
-	if operation == nil || operation.Operation == nil || operation.Operation.Operation != ast.Mutation {
+	if operation == nil || operation.Operation == nil {
 		return next(ctx)
 	}
-	if message := mutationOrgViolation(ctx, operation); message != "" {
+	if message := operationOrgViolation(ctx, operation); message != "" {
 		return func(context.Context) *graphql.Response {
 			return &graphql.Response{Errors: gqlerror.List{{Message: message}}}
 		}
@@ -51,8 +54,8 @@ func (MutationOrgGuard) InterceptOperation(ctx context.Context, next graphql.Ope
 	return next(ctx)
 }
 
-// mutationOrgViolation is the refusal message for the operation, or "".
-func mutationOrgViolation(ctx context.Context, operation *graphql.OperationContext) string {
+// operationOrgViolation is the refusal message for the operation, or "".
+func operationOrgViolation(ctx context.Context, operation *graphql.OperationContext) string {
 	var requested []string
 	invalid := false
 	visited := map[string]bool{}

@@ -94,11 +94,6 @@ func TestSavedReportRoutes_ThroughTheSignedEnvelope(t *testing.T) {
 		}
 		return strings.Join(n, ",")
 	}
-	denied := func(body map[string]any) bool {
-		b, _ := json.Marshal(body["errors"])
-		return strings.Contains(string(b), "AUTHORIZATION_ERROR")
-	}
-
 	t.Run("list is the caller's org only, newest update first", func(t *testing.T) {
 		_, body := run(registeredSavedReportsDocument, "org-1", map[string]any{"orgId": "org-1", "limit": 50, "offset": 0})
 		conn := data(body, "savedReports")
@@ -312,7 +307,9 @@ func TestSavedReportRoutes_ThroughTheSignedEnvelope(t *testing.T) {
 			registeredReportRunsDocument:   {"orgId": "org-2", "reportId": reportC, "limit": 50},
 		} {
 			code, body := run(doc, "org-1", vars)
-			if code != http.StatusOK || !denied(body) || strings.Contains(toJSON(body), "foreign") {
+			// The operation org guard answers what OrgIdAuthExtension does:
+			// the whole operation refused, data null, before any field runs.
+			if code != http.StatusOK || body["data"] != nil || !strings.Contains(toJSON(body["errors"]), "Access denied: cannot query org 'org-2'") || strings.Contains(toJSON(body), "foreign") {
 				t.Errorf("foreign orgId served: %d %v", code, body)
 			}
 		}

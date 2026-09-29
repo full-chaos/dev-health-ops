@@ -3127,7 +3127,7 @@ func newGraphQLServer(resolver *graph.Resolver) *gqlhandler.Server {
 	schema := graph.NewExecutableSchema(graph.Config{Resolvers: resolver})
 	gqlHandler := gqlhandler.NewDefaultServer(schema)
 	gqlHandler.AroundFields(graph.RefuseNullForNonNullArguments)
-	gqlHandler.Use(graph.MutationOrgGuard{})
+	gqlHandler.Use(graph.OperationOrgGuard{})
 	// CHAOS-4647 diagnostic: the process log carries nothing per-request,
 	// and gqlgen's default presenter surfaces only err.Error() -- which for
 	// a dev-health-go *operationError (clickhouse/client.go) is the fixed

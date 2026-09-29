@@ -315,3 +315,36 @@ def test_postgres_uri_sourced_from_the_registry_role_secret() -> None:
             pg["valueFrom"]["secretKeyRef"]["name"]
             == volumes["envelope-key"]["secret"]["secretName"]
         )
+
+
+@pytest.mark.parametrize("job_name", [_CARRY, _REPOINT])
+def test_hook_pod_pins_a_numeric_uid_so_run_as_non_root_is_verifiable(
+    job_name: str,
+) -> None:
+    """The tools image's `USER toolsuser` is a name. With runAsNonRoot and no numeric
+    runAsUser the kubelet cannot verify the user and refuses the pod
+    (CreateContainerConfigError: "image has non-numeric user (toolsuser)"), which stalled a
+    pre-upgrade hook until Helm's deadline. Both hook Jobs must pin a numeric uid and gid."""
+    pod = _jobs(*_ENABLED)[job_name]["spec"]["template"]["spec"]
+    context = pod["securityContext"]
+    assert context["runAsNonRoot"] is True
+    assert isinstance(context.get("runAsUser"), int) and context["runAsUser"] > 0, (
+        context
+    )
+    assert isinstance(context.get("runAsGroup"), int) and context["runAsGroup"] > 0, (
+        context
+    )
+
+
+def test_tools_dockerfile_user_is_the_numeric_uid_the_chart_pins() -> None:
+    dockerfile = (
+        Path(__file__).resolve().parents[2] / "docker" / "go-api-tools.Dockerfile"
+    ).read_text()
+    users = [
+        line.split(None, 1)[1].strip()
+        for line in dockerfile.splitlines()
+        if line.startswith("USER ")
+    ]
+    assert users and users[-1] == "10001:10001", users
+    pod = _jobs(*_ENABLED)[_CARRY]["spec"]["template"]["spec"]["securityContext"]
+    assert users[-1] == f"{pod['runAsUser']}:{pod['runAsGroup']}"

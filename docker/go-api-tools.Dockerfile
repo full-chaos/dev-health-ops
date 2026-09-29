@@ -114,7 +114,8 @@ LABEL org.opencontainers.image.title="Dev Health Go-API tools" \
 # Same non-root numeric-friendly convention as docker/Dockerfile's runtime
 # stage: a real user, not root, but one a Kubernetes securityContext can
 # still pin by uid.
-RUN useradd --uid 10001 --create-home --shell /bin/bash toolsuser
+RUN groupadd --gid 10001 toolsuser \
+ && useradd --uid 10001 --gid 10001 --create-home --shell /bin/bash toolsuser
 
 WORKDIR /app/go-api
 
@@ -132,7 +133,8 @@ COPY src/dev_health_ops/api/graphql/go_api_operations.json /app/go-api/src/dev_h
 
 RUN chown -R toolsuser:toolsuser /app/go-api
 
-USER toolsuser
+# Numeric, so a pod with runAsNonRoot can verify the user without a runAsUser override.
+USER 10001:10001
 
 # No long-lived process of its own -- this exists to be `kubectl exec`ed
 # or `kubectl run ... -- <command>`ed into for one-off `dho goapi routing`

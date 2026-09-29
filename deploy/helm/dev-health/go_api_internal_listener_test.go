@@ -142,6 +142,32 @@ func TestGoAPIInternalListenerChart(t *testing.T) {
 		}
 	}
 
+	// The policy keeps every other listener reachable: every go-api containerPort
+	// except the internal one is open to all sources, plus goApi.internal.openPorts.
+	openPorts := func(docs []map[string]any) map[int]bool {
+		open := map[int]bool{}
+		for _, rule := range dig(named(docs, "NetworkPolicy", "b-dev-health-go-api-internal"), "spec", "ingress").([]any) {
+			if dig(rule, "from") != nil {
+				continue
+			}
+			for _, p := range dig(rule, "ports").([]any) {
+				open[dig(p, "port").(int)] = true
+			}
+		}
+		return open
+	}
+	open := openPorts(docs)
+	for _, p := range dig(container, "ports").([]any) {
+		port := dig(p, "containerPort").(int)
+		if port != 8091 && !open[port] {
+			t.Errorf("containerPort %d is denied by the NetworkPolicy (open: %v)", port, open)
+		}
+	}
+	withEdge := render("--set", "goApi.internal.openPorts[0]=8010")
+	if !openPorts(withEdge)[8010] || openPorts(withEdge)[8091] {
+		t.Errorf("openPorts must open 8010 and never the internal port: %v", openPorts(withEdge))
+	}
+
 	// Default allowedFrom (empty): the internal port has NO admitting rule.
 	defaults := render()
 	policy = named(defaults, "NetworkPolicy", "b-dev-health-go-api-internal")

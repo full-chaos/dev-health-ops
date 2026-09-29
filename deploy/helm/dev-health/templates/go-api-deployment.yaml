@@ -192,13 +192,18 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # The public and operator listeners: open to every source, exactly as before this policy
+    # The public and operator listeners, and goApi.internal.openPorts (extra listeners the
+    # process serves, e.g. the billing-edge port): open to every source, exactly as before this policy
     # existed (Ingress, probes and scrapes).
     - ports:
         - protocol: TCP
           port: {{ .Values.goApi.port }}
         - protocol: TCP
           port: {{ .Values.goApi.operatorPort }}
+        {{- range .Values.goApi.internal.openPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
     {{- /*
     The internal listener trusts every peer that can connect, so the network is the boundary:
     only the pod selectors listed in goApi.internal.allowedFrom (acr's api pods, set by the

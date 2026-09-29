@@ -202,6 +202,12 @@ goApi:
     #    the internal Service. The follow-up flips this to false (then the public
     #    listener serves no /api/v1/internal path) and removes the flag.
     acrPublicCompat: true
+    # -- Extra listener ports of the go-api pods that stay open to every source
+    #    (for example the billing-edge port the umbrella starts with
+    #    `--api-billing-edge-addr`). A pod selected by a NetworkPolicy denies every
+    #    port it does not list, so any listener added via extraArgs must be listed
+    #    here or the policy blocks it.
+    openPorts: []
     # -- Pod selectors (each `{matchLabels: {...}}`) allowed to reach the internal
     #    port. Empty admits NOBODY (the port is denied): the umbrella deploy chart
     #    sets acr's api pods here, for example

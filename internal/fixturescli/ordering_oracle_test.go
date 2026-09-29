@@ -188,6 +188,11 @@ func sortedKeys(counts map[string]int) []string {
 	return keys
 }
 
+const (
+	oracleShiftDays = 3
+	oracleOrg       = "99999999-8888-4777-8666-555555555555"
+)
+
 type oracleTable struct {
 	WorldTable
 	Rows [][]any
@@ -209,7 +214,9 @@ func generateOracleWorld(t *testing.T) []oracleTable {
 		if _, operational := operationalFamilies[table.Name]; !operational {
 			continue
 		}
-		rows, err := table.Transform(0, world.OrgID, world.OrgID)
+		// The rows the verb stamps are the TRANSFORMED ones (dates shifted, org rewritten), so the oracle
+		// compares those, not the frozen text.
+		rows, err := table.Transform(oracleShiftDays, world.OrgID, oracleOrg)
 		if err != nil {
 			t.Fatal(err)
 		}

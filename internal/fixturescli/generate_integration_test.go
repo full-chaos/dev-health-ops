@@ -601,6 +601,10 @@ func TestGenerateVerbRefusesANonUTCServer(t *testing.T) {
 // ordering_contract_v2 ... is violated"). The verb stamps the ordering columns when the table has them.
 func TestGenerateVerbLoadsTheWorldIntoAContractTwoHead(t *testing.T) {
 	t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "2")
+	world, err := LoadFrozenWorld(generateParameterSets[0].Params)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ch := startClickHouse(t)
 	stopMerges(t, ch.httpDSN)
 	if shape := strings.TrimSpace(clickHouseHTTP(t, ch.httpDSN, "SELECT count() FROM system.columns WHERE database = currentDatabase() AND table = 'operational_incidents' AND name = 'ordering_contract' FORMAT TSV")); shape != "1" {
@@ -622,5 +626,49 @@ func TestGenerateVerbLoadsTheWorldIntoAContractTwoHead(t *testing.T) {
 				t.Fatalf("%s: rows %s, contract-2 %s, key %s, revision %s, ingest %s: every row must carry all four ordering values", table, fields[0], fields[1], fields[2], fields[3], fields[4])
 			}
 		}
+		assertStoredStampMatchesStoredRow(t, ch.httpDSN, world, table)
+	}
+}
+
+// assertStoredStampMatchesStoredRow re-derives the ordering values from the row AS STORED (dates shifted,
+// organization rewritten) and requires the stored four to equal them: a stamp derived from the frozen
+// row before the shift and rewrite would still be nonempty and contract 2, and differ here.
+func assertStoredStampMatchesStoredRow(t *testing.T, dsn string, world FrozenWorld, name string) {
+	t.Helper()
+	var table WorldTable
+	for _, candidate := range world.Tables {
+		if candidate.Name == name {
+			table = candidate
+		}
+	}
+	if table.Name == "" {
+		t.Fatalf("the world holds no %s", name)
+	}
+	names := make([]string, len(table.Columns))
+	for index, column := range table.Columns {
+		names[index] = "`" + column.Name + "`"
+	}
+	body := clickHouseHTTP(t, dsn, "SELECT "+strings.Join(names, ", ")+", toString(source_revision), source_conflict_key, toString(ingest_revision), ordering_contract FROM "+name+" ORDER BY id FORMAT JSONCompactEachRow")
+	checked := 0
+	for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+		decoder := json.NewDecoder(strings.NewReader(line))
+		decoder.UseNumber()
+		var row []any
+		if err := decoder.Decode(&row); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		width := len(table.Columns)
+		_, stamped, err := stampOrdering(table, [][]any{row[:width]})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		derived := stamped[0][width:]
+		if fmt.Sprint(derived[0]) != fmt.Sprint(row[width]) || fmt.Sprint(derived[1]) != fmt.Sprint(row[width+1]) || fmt.Sprint(derived[2]) != fmt.Sprint(row[width+2]) {
+			t.Fatalf("%s: the stored stamp differs from the one derived from the stored row:\n stored  %v\n derived %v", name, row[width:width+3], derived[:3])
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatalf("%s: no stored rows were checked", name)
 	}
 }

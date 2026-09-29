@@ -119,6 +119,8 @@ func orderingValue(column FrozenColumn, value any) (any, error) {
 			return typed, nil
 		case json.Number:
 			return typed.String() != "0", nil
+		case float64:
+			return typed != 0, nil
 		}
 		return nil, fmt.Errorf("%v is not a flag", value)
 	case base == "Date" || base == "Date32" || strings.HasPrefix(base, "DateTime"):

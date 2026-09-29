@@ -3176,6 +3176,15 @@ func newProofOrgAllowed(pool *pgxpool.Pool) func(context.Context, string) bool {
 // error presenter. The venue oracle builds the same server, so what it measures
 // is what serves.
 func newGraphQLServer(resolver *graph.Resolver) *gqlhandler.Server {
+	return newGraphQLServerWithLimits(resolver, graphQLComplexityLimit, graphQLDepthLimit)
+}
+
+// newGraphQLServerWithLimits is newGraphQLServer with its two query limits as
+// parameters, so a test can drive the real HTTP pipeline against a limit small
+// enough for this schema's shallow documents to exceed (no registered document
+// nests past graphQLDepthLimit, so the production depth limit cannot be
+// exceeded over HTTP).
+func newGraphQLServerWithLimits(resolver *graph.Resolver, complexityLimit, depthMax int) *gqlhandler.Server {
 	schema := graph.NewExecutableSchema(graph.Config{Resolvers: resolver})
 	// CHAOS-7078: gqlhandler.NewDefaultServer's own doc comment says it
 	// plainly -- "Deprecated: This was and is just an example ... Not for
@@ -3200,8 +3209,8 @@ func newGraphQLServer(resolver *graph.Resolver) *gqlhandler.Server {
 	//     for the pin.
 	gqlHandler := gqlhandler.New(schema)
 	gqlHandler.AddTransport(transport.POST{})
-	gqlHandler.Use(extension.FixedComplexityLimit(graphQLComplexityLimit))
-	gqlHandler.Use(depthLimit{Max: graphQLDepthLimit})
+	gqlHandler.Use(extension.FixedComplexityLimit(complexityLimit))
+	gqlHandler.Use(depthLimit{Max: depthMax})
 	gqlHandler.AroundFields(graph.RefuseNullForNonNullArguments)
 	gqlHandler.Use(graph.OperationOrgGuard{})
 	// CHAOS-4647 diagnostic: the process log carries nothing per-request,

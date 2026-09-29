@@ -230,3 +230,53 @@ func TestNewGraphQLServerAllowsAnOrdinaryQueryUnderBothLimits(t *testing.T) {
 		t.Fatalf("got errors, want none: %v", resp.Errors)
 	}
 }
+
+// The depth limiter is wired into the server's real HTTP pipeline. No registered
+// document nests past graphQLDepthLimit, so the production limit cannot be
+// exceeded over HTTP; this drives the same constructor with a limit the real
+// depth-5 operatingReview document exceeds, so dropping the limiter from the
+// pipeline (while depthLimit's own unit test keeps passing) fails here.
+func TestNewGraphQLServerRefusesADocumentDeeperThanItsDepthLimitOverHTTP(t *testing.T) {
+	deep, err := json.Marshal(map[string]any{
+		"query":         registeredOperatingReviewDocument,
+		"operationName": "OperatingReview",
+		"variables":     map[string]any{"orgId": "org-1", "input": map[string]any{"weekStart": "2026-01-05"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := gqlPost(t, newGraphQLServerWithLimits(&graph.Resolver{}, graphQLComplexityLimit, 3), string(deep))
+	if !strings.Contains(strings.ToLower(refused.Body.String()), "depth") {
+		t.Fatalf("depth-5 document against a depth limit of 3 was not refused for depth: %s", refused.Body.String())
+	}
+	allowed := gqlPost(t, newGraphQLServerWithLimits(&graph.Resolver{}, graphQLComplexityLimit, graphQLDepthLimit), string(deep))
+	if strings.Contains(strings.ToLower(allowed.Body.String()), "depth") {
+		t.Fatalf("the same document against the configured depth limit (%d) was refused for depth: %s", graphQLDepthLimit, allowed.Body.String())
+	}
+}
+
+// The complexity limit's VALUE, not just its presence: aliases of __typename
+// each cost 1, so exactly graphQLComplexityLimit of them is served and one more
+// is refused. The literals are deliberate -- the limit is sized from the real
+// registered-document set (graphql_server_limits.go), and raising it must fail
+// this test until it is changed here on purpose.
+func TestNewGraphQLServerComplexityLimitIsExactlyOneHundredFifty(t *testing.T) {
+	aliased := func(n int) string {
+		var b strings.Builder
+		for i := 0; i < n; i++ {
+			b.WriteString("a" + strconv.Itoa(i) + ": __typename ")
+		}
+		body, err := json.Marshal(map[string]string{"query": "{ " + b.String() + "}"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
+	}
+	gql := newGraphQLServer(&graph.Resolver{})
+	if rec := gqlPost(t, gql, aliased(150)); strings.Contains(strings.ToLower(rec.Body.String()), "complexity") {
+		t.Fatalf("150 complexity-1 fields were refused for complexity, want served: %s", rec.Body.String())
+	}
+	if rec := gqlPost(t, gql, aliased(151)); !strings.Contains(strings.ToLower(rec.Body.String()), "complexity") {
+		t.Fatalf("151 complexity-1 fields were not refused for complexity: %s", rec.Body.String())
+	}
+}

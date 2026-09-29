@@ -86,8 +86,8 @@ def _docker_stub(stub_bin: Path, *, routing_response: str, routing_rc: int) -> N
     """
     digest_map = {name: _NEW_DIGEST for name in _IMAGES}
     digest_map["dev-health-web"] = _WEB_NEW_DIGEST
-    # repin.sh's own OLD8 cross-check resolves dev-hops-api at sha-$OLD8 and must see _OLD_DIGEST.
-    old_probe = f"dev-hops-api:sha-{_OLD8}"
+    # repin.sh's own OLD8 cross-check resolves dev-hops-api at sha-<first 7 chars of $OLD8> (the real image tag) and must see _OLD_DIGEST.
+    old_probe = f"dev-hops-api:sha-{_OLD8[:7]}"
     script = ["#!/usr/bin/env bash", "set -u", 'args="$*"']
     script.append(f'if [[ "$args" == *"{_MIGRATE_MARKER}"* ]]; then')
     script.append("  exit 9")

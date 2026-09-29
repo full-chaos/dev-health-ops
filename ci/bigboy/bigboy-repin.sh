@@ -24,7 +24,9 @@ case "$OLD8" in
   [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
   *) echo "FAIL: OLD8='$OLD8' is not exactly 8 lowercase hex characters (got ${#OLD8}) -- the exact typo class that silently no-op'd a repin once already (D2801)"; exit 4 ;;
 esac
-OLD_DIGEST_RESOLVED=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-hops-api:sha-$OLD8" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest || true)
+# Images are tagged sha-<first 7 hex chars of the commit> (S7 below), never with all 8 that name the
+# _records dir, so the registry lookup uses the 7-character form.
+OLD_DIGEST_RESOLVED=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-hops-api:sha-${OLD8:0:7}" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest || true)
 [[ ${OLD_DIGEST_RESOLVED:-} == sha256:* ]] || { echo "FAIL: OLD8=$OLD8 does not resolve to a real dev-hops-api image in the registry"; exit 4; }
 OLD_DIGEST_PINNED=$(grep -ohE "dev-hops-api@sha256:[0-9a-f]{64}" "$OV" | head -1 | cut -d@ -f2)
 [[ -n "$OLD_DIGEST_PINNED" ]] || { echo "FAIL: $OV has no dev-hops-api digest pinned to cross-check OLD8 against"; exit 4; }

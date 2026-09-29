@@ -125,3 +125,48 @@ def test_digest_mismatch_fails_loudly_not_a_silent_noop() -> None:
         "an OLD8/live-digest mismatch must abort (non-zero exit), never continue"
     )
     assert "does not name the ACTUALLY-running build" in block
+
+
+def test_old8_registry_lookup_uses_the_seven_character_image_tag(
+    tmp_path: Path,
+) -> None:
+    """Images are tagged sha-<7 hex chars> (sha-f03f57d exists, sha-f03f57d5 does not). The
+    OLD8 registry lookup asked for the 8-character tag, so the guard could never resolve a
+    real build and every cut aborted at repin with exit 4. This drives the REAL script with a
+    docker stand-in that answers ONLY the 7-character tag: the lookup must reach the digest
+    cross-check (which then refuses, because the pinned digest differs from the resolved one)
+    instead of failing as an unresolvable image."""
+    root = _build_root(tmp_path)
+    (root / "compose" / "compose.bigboy.images.yml").write_text(
+        "image: ghcr.io/full-chaos/dev-hops-api@sha256:" + "c" * 64 + "\n"
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "docker-calls.txt"
+    fake_docker = bin_dir / "docker"
+    fake_docker.write_text(
+        "#!/bin/bash\n"
+        f'echo "$*" >> "{calls}"\n'
+        'case "$*" in\n'
+        '  *dev-hops-api:sha-f03f57d\\ *) echo \'{"digest":"sha256:'
+        + "a"
+        * 64
+        + "\"}' ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n"
+    )
+    fake_docker.chmod(0o755)
+    proc = subprocess.run(
+        ["bash", str(REPIN), "f03f57d5", "b" * 40],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "BIGBOY_ROOT": str(root)},
+    )
+    output = proc.stdout + proc.stderr
+    assert "does not resolve to a real dev-hops-api image" not in output, (
+        f"the OLD8 lookup used a tag the registry does not have: {output!r}"
+    )
+    assert "currently pins" in output, output
+    assert "dev-hops-api:sha-f03f57d5" not in calls.read_text(), calls.read_text()

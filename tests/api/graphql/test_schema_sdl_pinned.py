@@ -13,7 +13,7 @@ does not know about fails here. Extra types/fields in the pin are allowed.
 The subset relation ends when CHAOS-6264 deletes the Python schema.
 
 To change the schema: edit ``contracts/graphql/v1/schema.graphql``, run
-``go generate ./internal/queryapi/...`` (gqlgen), update
+``go run ./cmd/gqlgen-guard generate`` (gqlgen), update
 ``contracts/graphql/v1/schema-digest.json`` and the schema-digest history
 table, and bump the checked-in ``web`` copy in a paired PR. A Python-side
 addition must be mirrored into the pin in the same PR.
@@ -45,7 +45,14 @@ _PINNED_SDL_PATH = (
 
 def python_members_missing_from_pin(python_sdl: str, pinned_sdl: str) -> list[str]:
     """Every type / field / argument / enum value / union member / implemented
-    interface in ``python_sdl`` that ``pinned_sdl`` lacks (empty = subset)."""
+    interface in ``python_sdl`` that ``pinned_sdl`` lacks, and every shared
+    field, argument or input field whose declared type (nullability and list
+    wrapping included) differs (empty = subset with identical signatures).
+
+    Signatures must match exactly while Python still serves the field: a
+    changed return or argument type makes the two planes accept different
+    operations. A Go-side signature change to a shared member must be mirrored
+    in Python, or wait for Python's deletion."""
     py = build_schema(python_sdl)
     pin = build_schema(pinned_sdl)
     missing: list[str] = []
@@ -69,9 +76,20 @@ def python_members_missing_from_pin(python_sdl: str, pinned_sdl: str) -> list[st
                 if pin_field is None:
                     missing.append(f"field {name}.{fname}")
                     continue
-                for aname in sorted(field.args):
-                    if aname not in pin_field.args:
+                if str(field.type) != str(pin_field.type):
+                    missing.append(
+                        f"field {name}.{fname}: type {field.type} in Python, "
+                        f"{pin_field.type} in the pin"
+                    )
+                for aname, arg in sorted(field.args.items()):
+                    pin_arg = pin_field.args.get(aname)
+                    if pin_arg is None:
                         missing.append(f"argument {name}.{fname}({aname})")
+                    elif str(arg.type) != str(pin_arg.type):
+                        missing.append(
+                            f"argument {name}.{fname}({aname}): type {arg.type} "
+                            f"in Python, {pin_arg.type} in the pin"
+                        )
             for iface in py_type.interfaces:
                 if iface.name not in {
                     i.name
@@ -79,9 +97,15 @@ def python_members_missing_from_pin(python_sdl: str, pinned_sdl: str) -> list[st
                 }:
                     missing.append(f"type {name} implements {iface.name}")
         elif isinstance(py_type, GraphQLInputObjectType):
-            for fname in sorted(py_type.fields):
-                if fname not in pin_type.fields:  # type: ignore[union-attr]
+            for fname, in_field in sorted(py_type.fields.items()):
+                pin_in_field = pin_type.fields.get(fname)  # type: ignore[union-attr]
+                if pin_in_field is None:
                     missing.append(f"input field {name}.{fname}")
+                elif str(in_field.type) != str(pin_in_field.type):
+                    missing.append(
+                        f"input field {name}.{fname}: type {in_field.type} in "
+                        f"Python, {pin_in_field.type} in the pin"
+                    )
         elif isinstance(py_type, GraphQLEnumType):
             for vname in sorted(py_type.values):
                 if vname not in pin_type.values:  # type: ignore[union-attr]
@@ -107,7 +131,7 @@ def test_python_schema_is_a_subset_of_the_checked_in_pin() -> None:
         "contracts/graphql/v1/schema.graphql does not: "
         + ", ".join(missing)
         + ". The pin is the Go plane's schema and is never regenerated from "
-        "Python; add the member to the pin (then `go generate`, update "
+        "Python; add the member to the pin (then `go run ./cmd/gqlgen-guard generate`, update "
         "schema-digest.json and its history row) in the same PR."
     )
 
@@ -139,3 +163,27 @@ def test_pinned_sdl_is_nonempty_and_well_formed() -> None:
     assert len(pinned_sdl) > 1000, "Pinned SDL is suspiciously small"
     assert "type Query" in pinned_sdl
     assert "type Mutation" in pinned_sdl
+
+
+def test_subset_check_reports_a_changed_field_or_argument_type() -> None:
+    """Observe the guard failing on a same-name member with a different type."""
+    pinned = _PINNED_SDL_PATH.read_text()
+    python_sdl = schema.as_str()
+    changed_return = pinned.replace(
+        "  home(orgId: String!, filters: FilterInput = null): HomeResult!",
+        "  home(orgId: String!, filters: FilterInput = null): String!",
+        1,
+    )
+    assert changed_return != pinned
+    assert python_members_missing_from_pin(python_sdl, changed_return) == [
+        "field Query.home: type HomeResult! in Python, String! in the pin"
+    ]
+    changed_arg = pinned.replace(
+        "  home(orgId: String!, filters: FilterInput = null): HomeResult!",
+        "  home(orgId: Int!, filters: FilterInput = null): HomeResult!",
+        1,
+    )
+    assert changed_arg != pinned
+    assert python_members_missing_from_pin(python_sdl, changed_arg) == [
+        "argument Query.home(orgId): type String! in Python, Int! in the pin"
+    ]

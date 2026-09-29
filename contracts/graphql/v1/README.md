@@ -28,7 +28,7 @@ only (optionally) downstream.
 ## Changing the schema
 
 1. Edit `schema.graphql`.
-2. `go generate ./internal/queryapi/...` (gqlgen) and commit the diff;
+2. Regenerate through `go run ./cmd/gqlgen-guard generate` (never `go generate`, which has no directive here; see internal/queryapi/server/README.md "Regeneration" for the expected-drift record) and commit the diff;
    `TestGeneratedSchemaSourceIsTheCheckedInPin` fails until you do.
 3. Update `schema-digest.json` and the schema-digest history row (the
    digest is the sha256 of this file's raw bytes; see

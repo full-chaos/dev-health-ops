@@ -39,7 +39,6 @@ from ._errors import (
     register_exception_handlers,
 )
 from ._health import (
-    _check_celery_health,
     _check_clickhouse_health,
     _check_go_worker_presence,
     _check_postgres_health,
@@ -221,36 +220,29 @@ async def ready() -> JSONResponse:
 async def health_workers() -> JSONResponse:
     """Worker fleet health check.
 
-    Separated from /health because Celery inspect.ping is slow (~2s).
+    Separated from /health because it reads the worker heartbeat table.
     Use this for worker monitoring dashboards, not for SSR readiness.
 
-    Three states, selected by ``EXPECTED_WORKER_GROUPS``:
+    Three states, selected by ``EXPECTED_WORKER_GROUPS`` (the same contract
+    internal/api/health serves):
 
-    - Unset (legacy/Celery deployments): Celery ``inspect.ping`` is
-      authoritative. Zero responding workers ("no_workers") is a failure,
-      not "ok" -- CHAOS-3942: the endpoint used to fold that case into
-      "ok", hiding the one condition it was built to detect.
+    - Unset: no Go fleet is declared, so nothing can vouch for the workers.
+      The endpoint answers 503 ``down`` -- CHAOS-3942: it must never fold
+      "no workers" into "ok". There is no Celery fleet to fall back to.
     - Set but empty/malformed (e.g. ``","`` or whitespace): a declared-but-
       unparseable fleet is a misconfiguration, not "no fleet declared" --
-      this fails closed rather than silently falling back to Celery mode,
-      where a stray Celery worker could mask a broken Go deployment.
-    - Set with at least one group (Go worker deployments -- e.g. Full
-      Chaos's own production, which runs no Celery workers at all): the
-      declared Go worker groups' heartbeat presence in
-      ``public.worker_instances`` is authoritative. Celery is still
-      reported, but its "no_workers" reading is relabeled "retired"
-      (informational) since that is expected on a Go-only deployment, not
-      a failure.
+      this fails closed.
+    - Set with at least one group: the declared Go worker groups' heartbeat
+      presence in ``public.worker_instances`` is authoritative. The legacy
+      ``celery`` key is still reported, always ``retired`` (informational),
+      so existing readers of the response keep their key.
     """
     expected_groups = _expected_worker_groups()
 
     if expected_groups is None:
-        key, status_val = await _check_celery_health()
-        overall = "ok" if status_val == "ok" else "down"
-        status_code = 200 if overall == "ok" else 503
         return JSONResponse(
-            status_code=status_code,
-            content={"status": overall, "services": {key: status_val}},
+            status_code=503,
+            content={"status": "down", "services": {"celery": "down"}},
         )
 
     if not expected_groups:
@@ -263,12 +255,8 @@ async def health_workers() -> JSONResponse:
         )
 
     go_statuses = await _check_go_worker_presence(expected_groups)
-    _, celery_status = await _check_celery_health()
-    if celery_status == "no_workers":
-        celery_status = "retired"
-
     services = {f"go_worker:{group}": status for group, status in go_statuses.items()}
-    services["celery"] = celery_status
+    services["celery"] = "retired"
 
     complete = set(go_statuses) == set(expected_groups)
     overall = (

@@ -177,7 +177,7 @@ async def test_trigger_config_without_integration_returns_400(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_trigger_does_not_depend_on_celery_broker(monkeypatch):
-    """The API commits durable planner state without publishing to Celery."""
+    """The API commits durable planner state without running dispatch inline."""
 
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -190,10 +190,8 @@ async def test_trigger_does_not_depend_on_celery_broker(monkeypatch):
                 sync_router, "SyncConfigurationService", _service_factory(config)
             )
 
-            celery_publish = MagicMock(side_effect=RuntimeError("broker down"))
-            monkeypatch.setattr(
-                sync_units.dispatch_sync_run, "apply_async", celery_publish
-            )
+            dispatch = MagicMock(side_effect=RuntimeError("dispatch must not run"))
+            monkeypatch.setattr(sync_units, "dispatch_sync_run", dispatch)
 
             response = await sync_router.trigger_sync_config(
                 str(config.id),
@@ -202,7 +200,7 @@ async def test_trigger_does_not_depend_on_celery_broker(monkeypatch):
             )
 
             assert response["status"] == "triggered"
-            celery_publish.assert_not_called()
+            dispatch.assert_not_called()
 
             runs = list(sync_session.execute(select(SyncRun)).scalars().all())
             jobs = list(sync_session.execute(select(JobRun)).scalars().all())

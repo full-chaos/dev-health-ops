@@ -101,7 +101,6 @@ from dev_health_ops.sync.trigger_routing import (
     stamp_sync_run_canonical_config,
 )
 from dev_health_ops.sync.zero_unit_telemetry import ZERO_UNIT_FINALIZATIONS_TOTAL
-from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
 from dev_health_ops.workers.provider_family_contract import (
     validate_provider_family_claim,
@@ -127,7 +126,6 @@ class _PendingUnitCounts(TypedDict):
     next_deferred_at: datetime | None
 
 
-@celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.dispatch_sync_run")
 def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
     """Authorize, route, and queue all pending units of a planned run.
 
@@ -237,7 +235,16 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                         "failed_stale_dispatching_units": failed_stale_dispatching,
                     },
                 )
-                _enqueue_denied_active_finalize(sync_run_id)
+                # Arm the durable finalize wakeup in THIS transaction (the same
+                # mechanism internal/syncdispatchruntime's armFinalizeSyncRunWakeup
+                # uses on the denial path): terminal state and wakeup commit
+                # together, and the relay runs finalize_sync_run from the outbox.
+                upsert_outbox_wakeup(
+                    session,
+                    sync_run_id=run_uuid,
+                    kind=OUTBOX_KIND_FINALIZE,
+                    available_at=datetime.now(timezone.utc),
+                )
                 return {
                     "status": "denied_active",
                     "reason": error,
@@ -544,7 +551,6 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
     return {"status": "noop", "queued_units": 0}
 
 
-@celery_app.task(queue="sync", name="dev_health_ops.workers.tasks.finalize_sync_run")
 def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
     """Aggregate unit statuses and materialize post-sync metrics once per run.
 
@@ -1147,17 +1153,6 @@ def _unroutable_reason(provider: str, dataset_key: str) -> str:
         f"{prefix}: the provider capability matrix does not mark it "
         f"route-ready and plannable, so no shipped writer owns it"
     )
-
-
-def _enqueue_denied_active_finalize(sync_run_id: str) -> None:
-    try:
-        getattr(finalize_sync_run, "apply_async")(args=(sync_run_id,), queue="sync")
-    except Exception:
-        logger.exception(
-            "dispatch_sync_run.denied_active_finalize_enqueue_failed",
-            extra={"sync_run_id": sync_run_id},
-        )
-        raise
 
 
 def terminalize_feature_disabled_plan(

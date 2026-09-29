@@ -80,7 +80,6 @@ from tests._helpers import (
 from tests.test_sync_units import (
     _aware,
     _patch_db_session,
-    _patch_worker_enqueues,
     _seed_run,
 )
 
@@ -207,7 +206,6 @@ def test_sibling_units_deferred_during_active_cooldown(db_session, monkeypatch):
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
     # CHAOS budget_guard_cooldown wall-clock flake: pin dispatch's own
     # internal `now` to this test's `now` so the 0.5s tolerance below checks
@@ -257,7 +255,6 @@ def test_different_route_family_dispatches_normally(db_session, monkeypatch):
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -324,7 +321,6 @@ def test_credential_rotation_does_not_bypass_cooldown(db_session, monkeypatch):
     assert credential_a.id != credential_b.id  # the swap was real
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
 
     sync_units.dispatch_sync_run(str(run.id))
@@ -383,7 +379,6 @@ def test_ambiguous_attribution_falls_back_to_dimension_gating(db_session, monkey
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
     # CHAOS budget_guard_cooldown wall-clock flake: see the sibling-deferral
     # test above -- pin dispatch's internal `now` to this test's `now`.
@@ -428,7 +423,6 @@ def test_cooldown_never_crosses_org_boundary(db_session, monkeypatch):
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -464,7 +458,6 @@ def test_cooldown_read_failure_fails_open(db_session, monkeypatch):
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     real_query = db_session.query
 
@@ -510,7 +503,6 @@ def test_expired_cooldown_dispatches_normally(db_session, monkeypatch):
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -553,7 +545,6 @@ def test_cooldown_expiry_drains_bounded_by_concurrency_cap(db_session, monkeypat
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
 
     result = sync_units.dispatch_sync_run(str(run.id))
@@ -618,7 +609,6 @@ def test_cooldown_deferral_consumes_rate_limit_budget_and_terminalizes(
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     sync_units.dispatch_sync_run(str(run.id))
 
@@ -657,7 +647,6 @@ def test_single_observation_query_per_dispatch_pass(db_session, monkeypatch):
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     engine = db_session.get_bind()
     captured: list[str] = []
@@ -715,7 +704,6 @@ def test_next_deferred_at_rearms_redispatch(db_session, monkeypatch):
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
     # CHAOS budget_guard_cooldown wall-clock flake: see
     # test_sibling_units_deferred_during_active_cooldown above.
@@ -770,7 +758,6 @@ def test_concurrent_observation_between_enforce_run_and_claim_still_defers_sibli
     # gate never ran").
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     now = datetime.now(timezone.utc)
     reset_at = now + timedelta(seconds=180)
@@ -866,7 +853,6 @@ def test_cooldown_available_at_respects_wall_clock_clamp(db_session, monkeypatch
 
     jitter_seconds = 120
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", str(jitter_seconds))
 
     sync_units.dispatch_sync_run(str(run.id))
@@ -956,7 +942,6 @@ def test_cooldown_wall_clock_budget_exhausted_terminalizes_rather_than_sleeping_
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     sync_units.dispatch_sync_run(str(run.id))
 
@@ -1003,7 +988,6 @@ def test_cooldown_read_survives_malformed_observation_row(
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     with caplog.at_level(logging.WARNING, logger="dev_health_ops.sync.budget_guard"):
         result = sync_units.dispatch_sync_run(str(run.id))
@@ -1067,7 +1051,6 @@ def test_late_reconfirm_match_short_reset_window_defers_with_full_bookkeeping(
         staticmethod(_reconfirm_after_concurrent_commit),
     )
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
     # CHAOS budget_guard_cooldown wall-clock flake: pin dispatch's internal
     # `now` to the instant `reset_at` was derived from.
@@ -1142,7 +1125,6 @@ def test_late_reconfirm_match_long_reset_window_clamps_to_wall_clock_deadline(
         staticmethod(_reconfirm_after_concurrent_commit),
     )
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
     # CHAOS budget_guard_cooldown wall-clock flake: pin dispatch's internal
     # `now` to the instant `reset_at`/`deadline` were derived from.
@@ -1307,7 +1289,6 @@ def test_cooldown_observation_aged_past_lookback_terminalizes_from_unit_state(
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     sync_units.dispatch_sync_run(str(run.id))
 
@@ -1358,7 +1339,6 @@ def test_cooldown_lookback_window_has_slack_beyond_wall_clock_budget(
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     sync_units.dispatch_sync_run(str(run.id))
 
@@ -1402,7 +1382,6 @@ def test_stale_rate_limit_state_cleared_by_non_rate_limit_retry_then_claimed(
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     # Force a budget deferral (unrelated to rate limits) on this pass.
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", '{"github:rest_core": 0}')
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "60")
@@ -1462,7 +1441,6 @@ def test_stale_rate_limit_columns_without_rate_limit_error_category_do_not_termi
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -1510,7 +1488,6 @@ def test_budget_deferral_exhausts_instead_of_looping_forever(db_session, monkeyp
 
     run, unit = _seed_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     # An estimate this unit can never fit: the guard is doing its job, the
     # unit is permanently oversized for its bucket (the CHAOS-3412 shape).
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", '{"github:rest_core": 0}')
@@ -1558,7 +1535,6 @@ def test_budget_deferral_exhaustion_finalizes_the_run_as_failed(
 
     run, unit = _seed_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", '{"github:rest_core": 0}')
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "60")
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
@@ -1617,7 +1593,6 @@ def test_budget_wall_clock_cap_exhausts_below_the_count_cap(db_session, monkeypa
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     # Still oversized on THIS pass -- the wall clock is what ends it, but the
     # unit must genuinely not fit for exhaustion to be considered at all.
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", '{"github:rest_core": 0}')
@@ -1668,7 +1643,6 @@ def test_fresh_unit_with_no_budget_history_is_never_exhausted(db_session, monkey
     assert unit.budget_deferrals == 0
     assert unit.budget_first_deferred_at is None
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -1700,7 +1674,6 @@ def test_stale_budget_state_does_not_terminalize_unrelated_retry(
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -1744,7 +1717,6 @@ def test_rate_limit_deferral_clears_the_budget_episode_pair(db_session, monkeypa
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     sync_units.dispatch_sync_run(str(run.id))
 
@@ -1983,7 +1955,6 @@ def test_unit_at_count_cap_is_admitted_when_capacity_frees_up(db_session, monkey
 
     run, unit = _seed_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", '{"github:rest_core": 0}')
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "60")
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
@@ -2020,7 +1991,6 @@ def test_unit_at_count_cap_still_oversized_is_terminalized(db_session, monkeypat
 
     run, unit = _seed_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", '{"github:rest_core": 0}')
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "60")
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
@@ -2087,7 +2057,6 @@ def test_alternating_episodes_preserve_the_aggregate_blocked_clock(
     """
     run, unit = _seed_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "60")
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
 
@@ -2124,7 +2093,6 @@ def test_alternating_episodes_terminalize_at_the_aggregate_cap(db_session, monke
 
     run, unit = _seed_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "60")
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
 
@@ -2182,7 +2150,6 @@ def test_aggregate_cap_does_not_kill_a_unit_that_now_fits(db_session, monkeypatc
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     # No bucket limit and no cooldown: the unit fits now.
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -2264,7 +2231,6 @@ def _run_with_order(db_session, monkeypatch, *, order, costs, at_cap_dataset):
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", '{"github:rest_core": 10}')
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     sync_units.dispatch_sync_run(str(run.id))
     db_session.refresh(by_key[at_cap_dataset])
@@ -2371,7 +2337,6 @@ def test_contention_blocked_unit_error_never_claims_it_can_never_be_admitted(
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", '{"github:rest_core": 10}')
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     sync_units.dispatch_sync_run(str(run.id))
     db_session.refresh(second)
@@ -2424,7 +2389,6 @@ def test_sibling_completion_lets_a_previously_contended_unit_run(
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", '{"github:rest_core": 10}')
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     # Pass 1: alpha still running -> beta contends, defers, hits its cap.
     sync_units.dispatch_sync_run(str(run.id))
@@ -2494,7 +2458,6 @@ def test_single_cause_rate_limit_unit_gets_the_specific_category(
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(second)
@@ -2551,7 +2514,6 @@ def test_generic_exhaustion_text_only_claims_alternation_when_it_happened(
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", '{"github:rest_core": 10}')
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     sync_units.dispatch_sync_run(str(run.id))
     db_session.refresh(second)
@@ -2621,7 +2583,6 @@ def test_stale_capped_counters_with_cooldown_defer_as_a_fresh_episode(
     db_session.flush()
 
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(second)
@@ -2880,7 +2841,6 @@ def _cooldown_blocked_stale_counter_unit(db_session, monkeypatch):
     )
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     return run, second
 
 

@@ -236,19 +236,19 @@ def _patch_dispatch(
     side_effect: BaseException | None = None,
     task_id: str = "bf-task-id",
 ) -> Iterator[MagicMock]:
-    """Patch the retired Celery fastpath to prove the endpoint does not use it.
+    """Patch ``dispatch_sync_run`` itself to prove the endpoint never calls it.
 
     The real planner (``plan_sync_run``) still runs against the test DB so the
     PENDING JobRun anchor, SyncRun, and durable outbox wakeup are created for real.
     """
     mock_dispatch = MagicMock()
     if side_effect is not None:
-        mock_dispatch.apply_async.side_effect = side_effect
+        mock_dispatch.side_effect = side_effect
     else:
-        mock_dispatch.apply_async.return_value = MagicMock(id=task_id)
+        mock_dispatch.return_value = MagicMock(id=task_id)
     with patch(
-        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
-        mock_dispatch.apply_async,
+        "dev_health_ops.workers.sync_units.dispatch_sync_run",
+        mock_dispatch,
     ):
         yield mock_dispatch
 
@@ -282,7 +282,7 @@ async def test_backfill_config_created_via_plain_endpoint_succeeds(
         )
 
     assert resp.status_code == 202, resp.text
-    mock_dispatch.apply_async.assert_not_called()
+    mock_dispatch.assert_not_called()
 
     async with session_maker() as session:
         backfill_jobs = (await session.execute(select(BackfillJob))).scalars().all()
@@ -402,7 +402,7 @@ async def test_backfill_fanout_creates_job_run_anchor(
     assert sync_run_id is not None
     uuid.UUID(sync_run_id)
     assert data["task_id"] == f"sync_run:{sync_run_id}"
-    mock_dispatch.apply_async.assert_not_called()
+    mock_dispatch.assert_not_called()
 
     # A PENDING JobRun must exist anchored to the config's sync ScheduledJob.
     async with session_maker() as session:
@@ -503,7 +503,7 @@ async def test_backfill_over_unit_cap_rejected_before_persisting(
 
     assert resp.status_code == 400, resp.text
     assert "unit cap" in resp.json()["detail"]
-    mock_dispatch.apply_async.assert_not_called()
+    mock_dispatch.assert_not_called()
 
     # Fail-fast means NOTHING was persisted: no run, no units, no backfill
     # job, and no stranded PENDING JobRun anchor.
@@ -540,7 +540,7 @@ async def test_backfill_fanout_commits_stable_marker_without_celery_dispatch(
 
     assert resp.status_code == 202, resp.text
     assert resp.json()["mode"] == "fanout"
-    mock_dispatch.apply_async.assert_not_called()
+    mock_dispatch.assert_not_called()
 
     async with session_maker() as session:
         backfill_job = (await session.execute(select(BackfillJob))).scalar_one()
@@ -585,7 +585,7 @@ async def test_backfill_fanout_ignores_celery_failure_and_keeps_records_pending(
         )
 
     assert resp.status_code == 202, resp.text
-    mock_dispatch.apply_async.assert_not_called()
+    mock_dispatch.assert_not_called()
 
     async with session_maker() as session:
         backfill_job = (await session.execute(select(BackfillJob))).scalar_one()
@@ -644,7 +644,7 @@ async def test_backfill_fanout_never_observes_celery_broker_credentials(
         )
 
     assert resp.status_code == 202, resp.text
-    mock_dispatch.apply_async.assert_not_called()
+    mock_dispatch.assert_not_called()
     assert fixture_value not in resp.text
 
     async with session_maker() as session:
@@ -684,7 +684,7 @@ async def test_backfill_planner_managed_config_routes_to_fanout(
     data = resp.json()
     assert data["mode"] == "fanout"
     sync_run_id = data["sync_run_id"]
-    mock_dispatch.apply_async.assert_not_called()
+    mock_dispatch.assert_not_called()
 
     async with session_maker() as session:
         sched_job = (
@@ -746,7 +746,7 @@ async def test_backfill_paused_config_returns_409_without_dispatch(
 
     assert resp.status_code == 409
     assert "paused" in resp.json()["detail"]
-    mock_dispatch.apply_async.assert_not_called()
+    mock_dispatch.assert_not_called()
 
     async with session_maker() as session:
         job_runs = (await session.execute(select(JobRun))).scalars().all()

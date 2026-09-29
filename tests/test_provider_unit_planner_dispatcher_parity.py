@@ -260,28 +260,13 @@ def _set_provider_unit_route(session: Session, transport: str) -> None:
 
 
 def _silence_run_scheduling(monkeypatch) -> None:
-    """Keep redispatch/finalize scheduling off a real broker.
+    """Formerly kept redispatch/finalize scheduling off a real broker.
 
-    Before CHAOS-4054 step 4 this helper also captured per-unit Celery
-    publishes by faking ``run_sync_unit.s(...).set(queue=...).apply_async()``.
-    That branch no longer exists in ``dispatch_sync_run``: an admitted unit is
-    staged in the durable outbox and an unroutable one is terminalized, so
-    "did anything reach a Celery queue" is now answered by the outbox/terminal
-    accounting below rather than by a signature spy.
+    CHAOS-7059: dispatch has no Celery publish left at all (a run-level
+    hand-off is a durable outbox row, and a provider unit is staged in the
+    outbox or terminalized), so there is no broker call to silence. The
+    function stays as a no-op so the sweep's call sites keep reading the same.
     """
-
-    from dev_health_ops.workers import sync_units
-
-    monkeypatch.setattr(
-        sync_units.dispatch_sync_run,
-        "apply_async",
-        lambda args=None, queue=None, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        sync_units.finalize_sync_run,
-        "apply_async",
-        lambda args=None, queue=None: None,
-    )
 
 
 def _plan_and_dispatch(session, monkeypatch, *, provider: str, dataset: str) -> dict:

@@ -13,7 +13,9 @@ import (
 
 // testdata/evidence_golden.json is what Python's real row mapper answers for
 // the evidence columns of the grid, and testdata/window_golden.json what its
-// real _window_to_dates answers for the (unit, value) grid. This test EXECUTES
+// real _window_to_dates answers for the (unit, value) grid, and
+// testdata/failure_modes_golden.json what its real resolve_recommendations
+// answers when the window overflows or the ClickHouse read fails. This test EXECUTES
 // each generator against the current production Python and requires its output
 // to equal the checked-in file byte for byte, so a golden cannot go stale when
 // the Python side changes: the run fails and says how to regenerate.
@@ -28,6 +30,7 @@ func TestGoldensAreWhatPythonProducesNow(t *testing.T) {
 	for _, pair := range [][2]string{
 		{"gen_evidence_golden.py", "evidence_golden.json"},
 		{"gen_window_golden.py", "window_golden.json"},
+		{"gen_failure_modes_golden.py", "failure_modes_golden.json"},
 	} {
 		command := exec.Command(python, filepath.Join("testdata", pair[0]))
 		command.Dir = filepath.Dir(file)

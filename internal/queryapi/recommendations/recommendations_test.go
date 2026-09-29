@@ -449,3 +449,70 @@ func TestResolve_ANonFiniteEvidenceValueFailsTheFieldLikeGraphQLCore(t *testing.
 		}
 	}
 }
+
+// failureModeGolden is one case of testdata/failure_modes_golden.json,
+// produced by testdata/gen_failure_modes_golden.py running Python's REAL
+// resolve_recommendations with a scripted ClickHouse read.
+type failureModeGolden struct {
+	Window    string `json:"window"`
+	Mode      string `json:"mode"`
+	Rows      *int   `json:"rows"`
+	Exception string `json:"exception"`
+}
+
+// Which failures become an empty list and which fail the field is Python's own
+// answer at every stage: an oversized window fails the field (its date
+// arithmetic raises outside any handler), while a ClickHouse error, at once or
+// after some rows, is caught by resolve_recommendations and answered as [].
+func TestResolveFailureModesMatchPythonResolver(t *testing.T) {
+	raw, err := os.ReadFile("testdata/failure_modes_golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []failureModeGolden
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) < 7 {
+		t.Fatalf("golden file has %d cases, want the whole grid", len(cases))
+	}
+	windows := map[string]model.WindowInput{
+		"ok window":        {Value: 4, Unit: model.WindowUnitWeek},
+		"oversized window": {Value: 1000000, Unit: model.WindowUnitDay},
+	}
+	var raised, answered int
+	for _, c := range cases {
+		window, ok := windows[c.Window]
+		if !ok {
+			window = model.WindowInput{Value: 142857143, Unit: model.WindowUnitWeek}
+		}
+		var client *fakeClient
+		switch c.Mode {
+		case "rows":
+			client = &fakeClient{scanner: &fakeRowScanner{rows: []fakeRow{saturationRow(), thrashRow()}}}
+		case "empty":
+			client = &fakeClient{scanner: &fakeRowScanner{}}
+		case "raises_at_once":
+			client = &fakeClient{err: errors.New("clickhouse unavailable")}
+		case "raises_after_rows":
+			client = &fakeClient{scanner: &fakeRowScanner{rows: []fakeRow{saturationRow()}, err: errors.New("stream interrupted")}}
+		default:
+			t.Fatalf("unknown mode %q in the golden file", c.Mode)
+		}
+		got, err := Resolve(context.Background(), client, "test-org", "team-a", window, computedAtFixture)
+		if c.Exception != "" {
+			raised++
+			if err == nil || got != nil {
+				t.Errorf("%s/%s: python raised %s; Go answered %d rows, err %v", c.Window, c.Mode, c.Exception, len(got), err)
+			}
+			continue
+		}
+		answered++
+		if err != nil || got == nil || len(got) != *c.Rows {
+			t.Errorf("%s/%s: python answered %d rows; Go answered %d rows, err %v", c.Window, c.Mode, *c.Rows, len(got), err)
+		}
+	}
+	if raised == 0 || answered == 0 {
+		t.Fatalf("one-sided golden: %d raised, %d answered", raised, answered)
+	}
+}

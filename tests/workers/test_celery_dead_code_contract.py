@@ -194,6 +194,33 @@ def _src_modules() -> list[Path]:
     )
 
 
+def _folded_string(node: ast.AST) -> str | None:
+    """A string literal, or a chain of ``+`` over string literals, folded."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _folded_string(node.left), _folded_string(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
+def _dynamic_banned_use(call: ast.Call) -> bool:
+    """A dynamic import of a Celery-family module, or a getattr that spells
+    ``apply_async`` / ``send_task`` out of constants."""
+    func = ast.unparse(call.func)
+    first = _folded_string(call.args[0]) if call.args else None
+    if func in {"importlib.import_module", "import_module", "__import__"}:
+        return first is not None and first.split(".")[0] in {
+            "celery",
+            "kombu",
+            "billiard",
+        }
+    if func == "getattr" and len(call.args) >= 2:
+        return _folded_string(call.args[1]) in {"apply_async", "send_task"}
+    return False
+
+
 def test_the_celery_app_and_every_celery_import_are_gone() -> None:
     """CHAOS-7059: the Celery app is deleted, and nothing may bring it back.
 
@@ -219,6 +246,10 @@ def test_the_celery_app_and_every_celery_import_are_gone() -> None:
             elif isinstance(node, ast.ImportFrom) and node.module:
                 names = [node.module]
             if any(name.split(".")[0] in banned_roots for name in names):
+                offenders.append(where)
+            if isinstance(node, ast.Call) and _dynamic_banned_use(node):
+                # importlib.import_module("celery") / __import__("kombu") and
+                # a getattr whose attribute name is built from constants.
                 offenders.append(where)
             if (
                 isinstance(node, ast.Attribute)

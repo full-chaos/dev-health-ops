@@ -1,8 +1,9 @@
 """Sync run dispatch + finalize contract (CHAOS-2512).
 
-FROZEN CONTRACT — the two remaining Celery entrypoints of the fan-out
-execution model, each wrapped with the ``@app.task`` decorator. They take IDs
-ONLY (no credentials, no DTOs) in their payloads. Per-unit execution
+FROZEN CONTRACT — the two entrypoints of the fan-out execution model
+(``dispatch_sync_run`` and ``finalize_sync_run``). They are plain functions:
+the Celery app and its task decorators are deleted, and Go serves both kinds
+natively. They take IDs ONLY (no credentials, no DTOs) in their arguments. Per-unit execution
 (formerly ``run_sync_unit``) is native Go now (``internal/jobs/providerunit``,
 routed via the durable ``sync.provider_unit`` outbox) -- there is no Celery
 consumer or HTTP bridge for it any more, so this module only dispatches units

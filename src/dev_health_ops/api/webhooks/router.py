@@ -4,7 +4,7 @@ All webhooks follow the same pattern:
 1. Validate signature/token (via dependency)
 2. Parse provider-specific headers
 3. Create canonical WebhookEvent
-4. Dispatch to Celery task for async processing
+4. Hand the event to the durable outbox for async processing
 5. Return accepted response immediately
 
 This ensures webhooks don't timeout during heavy processing.

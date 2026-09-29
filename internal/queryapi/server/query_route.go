@@ -3248,8 +3248,8 @@ func withMutationLocation(ctx context.Context, presented *gqlerror.Error) *gqler
 //
 // orgAllowed, when non-nil, gates the AUTHENTICATED claims' OrgID before the
 // Mux is reached (CHAOS-7096's proof-org allowlist). nil for /query and
-// /query/proof -- both keep today's behavior byte for byte, pinned by
-// TestQueryAndProofRoutesNeverCallOrgAllowed. It must fail CLOSED: an empty
+// /query/proof -- both keep today's behavior byte for byte (their handlers are
+// built with a nil check). It must fail CLOSED: an empty
 // OrgID or a "cannot decide" answer from the caller is a refusal, never a
 // fall-through, because a write door is the one place "the check could not
 // run" must never read as "the check passed."

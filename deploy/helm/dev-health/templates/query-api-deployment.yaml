@@ -238,9 +238,18 @@ spec:
     - ports:
         - protocol: TCP
           port: {{ .Values.queryApi.port }}
-    # The internal listener: pods in this namespace only.
+    # The internal listener trusts X-DH-Internal-* identity headers from whoever can reach it, so
+    # the network is the boundary: only this release's api pods (the edge dispatcher), plus any
+    # pod selector the operator adds under queryApi.internal.allowedFrom (for example the tools
+    # pod that runs `dho goapi prove-write`). Never every pod in the namespace.
     - from:
-        - podSelector: {}
+        - podSelector:
+            matchLabels:
+              {{- include "dev-health.componentSelectorLabels" (dict "component" "api" "context" $) | nindent 14 }}
+        {{- range .Values.queryApi.internal.allowedFrom }}
+        - podSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.queryApi.internal.port }}

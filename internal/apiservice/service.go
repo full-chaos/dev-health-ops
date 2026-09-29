@@ -433,7 +433,17 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
 	}
-	return acr.Routes(acr.Deps{Store: store, Logger: logger})
+	return internalRoutesFor(store, logger)
+}
+
+// internalRoutesFor is InternalRoutes over an explicit store. The routes are
+// marked with the response-model table (markResponseModels) here, at the one
+// place they are built, so every consumer (the internal listener and the
+// public compat bridge) serves them as response_model routes: an unmarked
+// route makes policy.WriteModel log a false wrong-writer violation on every
+// successful response.
+func internalRoutesFor(store acr.EntitlementStore, logger *slog.Logger) []httpapi.Route {
+	return markResponseModels(acr.Routes(acr.Deps{Store: store, Logger: logger}))
 }
 
 // NewInternalServer is the internal listener: the same transport bounds and

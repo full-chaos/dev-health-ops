@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -177,5 +179,51 @@ func TestACRPublicCompatBridgeServesBothListeners(t *testing.T) {
 		if strings.Contains(route.Pattern, "/api/v1/internal") && !strings.HasPrefix(route.Pattern, "/api/v1/internal/acr/") {
 			t.Errorf("compat mounts a non-acr internal route %s", route.Pattern)
 		}
+	}
+}
+
+type okStore struct{}
+
+func (okStore) Ready(context.Context) error { return nil }
+func (okStore) Lookup(_ context.Context, orgID string) (acr.Entitlement, error) {
+	return acr.Entitlement{OrgID: orgID, AgentContextRuntime: true}, nil
+}
+
+// TestInternalRoutesSucceedWithoutWriterViolations: a SUCCESSFUL response
+// through the real server wrapper (not the bare handler) on both the internal
+// listener and the public compat bridge writes its body as the response-model
+// route it is, so policy.WriterViolations does not move.
+func TestInternalRoutesSucceedWithoutWriterViolations(t *testing.T) {
+	cfg := config.Config{APIAddress: "127.0.0.1:0", APIInternalAddress: "127.0.0.1:0"}
+	internal, err := NewInternalServer(cfg, quietLog(), internalRoutesFor(okStore{}, quietLog()))
+	if err != nil {
+		t.Fatalf("NewInternalServer: %v", err)
+	}
+	compat, err := NewServer(cfg, quietLog(), markResponseModels(internalRoutesFor(okStore{}, quietLog())))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	for name, handler := range map[string]http.Handler{"internal": internal.Handler(), "public compat": compat.Handler()} {
+		for _, path := range internalPaths {
+			before := policy.WriterViolations()
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s GET %s = %d %s, want 200", name, path, rec.Code, rec.Body.String())
+			}
+			if got := policy.WriterViolations() - before; got != 0 {
+				t.Errorf("%s GET %s moved WriterViolations by %d", name, path, got)
+			}
+		}
+	}
+	// The compat bridge through Routes() itself (the production path).
+	before := policy.WriterViolations()
+	for _, route := range Routes(Deps{ACRPublicCompat: true}, quietLog()) {
+		if strings.HasPrefix(route.Pattern, "/api/v1/internal/") && route.ResponseModelFor == nil {
+			t.Errorf("compat route %s %s is not marked as a response-model route", route.Method, route.Pattern)
+		}
+	}
+	if policy.WriterViolations() != before {
+		t.Errorf("building Routes moved WriterViolations")
 	}
 }

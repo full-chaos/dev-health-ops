@@ -149,7 +149,8 @@ func (a *Authenticator) IsMember(ctx context.Context, userID, orgID string) (boo
 // superuser and whose users row confirms it, an active session makes the
 // target's org the request's org, sets the impersonation context, and
 // stamps X-Impersonating / X-Impersonated-User-Id on the response. A
-// session lookup failure means no impersonation (fail open, logged).
+// session lookup failure refuses the request with the generic 500, like the
+// other authorization lookups (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !maybeSuperuser(r) {
@@ -169,9 +170,15 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 		}
 		session, err := s.auth.store.ActiveImpersonation(r.Context(), user.ID)
 		if err != nil {
-			s.logger.WarnContext(r.Context(), "api impersonation: session lookup failed; not impersonating",
-				slog.String("admin_user_id", user.UserID), slog.Bool("unavailable", isUnavailable(err)))
-			session = nil
+			// Fail closed: an admin whose active session could not be read
+			// must not be served as though no session existed (that would
+			// lift the impersonation restriction). Same refusal as the
+			// caller and membership lookups above.
+			s.logger.ErrorContext(r.Context(), "api impersonation: session lookup failed; refusing the request",
+				slog.String("path", r.URL.Path), slog.String("admin_user_id", user.UserID),
+				slog.Bool("unavailable", isUnavailable(err)), slog.Any("error", err))
+			WriteInternal(w)
+			return
 		}
 		if session == nil {
 			next.ServeHTTP(w, r)

@@ -1,9 +1,11 @@
 package graph
 
 import (
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"sort"
 	"strings"
@@ -22,6 +24,12 @@ const notImplementedDir = "testdata/not_implemented"
 // notImplementedResolverNames lists the names the directory holds.
 func notImplementedResolverNames(t *testing.T) []string {
 	t.Helper()
+	// git does not track an empty directory: once the last stub is built its
+	// marker file is deleted and the directory is gone, which means "no stubs
+	// remain", the state this test then holds every resolver to.
+	if _, err := os.Stat(notImplementedDir); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	return namesInDir(t, notImplementedDir)
 }
 

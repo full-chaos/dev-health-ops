@@ -1,7 +1,9 @@
 package policy
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -19,7 +21,8 @@ func TestImpersonationSessionLookupErrorIsRefused(t *testing.T) {
 	store.sessions[userID] = &Impersonation{ID: uuid.New(), AdminUserID: userID, TargetUserID: targetUserID,
 		TargetOrgID: targetOrgID, TargetRole: "member", ExpiresAt: time.Now().Add(time.Hour)}
 	store.errSession = errors.New("store down")
-	scope := NewScope(authenticator(t, store), quiet())
+	var logs bytes.Buffer
+	scope := NewScope(authenticator(t, store), slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	token := sign(t, claims(func(c jwt.MapClaims) { c["is_superuser"] = true }))
 	got := serve(scope.Impersonation(echo), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + token})
 	if got.status != http.StatusInternalServerError {
@@ -30,5 +33,13 @@ func TestImpersonationSessionLookupErrorIsRefused(t *testing.T) {
 	}
 	if store.sessionCalls != 1 {
 		t.Fatalf("%d session lookups, want 1", store.sessionCalls)
+	}
+	// The refusal must be visible at the default (Info) level, with the store
+	// error and the request path, so a fault that turns admin requests into
+	// 500s is not silent.
+	for _, want := range []string{"level=ERROR", "session lookup failed; refusing the request", "path=/x", "store down"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("log %q lacks %q", logs.String(), want)
+		}
 	}
 }

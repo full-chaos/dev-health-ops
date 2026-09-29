@@ -95,6 +95,7 @@ verbs:
   repoint   point every routing row at the build /buildinfo reports, modes untouched
   enable    turn operations ON (mode canary|primary), with every preflight
   disable   turn operations OFF (mode python|disabled|shadow); mode only, never the build
+  seed      create the FIRST routing row (shadow only) for operations that have none
   carry     BEFORE a roll: copy every reachable row to the schema digest this binary computes
   status    report both planes' digests and every operation's row; never fails
   proof-org manage /query/proof-write's org allowlist (add/remove/list); see "proof-org -h"
@@ -293,6 +294,8 @@ func run(argv []string) error {
 		return helpAsSuccess(runEnable(rest))
 	case "disable":
 		return helpAsSuccess(runDisable(rest))
+	case "seed":
+		return helpAsSuccess(runSeed(rest))
 	case "carry":
 		return helpAsSuccess(runCarry(rest))
 	case "status":

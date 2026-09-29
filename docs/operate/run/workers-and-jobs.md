@@ -1,6 +1,6 @@
 ---
 page_id: op-workers
-summary: Start, verify, roll out, and recover Celery and deployment-selected Go workers.
+summary: Start, verify, roll out, and recover deployment-selected Go workers.
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
@@ -40,12 +40,9 @@ or production job ownership.
 ## Start the active runtime
 
 `dev-hops workers start-worker`/`start-scheduler` no longer exist (CHAOS-4026)
--- there is no Python Celery worker/beat process to start in production. The
-one exception is the non-prod `tests/acceptance/compose.ask-dev.yml`
-acceptance fleet, which still boots a real `celery worker`/`celery beat`
-process directly via the `celery` CLI (not through `dev-hops`) to exercise a
-handful of general scheduled jobs whose Go executed-proof gate is still in
-flight.
+-- there is no Python Celery worker/beat process to start anywhere: the Celery
+app was deleted (CHAOS-7059) and the non-prod acceptance compose file starts
+no Celery service.
 
 ### Start a Go worker group
 
@@ -63,16 +60,14 @@ dev-health-worker \
   --shutdown-timeout 960s
 ```
 
-The flag surface mirrors the Python Celery worker CLI: `-Q/--queues` names the
-queues to consume and `-c/--concurrency` sets the worker budget, exactly as
-`celery -A dev_health_ops.workers.celery_app worker -Q … --concurrency=…` does
-for the Celery fleet. `-q` and `--loglevel` are accepted as aliases.
+The flag surface: `-Q/--queues` names the queues to consume and
+`-c/--concurrency` sets the worker budget. `-q` and `--loglevel` are accepted as aliases.
 
 **The two fleets do not serve the same queues.** `-Q` names queues from the Go
 River topology (`coverage`, `heartbeat`, `investment`, `metrics`, `reports`,
 `retention`, `sync`, `sync_provider`, `webhooks`, `workgraph`). Four of those
-names — `metrics`, `reports`, `sync`, `webhooks` — are shared with the Celery
-app and mean the same thing; the rest exist in only one runtime. Selecting a
+names — `metrics`, `reports`, `sync`, `webhooks` — also appear in historical
+Celery-era records and mean the same thing there. Selecting a
 queue this fleet does not serve fails before readiness, because startup
 validation requires the selected queue set to equal the constructed handler
 set.
@@ -222,8 +217,7 @@ stopping one process and does not require a global queue owner.
 
 ## Verify worker health
 
-**Celery is retired (CHAOS-4026); the commands below are historical.** For the live Go fleet, inspect River
-jobs directly:
+Inspect River jobs directly:
 
 ```bash
 dho workers jobs list --state available --state retryable --state running --state scheduled
@@ -232,12 +226,6 @@ dho workers jobs inspect <id>
 
 See [Operator commands § Blocked/failed partition inspection and repair](../runbooks/operator-commands.md#b-blockedfailed-partition-inspection-and-repair)
 for the full read-only inspection surface (jobs, metrics executions, workgraph requests).
-
-Historical, non-prod only (the `tests/acceptance/compose.ask-dev.yml` Celery fleet):
-
-```bash
-celery -A dev_health_ops.workers.celery_app inspect ping
-```
 
 Verify all of the following:
 

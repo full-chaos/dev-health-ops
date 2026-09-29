@@ -1,6 +1,6 @@
 ---
 page_id: op-rb-worker
-summary: Recover when Celery work stops advancing or a Go coexistence process, River queue, reconciler, schedule evaluator, or operator mutation fails.
+summary: Recover when work stops advancing or a Go worker process, River queue, reconciler, schedule evaluator, or operator mutation fails.
 content_type: runbook
 owner: platform-operations
 source_of_truth:
@@ -14,7 +14,7 @@ lifecycle: active
 
 # Worker or queue failure
 
-Use this runbook when expected work is not created, a queue stops advancing, workers repeatedly retry without domain progress, or a Go coexistence process closes readiness. **Celery stopped in prod 2026-08-19 (CHAOS-4026); the Go worker stack owns every production route today.** The "Active Celery recovery" section below is retained for the non-prod Celery-based acceptance fleet and historical reference only -- confirm which runtime actually owns the route before following it.
+Use this runbook when expected work is not created, a queue stops advancing, workers repeatedly retry without domain progress, or a Go coexistence process closes readiness. **Celery stopped in prod 2026-08-19 (CHAOS-4026); the Go worker stack owns every production route today.**
 {: .fc-page-lede }
 
 ## Preserve the failing boundary
@@ -50,17 +50,6 @@ double-drives it.
 | Go profile is healthy but no work arrives | Confirm the profile is enabled and inspect the durable job and sync-dispatch routes; a checked-in River route that was not applied remains on its prior database transport |
 | Operator command reports `outcome_unknown` | Database commit ambiguity; inspect before retrying |
 | Operator command reports `audit_pending` | Mutation committed; audit finalization needs recovery |
-
-## Active Celery recovery (non-prod / historical)
-
-1. Confirm each configured queue has an intended deployed consumer.
-2. Confirm provider-specific and cost-class routing settings match worker queue lists.
-3. Check broker/result-backend connectivity and worker heartbeats.
-4. Inspect queue depth, oldest age, leases, retries, and terminal failures.
-5. Stop unsafe retry amplification before increasing concurrency.
-6. Recover one bounded job.
-7. Verify the domain run, downstream writes, and product freshness.
-8. Restore normal concurrency only after oldest age and failure rate decline.
 
 Do not increase worker count when the provider budget, database, queue, or downstream store is the bottleneck.
 
@@ -98,10 +87,10 @@ Confirm `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER` is unset afterwards. Left set, a
 For the generic worker outbox:
 
 1. Confirm the producer committed a route-executable intent.
-2. Confirm known Celery-routed rows were not claimed for River.
+2. Confirm rows whose route is not executable were not claimed for River.
 3. Inspect reconciler readiness and the last successful loop step.
 4. Distinguish a transient persistence failure from an invalid job kind or route.
-5. Preserve deferred or terminal rows for audit; do not silently republish them to Celery.
+5. Preserve deferred or terminal rows for audit; do not silently republish them.
 6. After correction, process one bounded row and verify a single domain effect.
 
 ### Scheduled report delivery abandonment

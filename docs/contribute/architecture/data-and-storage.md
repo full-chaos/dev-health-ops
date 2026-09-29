@@ -1,6 +1,6 @@
 ---
 page_id: con-storage
-summary: Preserve Postgres semantic authority, ClickHouse analytics, Celery coordination, River queue control, outbox delivery, migrations, and tenant isolation.
+summary: Preserve Postgres semantic authority, ClickHouse analytics, River queue control, outbox delivery, migrations, and tenant isolation.
 content_type: architecture
 owner: engineering
 source_of_truth:
@@ -22,13 +22,13 @@ Dev Health separates semantic authority, analytics, asynchronous coordination, a
 
 - **PostgreSQL** stores organizations, users, settings, encrypted credentials, integration sources, webhook bindings, job/run control state, licensing decisions, operational authority, audit intents, and River execution state.
 - **ClickHouse** stores high-volume provider facts, canonical operational events, work items, commits, analytics, and derived materializations.
-- **Valkey/Redis** backs Celery queues/results, provider budget coordination, selected streams, and bounded claims.
-- **River** is a PostgreSQL-backed execution queue for the additive Go foundation; it is not yet the production owner of current jobs.
+- **Valkey/Redis** backs provider budget coordination, selected streams, and bounded claims.
+- **River** is the PostgreSQL-backed execution queue the Go worker fleet uses for production jobs.
 - **Domain run tables** remain product-visible execution history. Bounded queue rows are not a replacement for durable domain evidence.
 
 ## Python and Go PostgreSQL access
 
-The Python API and Celery runtime use semantic PostgreSQL access. Transaction-mode PgBouncer is supported when prepared-statement behavior is disabled through the configured engine path.
+The Python API uses semantic PostgreSQL access. Transaction-mode PgBouncer is supported when prepared-statement behavior is disabled through the configured engine path.
 
 The Go coexistence foundation splits database responsibilities:
 
@@ -54,7 +54,7 @@ The generic `worker_job_outbox` path is route-safe:
 2. the producer refuses to enqueue unless the checked-in migration route is executable;
 3. the Go reconciler claims eligible rows;
 4. the relay rechecks route ownership before inserting River work;
-5. known Celery-routed rows remain untouched;
+5. rows whose route is not executable remain untouched;
 6. unknown or invalid kinds terminalize with bounded evidence rather than disappearing.
 
 The domain role can insert and inspect producer-owned rows but cannot forge relay state. The queue role can claim and retire relay-owned state but cannot create producer intent.

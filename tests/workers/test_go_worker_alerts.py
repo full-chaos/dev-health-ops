@@ -123,3 +123,17 @@ def test_alert_names_are_unique_across_rule_file() -> None:
     ]
 
     assert len(alerts) == len(set(alerts))
+
+
+def test_no_celery_alert_group_or_rule_ships() -> None:
+    document = yaml.safe_load(RULES_PATH.read_text(encoding="utf-8"))
+    names = {str(group["name"]) for group in document["groups"]}
+    alerts = {
+        str(rule["alert"])
+        for group in document["groups"]
+        for rule in group["rules"]
+        if "alert" in rule
+    }
+    assert "celery" not in names
+    assert not {a for a in alerts if a.startswith("Celery")}
+    assert "devhealth_celery_" not in RULES_PATH.read_text(encoding="utf-8")

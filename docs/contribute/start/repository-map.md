@@ -37,7 +37,7 @@ Python code under `src/dev_health_ops/` owns:
 - Customer Push and webhook ingestion;
 - PostgreSQL and ClickHouse models, queries, migrations, and sinks;
 - metrics, Work Graph, Investment, reports, and fixtures;
-- Celery workers, Beat schedules, retries, and current production job routes;
+- sync-dispatch and worker job contracts, and the queue/route registry the Go workers read;
 - the `dev-hops` CLI.
 
 New provider work belongs under `src/dev_health_ops/providers/<provider>/`. Legacy code under `connectors/` is not the destination for new provider implementations except compatibility shims.

@@ -1199,12 +1199,14 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		rec := postGraphQLWithVariables(t, handler, registeredFlowMatrixDocument, token, vars)
 		if rec.Code != http.StatusOK {
 			// gqlgen returns 200 with a GraphQL-level error for a
-			// resolver error, not an HTTP error code -- the
-			// AUTHORIZATION_ERROR is IN the body, checked below.
+			// refused operation, not an HTTP error code -- the refusal
+			// is IN the body, checked below.
 			t.Fatalf("expected 200 with a GraphQL error body, got %d: %s", rec.Code, rec.Body.String())
 		}
-		if !strings.Contains(rec.Body.String(), "AUTHORIZATION_ERROR") {
-			t.Fatalf("expected an AUTHORIZATION_ERROR for a mismatched orgId argument, got %s", rec.Body.String())
+		// The operation org guard refuses it exactly like Python's
+		// OrgIdAuthExtension, before the resolver runs.
+		if !strings.Contains(rec.Body.String(), "Access denied: cannot query org 'org-2'") {
+			t.Fatalf("expected the org guard's refusal for a mismatched orgId argument, got %s", rec.Body.String())
 		}
 	})
 

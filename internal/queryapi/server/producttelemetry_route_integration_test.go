@@ -99,7 +99,11 @@ func TestProductTelemetryRoute_GatesThroughTheSignedEnvelope(t *testing.T) {
 	}{
 		{"own org", principal.Claims{OrgID: "org-1"}, "org-1", true},
 		{"other org", principal.Claims{OrgID: "org-1"}, "org-2", false},
-		{"superuser other org", principal.Claims{OrgID: "org-1", IsSuperuser: true}, "org-2", false},
+		// As in Python's OrgIdAuthExtension: a verified, non-impersonating
+		// superuser may name another org (the operation then runs as it); an
+		// impersonating one may not.
+		{"superuser other org", principal.Claims{OrgID: "org-1", IsSuperuser: true}, "org-2", true},
+		{"superuser impersonating other org", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuser: true, ImpersonationActive: true, ImpersonatedBy: &impersonator}, "org-2", false},
 	} {
 		t.Run("org "+tc.name, func(t *testing.T) {
 			code, body := org(signDataHealthEnvelope(t, priv, tc.claims, valid), tc.orgArg)

@@ -60,7 +60,7 @@ func TestDataHealthRoute_OperatorGateThroughTheSignedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
 	setRoutingMode(t, pool, digestHex(registeredConnectorsDataHealthDocument), "connectorsDataHealth", "canary")
 
 	post := func(bearer string) (int, string) {

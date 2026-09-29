@@ -254,6 +254,20 @@ queryApi:
   #    a time and one stays ready).
   rollingUpdate: {}
   port: 8090
+  # -- The internal listener (QUERY_API_INTERNAL_ADDR): X-DH-Internal-* identity routes,
+  #    /metrics and /query/proof-write, none of them on the public `port`. Off by default
+  #    because the umbrella deploy chart renders its own internal Service and NetworkPolicy
+  #    (queryApiInternal) with the same purpose: enable exactly one of the two. When on, this
+  #    chart adds the env var, a named `internal` containerPort, a ClusterIP Service
+  #    `<fullname>-query-api-internal`, and a NetworkPolicy admitting this release's api pods (plus `internal.allowedFrom`) only.
+  internal:
+    enabled: false
+    port: 8091
+    # -- Extra pod selectors (each `{matchLabels: {...}}`) allowed to reach the internal port,
+    #    beside this release's api pods. The internal listener trusts X-DH-Internal-* identity
+    #    headers from any peer that can connect, so add only the pods that must call it (for
+    #    example the tools pod that runs `dho goapi prove-write`).
+    allowedFrom: []
   image:
     # -- The dho image (docker/go-worker.Dockerfile target `dho`); the
     #    Deployment runs `dho query-api`. Non-local profiles (prod/kiac) pin

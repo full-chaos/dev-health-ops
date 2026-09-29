@@ -243,6 +243,14 @@ func Build(get func(string) string) (*Plane, error) {
 	_ = newExecutableSchemaHandler()
 
 	mux := http.NewServeMux()
+	// internalMux (CHAOS-7078/CHAOS-7097 groundwork) is declared here, not
+	// at the end of Build, so /query/proof-write (CHAOS-7096, below) can
+	// mount directly on it in the same scope handlers.ProofWrite is built
+	// in. mux and internalMux diverge from this point on, never
+	// re-converging except through internalMux's own fallthrough
+	// ("/" -> handler, registered at the very end of Build once handler --
+	// mux's final, wrapped form -- exists).
+	internalMux := http.NewServeMux()
 
 	// CHAOS-4367 Wave 1 / CHAOS-4368 Wave 2 / CHAOS-4369 Wave 3: mount the
 	// real featureFlags, reviewEdges, and cognitiveLoad routes when their
@@ -294,6 +302,11 @@ func Build(get func(string) string) (*Plane, error) {
 		// operator-typed sha nothing verified. See buildinfo_route.go.
 		mux.HandleFunc("/buildinfo", handlers.BuildInfo)
 		mountProofRoute(getenv, mux, handlers.Proof)
+		// CHAOS-7096: mounted on internalMux ONLY -- never on mux, which the
+		// public listener is built from (CHAOS-7097's Listeners split).
+		// A test proves the public route
+		// set has no /query/proof-write.
+		mountProofWriteRoute(getenv, internalMux, handlers.ProofWrite)
 		ready = readyFn
 		probes = handlers.Probes
 		// CHAOS-4710 deliverable 3: the mount-confirmation log line used to
@@ -315,6 +328,7 @@ func Build(get func(string) string) (*Plane, error) {
 		// from "nobody ever considered it" -- the same conflation the
 		// registered/not-registered lines exist to prevent (codex r1 F8).
 		mountProofRoute(getenv, mux, nil)
+		mountProofWriteRoute(getenv, internalMux, nil)
 	}
 
 	// CHAOS-4977 step 5a: POST /api/v1/investment/explain, gated by its
@@ -758,14 +772,16 @@ func Build(get func(string) string) (*Plane, error) {
 	})
 
 	handler := markResponseModelRoutes(mux)
-	// CHAOS-7078 groundwork: nothing is mounted on internalMux directly yet
-	// (that is CHAOS-7096's job), so falling through to handler for every
-	// path makes it behaviourally identical to Handler today -- the
-	// separation exists so a future direct registration here (a route ONLY
-	// the internal listener serves) never needs the public mux touched, and
-	// so it structurally CANNOT be reachable through the public listener,
-	// which is built from Handler and never sees internalMux at all.
-	internalMux := http.NewServeMux()
+	// CHAOS-7096: internalMux already carries /query/proof-write (mounted
+	// above, in the same scope as handlers.ProofWrite) when that route is
+	// configured. This fallthrough registration makes every OTHER path
+	// behave identically to the public listener -- a route only the
+	// internal listener should serve is registered directly on internalMux
+	// BEFORE this call (Go's ServeMux matches the longest registered
+	// pattern regardless of registration order, so /query/proof-write
+	// still wins over this "/" catch-all) -- and it structurally CANNOT be
+	// reachable through the public listener, which is built from handler
+	// and never sees internalMux at all.
 	internalMux.Handle("/", handler)
 	return &Plane{Handler: handler, InternalHandler: internalMux, Ready: ready, Probes: probes, Close: closeAll}, nil
 }

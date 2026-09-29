@@ -14,6 +14,9 @@ element, so a registry prefix, a tag and a digest are all allowed). The
 retired dev-health-query-api image has no dho entrypoint: its own binary
 exits 2 on the `query-api` argument, so the render refuses it by name.
 */}}
+{{- if and .Values.queryApi.internal.enabled (eq (int .Values.queryApi.internal.port) (int .Values.queryApi.port)) }}
+{{- fail "queryApi.internal.port must differ from queryApi.port (the public listener)" }}
+{{- end }}
 {{- $queryApiImage := include "dev-health.queryApiImage" . }}
 {{- if regexMatch "(^|/)dev-health-query-api([:@]|$)" $queryApiImage }}
 {{- fail (printf "queryApi.image %q is the retired dev-health-query-api image, which has no dho entrypoint and exits 2 on `query-api`; use the dev-health-go-dho image." $queryApiImage) }}
@@ -63,11 +66,21 @@ spec:
             - name: http
               containerPort: {{ .Values.queryApi.port }}
               protocol: TCP
+            {{- if .Values.queryApi.internal.enabled }}
+            - name: internal
+              containerPort: {{ .Values.queryApi.internal.port }}
+              protocol: TCP
+            {{- end }}
             {{- /*
-            /metrics is served on this same listener (QUERY_API_ADDR). A
-            second ports entry for it is not allowed: container ports are a
-            server-side-apply list keyed on containerPort+protocol, so a
-            duplicate key rejects the whole Deployment. Scrape via `http`.
+            /metrics is NOT served on the query listener (`http`): a scrape
+            endpoint is operational detail, so it lives on the internal
+            listener only (queryApi.internal.enabled), next to the
+            X-DH-Internal-* identity routes and /query/proof-write. Scrape the
+            `internal` port; nothing in this chart or the deploy chart scrapes
+            query-api today. A second ports entry must use a distinct
+            containerPort: container ports are a server-side-apply list keyed
+            on containerPort+protocol, so a duplicate key rejects the whole
+            Deployment.
             */}}
           {{- /*
           Declared-only by design: unlike api/metrics-api, this
@@ -85,6 +98,16 @@ spec:
           env:
             - name: QUERY_API_ADDR
               value: {{ printf ":%v" .Values.queryApi.port | quote }}
+            {{- if .Values.queryApi.internal.enabled }}
+            {{- /*
+            The internal listener: honours X-DH-Internal-* identity headers, serves
+            /metrics and /query/proof-write, and is reachable only through the
+            internal Service below (whose NetworkPolicy admits in-namespace pods
+            only). No Ingress may route to it.
+            */}}
+            - name: QUERY_API_INTERNAL_ADDR
+              value: {{ printf ":%v" .Values.queryApi.internal.port | quote }}
+            {{- end }}
             {{- /*
             Native ClickHouse wire protocol (9000), not the HTTP 8123 port the
             Python services use: the Go client Pings eagerly at construction and
@@ -178,4 +201,57 @@ spec:
       port: {{ .Values.queryApi.port }}
       targetPort: http
       protocol: TCP
+{{- if .Values.queryApi.internal.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dev-health.fullname" . }}-query-api-internal
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "query-api-internal" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dev-health.componentSelectorLabels" (dict "component" "query-api" "context" $) | nindent 4 }}
+  ports:
+    - name: internal
+      port: {{ .Values.queryApi.internal.port }}
+      targetPort: internal
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" . }}-query-api-internal
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "query-api-internal" "context" $) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "query-api" "context" $) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # The public listener: open to every source, exactly as before this policy existed.
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.queryApi.port }}
+    # The internal listener trusts X-DH-Internal-* identity headers from whoever can reach it, so
+    # the network is the boundary: only this release's api pods (the edge dispatcher), plus any
+    # pod selector the operator adds under queryApi.internal.allowedFrom (for example the tools
+    # pod that runs `dho goapi prove-write`). Never every pod in the namespace.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "dev-health.componentSelectorLabels" (dict "component" "api" "context" $) | nindent 14 }}
+        {{- range .Values.queryApi.internal.allowedFrom }}
+        - podSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.queryApi.internal.port }}
+{{- end }}
 {{- end }}

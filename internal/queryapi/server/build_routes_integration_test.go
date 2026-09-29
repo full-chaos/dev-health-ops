@@ -101,6 +101,14 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 	if len(unmounted) > 0 {
 		t.Fatalf("with every dependency and every switch present these declared routes answer 404 (unmounted): %v", unmounted)
 	}
+	// The write-proof route is on the internal route set only: absent (404) from the public
+	// handler, answered (any status but 404 for an empty request) by the internal one.
+	if got := probe(plane.Handler, http.MethodPost, "/query/proof-write"); got != http.StatusNotFound {
+		t.Errorf("POST /query/proof-write on the PUBLIC handler answered %d, want 404 (not mounted there)", got)
+	}
+	if probe(plane.InternalHandler, http.MethodPost, "/query/proof-write") == http.StatusNotFound {
+		t.Errorf("POST /query/proof-write on the INTERNAL handler answered 404: the route is not mounted there")
+	}
 }
 
 // switchNames are the GO_API_*_ENABLED settings the package's source names.

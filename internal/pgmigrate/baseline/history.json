@@ -8,11 +8,17 @@
   "doc": "Move the checked-in worker job kinds to the River transport."
  },
  {
-  "revision": "0144",
-  "down": "0143",
+  "revision": "0145",
+  "down": "0144",
   "labels": "application_schema",
   "realHead": true,
   "head": true,
+  "doc": "Add ``go_api_proof_orgs`` -- the org allowlist for ``/query/proof-write``."
+ },
+ {
+  "revision": "0144",
+  "down": "0143",
+  "labels": "application_schema",
   "doc": "Add saml_assertion_replays (CHAOS-6659, D2744)."
  },
  {

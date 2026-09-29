@@ -167,6 +167,11 @@ var queryAPIOptions = func() []Option {
 			Usage: "enable the proof route (default off; it also needs its dependencies configured, or it stays unmounted)",
 		},
 		{
+			Flag: "proof-write-route-enabled", Env: "GO_API_PROOF_WRITE_ROUTE_ENABLED", Kind: KindBool,
+			Default: "false", Services: q, Group: GroupRoutes,
+			Usage: "enable /query/proof-write (CHAOS-7096, default off): internal listener only, mutation-only, gated per request by the go_api_proof_orgs allowlist (empty by default)",
+		},
+		{
 			Flag: "quadrant-enabled", Env: "GO_API_QUADRANT_ENABLED", Kind: KindBool,
 			Default: "false", Services: q, Group: GroupRoutes,
 			Usage: "enable the quadrant route (default off; it also needs its dependencies configured, or it stays unmounted)",

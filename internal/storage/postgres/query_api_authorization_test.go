@@ -19,6 +19,7 @@ func TestQueryAPIPostureIsPinned(t *testing.T) {
 		{"report_runs", true, false, false},
 		{"worker_job_outbox", true, false, false},
 		{"go_api_routing_state", false, false, false},
+		{"go_api_proof_orgs", false, false, false},
 		{"sync_configurations", false, false, false},
 		{"job_runs", false, false, false},
 		{"sync_runs", false, false, false},

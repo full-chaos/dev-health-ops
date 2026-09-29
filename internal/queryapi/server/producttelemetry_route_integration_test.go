@@ -31,7 +31,7 @@ func TestProductTelemetryRoute_GatesThroughTheSignedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
 	setRoutingMode(t, pool, digestHex(registeredProductTelemetryPlatformDashboardDocument), "productTelemetryPlatformDashboard", "canary")
 	setRoutingMode(t, pool, digestHex(registeredProductTelemetryDashboardDocument), "productTelemetryDashboard", "canary")
 

@@ -29,6 +29,10 @@ import (
 // Reads:
 //   - go_api_routing_state: routeswitch.PostgresSwitch.Enabled (every request),
 //     the proof switch, and the registry route's digest-drift log.
+//   - go_api_proof_orgs: /query/proof-write's org allowlist (CHAOS-7096) --
+//     a per-request lookup keyed on the authenticated claims' OrgID, checked
+//     before routeMux.Dispatch. Empty by default; only dho goapi routing
+//     proof-org (a separate CLI identity) writes it.
 //   - sync_configurations, job_runs, sync_runs: the data-health connectors
 //     section and the home freshness panel's latest-successful-sync read (which
 //     also joins scheduled_jobs, below).
@@ -87,6 +91,7 @@ func queryAPIPosture() RolePosture {
 			{"report_runs", true, false, false},
 			{"worker_job_outbox", true, false, false},
 			{"go_api_routing_state", false, false, false},
+			{"go_api_proof_orgs", false, false, false},
 			{"sync_configurations", false, false, false},
 			{"job_runs", false, false, false},
 			{"sync_runs", false, false, false},

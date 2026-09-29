@@ -79,7 +79,7 @@ func TestBuildQueryRouteWiresThePostureCheckIntoReadiness(t *testing.T) {
 	for _, call := range []string{
 		"posture := queryAPIPostureCheck(getenv, pgPool)",
 		"readinessCheck(chClient, pgPool, verifier, posture)",
-		"Probes:    readinessProbes(chClient, pgPool, verifier, posture),",
+		"Probes:     readinessProbes(chClient, pgPool, verifier, posture),",
 	} {
 		if strings.Count(string(src), call) != 1 {
 			t.Fatalf("query_route.go must contain %q exactly once", call)

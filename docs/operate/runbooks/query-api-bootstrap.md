@@ -221,9 +221,18 @@ per-environment Fixture Org, recorded as a `write_executed` receipt:
 ```bash
 GO_API_PROVE_WRITE_FIXTURE_ORG=<fixture org id> dho goapi prove-write \
   -org <fixture org id> -case <registered case> -via query-api \
-  -documents <registrydump output> -recorded-by <operator> -review-evidence "<why>" \
-  -postgres-uri "$POSTGRES_URI"
+  -query-url http://<release>-dev-health-query-api-internal:8091/query/proof-write \
+  -documents <registrydump output> -recorded-by <operator> -review-evidence "<why>"
 ```
+
+Both verbs read the domain Postgres DSN from `POSTGRES_URI` in the environment when `-postgres-uri` is absent; keep it out of the command line, where it would show in the process arguments.
+
+`-query-url` must name the INTERNAL listener's `/query/proof-write`. The verb's default (`http://localhost:8090/query`) is the
+public route, which answers 404 for a mutation whose routing row is not yet eligible: exactly the bootstrap case. Before the
+first run, on the query-api Deployment: enable the internal listener (`queryApi.internal.enabled`, or the umbrella chart's
+`queryApiInternal`), set `GO_API_PROOF_WRITE_ROUTE_ENABLED=true`, and put the Fixture Org on the allowlist with
+`dho goapi routing proof-org add -org <fixture org id> -recorded-by <operator> -review-evidence "<why>"` (with `POSTGRES_URI` in the environment, never on the command line). The route refuses every org not
+on that list, every document that is not a registered mutation, and everything when the allowlist cannot be read.
 
 The verb writes only in the Fixture Org named by the environment (it never creates an org), posts the mutation once,
 compares the persisted effects with the case's committed baseline digest, and refuses to call a run a match unless the

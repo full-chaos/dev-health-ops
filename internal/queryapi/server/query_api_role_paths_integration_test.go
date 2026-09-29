@@ -417,6 +417,15 @@ VALUES (gen_random_uuid(), $1, 'paths connector' || $2::text, 'github', '[]'::js
 	if err == nil && session == nil {
 		fail("policy.ActiveImpersonation", errors.New("expected the seeded active impersonation session, found none"))
 	}
+
+	// CHAOS-7096: /query/proof-write's org-allowlist read. go_api_proof_orgs
+	// is otherwise never reached by anything above -- without this, revoking
+	// SELECT on it produces no failure naming it (caught live: this driver
+	// originally had no path to that relation at all, per TestQueryAPIRole
+	// DriverObservesAMissingGrant's own "the driver does not reach that
+	// relation" message).
+	_, err = postgresstore.ProofOrgAllowed(ctx, pool, f.org)
+	fail("postgresstore.ProofOrgAllowed", err)
 	return failures
 }
 

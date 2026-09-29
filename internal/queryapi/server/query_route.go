@@ -2587,6 +2587,11 @@ type queryRouteHandlers struct {
 	// admits shadow. Mounted only by mountProofRoute, which refuses in a
 	// production posture and without an explicit opt-in.
 	Proof http.HandlerFunc
+	// ProofWrite is /query/proof-write (CHAOS-7096): the same pipeline,
+	// mutation-only, org-allowlist gated. Mounted only by
+	// mountProofWriteRoute, and ONLY on Plane.InternalHandler -- never on
+	// Plane.Handler, never on the public listener.
+	ProofWrite http.HandlerFunc
 	// Registry is GET /registry.
 	Registry http.HandlerFunc
 	// BuildInfo is GET /buildinfo -- which build this process is,
@@ -2671,17 +2676,18 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// One posture check per process: it proves the role in the background from here
 	// on, and both the combined check and the per-class probes read its last answer.
 	posture := queryAPIPostureCheck(getenv, pgPool)
-	handler, proofHandler, registryHandler, err := newQueryHandler(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv)
+	handler, proofHandler, proofWriteHandler, registryHandler, err := newQueryHandler(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv)
 	if err != nil {
 		pgPool.Close()
 		return queryRouteHandlers{}, nil, nil, err
 	}
 	handlers := queryRouteHandlers{
-		Query:     handler,
-		Proof:     proofHandler,
-		Registry:  registryHandler,
-		BuildInfo: newBuildInfoHandler(verifier),
-		Probes:    readinessProbes(chClient, pgPool, verifier, posture),
+		Query:      handler,
+		Proof:      proofHandler,
+		ProofWrite: proofWriteHandler,
+		Registry:   registryHandler,
+		BuildInfo:  newBuildInfoHandler(verifier),
+		Probes:     readinessProbes(chClient, pgPool, verifier, posture),
 	}
 	cleanup := func() { pgPool.Close() }
 	// CHAOS-6803/CHAOS-6804: a deployment that names query-api's role
@@ -2978,7 +2984,7 @@ func mountedRouteLogMessage(digestByOperation map[string]string) string {
 	)
 }
 
-func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string, getenv getenvFunc) (http.HandlerFunc, http.HandlerFunc, http.HandlerFunc, error) {
+func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string, getenv getenvFunc) (http.HandlerFunc, http.HandlerFunc, http.HandlerFunc, http.HandlerFunc, error) {
 	// CHAOS-6263 PR (a): /query's edge-access-token carrier, built once
 	// here (not per-request) and threaded into every authenticateInternalRequest
 	// call this handler makes. (nil, nil, nil) when GO_API_EDGE_JWT_SECRET is
@@ -2988,7 +2994,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// the envelope verifier's own JWKS check in buildQueryRoute.
 	edgeAuth, edgeStore, err := buildQueryEdgeAuthenticatorFromEnv(getenv, pgPool)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("query-api: edge authenticator: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("query-api: edge authenticator: %w", err)
 	}
 	// digestByOperation is this route's registered-document inventory:
 	// operation name -> the sha256 digest of that operation's registered
@@ -3114,9 +3120,53 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		proofMux.Register(operation, gqlHandler)
 	}
 
-	return newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier, edgeAuth, edgeStore, true),
-		newDocumentDispatchHandler(getenv, proofMux, operationByDigest, verifier, edgeAuth, edgeStore, false),
+	// CHAOS-7096: a THIRD instance of the same shared pipeline, over its own
+	// Switch, independent of go_api_routing_state -- a proof-write operation
+	// is by definition one CHAOS-6098 could not yet get a receipt for at its
+	// target mode, so gating it on that mode would recreate the exact
+	// circularity this route exists to break (routing_enable.go's
+	// ErrEnableUnproven). "Off by default" instead lives in the two gates
+	// OUTSIDE this Switch: mountProofWriteRoute's posture check (server.go,
+	// mirrors mountProofRoute) decides whether this handler is mounted on
+	// any listener at all, and orgAllowed decides per-request whether THIS
+	// caller may use it (go_api_proof_orgs, empty on every deployment until
+	// an operator runs `dho goapi routing proof-org add`). A request
+	// reaching proofWriteMux.Dispatch has already passed both.
+	proofWriteOperations := make(routeswitch.StaticSwitch, len(digestByOperation))
+	for operation := range digestByOperation {
+		proofWriteOperations[operation] = true
+	}
+	proofWriteMux := routeswitch.NewMux(proofWriteOperations)
+	for operation := range digestByOperation {
+		proofWriteMux.Register(operation, gqlHandler)
+	}
+	orgAllowed := newProofOrgAllowed(pgPool)
+
+	return newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier, edgeAuth, edgeStore, "", nil),
+		newDocumentDispatchHandler(getenv, proofMux, operationByDigest, verifier, edgeAuth, edgeStore, digest.KindQuery, nil),
+		newDocumentDispatchHandler(getenv, proofWriteMux, operationByDigest, verifier, edgeAuth, edgeStore, digest.KindMutation, orgAllowed),
 		registryHandler, nil
+}
+
+// newProofOrgAllowed builds /query/proof-write's org-allowlist check
+// (CHAOS-7096) against a real Postgres pool. Named and separated from
+// newQueryHandler's body specifically so a test can call it directly with a
+// pool forced into an error state (e.g. already closed) and assert the
+// closure itself -- not a stand-in -- fails closed: a store error must
+// never read as "allowed", and the only way to prove that is to exercise
+// this exact function, not a test double standing in for its contract.
+func newProofOrgAllowed(pool *pgxpool.Pool) func(context.Context, string) bool {
+	return func(ctx context.Context, orgID string) bool {
+		allowed, err := postgresstore.ProofOrgAllowed(ctx, pool, orgID)
+		if err != nil {
+			// Fail closed: a store error is never "let it through". Logged
+			// so an operator can tell "nobody is allowlisted yet" (a normal,
+			// expected 403) from "the allowlist read itself is broken".
+			log.Printf("query-api: proof-write org-allowlist read failed for org_id=%q (refusing): %v", orgID, err)
+			return false
+		}
+		return allowed
+	}
 }
 
 // newGraphQLServer is the gqlgen server every registered operation runs on:
@@ -3173,24 +3223,37 @@ func withMutationLocation(ctx context.Context, presented *gqlerror.Error) *gqler
 	return presented
 }
 
-// newDocumentDispatchHandler builds the per-request pipeline both /query
-// and /query/proof serve: method check, the Python edge's body-size
-// contract, registered-document resolution, bearer/envelope verification,
-// org context, and dispatch through the supplied Mux.
+// newDocumentDispatchHandler builds the per-request pipeline /query,
+// /query/proof AND /query/proof-write (CHAOS-7096) serve: method check, the
+// Python edge's body-size contract, registered-document resolution,
+// bearer/envelope verification, org context, and dispatch through the
+// supplied Mux.
 //
-// It takes the Mux rather than the Switch so the two routes cannot drift
-// in anything EXCEPT reachability -- the property the proof route exists
-// to vary, and the only one it is allowed to.
+// It takes the Mux rather than the Switch so the routes cannot drift
+// in anything EXCEPT reachability -- the property a measurement/write route
+// exists to vary, and the only one it is allowed to.
 //
-// servesMutations says whether a registered MUTATION document may execute
-// here. /query serves them; /query/proof never does: it exists to measure an
-// operation without exposing it to real traffic, and a mutation cannot be
-// measured that way -- running it would apply a real write, and a
-// two-plane comparison would apply it twice. The refusal is decided from the
-// registered document itself (digest.DocumentKind), after the request is
-// authenticated and resolved to a registered operation, and before the Mux is
-// reached, so no switch state can let a write through this door.
-func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, servesMutations bool) http.HandlerFunc {
+// requireKind constrains which registered document KIND may execute here,
+// by digest.DocumentKind's vocabulary ("" means no constraint -- /query's
+// shape, unchanged since before CHAOS-7096). /query/proof passes
+// digest.KindQuery: it exists to measure an operation without exposing it to
+// real traffic, and a mutation cannot be measured that way -- running it
+// would apply a real write, and a two-plane comparison would apply it
+// twice. /query/proof-write passes digest.KindMutation, the exact inverse,
+// for the opposite reason: it exists ONLY to apply one real, bounded write
+// so CHAOS-6098's bootstrap circularity has a receipt to point at, and a
+// query document has no business on that door. Checked after the request is
+// authenticated and resolved to a registered operation, and before the Mux
+// is reached, so no switch state can let the wrong kind through.
+//
+// orgAllowed, when non-nil, gates the AUTHENTICATED claims' OrgID before the
+// Mux is reached (CHAOS-7096's proof-org allowlist). nil for /query and
+// /query/proof -- both keep today's behavior byte for byte (their handlers are
+// built with a nil check). It must fail CLOSED: an empty
+// OrgID or a "cannot decide" answer from the caller is a refusal, never a
+// fall-through, because a write door is the one place "the check could not
+// run" must never read as "the check passed."
+func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, requireKind string, orgAllowed func(context.Context, string) bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -3276,14 +3339,26 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			return
 		}
 
-		if !servesMutations {
+		if requireKind != "" {
 			kind, kindErr := digest.DocumentKind(parsed.Query)
-			if kind != digest.KindQuery {
+			if kind != requireKind {
 				// DocumentKind answers "" for a document whose kind cannot be
 				// stated, so that case is refused here too: only a document
-				// proven to be a query reaches the measurement-only route.
-				log.Printf("query-api: proof route refused a non-query document: operation=%s kind=%q err=%v", operation, kind, kindErr)
-				http.Error(w, "this route serves query documents only", http.StatusMethodNotAllowed)
+				// proven to be the required kind reaches a kind-constrained route.
+				log.Printf("query-api: route requiring kind=%q refused a document: operation=%s kind=%q err=%v", requireKind, operation, kind, kindErr)
+				http.Error(w, fmt.Sprintf("this route serves %s documents only", requireKind), http.StatusMethodNotAllowed)
+				return
+			}
+		}
+
+		if orgAllowed != nil {
+			// Fail closed on the empty case too -- see the doc comment above.
+			// claims.OrgID is trusted here for the same reason the rest of this
+			// pipeline trusts claims: authenticateInternalRequest already
+			// verified them, above, before any of this ran.
+			if claims.OrgID == "" || !orgAllowed(r.Context(), claims.OrgID) {
+				log.Printf("query-api: proof-write route refused: operation=%s org_id=%q is not on the proof-org allowlist", operation, claims.OrgID)
+				http.Error(w, "this org is not enabled for proof-write", http.StatusForbidden)
 				return
 			}
 		}

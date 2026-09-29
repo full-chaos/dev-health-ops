@@ -66,6 +66,22 @@ const deploymentEnvEnv = "DEV_HEALTH_ENV"
 // non-production posture.
 var productionPostures = map[string]bool{"prod": true, "production": true}
 
+// proofWriteRouteEnabledEnv opts /query/proof-write (CHAOS-7096) in.
+// Absent or anything other than "true" means the handler is never
+// registered. Deliberately its OWN variable, not proofRouteEnabledEnv:
+// the two routes' safe-to-run postures are opposite. /query/proof is a
+// measurement route with nothing to lose from running everywhere except
+// production; /query/proof-write exists ONLY to break CHAOS-6098's
+// bootstrap circularity in the one place it is stuck -- production,
+// where the missing receipt is needed for `enable` to ever succeed on
+// live traffic. Refusing it there the way mountProofRoute refuses
+// /query/proof would make it useless for its own purpose. Its real
+// safety comes from three OTHER, independent gates, all empty/off by
+// default: this env var, internalMux-only reachability (never the public
+// listener, CHAOS-7097), and the per-org go_api_proof_orgs allowlist
+// checked on every request (newDocumentDispatchHandler's orgAllowed).
+const proofWriteRouteEnabledEnv = "GO_API_PROOF_WRITE_ROUTE_ENABLED"
+
 // planeHeaderName and buildHeaderName are what the proof route stamps on
 // every response it serves.
 //
@@ -236,5 +252,33 @@ func mountProofRoute(getenv getenvFunc, mux *http.ServeMux, handler http.Handler
 	log.Printf(
 		"query-api: /query/proof REGISTERED (routes_registered=1, %s=%q): measurement-only, admits shadow, unreachable from the Python edge",
 		deploymentEnvEnv, posture,
+	)
+}
+
+// mountProofWriteRoute mounts /query/proof-write (CHAOS-7096) on internalMux
+// ONLY -- the caller (server.go's Build) must never pass the public mux; see
+// proofWriteRouteEnabledEnv's doc comment for why this gate has no
+// production-posture refusal, unlike mountProofRoute's.
+func mountProofWriteRoute(getenv getenvFunc, internalMux *http.ServeMux, handler http.HandlerFunc) {
+	enabled := strings.EqualFold(strings.TrimSpace(getenv(proofWriteRouteEnabledEnv)), "true")
+
+	switch {
+	case !enabled:
+		log.Printf(
+			"query-api: /query/proof-write NOT registered: %s is not \"true\" (routes_registered=0); CHAOS-6098 bootstrap writes are unavailable in this deployment",
+			proofWriteRouteEnabledEnv,
+		)
+		return
+	case handler == nil:
+		// Unreachable while buildQueryRoute always populates it -- same
+		// defensive shape as mountProofRoute's identical case.
+		log.Printf("query-api: /query/proof-write NOT registered: no handler was built (routes_registered=0)")
+		return
+	}
+
+	internalMux.HandleFunc("/query/proof-write", withProofProvenance(handler, version.Current("query-api").Commit))
+	log.Printf(
+		"query-api: /query/proof-write REGISTERED (routes_registered=1, %s=true): internal listener only, mutation-only, org-allowlist gated",
+		proofWriteRouteEnabledEnv,
 	)
 }

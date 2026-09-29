@@ -97,7 +97,7 @@ func iaDispatchWithEdge(t *testing.T, verifier *principal.Verifier, edgeAuth *po
 		*seen = append(*seen, claims)
 		w.WriteHeader(http.StatusOK)
 	}))
-	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, edgeAuth, edgeStore, true)
+	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, edgeAuth, edgeStore, "", nil)
 	return handler, seen
 }
 

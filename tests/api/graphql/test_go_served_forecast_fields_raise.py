@@ -307,3 +307,13 @@ def test_every_document_over_the_analytics_root_has_its_own_ledger_row() -> None
         "testOpsTest",
         "testOpsCoverage",
     } <= operations
+
+
+def test_home_stays_absent_from_the_python_schema() -> None:
+    """`home` is exempt from the ledger-vs-schema.py check because its Python
+    field was deleted outright (CHAOS-7070). The exemption is only sound while
+    the field stays absent: a Python `home` field would answer from Python
+    beside the Go plane with no raise and no check noticing."""
+    query_type = schema._schema.query_type
+    assert query_type is not None
+    assert "home" not in query_type.fields

@@ -477,8 +477,7 @@ func TestResolve_FlowMatrix_ExecuteFailureSwallowsToEmpty(t *testing.T) {
 	if result.FlowMatrix == nil {
 		t.Fatal("expected a non-nil (degraded-empty) FlowMatrixResult")
 	}
-	// CHAOS-7092 (MCP request E3): this is the exact defect the ticket's
-	// acceptance test describes -- before this field existed, this
+	// Before this field existed, this
 	// assertion could not be written at all, and the swallowed-error
 	// result was byte-identical to a genuinely empty org (this test's
 	// own prior doc comment on FlowMatrix's degradation-reporting sibling

@@ -547,10 +547,9 @@ func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, in
 		RecordInvestmentRepoJoinDedupCollisions(ctx, client, orgID)
 	}
 	nodes, edges, execErr := ExecuteFlowMatrix(ctx, client, nodesQuery, edgesQuery)
-	// CHAOS-7092 (MCP request E3): the swallow-to-empty behaviour itself
-	// is unchanged (analytics.py:959-961's own "logs and degrades" is a
-	// parity-declared answer, and changing it changes web's answer too
-	// -- out of scope without chris's explicit word, per the ticket).
+	// The swallow-to-empty behaviour itself is unchanged
+	// (analytics.py:959-961's own "logs and degrades" is a parity-declared
+	// answer, and changing it would change web's answer too).
 	// What was missing is a way for the CALLER to tell this genuinely
 	// empty flowMatrix apart from one that swallowed a real execution
 	// failure: degradedReason is additive-only, non-nil ONLY on this

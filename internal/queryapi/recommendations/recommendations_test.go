@@ -72,9 +72,11 @@ func (f *fakeRowScanner) Close() error { return nil }
 type fakeClient struct {
 	scanner *fakeRowScanner
 	err     error
+	queried bool
 }
 
 func (c *fakeClient) Query(ctx context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	c.queried = true
 	if c.err != nil {
 		return nil, c.err
 	}
@@ -233,7 +235,7 @@ func TestWindowToDates_CapsReadAtTodayPlusOne(t *testing.T) {
 
 	wantToday := time.Date(2026, 4, 8, 0, 0, 0, 0, time.UTC)
 
-	start, end := windowToDates(today, model.WindowInput{Value: 2, Unit: model.WindowUnitWeek})
+	start, end, _ := windowToDates(today, model.WindowInput{Value: 2, Unit: model.WindowUnitWeek})
 	if !end.Equal(wantToday.AddDate(0, 0, 1)) {
 		t.Errorf("week: end = %v, want today+1 = %v", end, wantToday.AddDate(0, 0, 1))
 	}
@@ -241,12 +243,12 @@ func TestWindowToDates_CapsReadAtTodayPlusOne(t *testing.T) {
 		t.Errorf("week: start = %v, want today-14d", start)
 	}
 
-	start, end = windowToDates(today, model.WindowInput{Value: 7, Unit: model.WindowUnitDay})
+	start, end, _ = windowToDates(today, model.WindowInput{Value: 7, Unit: model.WindowUnitDay})
 	if !end.Equal(wantToday.AddDate(0, 0, 1)) || !start.Equal(wantToday.AddDate(0, 0, -7)) {
 		t.Errorf("day: got start=%v end=%v, want today-7d/today+1", start, end)
 	}
 
-	start, end = windowToDates(today, model.WindowInput{Value: 2, Unit: model.WindowUnitCycle})
+	start, end, _ = windowToDates(today, model.WindowInput{Value: 2, Unit: model.WindowUnitCycle})
 	if !end.Equal(wantToday.AddDate(0, 0, 1)) || !start.Equal(wantToday.AddDate(0, 0, -28)) {
 		t.Errorf("cycle: got start=%v end=%v, want today-28d/today+1", start, end)
 	}
@@ -356,5 +358,94 @@ func TestResolve_AnOverflowingEvidenceValueFailsTheField(t *testing.T) {
 	got, err := Resolve(context.Background(), client, "test-org", "team-alpha", weekWindow(), computedAtFixture)
 	if !errors.Is(err, errEvidenceOverflow) || got != nil {
 		t.Fatalf("got %v, err %v; want no rows and errEvidenceOverflow", got, err)
+	}
+}
+
+// windowGolden is one case of testdata/window_golden.json, produced by
+// testdata/gen_window_golden.py through Python's real _window_to_dates with
+// today pinned to 2026-09-29.
+type windowGolden struct {
+	Unit      string `json:"unit"`
+	Value     int    `json:"value"`
+	Start     string `json:"start"`
+	End       string `json:"end"`
+	Exception string `json:"exception"`
+}
+
+// Every (unit, value) in the golden file is answered as Python answers it:
+// the same start and end dates, or the OverflowError that nothing on the path
+// catches (an oversized or negative-huge window used to reach ClickHouse as a
+// date it rejects and come back as an empty list).
+func TestWindowToDatesMatchesPython(t *testing.T) {
+	raw, err := os.ReadFile("testdata/window_golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []windowGolden
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) < 60 {
+		t.Fatalf("golden file has %d cases, want the whole grid", len(cases))
+	}
+	units := map[string]model.WindowUnit{"DAY": model.WindowUnitDay, "WEEK": model.WindowUnitWeek, "CYCLE": model.WindowUnitCycle}
+	now := time.Date(2026, 9, 29, 13, 45, 0, 0, time.UTC)
+	overflows := 0
+	for _, c := range cases {
+		unit, ok := units[c.Unit]
+		if !ok {
+			t.Fatalf("unknown unit %q in the golden file", c.Unit)
+		}
+		start, end, err := windowToDates(now, model.WindowInput{Value: c.Value, Unit: unit})
+		if c.Exception != "" {
+			overflows++
+			if c.Exception != "OverflowError" || !errors.Is(err, errWindowOverflow) {
+				t.Errorf("%s %d: python raised %s, Go err %v", c.Unit, c.Value, c.Exception, err)
+			}
+			continue
+		}
+		if err != nil || start.Format("2006-01-02") != c.Start || end.Format("2006-01-02") != c.End {
+			t.Errorf("%s %d: Go %v..%v err %v, python %s..%s", c.Unit, c.Value, start, end, err, c.Start, c.End)
+		}
+	}
+	if overflows == 0 || overflows == len(cases) {
+		t.Fatalf("one-sided golden: %d overflows of %d", overflows, len(cases))
+	}
+}
+
+// An oversized window fails the field as Python's OverflowError does; it is
+// never turned into a query for an impossible date and answered as empty.
+func TestResolve_AnOverflowingWindowFailsTheFieldWithoutQuerying(t *testing.T) {
+	client := &fakeClient{scanner: &fakeRowScanner{}}
+	got, err := Resolve(context.Background(), client, "test-org", "team-alpha", model.WindowInput{Value: 1000000, Unit: model.WindowUnitDay}, computedAtFixture)
+	if !errors.Is(err, errWindowOverflow) || got != nil {
+		t.Fatalf("got %v, err %v; want no rows and errWindowOverflow", got, err)
+	}
+	if client.queried {
+		t.Error("an impossible window must not reach ClickHouse")
+	}
+}
+
+// A non-finite evidence value fails the field with graphql-core's message
+// (its Float serializer refuses nan/inf, executed against the installed
+// graphql-core: "Float cannot represent non numeric value: nan"/"inf"), never
+// as a response carrying the invalid JSON tokens NaN / +Inf.
+func TestResolve_ANonFiniteEvidenceValueFailsTheFieldLikeGraphQLCore(t *testing.T) {
+	for value, want := range map[string]string{
+		`"nan"`:       "Float cannot represent non numeric value: nan",
+		`NaN`:         "Float cannot represent non numeric value: nan",
+		`"inf"`:       "Float cannot represent non numeric value: inf",
+		`Infinity`:    "Float cannot represent non numeric value: inf",
+		`1e999`:       "Float cannot represent non numeric value: inf",
+		`-Infinity`:   "Float cannot represent non numeric value: -inf",
+		`"-Infinity"`: "Float cannot represent non numeric value: -inf",
+	} {
+		row := saturationRow()
+		row.evidenceJSON = `[{"value":` + value + `}]`
+		client := &fakeClient{scanner: &fakeRowScanner{rows: []fakeRow{row}}}
+		got, err := Resolve(context.Background(), client, "test-org", "team-alpha", weekWindow(), computedAtFixture)
+		if got != nil || err == nil || err.Error() != want {
+			t.Errorf("value %s: got %v, err %v; want no rows and %q", value, got, err, want)
+		}
 	}
 }

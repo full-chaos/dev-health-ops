@@ -17,6 +17,7 @@ package recommendations
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"math/big"
@@ -94,7 +95,7 @@ ORDER BY latest_window_end DESC, rule_id
 // than leaving them one finalize-day stale (CHAOS-2373). window_start is
 // anchored to today (not the bumped cap), so the lookback span itself is
 // unchanged. A cycle is 14 days (two-week sprint), matching Python.
-func windowToDates(now time.Time, window model.WindowInput) (start, end time.Time) {
+func windowToDates(now time.Time, window model.WindowInput) (start, end time.Time, err error) {
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	end = today.AddDate(0, 0, 1)
 	days := window.Value * 7
@@ -106,9 +107,24 @@ func windowToDates(now time.Time, window model.WindowInput) (start, end time.Tim
 	case model.WindowUnitCycle:
 		days = window.Value * 14
 	}
+	// Python's `today - timedelta(days=days)` raises OverflowError when the
+	// resulting date leaves datetime.date's year 1..9999 (a day count beyond
+	// timedelta's own 999999999-day magnitude does too, and always lands
+	// outside those years first); nothing on the path catches it, so the
+	// field errors. Go's date arithmetic would carry
+	// on into a year ClickHouse rejects, which the reader then answers as an
+	// empty list -- an error turned into a plausible-looking answer.
 	start = today.AddDate(0, 0, -days)
-	return start, end
+	if start.Year() < 1 || start.Year() > 9999 {
+		return time.Time{}, time.Time{}, errWindowOverflow
+	}
+	return start, end, nil
 }
+
+// errWindowOverflow is Python's uncaught OverflowError ("date value out of
+// range" / "days=...; must have magnitude <= 999999999") for a lookback
+// window no date can hold.
+var errWindowOverflow = errors.New("recommendations: the lookback window is outside the range of dates")
 
 // parseEvidence ports _parse_evidence (recommendations.py) with Python's own
 // value semantics, not Go's struct decoding: the column is decoded as
@@ -317,7 +333,10 @@ type row struct {
 // ClickHouse read failure never surfaces as a GraphQL field error here,
 // same as upstream.
 func Resolve(ctx context.Context, client QueryClient, orgID, team string, window model.WindowInput, now time.Time) ([]model.Recommendation, error) {
-	start, end := windowToDates(now, window)
+	start, end, err := windowToDates(now, window)
+	if err != nil {
+		return nil, err
+	}
 	bindings := []dhclickhouse.Binding{
 		{Name: "team_id", Value: team},
 		{Name: "org_id", Value: orgID},
@@ -350,6 +369,15 @@ func Resolve(ctx context.Context, client QueryClient, orgID, team string, window
 		if outcome == rowDropped {
 			continue
 		}
+		// evidence.value is a non-null GraphQL Float: graphql-core refuses to
+		// serialize nan/inf ("Float cannot represent non numeric value: nan"),
+		// failing the whole field, where gqlgen would write the invalid JSON
+		// tokens NaN / +Inf.
+		for _, ref := range evidence {
+			if math.IsNaN(ref.Value) || math.IsInf(ref.Value, 0) {
+				return nil, nonFiniteFloatError(ref.Value)
+			}
+		}
 		out = append(out, model.Recommendation{
 			RuleID:           r.ruleID,
 			TeamID:           r.teamID,
@@ -373,4 +401,17 @@ func Resolve(ctx context.Context, client QueryClient, orgID, team string, window
 		return []model.Recommendation{}, nil
 	}
 	return out, nil
+}
+
+// nonFiniteFloatError is graphql-core's serialize_float refusal, worded as
+// Python words it (repr of the float: nan, inf, -inf).
+func nonFiniteFloatError(value float64) error {
+	text := "nan"
+	switch {
+	case math.IsInf(value, 1):
+		text = "inf"
+	case math.IsInf(value, -1):
+		text = "-inf"
+	}
+	return fmt.Errorf("Float cannot represent non numeric value: %s", text)
 }

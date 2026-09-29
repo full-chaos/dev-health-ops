@@ -1,0 +1,392 @@
+[
+ {
+  "unit": "DAY",
+  "value": 0,
+  "start": "2026-09-29",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": 1,
+  "start": "2026-09-28",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": 2,
+  "start": "2026-09-27",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": 4,
+  "start": "2026-09-25",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": 52,
+  "start": "2026-08-08",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": 1000,
+  "start": "2024-01-03",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": 99999,
+  "start": "1752-12-15",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": 142857142,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "DAY",
+  "value": 142857143,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "DAY",
+  "value": 71428571,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "DAY",
+  "value": 71428572,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "DAY",
+  "value": 999999999,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "DAY",
+  "value": 1000000000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "DAY",
+  "value": 1000000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "DAY",
+  "value": 738000,
+  "start": "0006-03-03",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": 738522,
+  "start": "0004-09-27",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": 738523,
+  "start": "0004-09-26",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": 2147483647,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "DAY",
+  "value": -1,
+  "start": "2026-09-30",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": -52,
+  "start": "2026-11-20",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": -1000000,
+  "start": "4764-08-26",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "DAY",
+  "value": -999999999,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "DAY",
+  "value": -1000000000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "DAY",
+  "value": -2147483648,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": 0,
+  "start": "2026-09-29",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "WEEK",
+  "value": 1,
+  "start": "2026-09-22",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "WEEK",
+  "value": 2,
+  "start": "2026-09-15",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "WEEK",
+  "value": 4,
+  "start": "2026-09-01",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "WEEK",
+  "value": 52,
+  "start": "2025-09-30",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "WEEK",
+  "value": 1000,
+  "start": "2007-07-31",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "WEEK",
+  "value": 99999,
+  "start": "0110-03-25",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "WEEK",
+  "value": 142857142,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": 142857143,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": 71428571,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": 71428572,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": 999999999,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": 1000000000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": 1000000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": 738000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": 738522,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": 738523,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": 2147483647,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": -1,
+  "start": "2026-10-06",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "WEEK",
+  "value": -52,
+  "start": "2027-09-28",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "WEEK",
+  "value": -1000000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": -999999999,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": -1000000000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "WEEK",
+  "value": -2147483648,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 0,
+  "start": "2026-09-29",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 1,
+  "start": "2026-09-15",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 2,
+  "start": "2026-09-01",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 4,
+  "start": "2026-08-04",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 52,
+  "start": "2024-10-01",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 1000,
+  "start": "1988-05-31",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 99999,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 142857142,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 142857143,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 71428571,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 71428572,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 999999999,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 1000000000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 1000000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 738000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 738522,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 738523,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": 2147483647,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": -1,
+  "start": "2026-10-13",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "CYCLE",
+  "value": -52,
+  "start": "2028-09-26",
+  "end": "2026-09-30"
+ },
+ {
+  "unit": "CYCLE",
+  "value": -1000000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": -999999999,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": -1000000000,
+  "exception": "OverflowError"
+ },
+ {
+  "unit": "CYCLE",
+  "value": -2147483648,
+  "exception": "OverflowError"
+ }
+]

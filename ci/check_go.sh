@@ -1820,7 +1820,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/queryapi/recommendations (evidence golden vs the live row mapper)\n'
+  printf 'go test -count=1: internal/queryapi/recommendations (evidence and window goldens vs the live Python)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -1828,14 +1828,14 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -run '^TestEvidenceGoldenIsWhatPythonProducesNow$' ./internal/queryapi/recommendations
+      go test -mod=readonly -count=1 -run '^TestGoldensAreWhatPythonProducesNow$' ./internal/queryapi/recommendations
   ); then
     rm -rf -- "${proof_dir}"
     return 1
   fi
   proof_file="${proof_dir}/query-api-recommendations-evidence"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the recommendations evidence golden live Python measurement did not occur\n' >&2
+    printf 'ERROR: the recommendations goldens live Python measurement did not occur\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

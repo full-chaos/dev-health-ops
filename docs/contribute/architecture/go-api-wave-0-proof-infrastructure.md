@@ -693,6 +693,16 @@ appear here.
 | `sha256:d5ba09b1f460953482518ae4f5653ba6350b085bdc39621c5888756741118117` | 2026-09-28 | CHAOS-6262, deleting the 8 `dev*` Ask Dev V1 GraphQL fields and their input/result types from the SDL | superseded |
 | `sha256:c210117e47812bc75fbd11a88aa38ff6eaf63887ea13d9324335e913898d84c9` | this revision | CHAOS-7070, growing `HomeResult` to the full home payload (freshness sources, constraint cards, events, scope entity refs, health state) and adding the `window` argument (`HomeWindowInput`: rangeDays, compareDays, startDate, endDate) to `home` in the Go-owned SDL; Python's `home` field is deleted | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
 
+### Where `bigboy-cut.sh` finds its tools and its tree (CHAOS-7135)
+
+`ci/bigboy/bigboy-cut.sh` separates the two: `BIGBOY_ROOT` (default `/home/ubuntu/devhealth`) is the
+running tree the cut acts on (`compose/compose.bigboy.images.yml`, `_records/`, `ops/.env`), and the
+tools (the sibling `bigboy-repin.sh`, `bigboy-repin-web.sh`, the check scripts) come from
+`BIGBOY_TOOLS_DIR`, which defaults to the directory the script itself runs from. A cut launched from
+a git worktree therefore needs no `ci/bigboy` symlink under the root; set `BIGBOY_TOOLS_DIR` only to
+run the tools from a different checkout. The first log line prints both (`root=... tools=...`), and
+the cut refuses a tools directory that is not one (`is not a directory`, or no `bigboy-repin.sh`).
+
 ### Automated in `bigboy-cut.sh` (CHAOS-7022): digest change = carry before swap; repoint after
 
 The rule above -- **carry BEFORE the roll, re-enable after** -- was, until CHAOS-7022, something

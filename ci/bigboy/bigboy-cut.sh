@@ -14,19 +14,29 @@ OLD8=${1:?old8}; NEW=${2:?full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
 # falling back to the real default.
 export BIGBOY_ROOT="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"
 R=$BIGBOY_ROOT; REC=$R/_records/bigboy-$N8
-HERE=$(cd "$(dirname "$0")" && pwd)  # sibling scripts (this family) resolve from HERE, never a hardcoded _records path -- proves the tracked move actually runs, not just coexists with a synced _records copy
+# CHAOS-7135: the tools (this family of scripts) come from BIGBOY_TOOLS_DIR, default this script's own
+# directory, so a cut run from a git worktree needs no ci/bigboy symlink under BIGBOY_ROOT. The root is
+# only the running tree (compose files, _records, ops/.env); the tools are code and travel with the checkout.
+# Sibling scripts (this family) resolve from HERE, never a hardcoded _records path -- proves the tracked
+# move actually runs, not just coexists with a synced _records copy. Exported so a sibling that reads the
+# same variable resolves to the same directory.
+HERE=$(cd "${BIGBOY_TOOLS_DIR:-$(dirname "$0")}" 2>/dev/null && pwd) || { echo "FAIL: BIGBOY_TOOLS_DIR=${BIGBOY_TOOLS_DIR:-} is not a directory" >&2; exit 1; }
+export BIGBOY_TOOLS_DIR=$HERE
+[ -f "$HERE/bigboy-repin.sh" ] || { echo "FAIL: BIGBOY_TOOLS_DIR=$HERE has no bigboy-repin.sh -- refusing to run with a directory that is not the bigboy cut tools" >&2; exit 1; }
 # Fail closed (D2895): refuse a root that is not shaped like a real bigboy tree, rather than
 # silently proceeding to `cd` into it and produce confusing failures many steps later.
-for need in ci/bigboy compose/compose.bigboy.images.yml _records; do
+for need in compose/compose.bigboy.images.yml _records; do
   [ -e "$R/$need" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing $need -- refusing to run against a root that is not a real bigboy tree" >&2; exit 1; }
 done
 # CHAOS-7131: the router overlay is part of the chain. It sets web's BACKEND_URL (the plane-split router)
 # and AUTH_URL; without it `up` below recreated web from the base file alone and web lost both -- REST
 # calls 500'd and the auth callback/logout used the wrong origin. It stays last so its web.environment wins.
-export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:compose/compose.metrics-api.local.yml:.remember/lanes/team-lead/reconciler-sweep-override.yml:compose/compose.bigboy.images.yml:compose/compose.bigboy.workers.yml:ci/bigboy/compose.bigboy.router.yml
+# It is a tools file, so it is named from $HERE (absolute), not from the root: the other entries are relative
+# to $R, where compose runs, and a root without ci/bigboy (CHAOS-7135) would not find it.
+export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:compose/compose.metrics-api.local.yml:.remember/lanes/team-lead/reconciler-sweep-override.yml:compose/compose.bigboy.images.yml:compose/compose.bigboy.workers.yml:$HERE/compose.bigboy.router.yml
 cd "$R"
 st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
-echo "cut start $(date -u +%T) new=$NEW root=$R"
+echo "cut start $(date -u +%T) new=$NEW root=$R tools=$HERE"
 for i in $(seq 1 240); do
   ok=1; for img in dev-hops-api dev-health-go-operator dev-health-go-dho dev-health-go-api-tools; do docker buildx imagetools inspect ghcr.io/full-chaos/$img:sha-$S7 >/dev/null 2>&1 || ok=0; done
   [ $ok = 1 ] && break; sleep 30

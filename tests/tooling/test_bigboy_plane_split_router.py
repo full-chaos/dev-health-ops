@@ -287,17 +287,37 @@ INTERNAL = {"path": "/api/v1/internal", "pathType": "Prefix"}
         ([{"path": "/graphql"}], [], None),
         # Go path under a defaults Prefix, with a token segment.
         ([{"path": "/graphql/{op}"}], [], None),
-        # A served Prefix (query) covering an allow-list Exact path.
+        # r2 P1: a Go `{token}` segment matches a concrete Exact allow-list value.
         (
+            [{"path": "/api/v1/external-ingest/schemas/{schema_id}"}],
             [],
-            [{"path": "/api/v1/admin", "pathType": "Prefix"}],
-            [{"path": "/api/v1/admin/x", "pathType": "Exact"}, INTERNAL],
+            [
+                {"path": "/api/v1/external-ingest/schemas/abc", "pathType": "Exact"},
+                INTERNAL,
+            ],
         ),
         # A regex-shaped query path matching an allow-list Exact path.
         (
             [],
             [{"path": "/api/v1/people/[^/]+", "pathType": "ImplementationSpecific"}],
             [{"path": "/api/v1/people/x", "pathType": "Exact"}, INTERNAL],
+        ),
+        # A partial-segment regex (`peo[^/]+`) matches an Exact allow-list segment.
+        (
+            [],
+            [{"path": "/api/v1/peo[^/]+", "pathType": "ImplementationSpecific"}],
+            [{"path": "/api/v1/people", "pathType": "Exact"}, INTERNAL],
+        ),
+        # An allow-list Prefix above a served path (Traefik: the Go router at 1000 wins under it).
+        (
+            [],
+            [
+                {
+                    "path": "/api/v1/reports/[^/]+/metric",
+                    "pathType": "ImplementationSpecific",
+                }
+            ],
+            [{"path": "/api/v1/reports", "pathType": "Prefix"}, INTERNAL],
         ),
         # Identical strings still refused.
         (
@@ -312,6 +332,36 @@ def test_allow_list_overlap_with_go_or_query_paths_is_refused(
 ) -> None:
     with pytest.raises(SystemExit):
         gen.python_allow_list_from_doc(_doc(go, query, allow))
+
+
+@pytest.mark.parametrize(
+    ("go", "query", "allow"),
+    [
+        # r2 P1: the generated query regex is ANCHORED, so a longer Exact path does not overlap it.
+        (
+            [],
+            [
+                {
+                    "path": "/api/v1/reports/[^/]+/metric",
+                    "pathType": "ImplementationSpecific",
+                }
+            ],
+            [{"path": "/api/v1/reports/x/metric/extra", "pathType": "Exact"}, INTERNAL],
+        ),
+        # A query "Prefix" entry is emitted anchored too: an Exact below it does not overlap.
+        (
+            [],
+            [{"path": "/api/v1/admin", "pathType": "Prefix"}],
+            [{"path": "/api/v1/admin/x", "pathType": "Exact"}, INTERNAL],
+        ),
+        # A served path shorter than the allow-list Prefix does not overlap.
+        ([{"path": "/api/v1"}], [], None),
+    ],
+)
+def test_non_overlap_by_generated_matchers_is_accepted(
+    gen: ModuleType, go: list[dict], query: list[dict], allow: list[dict] | None
+) -> None:
+    assert gen.python_allow_list_from_doc(_doc(go, query, allow))
 
 
 def test_non_overlapping_allow_list_is_accepted(gen: ModuleType) -> None:

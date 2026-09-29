@@ -181,18 +181,33 @@ BIGBOY_LOCAL_PYTHON_PATHS: list[tuple[str, str]] = [
 ]
 
 
-def _norm_served(path: str) -> str:
-    """A Go/query path template with its whole-segment tokens replaced by a concrete segment."""
-    return re.sub(r"\{[a-zA-Z0-9_]+\}", "x", path).replace("[^/]+", "x")
+_WILD = "\x00"
 
 
-def _covers(path: str, path_type: str, other: str) -> bool:
-    """Would a rule (path, pathType) match the concrete path `other`? Whole-segment Prefix, like
-    ingress-nginx and the traefik terms this generator emits."""
-    if path_type == "Exact":
-        return other == path
-    base = path.rstrip("/")
-    return base == "" or other == base or other.startswith(base + "/")
+def _wild_segments(path: str) -> list[str]:
+    """Path segments of a go-api/query-api entry with every `{token}` / inline `[^/]+` replaced by a
+    wildcard marker BEFORE splitting on "/" (the inline placeholder itself contains a slash)."""
+    marked = re.sub(r"\{[a-zA-Z0-9_]+\}", _WILD, path).replace("[^/]+", _WILD)
+    return [s for s in marked.strip("/").split("/") if s != ""]
+
+
+def _seg_regex(segment: str) -> re.Pattern[str]:
+    """A wildcard-marked segment as the regex the generated router matches it with."""
+    return re.compile("[^/]+".join(re.escape(p) for p in segment.split(_WILD)))
+
+
+def _served_overlaps(allow_path: str, allow_type: str, served_path: str) -> bool:
+    """Does the generated Go/query router (an anchored full-path match, segment by segment) also
+    match a path the Python allow-list rule matches? Exact: the same segment count with every
+    segment matching. Prefix: some served path lies at or below the prefix."""
+    allow = [s for s in allow_path.strip("/").split("/") if s != ""]
+    served = _wild_segments(served_path)
+    if allow_type == "Exact":
+        if len(allow) != len(served):
+            return False
+    elif len(served) < len(allow):
+        return False
+    return all(_seg_regex(sv).fullmatch(al) for al, sv in zip(allow, served))
 
 
 def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
@@ -212,24 +227,17 @@ def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
         )
     # CHAOS-7198: a Python allow-list rule that overlaps a path go-api/query-api serve loses to the
     # higher-priority Go/query router, so the operator's intent silently goes the wrong way. Compare
-    # by matcher semantics (Exact vs whole-segment Prefix, both directions), on the EFFECTIVE list
+    # by the generated matchers (anchored segment-wise regexes vs Exact/whole-segment Prefix), on the EFFECTIVE list
     # (built-in defaults included), never by string equality.
     ingress = doc.get("ingress") or {}
-    served: list[tuple[str, str]] = [
-        (_norm_served(e["path"]), e.get("pathType", "Exact"))
+    # The generator emits EVERY go-api/query-api entry as an anchored full-path regex (see
+    # _goapi_path_to_regex/_queryapi_entry_to_regex), whatever pathType the values file declares.
+    served = [
+        e["path"]
         for e in (ingress.get("goApiPaths") or [])
-    ] + [
-        (_norm_served(e["path"]), e.get("pathType", "Exact"))
-        for e in (ingress.get("queryApiPaths") or [])
+        + (ingress.get("queryApiPaths") or [])
     ]
-    clash = sorted(
-        {
-            a
-            for a, at in out
-            for s, st in served
-            if _covers(a, at, s) or _covers(s, st, a)
-        }
-    )
+    clash = sorted({a for a, at in out for s in served if _served_overlaps(a, at, s)})
     if clash:
         raise SystemExit(
             "generate-plane-split-router: pythonAllowList paths overlap paths served by"

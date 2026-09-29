@@ -72,3 +72,24 @@ def test_the_walk_does_not_count_dev_extras() -> None:
     assert dev_only, "expected dev-only dependencies in uv.lock"
     closure = _runtime_closure(lock, "dev-health-ops")
     assert "fakeredis" in dev_only and "fakeredis" not in closure
+
+
+def test_pyproject_runtime_dependencies_declare_the_redis_client() -> None:
+    """The production Dockerfile installs with `pip install .` -- from
+    pyproject.toml, not from uv.lock -- so the lock-based test above does not
+    cover that install path. Moving `limits[redis]` to a dev extra while
+    leaving a stale lock would pass it and still crash the image at boot."""
+    from packaging.requirements import Requirement
+
+    project = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    requirements = [Requirement(line) for line in project["project"]["dependencies"]]
+    declares_redis = any(
+        requirement.name.lower() == "redis"
+        or (requirement.name.lower() == "limits" and "redis" in requirement.extras)
+        for requirement in requirements
+    )
+    assert declares_redis, (
+        "[project].dependencies declares neither `redis` nor `limits[redis]`: "
+        "`pip install .` (the api image) would omit the client the rate "
+        "limiter's redis:// storage needs."
+    )

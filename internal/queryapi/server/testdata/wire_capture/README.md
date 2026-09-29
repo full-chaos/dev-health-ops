@@ -247,7 +247,7 @@ proof against the actual client text, not proof against the const's own
 claim about itself.
 
 The wire-form digest happens to equal the hand-authored const's digest
-from that first cut (both are `ede461ac5783...`) -- HOME_QUERY's own
+from that first cut (both are `9776798e8090...`) -- HOME_QUERY's own
 field order and nesting were written to match `HomeResult`'s SDL
 exhaustively, same as the hand-authored version was, so urql's
 `__typename` injection landed on the identical selection tree. That is a
@@ -258,7 +258,7 @@ schema.
 
 | fixture | sha256(wire form) |
 | --- | --- |
-| `home_captured.graphql` | `ede461ac57835c7ea18ff78b50d6f2d969f1c6bcc2e317723d4c67235d76a40d` |
+| `home_captured.graphql` | `9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554` |
 
 (For contrast, `sha256(HOME_QUERY.trim())` on the raw, unprinted source
 text is `d4bb71ec7a9f667b5801fb23487bc3479628a11695eafa0e85507ae43c12a04b`

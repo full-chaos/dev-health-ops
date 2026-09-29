@@ -842,6 +842,14 @@ type HomeTileEntry struct {
 	Value *HomeTile `json:"value"`
 }
 
+// Time window of the `home` query, the same members as `filters.time` of the REST home endpoint (range_days, compare_days, start_date, end_date). An unset member takes the REST default: 14, 14, no explicit dates.
+type HomeWindowInput struct {
+	RangeDays   *int              `json:"rangeDays,omitempty"`
+	CompareDays *int              `json:"compareDays,omitempty"`
+	StartDate   *graphqldate.Date `json:"startDate,omitempty"`
+	EndDate     *graphqldate.Date `json:"endDate,omitempty"`
+}
+
 type HotspotRow struct {
 	FilePath           string   `json:"filePath"`
 	RepoID             string   `json:"repoId"`

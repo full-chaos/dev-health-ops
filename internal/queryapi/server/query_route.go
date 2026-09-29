@@ -345,8 +345,8 @@ const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!
 // document digest (see that function below), so any client selecting a
 // new field got a 404 digest-miss even though queryResolver.Home mapped
 // it correctly. So this selection set is exhaustive per type.
-const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput) {
-  home(orgId: $orgId, filters: $filters) {
+const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
     freshness {
       lastIngestedAt
       latestSuccessfulSyncAt

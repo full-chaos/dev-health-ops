@@ -904,6 +904,14 @@ type HomeTileEntry {
   value: HomeTile!
 }
 
+"""Time window of the `home` query, the same members as `filters.time` of the REST home endpoint (range_days, compare_days, start_date, end_date). An unset member takes the REST default: 14, 14, no explicit dates."""
+input HomeWindowInput {
+  rangeDays: Int = null
+  compareDays: Int = null
+  startDate: Date = null
+  endDate: Date = null
+}
+
 type HomeResult {
   freshness: Freshness!
   deltas: [MetricDelta!]!
@@ -1280,7 +1288,7 @@ type Query {
   productTelemetryPlatformDashboard(input: ProductTelemetryDashboardInput!): ProductTelemetryPlatformDashboardType!
 
   """Get home dashboard metrics"""
-  home(orgId: String!, filters: FilterInput = null): HomeResult!
+  home(orgId: String!, filters: FilterInput = null, window: HomeWindowInput = null): HomeResult!
 
   """Query work graph edges with optional filters"""
   workGraphEdges(orgId: String!, filters: WorkGraphEdgeFilterInput = null): WorkGraphEdgesResult!

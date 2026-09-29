@@ -271,7 +271,7 @@ func (r *queryResolver) ProductTelemetryPlatformDashboard(ctx context.Context, i
 // carries no org, else always use the authorized org, never the orgId
 // argument) via requestOrg, the same helper WorkGraphEdges documents this
 // convention with above.
-func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.FilterInput) (*model.HomeResult, error) {
+func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.FilterInput, window *model.HomeWindowInput) (*model.HomeResult, error) {
 	authorizedOrgID, err := requestOrg(ctx)
 	if err != nil {
 		return nil, err
@@ -282,7 +282,7 @@ func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.F
 		return nil, fmt.Errorf("home: postgres client does not support QueryRow")
 	}
 
-	resp, err := home.BuildResponse(ctx, r.ClickHouse, pgClient, authorizedOrgID, homeFiltersFromGraphQL(filters), time.Now().UTC())
+	resp, err := home.BuildResponse(ctx, r.ClickHouse, pgClient, authorizedOrgID, homeFiltersFromGraphQL(filters, window), time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("home: %w", err)
 	}

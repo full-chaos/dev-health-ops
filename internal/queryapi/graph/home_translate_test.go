@@ -29,11 +29,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 )
 
 func TestHomeFiltersFromGraphQL_NilInputUsesDefaults(t *testing.T) {
-	got := homeFiltersFromGraphQL(nil)
+	got := homeFiltersFromGraphQL(nil, nil)
 	want := home.Filters{
 		Time:  home.TimeFilter{RangeDays: 14, CompareDays: 14},
 		Scope: home.ScopeFilter{Level: "org"},
@@ -52,7 +53,7 @@ func TestHomeFiltersFromGraphQL_MapsScopeWhatWhy(t *testing.T) {
 		What:  &model.WhatFilterInput{Repos: []string{"repo-1", "repo-2"}},
 		Why:   &model.WhyFilterInput{WorkCategory: []string{"feature_delivery"}},
 	}
-	got := homeFiltersFromGraphQL(in)
+	got := homeFiltersFromGraphQL(in, nil)
 
 	if got.Scope.Level != "team" {
 		t.Errorf("Scope.Level = %q, want %q (lower-cased GraphQL enum)", got.Scope.Level, "team")
@@ -79,7 +80,7 @@ func TestHomeFiltersFromGraphQL_ScopeWithoutLevelDefaultsToOrg(t *testing.T) {
 	// empty level home.BuildResponse's own scope-filter code has no
 	// case for.
 	in := &model.FilterInput{Scope: &model.ScopeFilterInput{Ids: []string{"x"}}}
-	got := homeFiltersFromGraphQL(in)
+	got := homeFiltersFromGraphQL(in, nil)
 	if got.Scope.Level != "org" {
 		t.Errorf("Scope.Level = %q, want the org default preserved", got.Scope.Level)
 	}
@@ -420,3 +421,50 @@ var errNotAnIndex = errNotAnIndexError{}
 type errNotAnIndexError struct{}
 
 func (errNotAnIndexError) Error() string { return "segment is not a numeric index" }
+
+// A requested time window reaches the window computation: 90 days asked,
+// 90 days queried (the resolver used to drop it and always query 14).
+func TestHomeFiltersFromGraphQL_TimeWindowIsApplied(t *testing.T) {
+	now := time.Date(2026, 9, 28, 15, 4, 5, 0, time.UTC)
+	days := func(n int) *int { return &n }
+	date := func(y int, m time.Month, d int) *graphqldate.Date {
+		v := graphqldate.Date(time.Date(y, m, d, 0, 0, 0, 0, time.UTC))
+		return &v
+	}
+	window := func(in *model.FilterInput, w *model.HomeWindowInput) (time.Time, time.Time, time.Time, time.Time) {
+		start, end, compareStart, compareEnd, err := home.TimeWindow(homeFiltersFromGraphQL(in, w), now)
+		if err != nil {
+			t.Fatalf("TimeWindow: %v", err)
+		}
+		return start, end, compareStart, compareEnd
+	}
+
+	// Default path unchanged: no filters, or filters without a time member.
+	defStart, defEnd, defCS, defCE := window(nil, nil)
+	for name, in := range map[string]*model.FilterInput{"no filters": nil, "empty filters": {}} {
+		s, e, cs, ce := window(in, &model.HomeWindowInput{})
+		if !s.Equal(defStart) || !e.Equal(defEnd) || !cs.Equal(defCS) || !ce.Equal(defCE) {
+			t.Fatalf("%s: window moved off the 14/14 default", name)
+		}
+	}
+	if got := defEnd.Sub(defStart); got != 14*24*time.Hour {
+		t.Fatalf("default range = %v, want 14 days", got)
+	}
+
+	// 90 days requested -> 90 days queried, comparison window 30 days.
+	s, e, cs, ce := window(nil, &model.HomeWindowInput{RangeDays: days(90), CompareDays: days(30)})
+	if got := e.Sub(s); got != 90*24*time.Hour {
+		t.Fatalf("range = %v, want 90 days", got)
+	}
+	if got := s.Sub(cs); got != 30*24*time.Hour || !ce.Equal(s) {
+		t.Fatalf("compare window = %v ending %v, want 30 days ending at the start %v", got, ce, s)
+	}
+
+	// Explicit dates take precedence over the day count, as in REST.
+	s, e, _, _ = window(nil, &model.HomeWindowInput{
+		RangeDays: days(90), StartDate: date(2026, 1, 1), EndDate: date(2026, 1, 31),
+	})
+	if !s.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) || !e.Equal(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("explicit dates: window %v..%v, want 2026-01-01..2026-02-01", s, e)
+	}
+}

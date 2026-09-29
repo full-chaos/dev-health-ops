@@ -30,21 +30,37 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 )
 
-// homeFiltersFromGraphQL maps the GraphQL FilterInput to home.Filters.
-// FilterInput carries no time range at all (no rangeDays/compareDays/
-// startDate/endDate field exists on the GraphQL type), so Time is left
-// at its zero value and BuildResponse's own TimeWindow falls back to
-// home.DefaultFilters' convention (range_days=14, compare_days=14) --
-// see timewindow.Compute. Who/How are not read: home.Filters' own doc
-// comment already scopes this package's readers to time/scope/what.
-// repos/why.work_category only, matching REST home_route.go's
-// homeFiltersFromMap (server/home_route.go) exactly. Scope.Level
-// defaults to "org" for a nil/absent filter, mirroring
+// homeFiltersFromGraphQL maps the GraphQL FilterInput and HomeWindowInput
+// to home.Filters. FilterInput carries no time range (the window is its own
+// `window` argument, whose members match REST's filters.time), so Time keeps
+// the default (range_days=14, compare_days=14) for every member the caller
+// leaves unset, and the day counts and dates reach home.TimeWindow (see
+// timewindow.Compute) unchanged, the same computation REST uses. Who/How are
+// not read: home.Filters' own doc comment already scopes this package's
+// readers to time/scope/what.repos/why.work_category only, matching REST
+// home_route.go's homeFiltersFromMap (server/home_route.go) exactly.
+// Scope.Level defaults to "org" for a nil/absent filter, mirroring
 // homeValidScopeLevels' default and home.DefaultFilters().
-func homeFiltersFromGraphQL(in *model.FilterInput) home.Filters {
+func homeFiltersFromGraphQL(in *model.FilterInput, window *model.HomeWindowInput) home.Filters {
 	f := home.Filters{
 		Time:  home.TimeFilter{RangeDays: 14, CompareDays: 14},
 		Scope: home.ScopeFilter{Level: "org"},
+	}
+	if window != nil {
+		if window.RangeDays != nil {
+			f.Time.RangeDays = *window.RangeDays
+		}
+		if window.CompareDays != nil {
+			f.Time.CompareDays = *window.CompareDays
+		}
+		if window.StartDate != nil {
+			start := window.StartDate.Time()
+			f.Time.StartDate = &start
+		}
+		if window.EndDate != nil {
+			end := window.EndDate.Time()
+			f.Time.EndDate = &end
+		}
 	}
 	if in == nil {
 		return f

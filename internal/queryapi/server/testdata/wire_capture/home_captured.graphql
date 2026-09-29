@@ -1,5 +1,5 @@
-query Home($orgId: String!, $filters: FilterInput) {
-  home(orgId: $orgId, filters: $filters) {
+query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
     freshness {
       lastIngestedAt
       latestSuccessfulSyncAt

@@ -1056,7 +1056,7 @@ type ComplexityRoot struct {
 		Experiments                       func(childComplexity int, orgID string, filters *model.FilterInput) int
 		FeatureFlagEvents                 func(childComplexity int, orgID string, flagKey *string, environment *string, limit int) int
 		FeatureFlags                      func(childComplexity int, orgID string, provider *string, project *string, includeArchived *bool, limit int) int
-		Home                              func(childComplexity int, orgID string, filters *model.FilterInput) int
+		Home                              func(childComplexity int, orgID string, filters *model.FilterInput, window *model.HomeWindowInput) int
 		Hotspots                          func(childComplexity int, input model.HotspotsInput) int
 		ImproveOpportunities              func(childComplexity int, scope *model.AIScopeInput, limit int, windowDays int) int
 		OperatingReview                   func(childComplexity int, orgID string, input model.OperatingReviewInput) int
@@ -1477,7 +1477,7 @@ type QueryResolver interface {
 	Analytics(ctx context.Context, orgID string, batch model.AnalyticsRequestInput) (*model.AnalyticsResult, error)
 	ProductTelemetryDashboard(ctx context.Context, orgID string, input model.ProductTelemetryDashboardInput) (*model.ProductTelemetryDashboardType, error)
 	ProductTelemetryPlatformDashboard(ctx context.Context, input model.ProductTelemetryDashboardInput) (*model.ProductTelemetryPlatformDashboardType, error)
-	Home(ctx context.Context, orgID string, filters *model.FilterInput) (*model.HomeResult, error)
+	Home(ctx context.Context, orgID string, filters *model.FilterInput, window *model.HomeWindowInput) (*model.HomeResult, error)
 	WorkGraphEdges(ctx context.Context, orgID string, filters *model.WorkGraphEdgeFilterInput) (*model.WorkGraphEdgesResult, error)
 	Pr(ctx context.Context, orgID string, id string) (*model.PullRequestDetail, error)
 	WorkGraphFlow(ctx context.Context, orgID string, filters *model.WorkGraphEdgeFilterInput) (*model.WorkGraphFlowResult, error)
@@ -6364,7 +6364,7 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 			return 0, false
 		}
 
-		return e.complexity.Query.Home(childComplexity, args["orgId"].(string), args["filters"].(*model.FilterInput)), true
+		return e.complexity.Query.Home(childComplexity, args["orgId"].(string), args["filters"].(*model.FilterInput), args["window"].(*model.HomeWindowInput)), true
 
 	case "Query.hotspots":
 		if e.complexity.Query.Hotspots == nil {
@@ -8338,6 +8338,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputDateRangeInput,
 		ec.unmarshalInputFilterInput,
 		ec.unmarshalInputFlowMatrixRequestInput,
+		ec.unmarshalInputHomeWindowInput,
 		ec.unmarshalInputHotspotsInput,
 		ec.unmarshalInputHowFilterInput,
 		ec.unmarshalInputOperatingReviewInput,
@@ -9359,6 +9360,14 @@ type HomeTileEntry {
   value: HomeTile!
 }
 
+"""Time window of the ` + "`" + `home` + "`" + ` query, the same members as ` + "`" + `filters.time` + "`" + ` of the REST home endpoint (range_days, compare_days, start_date, end_date). An unset member takes the REST default: 14, 14, no explicit dates."""
+input HomeWindowInput {
+  rangeDays: Int = null
+  compareDays: Int = null
+  startDate: Date = null
+  endDate: Date = null
+}
+
 type HomeResult {
   freshness: Freshness!
   deltas: [MetricDelta!]!
@@ -9735,7 +9744,7 @@ type Query {
   productTelemetryPlatformDashboard(input: ProductTelemetryDashboardInput!): ProductTelemetryPlatformDashboardType!
 
   """Get home dashboard metrics"""
-  home(orgId: String!, filters: FilterInput = null): HomeResult!
+  home(orgId: String!, filters: FilterInput = null, window: HomeWindowInput = null): HomeResult!
 
   """Query work graph edges with optional filters"""
   workGraphEdges(orgId: String!, filters: WorkGraphEdgeFilterInput = null): WorkGraphEdgesResult!
@@ -12386,6 +12395,11 @@ func (ec *executionContext) field_Query_home_args(ctx context.Context, rawArgs m
 		return nil, err
 	}
 	args["filters"] = arg1
+	arg2, err := ec.field_Query_home_argsWindow(ctx, rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	args["window"] = arg2
 	return args, nil
 }
 func (ec *executionContext) field_Query_home_argsOrgID(
@@ -12421,6 +12435,24 @@ func (ec *executionContext) field_Query_home_argsFilters(
 	}
 
 	var zeroVal *model.FilterInput
+	return zeroVal, nil
+}
+
+func (ec *executionContext) field_Query_home_argsWindow(
+	ctx context.Context,
+	rawArgs map[string]any,
+) (*model.HomeWindowInput, error) {
+	if _, ok := rawArgs["window"]; !ok {
+		var zeroVal *model.HomeWindowInput
+		return zeroVal, nil
+	}
+
+	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("window"))
+	if tmp, ok := rawArgs["window"]; ok {
+		return ec.unmarshalOHomeWindowInput2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐHomeWindowInput(ctx, tmp)
+	}
+
+	var zeroVal *model.HomeWindowInput
 	return zeroVal, nil
 }
 
@@ -43481,7 +43513,7 @@ func (ec *executionContext) _Query_home(ctx context.Context, field graphql.Colle
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().Home(rctx, fc.Args["orgId"].(string), fc.Args["filters"].(*model.FilterInput))
+		return ec.resolvers.Query().Home(rctx, fc.Args["orgId"].(string), fc.Args["filters"].(*model.FilterInput), fc.Args["window"].(*model.HomeWindowInput))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -60031,6 +60063,54 @@ func (ec *executionContext) unmarshalInputFlowMatrixRequestInput(ctx context.Con
 				return it, err
 			}
 			it.UseInvestment = data
+		}
+	}
+
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputHomeWindowInput(ctx context.Context, obj any) (model.HomeWindowInput, error) {
+	var it model.HomeWindowInput
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"rangeDays", "compareDays", "startDate", "endDate"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "rangeDays":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("rangeDays"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RangeDays = data
+		case "compareDays":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("compareDays"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CompareDays = data
+		case "startDate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("startDate"))
+			data, err := ec.unmarshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.StartDate = data
+		case "endDate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("endDate"))
+			data, err := ec.unmarshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.EndDate = data
 		}
 	}
 
@@ -77196,6 +77276,14 @@ func (ec *executionContext) marshalOFlowMatrixResult2ᚖgithubᚗcomᚋfullᚑch
 		return graphql.Null
 	}
 	return ec._FlowMatrixResult(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOHomeWindowInput2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐHomeWindowInput(ctx context.Context, v any) (*model.HomeWindowInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputHomeWindowInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) unmarshalOHowFilterInput2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐHowFilterInput(ctx context.Context, v any) (*model.HowFilterInput, error) {

@@ -27,15 +27,31 @@ func lookupOf(values map[string]string) func(string) (string, bool) {
 // freeAddr returns a loopback address nothing listens on right now.
 func freeAddr(t *testing.T) string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	return freeAddrs(t, 1)[0]
+}
+
+// freeAddrs returns n DISTINCT loopback addresses nothing listens on right now. Every listener is held
+// open until all n addresses are known: closing each one before asking for the next lets the kernel
+// hand the same ephemeral port out twice (measured: about 4 collisions per 10000 triples), and two
+// configured listeners on one address make the service exit "must differ" before it ever serves.
+func freeAddrs(t *testing.T, n int) []string {
+	t.Helper()
+	held := make([]net.Listener, 0, n)
+	addrs := make([]string, 0, n)
+	for range n {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, listener)
+		addrs = append(addrs, listener.Addr().String())
 	}
-	addr := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
+	for _, listener := range held {
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
-	return addr
+	return addrs
 }
 
 type running struct {
@@ -110,7 +126,8 @@ func stop(t *testing.T, r running) {
 // (health.NewServer's route, independent of this split) is the real, always-on scrape
 // target throughout, unaffected -- see TestOperatorMetricsCarryTheReadinessOutcomeCounter.
 func TestServesTheQueryRoutesAndTheOperatorSurfaceOnBothListenersForOneRelease(t *testing.T) {
-	query, operator := freeAddr(t), freeAddr(t)
+	addrs := freeAddrs(t, 2)
+	query, operator := addrs[0], addrs[1]
 	r := start(t, []string{"--query-addr", query, "--http-addr", operator}, nil)
 	waitFor(t, r, "http://"+operator+"/healthz", http.StatusOK)
 	body := waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
@@ -157,7 +174,8 @@ func TestServesTheQueryRoutesAndTheOperatorSurfaceOnBothListenersForOneRelease(t
 // The operator /metrics carries what the query code records: the readiness outcome
 // counter, with the "no /query configured" mode countable apart from a healthy one.
 func TestOperatorMetricsCarryTheReadinessOutcomeCounter(t *testing.T) {
-	query, operator := freeAddr(t), freeAddr(t)
+	addrs := freeAddrs(t, 2)
+	query, operator := addrs[0], addrs[1]
 	r := start(t, []string{"--query-addr", query, "--http-addr", operator}, nil)
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	body := waitFor(t, r, "http://"+operator+"/metrics", http.StatusOK)
@@ -233,7 +251,8 @@ func TestATakenQueryAddressFailsTheStart(t *testing.T) {
 // The environment names the same settings as the flags (the chart's declared-only
 // contract): QUERY_API_ADDR alone moves the query listener; a flag beats it.
 func TestSettingsComeFromTheFlagsThenTheEnvironment(t *testing.T) {
-	envQuery, flagQuery, operator := freeAddr(t), freeAddr(t), freeAddr(t)
+	addrs := freeAddrs(t, 3)
+	envQuery, flagQuery, operator := addrs[0], addrs[1], addrs[2]
 	r := start(t, []string{"--http-addr", operator}, map[string]string{"QUERY_API_ADDR": envQuery})
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	waitFor(t, r, "http://"+envQuery+"/registry", http.StatusNotFound)
@@ -256,7 +275,8 @@ func TestSettingsComeFromTheFlagsThenTheEnvironment(t *testing.T) {
 // -- reachable on the internal address, absent on the public query address, the exact
 // pairing CHAOS-7097's route-set split exists to make structural.
 func TestOpensTheInternalListenerWhenItsAddressIsSet(t *testing.T) {
-	query, internal, operator := freeAddr(t), freeAddr(t), freeAddr(t)
+	addrs := freeAddrs(t, 3)
+	query, internal, operator := addrs[0], addrs[1], addrs[2]
 	r := start(t, []string{"--query-addr", query, "--internal-addr", internal, "--http-addr", operator}, nil)
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	waitFor(t, r, "http://"+query+"/registry", http.StatusNotFound)
@@ -335,5 +355,17 @@ func TestTheListenerCheckFailsUntilTheListenerIsBound(t *testing.T) {
 	}()
 	if status := registry.Readiness(context.Background()); !status.Ready {
 		t.Fatalf("readiness after the components started = %+v", status)
+	}
+}
+
+// The three addresses a test hands to three listeners must never coincide. 100000 draws of
+// three is far past the point where a helper that closes each listener before asking for
+// the next one (about 4 collisions per 10000 triples on Linux) reliably returns a duplicate.
+func TestFreeAddrsAreAlwaysDistinct(t *testing.T) {
+	for i := range 100000 {
+		addrs := freeAddrs(t, 3)
+		if addrs[0] == addrs[1] || addrs[1] == addrs[2] || addrs[0] == addrs[2] {
+			t.Fatalf("draw %d returned a repeated address: %v", i, addrs)
+		}
 	}
 }

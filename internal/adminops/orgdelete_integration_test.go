@@ -397,7 +397,7 @@ const deleteGolden = "testdata/orgdelete_golden.json"
 // is deleted with the Python CLI, so this is a rot guard: the file is only
 // rewritten by TestOrgsDeleteVenueOracleMatchesThePythonProducer with
 // DHO_ORGDELETE_GOLDEN_UPDATE=1, then this digest is updated.
-const deleteGoldenSHA256 = "6a6ebbfe47ef3219c2ef4809b7436d9f1fc29051346598cbf91e5f5c1dce002d"
+const deleteGoldenSHA256 = "655a5c9baea3b0eacc5237672755d9e850bedfe4a8b9d68fc036cae6e8664f59"
 
 func TestOrgsDeleteGoldenIsTheFileTheDigestPins(t *testing.T) {
 	raw, err := os.ReadFile(deleteGolden)

@@ -715,13 +715,17 @@ with code 516). `ci/bigboy/render-dho-api-ch-users.py <authorization.go> <out>` 
 element table (`networks/ip`, `profile`, `quota`, `access_management`, `password_sha256_hex`, `grants/query`) whose only
 variable parts are the SHA-256 of the password in `API_CH_PASSWORD` (environment only, never printed) and the grants,
 read from the `APIPosture` manifest in the given `authorization.go` (the file at the ops sha being cut). No attribute,
-comment or text from any input reaches the output, which is checked against the same grammar the checker uses.
+comment or text from any input reaches the output.
 
 The file must be world-readable (0644): it holds only the password hash and grants, and clickhouse-server runs as
 uid 101 in the container and **exits** on a mounted file it cannot read, so a 0600 file owned by the host user
 takes ClickHouse down. `ci/bigboy/check-dho-api-ch-user.sh` refuses such a file (or a missing one, which Docker
-would turn into a directory) and checks `dho_api_ch` is in `system.users`; `bigboy-cut.sh` runs it as the STEP
-`ch-api-user` and aborts before go-api is recreated when it fails. Run it by hand before recreating ClickHouse.
+would turn into a directory), and then requires the file to EQUAL the canonical render byte for byte: it re-renders
+from the posture manifest (this checkout's `authorization.go`, or `DHO_API_CH_POSTURE_GO`) and `API_CH_PASSWORD` in
+process and compares. The file is valid if and only if it is that render, so a comment, an edit, a malformed grant or
+a hash for another password is refused (rc 4, `CH_API_USER_FILE_MISMATCH`) without printing any content. After that it
+checks `dho_api_ch` is in `system.users` and that it logs in with `API_CH_PASSWORD`; `bigboy-cut.sh` runs it as the
+STEP `ch-api-user` and aborts before go-api is recreated when it fails. Do not hand-edit the file; regenerate it. Run it by hand before recreating ClickHouse.
 
 ### Automated in `bigboy-cut.sh` (CHAOS-7022): digest change = carry before swap; repoint after
 

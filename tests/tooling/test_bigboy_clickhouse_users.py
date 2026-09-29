@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import importlib.util
 import json
 import os
 import stat
@@ -24,12 +25,39 @@ CHECK = TOOLS / "check-dho-api-ch-user.sh"
 RENDER = TOOLS / "render-dho-api-ch-users.py"
 CUT = TOOLS / "bigboy-cut.sh"
 
-_HASH = hashlib.sha256(b"the-api-password").hexdigest()
-_XML = (
-    "<clickhouse><users><dho_api_ch><password_sha256_hex>"
-    + _HASH
-    + "</password_sha256_hex><grants><query>GRANT SELECT ON default.work_items</query>"
-    "</grants></dho_api_ch></users></clickhouse>"
+_PASSWORD = "the-api-password"
+_HASH = hashlib.sha256(_PASSWORD.encode()).hexdigest()
+
+_MANIFEST = """package clickhouse
+
+// func APIPosture is quoted here in comments: password="leaked" clickhouse://u:p@h/db
+func APIPosture(database string) Posture {
+	return Posture{RequiredTables: []TableGrant{
+		{Database: database, Table: "teams", AllowInsert: true, AllowSelect: true, AllowDelete: true},
+		// marker-comment: <password>plain</password> Table: "hidden"
+		{Database: database, Table: "team_sync_policies", AllowSelect: true},
+		{Database: database, Table: "team_memberships", AllowInsert: true},
+		{Database: database, Table: "no_privileges"},
+	}}
+}
+
+func other() {
+	_ = TableGrant{Database: database, Table: "outside", AllowSelect: true}
+}
+"""
+
+
+def _load_renderer():
+    spec = importlib.util.spec_from_file_location("dho_api_ch_render", RENDER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+#: The canonical render of the fixture manifest for the fixture credential: the ONLY file the check accepts.
+_XML = _load_renderer().render(
+    _load_renderer().grants_from_manifest(_MANIFEST), _PASSWORD
 )
 
 
@@ -85,6 +113,8 @@ def _check(
     api_password: str | None = "the-api-password",
 ) -> subprocess.CompletedProcess[str]:
     env = _docker(tmp_path, count=count, rc=rc, login_ok=login_ok)
+    (tmp_path / "authorization.go").write_text(_MANIFEST)
+    env["DHO_API_CH_POSTURE_GO"] = str(tmp_path / "authorization.go")
     if api_password is not None:
         env["API_CH_PASSWORD"] = api_password
     args = ["bash", str(CHECK)] + ([str(file)] if file is not None else [])
@@ -115,32 +145,6 @@ def test_a_missing_file_or_a_directory_is_refused(tmp_path: Path) -> None:
     proc = _check(tmp_path, directory)
     assert proc.returncode == 1 and "not a regular file" in proc.stderr
     assert _check(tmp_path, None).returncode == 1
-
-
-def test_a_file_that_does_not_declare_the_user_with_a_hash_is_refused(
-    tmp_path: Path,
-) -> None:
-    other = "<clickhouse><users><ch/></users></clickhouse>"
-    assert _check(tmp_path, _users_file(tmp_path, body=other)).returncode == 1
-    plaintext = "<clickhouse><users><dho_api_ch><password>x</password></dho_api_ch></users></clickhouse>"
-    proc = _check(tmp_path, _users_file(tmp_path, body=plaintext))
-    assert proc.returncode == 1 and "not allowed: password" in proc.stderr
-
-
-def test_a_file_holding_a_plaintext_password_or_a_uri_is_refused(
-    tmp_path: Path,
-) -> None:
-    """The file is mounted world-readable, so it may hold only the hash and grants."""
-    for extra in (
-        "<password>hunter2</password>",
-        "<!-- clickhouse://dho_api_ch:pw@clickhouse:9000/default -->",
-    ):
-        body = _XML.replace("</dho_api_ch>", extra + "</dho_api_ch>")
-        proc = _check(tmp_path, _users_file(tmp_path, body=body))
-        assert proc.returncode == 1, (extra, proc.stdout, proc.stderr)
-        assert "not a valid dho_api_ch users.d declaration" in proc.stderr
-        assert "hunter2" not in proc.stdout + proc.stderr
-        assert "pw@" not in proc.stdout + proc.stderr
 
 
 def test_a_user_missing_from_the_live_server_fails_with_its_own_code(
@@ -195,42 +199,6 @@ def test_the_cut_checks_dho_api_ch_before_it_recreates_go_api() -> None:
     assert "$HERE/compose.bigboy.clickhouse-users.yml" in chain
     assert chain.rstrip().endswith("$HERE/compose.bigboy.router.yml"), chain
     assert any(line.startswith("export DHO_API_CH_USERS_XML=") for line in lines)
-
-
-def test_the_file_is_parsed_not_grepped(tmp_path: Path) -> None:
-    """A truncated file that still contains every tag string made the old text check pass while
-    ClickHouse exits on it; the file must be well-formed with the exact shape."""
-    grants = "<grants><query>GRANT SELECT ON default.work_items</query></grants>"
-    cases = {
-        "truncated": _XML.replace("</clickhouse>", ""),
-        "second user": _XML.replace(
-            "</users>",
-            "<other><password_sha256_hex>"
-            + _HASH
-            + "</password_sha256_hex></other></users>",
-        ),
-        "extra authentication element": _XML.replace(
-            "</dho_api_ch>",
-            "<password_double_sha1_hex>"
-            + "b" * 40
-            + "</password_double_sha1_hex></dho_api_ch>",
-        ),
-        "two hashes": _XML.replace(
-            "</dho_api_ch>",
-            "<password_sha256_hex>" + _HASH + "</password_sha256_hex></dho_api_ch>",
-        ),
-        "hash not hex": _XML.replace(_HASH, "z" * 64),
-        "no grants": _XML.replace(grants, ""),
-        "query that is not a GRANT": _XML.replace("GRANT SELECT", "REVOKE SELECT"),
-    }
-    for name, body in cases.items():
-        proc = _check(tmp_path, _users_file(tmp_path, body=body))
-        assert proc.returncode == 1, (name, proc.stdout, proc.stderr)
-        assert "not a valid dho_api_ch users.d declaration" in proc.stderr, (
-            name,
-            proc.stderr,
-        )
-        assert _HASH not in proc.stdout + proc.stderr
 
 
 def test_a_user_that_cannot_log_in_with_the_api_credential_is_refused(
@@ -313,99 +281,6 @@ def test_the_cut_goes_on_to_recreate_go_api_when_the_check_passes(
     assert "STEP ch-api-user rc=0" in proc.stdout, (proc.stdout, proc.stderr)
     assert "STEP up rc=" in proc.stdout, proc.stdout
     assert [c for c in calls if " up " in f" {c} " and "go-api" in c], calls
-
-
-def test_the_declared_hash_must_match_the_api_credential_before_any_live_check(
-    tmp_path: Path,
-) -> None:
-    """A file whose hash is for another password passed while the old hand-made user was live, and went
-    red only after ClickHouse was recreated with the file mounted (login code 516)."""
-    other = _XML.replace(_HASH, hashlib.sha256(b"another-password").hexdigest())
-    proc = _check(tmp_path, _users_file(tmp_path, body=other))
-    assert proc.returncode == 4, (proc.stdout, proc.stderr)
-    assert (
-        "CH_API_USER_HASH_MISMATCH" in proc.stderr and "does not match" in proc.stderr
-    )
-    # A stale live user that accepts the credential (the stub logs in fine) must not mask the wrong file.
-    assert "ch_api_user_live=ok" not in proc.stdout
-    assert "another-password" not in proc.stdout + proc.stderr
-    assert hashlib.sha256(b"another-password").hexdigest() not in (
-        proc.stdout + proc.stderr
-    )
-    assert "ch_api_user_auth=ok" not in proc.stdout
-
-
-_ATTRIBUTE_SITES = {
-    "root": ("<clickhouse>", '<clickhouse x="{v}">'),
-    "users": ("<users>", '<users x="{v}">'),
-    "user": ("<dho_api_ch>", '<dho_api_ch x="{v}">'),
-    "hash": ("<password_sha256_hex>", '<password_sha256_hex x="{v}">'),
-    "grants": ("<grants>", '<grants x="{v}">'),
-    "query": ("<query>", '<query x="{v}">'),
-    "networks": ("</password_sha256_hex>", "</password_sha256_hex><networks x='{v}'>"),
-}
-
-
-def test_no_element_may_carry_an_attribute_in_a_declaration(
-    tmp_path: Path,
-) -> None:
-    """A plaintext value in an attribute passed the element-name checks and was copied into the 0644 file."""
-    value = "attr-plaintext-value"
-    for name, (old, new) in _ATTRIBUTE_SITES.items():
-        body = _XML.replace(old, new.replace("{v}", value), 1)
-        if name == "networks":
-            body = body.replace(
-                "<networks x='attr-plaintext-value'>",
-                "<networks x='attr-plaintext-value'></networks>",
-            )
-        checked = _check(tmp_path, _users_file(tmp_path, body=body))
-        assert checked.returncode == 1, (name, checked.stdout, checked.stderr)
-        assert value not in checked.stdout + checked.stderr, name
-
-
-def test_containers_hold_only_elements_and_leaves_only_their_own_kind_of_text(
-    tmp_path: Path,
-) -> None:
-    cases = {
-        "text in a container": _XML.replace("<grants>", "<grants>STRAY"),
-        "element inside a leaf": _XML.replace(
-            "<password_sha256_hex>", "<password_sha256_hex><x/>"
-        ),
-        "unknown element in networks": _XML.replace(
-            "</password_sha256_hex>",
-            "</password_sha256_hex><networks><secret>v</secret></networks>",
-        ),
-        "leaf of another container": _XML.replace(
-            "</password_sha256_hex>",
-            "</password_sha256_hex><networks><query>GRANT SELECT ON a.b</query></networks>",
-        ),
-        "free text in profile": _XML.replace(
-            "</password_sha256_hex>",
-            "</password_sha256_hex><profile>a b c</profile>",
-        ),
-    }
-    for name, body in cases.items():
-        proc = _check(tmp_path, _users_file(tmp_path, body=body))
-        assert proc.returncode == 1, (name, proc.stdout, proc.stderr)
-
-
-_MANIFEST = """package clickhouse
-
-// func APIPosture is quoted here in comments: password="leaked" clickhouse://u:p@h/db
-func APIPosture(database string) Posture {
-	return Posture{RequiredTables: []TableGrant{
-		{Database: database, Table: "teams", AllowInsert: true, AllowSelect: true, AllowDelete: true},
-		// marker-comment: <password>plain</password> Table: "hidden"
-		{Database: database, Table: "team_sync_policies", AllowSelect: true},
-		{Database: database, Table: "team_memberships", AllowInsert: true},
-		{Database: database, Table: "no_privileges"},
-	}}
-}
-
-func other() {
-	_ = TableGrant{Database: database, Table: "outside", AllowSelect: true}
-}
-"""
 
 
 def _manifest(tmp_path: Path, text: str = _MANIFEST) -> Path:
@@ -547,3 +422,98 @@ def test_rendered_grants_equal_the_golden_the_go_manifest_test_is_pinned_to(
     grants = [q.text for q in ET.fromstring(out).iter("query")]
     assert grants == golden
     assert password not in out
+
+
+def _differences() -> dict[str, str]:
+    """Every way a mounted file can differ from the canonical render, planted one at a time."""
+    first_query = "<query>GRANT SELECT, INSERT, ALTER DELETE ON default.teams</query>"
+    assert first_query in _XML
+    return {
+        "a comment": _XML.replace("<users>", "<!-- note --><users>", 1),
+        "the credential in a comment": _XML.replace(
+            "</clickhouse>", f"<!-- {_PASSWORD} --></clickhouse>"
+        ),
+        "a malformed grant": _XML.replace(
+            first_query, "<query>GRANT SELECT ON</query>"
+        ),
+        "an extra well-formed grant": _XML.replace(
+            "</grants>", "<query>GRANT SELECT ON default.other</query></grants>"
+        ),
+        "a hand edit of the network": _XML.replace("::/0", "127.0.0.1"),
+        "a hash for another password": _XML.replace(
+            _HASH, hashlib.sha256(b"another-password").hexdigest()
+        ),
+        "an attribute": _XML.replace("<networks>", '<networks x="attr-value">'),
+        "text in a container": _XML.replace("<grants>", "<grants>STRAY"),
+        "a plaintext password element": _XML.replace(
+            "</dho_api_ch>", "<password>hunter2</password></dho_api_ch>"
+        ),
+        "a uri": _XML.replace(
+            "</clickhouse>", "<!-- clickhouse://u:pw@h:9000/db --></clickhouse>"
+        ),
+        "a truncated file": _XML.replace("</clickhouse>", ""),
+        "a second user": _XML.replace(
+            "</users>",
+            "<other><password_sha256_hex>x</password_sha256_hex></other></users>",
+        ),
+        "trailing whitespace": _XML + "\n",
+        "an empty file": "",
+    }
+
+
+def test_the_file_is_valid_only_if_it_equals_the_canonical_render(
+    tmp_path: Path,
+) -> None:
+    """No parsing, no allow-list: any difference at all is refused with rc 4 before the live checks run.
+    Each plant passed the earlier shape validator except a wrong hash, which failed a separate check."""
+    for name, body in _differences().items():
+        case = tmp_path / name.replace(" ", "-")
+        case.mkdir()
+        proc = _check(case, _users_file(case, body=body))
+        assert proc.returncode == 4, (name, proc.stdout, proc.stderr)
+        assert "CH_API_USER_FILE_MISMATCH" in proc.stderr, name
+        output = proc.stdout + proc.stderr
+        for secret in (_PASSWORD, _HASH, "hunter2", "pw@", "attr-value", "STRAY"):
+            assert secret not in output, (name, secret)
+        assert not (case / "docker-args.log").exists(), (
+            name,
+            "the live checks ran on a file that is not canonical",
+        )
+
+
+def test_the_canonical_file_passes_and_prints_only_names(tmp_path: Path) -> None:
+    proc = _check(tmp_path, _users_file(tmp_path))
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert "canonical=yes" in proc.stdout
+    assert _HASH not in proc.stdout + proc.stderr
+
+
+def test_a_missing_posture_manifest_or_credential_is_refused_not_skipped(
+    tmp_path: Path,
+) -> None:
+    file = _users_file(tmp_path)
+    env = _docker(tmp_path, count="1")
+    env["API_CH_PASSWORD"] = _PASSWORD
+    env["DHO_API_CH_POSTURE_GO"] = str(tmp_path / "absent.go")
+    proc = subprocess.run(
+        ["bash", str(CHECK), str(file)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+    assert proc.returncode == 1 and "canonical render cannot be computed" in proc.stderr
+    empty = tmp_path / "empty.go"
+    empty.write_text("package clickhouse\n")
+    env["DHO_API_CH_POSTURE_GO"] = str(empty)
+    proc = subprocess.run(
+        ["bash", str(CHECK), str(file)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+    assert (
+        proc.returncode == 1 and "canonical render could not be computed" in proc.stderr
+    )
+    assert not (tmp_path / "docker-args.log").exists()

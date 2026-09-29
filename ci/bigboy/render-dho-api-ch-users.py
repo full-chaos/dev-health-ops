@@ -12,8 +12,8 @@ built from a fixed element table, and only two values vary.
   output   a fresh tree of exactly: clickhouse/users/dho_api_ch/{networks/ip, profile, quota,
            access_management, password_sha256_hex, grants/query...}. No attribute, comment, processing
            instruction or text from any input reaches it; the SHA-256 of the password is the only derived
-           secret. It is validated against the shared grammar before anything is written, and refused
-           (nothing written) if the password itself would appear in it.
+           secret. It is refused (nothing written) if the password itself would appear in it. The output is
+           the ONLY valid file: check-dho-api-ch-user.sh re-renders it and compares byte for byte.
 
 The file is written 0644 because clickhouse-server runs as uid 101 in its container and exits on a mounted
 users.d file it cannot read. Prints names and counts only.
@@ -22,13 +22,11 @@ users.d file it cannot read. Prints names and counts only.
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import os
 import re
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
-from collections.abc import Callable
 from pathlib import Path
 
 DATABASE = "default"
@@ -38,20 +36,6 @@ _PRIVILEGES = (
     ("AllowInsert", "INSERT"),
     ("AllowDelete", "ALTER DELETE"),
 )
-
-
-def _load_validate() -> Callable[[str], None]:
-    """The shape module is a sibling file, loaded by path so the script runs from any directory."""
-    path = Path(__file__).resolve().parent / "dho_api_ch_users_shape.py"
-    spec = importlib.util.spec_from_file_location("dho_api_ch_users_shape", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    validator: Callable[[str], None] = module.validate
-    return validator
-
-
-validate = _load_validate()
 
 
 def grants_from_manifest(source: str, database: str = DATABASE) -> list[str]:
@@ -92,12 +76,6 @@ def render(grants: list[str], password: str) -> str:
     for statement in grants:
         ET.SubElement(block, "query").text = statement
     rendered = ET.tostring(root, encoding="unicode") + "\n"
-    try:
-        validate(rendered)
-    except ValueError as error:
-        raise SystemExit(
-            f"the rendered file is refused, nothing written: {error}"
-        ) from None
     if password in rendered:
         raise SystemExit(
             "the rendered file is refused, nothing written: "

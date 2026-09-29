@@ -266,10 +266,13 @@ def test_carry_script_aborts_on_any_other_refusal() -> None:
 
 
 def test_repoint_script_is_unconditional() -> None:
-    """No digest check, no if/elif branching -- provenance-only, safe every roll."""
+    """No digest check, no if/elif branching -- provenance-only, safe every roll. The single
+    repoint call carries the build cross-check and is retried by an `until` loop (see
+    test_helm_routing_repoint_waits_for_rollout.py); there is no separate probe."""
     script = _script(_jobs(*_ENABLED)[_REPOINT])
     assert "if " not in script and "elif" not in script
     assert script.count("dho goapi routing repoint") == 1
+    assert "-expect-build" in script and "-dry-run" not in script
 
 
 # --- credential wiring: envelope key file, not an env var carrying the raw PEM -----------

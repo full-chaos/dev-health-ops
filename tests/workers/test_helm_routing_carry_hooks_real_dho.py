@@ -87,7 +87,7 @@ def _mint_stub(bin_dir: Path, real_dho: Path) -> None:
     stub.write_text(
         "#!/usr/bin/env bash\n"
         "set -u\n"
-        'if [ "$1 $2" = "mint envelope" ]; then echo "fake-bearer-for-real-dho-test"; exit 0; fi\n'
+        'if [ "${1:-} ${2:-}" = "mint envelope" ]; then echo "fake-bearer-for-real-dho-test"; exit 0; fi\n'
         f'exec "{real_dho}" "$@"\n'
     )
     stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
@@ -113,6 +113,10 @@ def _run_real_script(
         # docstring), so what this points at is irrelevant to what this test proves.
         "QUERY_API_URL": "http://127.0.0.1:1",
         "RELEASE_NAME": "test-release",
+        # The post-upgrade hook waits for the rollout with a bounded retry (chart values);
+        # one attempt keeps this run to the refusal it asserts.
+        "REPOINT_MAX_ATTEMPTS": "1",
+        "REPOINT_RETRY_INTERVAL_SECONDS": "0",
     }
     return subprocess.run(
         ["bash", str(harness)],

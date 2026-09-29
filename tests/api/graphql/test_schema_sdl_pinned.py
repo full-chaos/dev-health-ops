@@ -76,7 +76,13 @@ def schema_members(sdl: str) -> set[str]:
             members.add(f"directive: {_printed(definition)}")
             continue
         if isinstance(definition, gql_ast.SchemaDefinitionNode):
-            continue  # root bindings are taken from the built schema below
+            # Root bindings are taken from the built schema below; what is
+            # left to compare here is the directives applied to the schema.
+            if definition.directives:
+                header = copy.copy(definition)
+                header.operation_types = ()
+                members.add(f"schema: {_printed(header)}")
+            continue
         name = definition.name.value  # type: ignore[union-attr]
         header = copy.copy(definition)
         for attr in ("fields", "values", "types"):
@@ -133,7 +139,7 @@ def test_descriptions_are_the_only_exclusion() -> None:
 
 _BASE = """
 directive @d(a: Int = 1) on FIELD | QUERY
-directive @tag on OBJECT
+directive @tag on OBJECT | SCHEMA
 scalar Sc
 interface Node { id: ID! }
 enum Color { RED GREEN }
@@ -165,6 +171,10 @@ _CLASSES = {
     "directive definition": (
         _BASE,
         _BASE.replace("FIELD | QUERY", "FIELD"),
+    ),
+    "schema directive": (
+        _BASE + "schema @tag { query: Query }",
+        _BASE + "schema { query: Query }",
     ),
     "root binding": (
         _BASE + "schema { query: Query mutation: Mutation }",

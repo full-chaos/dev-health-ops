@@ -90,9 +90,7 @@ def assert_internal_only(name: str, rule: str) -> None:
         "Host(`traefik`)",
         "Host(`traefik`) && PathRegexp(P)",
         "Host(`traefik`) && (PATHS)",
-    }, (
-        f"{name}: rule can match without the internal Host clause: {skeleton}"
-    )
+    }, f"{name}: rule can match without the internal Host clause: {skeleton}"
 
 
 def test_dynamic_config_rules_are_internal_only(
@@ -176,7 +174,8 @@ def _route(doc: dict, path: str) -> str:
         elif "&&" in rule:
             terms = re.findall(r"(Path|PathPrefix)\(`([^`]+)`\)", rule)
             ok = any(
-                (k == "Path" and path == v) or (k == "PathPrefix" and path.startswith(v))
+                (k == "Path" and path == v)
+                or (k == "PathPrefix" and path.startswith(v))
                 for k, v in terms
             )
         else:
@@ -213,6 +212,29 @@ def test_default_backend_is_go_and_allow_list_stays_python(
 
 
 def test_allow_list_override_must_cover_internal(gen: ModuleType) -> None:
-    doc = {"ops": {"ingress": {"pythonAllowList": [{"path": "/graphql", "pathType": "Prefix"}]}}}
+    doc = {
+        "ops": {
+            "ingress": {"pythonAllowList": [{"path": "/graphql", "pathType": "Prefix"}]}
+        }
+    }
+    with pytest.raises(SystemExit):
+        gen.python_allow_list_from_doc(doc)
+
+
+@pytest.mark.parametrize(
+    ("path", "path_type"),
+    [
+        ("/api/v1/int", "Prefix"),
+        ("/api/v1/internal-x", "Prefix"),
+        ("/api/v1/internals", "Prefix"),
+        ("/api/v1/internal", "Exact"),
+    ],
+)
+def test_allow_list_cover_is_segment_exact(
+    gen: ModuleType, path: str, path_type: str
+) -> None:
+    doc = {
+        "ops": {"ingress": {"pythonAllowList": [{"path": path, "pathType": path_type}]}}
+    }
     with pytest.raises(SystemExit):
         gen.python_allow_list_from_doc(doc)

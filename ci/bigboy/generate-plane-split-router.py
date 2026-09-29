@@ -183,14 +183,14 @@ BIGBOY_LOCAL_PYTHON_PATHS: list[tuple[str, str]] = [
 
 
 def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
-    entries = (
-        ((doc.get("ops") or {}).get("ingress") or {}).get("pythonAllowList")
-    )
+    entries = ((doc.get("ops") or {}).get("ingress") or {}).get("pythonAllowList")
     if entries is None:
         return list(DEFAULT_PYTHON_ALLOW_LIST)
     out = [(e["path"], e["pathType"]) for e in entries]
+    # Segment-exact, like ingress-nginx Prefix: only these Prefix paths cover /api/v1/internal.
     if not any(
-        t == "Prefix" and p.rstrip("/") == "/api/v1/internal" for p, t in out
+        t == "Prefix" and p.rstrip("/") in ("", "/api", "/api/v1", "/api/v1/internal")
+        for p, t in out
     ):
         raise SystemExit(
             "generate-plane-split-router: ops.ingress.pythonAllowList must carry /api/v1/internal"

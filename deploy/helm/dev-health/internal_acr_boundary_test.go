@@ -197,6 +197,10 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 	for name, c := range map[string]struct{ hosts, allow, want string }{
 		"no opt-in":                 {`[{"host":"h","paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`, "", "without pythonAllowList"},
 		"allow-list drops internal": {catchAll, `[{"path":"/graphql","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
+		"string prefix only":        {catchAll, `[{"path":"/api/v1/int","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
+		"sibling -x":                {catchAll, `[{"path":"/api/v1/internal-x","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
+		"sibling s":                 {catchAll, `[{"path":"/api/v1/internals","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
+		"exact internal only":       {catchAll, `[{"path":"/api/v1/internal","pathType":"Exact"}]`, "must cover /api/v1/internal"},
 		"go-api /api":               {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api","pathType":"Prefix","service":"go-api"}]}]`, "", "covers /api/v1/internal"},
 		"go-api internal":           {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api/v1/internal/acr","pathType":"Prefix","service":"go-api"}]}]`, "", "covers /api/v1/internal"},
 	} {

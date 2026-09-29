@@ -66,8 +66,7 @@ spec:
           {{- if $host.pythonAllowList }}
           {{- $coversInternal := false }}
           {{- range $.Values.ingress.pythonAllowList }}
-          {{- if and (eq .pathType "Prefix") (hasPrefix .path "/api/v1/internal") (le (len .path) (len "/api/v1/internal")) }}{{- $coversInternal = true }}{{- end }}
-          {{- if or (eq .path "/") (and (eq .pathType "Prefix") (eq .path "/api")) (and (eq .pathType "Prefix") (eq .path "/api/v1")) }}{{- $coversInternal = true }}{{- end }}
+          {{- if and (eq .pathType "Prefix") (has (trimSuffix "/" .path) (list "" "/api" "/api/v1" "/api/v1/internal")) }}{{- $coversInternal = true }}{{- end }}
           - path: {{ .path }}
             pathType: {{ .pathType }}
             backend:

@@ -179,6 +179,10 @@ func TestGoAPIInternalListenerChart(t *testing.T) {
 		!strings.Contains(string(out), "DEV_HEALTH_API_BILLING_EDGE_ADDR sets a listener address by valueFrom") {
 		t.Errorf("a valueFrom listener address must fail the render: err=%v\n%s", err, out)
 	}
+	envInternal := render("--set-json", `goApi.extraEnv=[{"name":"DEV_HEALTH_API_BILLING_EDGE_ADDR","value":":8091"},{"name":"DEV_HEALTH_API_X_ADDR","value":"noport"}]`)
+	if got := openPorts(envInternal); got[8091] || len(got) != 2 {
+		t.Errorf("an extraEnv listener on the internal port, or a value with no port, must open nothing: %v", got)
+	}
 	viaInternal := render("--set", "goApi.extraArgs[0]=--api-billing-edge-addr=:8091")
 	if openPorts(viaInternal)[8091] {
 		t.Errorf("an extraArgs listener on the internal port opened it to every source")

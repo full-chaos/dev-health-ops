@@ -31,6 +31,11 @@ dependencies = [
   # floor stays for the starlette >=1.0.1 security fix (CHAOS-1772).
   "fastapi>=0.136.1,<0.137",
   "slowapi>=0.1.9",
+  # The rate limiter (api/middleware/rate_limit.py) builds `limits` with a
+  # redis:// storage URI whenever REDIS_URL is set; limits imports the `redis`
+  # client for that. It used to arrive through celery[redis] (removed with the
+  # Celery app, CHAOS-7059), so it is declared here on its own.
+  "limits[redis]>=3.0.0",
   "httpx>=0.28.1",
   "httpx2>=2.7.0,<3",
   "psycopg2-binary>=2.9.12",

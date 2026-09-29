@@ -66,11 +66,21 @@ def _printed(node: gql_ast.Node) -> str:
     return print_ast(node).strip()
 
 
+def _header(node: gql_ast.Node, *children: str) -> gql_ast.Node:
+    """A shallow copy of ``node`` with the named child lists emptied."""
+    header = copy.copy(node)
+    for attr in children:
+        if hasattr(header, attr):
+            setattr(header, attr, ())
+    return header
+
+
 def schema_members(sdl: str) -> set[str]:
     """Every member of ``sdl`` as ``<owner>: <printed member>`` text."""
     document = copy.deepcopy(parse(sdl))
     _strip_descriptions(document)
     members: set[str] = set()
+    child_attrs = ("fields", "values", "types")
     for definition in document.definitions:
         if isinstance(definition, gql_ast.DirectiveDefinitionNode):
             members.add(f"directive: {_printed(definition)}")
@@ -79,17 +89,12 @@ def schema_members(sdl: str) -> set[str]:
             # Root bindings are taken from the built schema below; what is
             # left to compare here is the directives applied to the schema.
             if definition.directives:
-                header = copy.copy(definition)
-                header.operation_types = ()
+                header = _header(definition, "operation_types")
                 members.add(f"schema: {_printed(header)}")
             continue
-        name = definition.name.value  # type: ignore[union-attr]
-        header = copy.copy(definition)
-        for attr in ("fields", "values", "types"):
-            if hasattr(header, attr):
-                setattr(header, attr, ())
-        members.add(f"{name}: {_printed(header)}")
-        for attr in ("fields", "values", "types"):
+        name = getattr(getattr(definition, "name", None), "value", "")
+        members.add(f"{name}: {_printed(_header(definition, *child_attrs))}")
+        for attr in child_attrs:
             for child in getattr(definition, attr, ()) or ():
                 members.add(f"{name}: {attr} {_printed(child)}")
     built = build_schema(sdl)

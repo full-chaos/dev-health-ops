@@ -477,6 +477,7 @@
     {
       "operation": "recommendations",
       "two_plane_ops_sha": "0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; two-plane MATCH (route=proof) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/recommendations/goldens_live_python_oracle_test.go", "test": "TestGoldensAreWhatPythonProducesNow"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
@@ -485,6 +486,7 @@
     {
       "operation": "workItemTeamAttributions",
       "two_plane_ops_sha": "0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; two-plane MATCH (route=proof) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/graph/workitemteamattributions_org_guard_test.go", "test": "TestWorkItemTeamAttributions_OrgIDMismatchIsRefused"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}

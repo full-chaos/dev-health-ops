@@ -331,22 +331,20 @@ const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!
 // TestRegisteredHomeDocumentSelectsEveryHomeResultField is the content
 // side: it fails the moment this constant's selection set falls behind
 // what contracts/graphql/v1/schema.graphql's HomeResult (recursively)
-// declares -- the exact defect class CHAOS-7070 r1 found (see the
-// comment below).
+// declares -- the defect class where the schema grows but the registered
+// document does not (see the comment below).
 //
-// CHAOS-7070 r1 (2026-09-28): the first cut of this PR grew HomeResult's
-// SDL and homeResultFromResponse's mapping to the full home payload but
-// left THIS constant selecting only the pre-existing 3 fields
-// (freshness/deltas/reworkThemeAllocation) -- every new field the SDL
+// Why the selection must track the schema: growing HomeResult's SDL and
+// homeResultFromResponse's mapping to the full home payload while leaving
+// THIS constant selecting only the original 3 fields
+// (freshness/deltas/reworkThemeAllocation) would leave every new field the SDL
 // and the resolver now support (summary/tiles/constraint/events/
 // healthState/signals/limitingFactor/dataConfidence,
-// freshness.latestSuccessfulSyncAt, freshness.sources) was therefore
+// freshness.latestSuccessfulSyncAt, freshness.sources)
 // UNREACHABLE through /query: operationForDocument matches by exact
 // document digest (see that function below), so any client selecting a
 // new field got a 404 digest-miss even though queryResolver.Home mapped
-// it correctly. Proven with an executed repro, not argued. Fixed by
-// growing this selection set to the same exhaustive-per-type standard
-// the rest of this constant's own doc comment already claims.
+// it correctly. So this selection set is exhaustive per type.
 const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput) {
   home(orgId: $orgId, filters: $filters) {
     freshness {

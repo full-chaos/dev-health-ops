@@ -228,7 +228,7 @@ to the query source text.
 | `saved_report_captured.graphql` | `02fc81f826285965c94a564e490d1dec4e4831079bb3788ff7f742dd06aa6a22` |
 | `report_runs_captured.graphql` | `16fbdefaa0f4f095d43b934b5fefb3eaed5878aeb20685303aba6f3a67c4a8de` |
 
-# home wire-capture fixture (CHAOS-7070 r1)
+# home wire-capture fixture
 
 `home_captured.graphql` (`Home`) is the wire-form text of `HOME_QUERY`
 (`web/src/lib/graphql/queries.ts`, CHAOS-7064's real caller of this

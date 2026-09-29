@@ -246,11 +246,10 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 	// Leaf paths with the same shape on both sides -- REST's snake_case
 	// against GraphQL's camelCase equivalent, per the mapping table sent
 	// to gwc-web-graphql for CHAOS-7064.
-	// CHAOS-7070 r1 P3: this list used to be a hand-picked subset (missed
+	// This list must cover every leaf field: a hand-picked subset (that missed
 	// signals.title/metric/direction/severity/category, two coverage
-	// values, and three limiting-factor fields) -- proven by the
-	// reviewer dropping the HomeSignal.Title mapping and watching this
-	// test still pass. It is now every leaf field either fixture object
+	// values, and three limiting-factor fields) -- would let a dropped
+	// HomeSignal.Title mapping pass unnoticed. It is every leaf field either fixture object
 	// (home.Response's top-level Freshness/Summary/Constraint/Events/
 	// HealthState/Signals/LimitingFactor/DataConfidence) declares,
 	// checked against home/response.go's own json tags on the REST

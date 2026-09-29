@@ -1,8 +1,7 @@
 package server
 
-// TestRegisteredHomeDocumentSelectsEveryHomeResultField is the direct fix
-// for the CHAOS-7070 r1 P1 finding: registeredHomeDocument's selection set
-// fell behind HomeResult's own SDL growth -- the schema and the resolver
+// TestRegisteredHomeDocumentSelectsEveryHomeResultField guards against
+// registeredHomeDocument's selection set falling behind HomeResult's own SDL growth -- the schema and the resolver
 // both grew to the full home payload, but the registered document (the
 // ONLY thing operationForDocument matches a request against) still
 // selected just the original 3 fields, so every new field was

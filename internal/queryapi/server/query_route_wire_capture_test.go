@@ -144,9 +144,9 @@ func TestRegisteredPrDetailDocument_MatchesCapturedWireFixture(t *testing.T) {
 	}
 }
 
-// TestRegisteredHomeDocument_MatchesCapturedWireFixture is CHAOS-7070 r1's
-// fix for its own P1 finding: registeredHomeDocument was authored by
-// hand from the schema instead of registered as HOME_QUERY's real wire
+// TestRegisteredHomeDocument_MatchesCapturedWireFixture guards against
+// registeredHomeDocument being authored by hand from the schema instead
+// of registered as HOME_QUERY's real wire
 // form (CHAOS-7064's real caller of this field, now that one exists --
 // unlike every OTHER document above, home had none when it was first
 // registered, CHAOS-6084's own doc comment on the const explains why).
@@ -168,7 +168,7 @@ func TestRegisteredHomeDocument_MatchesCapturedWireFixture(t *testing.T) {
 	if gotDigest != wantDigest {
 		t.Fatalf(
 			"registeredHomeDocument digest %s does NOT match the digest of a REAL captured request (%s) -- "+
-				"a real client's home request would 404 against this route (CHAOS-7070 r1 P1 defect class). "+
+				"a real client's home request would 404 against this route (a hand-authored document that no real client sends). "+
 				"captured fixture:\n%s\n\nregistered const:\n%s",
 			wantDigest, gotDigest, string(captured), registeredHomeDocument,
 		)

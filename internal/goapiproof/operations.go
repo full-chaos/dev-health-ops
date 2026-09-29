@@ -743,8 +743,8 @@ var operationSpecs = map[string]OperationSpec{
 	// always-unused, hand-rolled answer (two hardcoded metrics,
 	// delta_pct hardcoded to 0). A live two-plane run WILL disagree with
 	// Python here by construction, not by defect; that is the Python-side
-	// follow-up PR's job to resolve (D2870 item 1: flip schema.py's
-	// `home` to `_raise_served_by_query_api`), not this table's. Do not
+	// follow-up PR's job to resolve (flip schema.py's `home` to
+	// `_raise_served_by_query_api`), not this table's. Do not
 	// add a BaselineDefect for this until a live run actually observes
 	// it -- an invented tolerance for a mismatch nobody has measured is
 	// exactly the "claim without executed evidence" AGENTS.md warns

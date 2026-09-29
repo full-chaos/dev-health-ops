@@ -648,3 +648,36 @@ def test_seeded_read_op_wrong_data_shape_fails(
     )
     assert smoke.main() == 1
     assert "recommendations_data_shape" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("home", [{}, {"freshness": None}])
+def test_home_without_freshness_fails_by_name(
+    smoke: ModuleType,
+    web_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    home: dict[str, Any],
+) -> None:
+    """A Go-plane 200 with the right root type but no page data must not pass."""
+    bad = _resp(smoke, 200, {"data": {"home": home}}, {"X-Dev-Health-Plane": ["go"]})
+    monkeypatch.setattr(smoke, "request", _fake_web(smoke, {"gql:Home": bad}))
+    assert smoke.main() == 1
+    assert "home_field_missing=freshness" in capsys.readouterr().err
+
+
+def test_attribution_probe_never_sends_an_empty_id_list(
+    smoke: ModuleType, web_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty workItemIds list skips the resolver's filter and scans the whole org."""
+    seen: list[Any] = []
+    fake = _fake_web(smoke, {})
+
+    def spy(method: str, path: str, **kw: Any) -> Any:
+        body = kw.get("json_body")
+        if body and "workItemTeamAttributions(" in body.get("query", ""):
+            seen.append(body["variables"]["workItemIds"])
+        return fake(method, path, **kw)
+
+    monkeypatch.setattr(smoke, "request", spy)
+    smoke.main()
+    assert seen and all(isinstance(ids, list) and ids for ids in seen)

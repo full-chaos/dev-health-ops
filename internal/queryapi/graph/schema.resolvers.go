@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -626,19 +627,68 @@ func (r *queryResolver) FeatureFlagEvents(ctx context.Context, orgID string, fla
 }
 
 // WorkItemTeamAttributions is the resolver for the workItemTeamAttributions
-// field. Deliberately left UNPORTED by CHAOS-3969: unlike its sibling
-// WorkUnitTeamAttributions below (which CHAOS-3969 does port), this field
-// is not issued by any web document today -- confirmed by searching
-// web/src for a caller (`rg --hidden workItemTeamAttributions
-// web/src` -- no hits) -- so there is nothing to port against yet: no
-// real request shape, no dual-run fixture, no registered-document text to
-// verify parity against. CHAOS-3969 ports resolve_work_unit_team_attributions
-// only (team_attribution.py); this sibling
-// (resolve_work_item_team_attributions, the per-work-ITEM reader CHAOS-2600
-// originally shipped) stays a panic stub until a future ticket has an
-// actual caller to port against.
+// field (CHAOS-7066). It is the per-work-ITEM provenance sibling of
+// WorkUnitTeamAttributions. Ports team_attribution.py's
+// resolve_work_item_team_attributions via
+// workgraph.ResolveWorkItemTeamAttributions -- the per-work-ITEM
+// provenance reader, distinct from WorkUnitTeamAttributions' per-work-UNIT
+// aggregate (see that function's own doc comment for why both stay).
+// Org scoping: the org queried is claims.OrgID from the verified envelope;
+// an orgId argument that differs from it is refused with Python's
+// "Access denied: cannot query org" (see the guard below).
+//
+// Result cap: the list is capped at workgraph.workUnitTeamAttributionsMaxRows rows (shared with the work-unit reader),
+// exactly as Python's resolver is (the field is a bare list, so neither
+// plane can carry a truncation flag). A cap hit is logged at WARN with the
+// org and the cap and counted on the shared workgraph truncation counter
+// (op=work_item_team_attributions); the caller sees the first cap rows in
+// work_item_id order. A result-typed successor field with a truncation
+// signal is tracked as a follow-up.
+//
+// Registration: registeredWorkItemTeamAttributionsDocument in
+// query_route.go, hand-written against the published SDL (no real web
+// caller yet, same CHAOS-7042/7070 precedent) -- registration is not
+// enablement, no request reaches this resolver until a routing row for
+// workItemTeamAttributions is enabled.
 func (r *queryResolver) WorkItemTeamAttributions(ctx context.Context, orgID string, workItemIds []string, teamID *string) ([]model.WorkItemTeamAttribution, error) {
-	panic(fmt.Errorf("not implemented: WorkItemTeamAttributions - workItemTeamAttributions"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "Authorization required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// Python's OrgIdAuthExtension refuses an orgId argument that differs from
+	// the authenticated org before the resolver runs; do the same (fail
+	// closed) rather than silently answering for the authenticated org.
+	if orgID == "" || orgID != strings.TrimSpace(orgID) {
+		return nil, &gqlerror.Error{
+			Message: "A valid organization ID is required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if orgID != claims.OrgID {
+		return nil, &gqlerror.Error{
+			Message: "Access denied: cannot query org '" + orgID + "'",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	results, err := workgraph.ResolveWorkItemTeamAttributions(ctx, r.ClickHouse, claims.OrgID, workItemIds, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("workItemTeamAttributions: %w", err)
+	}
+	return results, nil
 }
 
 // WorkUnitTeamAttributions is the resolver for the workUnitTeamAttributions

@@ -1234,6 +1234,20 @@ var operationSpecs = map[string]OperationSpec{
 			workUnitTeamAttributionsTeamOwnedVariant("TEAM_OWNS_UNITS", "a team id that is the owning team of at least one work unit"),
 		},
 	},
+	// workItemTeamAttributions (CHAOS-7066): same base-case shape as its
+	// sibling workUnitTeamAttributions above -- an unknown work item id,
+	// both planes answer an empty list. No Parity/BaselineDefect/Variants
+	// entry: no live two-plane comparison has been run for this field
+	// yet, and a real non-empty comparison needs a real work item id
+	// with a real attribution row, resolved from the org's own data and
+	// a real captured web query -- its own follow-up ticket's job (file
+	// one before running a live comparison), not this table's.
+	"workItemTeamAttributions": {
+		ResponseRoot: "workItemTeamAttributions",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "workItemIds": []any{"wi-unknown-1"}, "teamId": nil}
+		},
+	},
 }
 
 // capacityForecastStochasticLeaves is the one StochasticLeafClass in this

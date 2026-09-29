@@ -220,11 +220,15 @@ is a new design, not a flag.
 
 ## Canonical SDL pin
 
-`contracts/graphql/v1/schema.graphql` is the CI-checked export of the
-Strawberry schema — see `contracts/graphql/v1/README.md` for how web
-codegen and `query-api`'s gqlgen consume it, and the drift gate
-(`tests/api/graphql/test_schema_sdl_pinned.py`) that fails on any
-divergence.
+`contracts/graphql/v1/schema.graphql` is the Go plane's schema (gqlgen
+generates `query-api` from it) and is never regenerated from Python — see
+`contracts/graphql/v1/README.md` for how to change it and for how web
+codegen consumes it. Two gates: the Python schema must be a subset of it
+(`tests/api/graphql/test_schema_sdl_pinned.py`), and the schema baked into
+the generated Go code must equal it byte for byte
+(`TestGeneratedSchemaSourceIsTheCheckedInPin`). Its sha256 digest is
+unchanged by which plane a member came from, so the routing key, the
+pin and the history table below work exactly as before.
 
 ## When the schema digest moves
 

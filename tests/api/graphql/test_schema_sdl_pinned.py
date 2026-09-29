@@ -1,38 +1,41 @@
-"""Pin the exported GraphQL SDL against the checked-in canonical artifact.
+"""Pin the Python GraphQL schema against the canonical SDL: Python must be a SUBSET.
 
-CHAOS-4366 (Go API epic, plan §4/§6 Wave 0) requires the invariant
-``Strawberry export == checked-in canonical SDL`` to be a CI-checked gate,
-not a convention. ``contracts/graphql/v1/schema.graphql`` is the pin; this
-test is what makes drift a hard failure via the standing
-``ci/local_validate.sh`` full-suite run (root AGENTS.md's rule #4: "a
-measurement that did not happen must FAIL, loudly" — this test runs inside
-the unmarked pure-Python unit suite, so it cannot be silently skipped the
-way an opt-in live-schema check could be).
+``contracts/graphql/v1/schema.graphql`` is owned by the Go plane. query-api
+generates its executable schema from that file (gqlgen, schema-first), so
+the file grows when Go ports a field or type that Python never had. It is
+therefore NOT a Strawberry export and must never be regenerated from one:
+regenerating from Python would erase the Go-only growth.
 
-Consumers of this pin:
-- Web codegen (``dev-health/web/codegen.ts``) points its GraphQL Code
-  Generator ``schema:`` at a copy of this file
-  (``web/src/lib/graphql/schema.graphql``) and regenerates TypeScript types
-  from it; web's own CI drift-checks that copy against a fresh export from
-  this repo (``.github/workflows/live-e2e.yml`` in the web repo).
-- ``query-api`` (Go, gqlgen, schema-first) takes this same file as its
-  gqlgen input SDL (see ``docs/architecture/go-api/query-api.md``).
+What this test gates instead: every schema member the Python (Strawberry)
+schema exposes must exist, printed identically, in the pin, so a Python
+change the pin (and therefore Go, web codegen and the routing digest) does
+not know about fails here. Extra types/members in the pin are allowed.
 
-If this test fails, the SDL genuinely changed: regenerate the pin with
+Exact coverage (by construction, not by a list of checks): both SDLs are
+parsed to a GraphQL AST; every definition is decomposed into members --
+the definition header (kind, name, implemented interfaces, applied
+directives), each field, each input field, each enum value, each union
+member, each directive definition -- and each member is compared as its
+printed SDL text (so types, nullability, list wrapping, argument names,
+types and default values, applied directives and locations are all part of
+the text), plus the query/mutation/subscription root bindings. The ONE
+exclusion: descriptions (docstrings) on any node. The subset relation ends
+when CHAOS-6264 deletes the Python schema.
 
-    PYTHONPATH=src .venv/bin/python -m dev_health_ops.api.graphql.export_schema \\
-      --out contracts/graphql/v1/schema.graphql
-
-review the diff, and commit it in the same PR as the schema change that
-caused it -- and update the checked-in copy in ``dev-health/web`` in a
-paired PR (schema drift across repos is exactly the risk this pin exists
-to catch early, in this repo's own gate, rather than downstream in web's
-optional live-e2e job).
+To change the schema: edit ``contracts/graphql/v1/schema.graphql``, run
+``go run ./cmd/gqlgen-guard generate`` (gqlgen), update
+``contracts/graphql/v1/schema-digest.json`` and the schema-digest history
+table, and bump the checked-in ``web`` copy in a paired PR. A Python-side
+addition must be mirrored into the pin in the same PR.
 """
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
+
+from graphql import build_schema, parse, print_ast
+from graphql.language import ast as gql_ast
 
 from dev_health_ops.api.graphql.schema import schema
 
@@ -45,24 +48,152 @@ _PINNED_SDL_PATH = (
 )
 
 
-def test_exported_sdl_matches_checked_in_pin() -> None:
-    """Strawberry's live schema export must byte-for-byte match the pin."""
+def _strip_descriptions(node: gql_ast.Node) -> None:
+    """Clear ``description`` on ``node`` and every descendant, in place."""
+    for key in node.keys:
+        value = getattr(node, key, None)
+        if key == "description":
+            setattr(node, key, None)
+        elif isinstance(value, gql_ast.Node):
+            _strip_descriptions(value)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                if isinstance(item, gql_ast.Node):
+                    _strip_descriptions(item)
+
+
+def _printed(node: gql_ast.Node) -> str:
+    return print_ast(node).strip()
+
+
+def _header(node: gql_ast.Node, *children: str) -> gql_ast.Node:
+    """A shallow copy of ``node`` with the named child lists emptied."""
+    header = copy.copy(node)
+    for attr in children:
+        if hasattr(header, attr):
+            setattr(header, attr, ())
+    return header
+
+
+def schema_members(sdl: str) -> set[str]:
+    """Every member of ``sdl`` as ``<owner>: <printed member>`` text."""
+    document = copy.deepcopy(parse(sdl))
+    _strip_descriptions(document)
+    members: set[str] = set()
+    child_attrs = ("fields", "values", "types")
+    for definition in document.definitions:
+        if isinstance(definition, gql_ast.DirectiveDefinitionNode):
+            members.add(f"directive: {_printed(definition)}")
+            continue
+        if isinstance(definition, gql_ast.SchemaDefinitionNode):
+            # Root bindings are taken from the built schema below; what is
+            # left to compare here is the directives applied to the schema.
+            if definition.directives:
+                header = _header(definition, "operation_types")
+                members.add(f"schema: {_printed(header)}")
+            continue
+        name = getattr(getattr(definition, "name", None), "value", "")
+        members.add(f"{name}: {_printed(_header(definition, *child_attrs))}")
+        for attr in child_attrs:
+            for child in getattr(definition, attr, ()) or ():
+                members.add(f"{name}: {attr} {_printed(child)}")
+    built = build_schema(sdl)
+    for root in ("query", "mutation", "subscription"):
+        root_type = getattr(built, f"{root}_type")
+        if root_type is not None:
+            members.add(f"schema: {root} {root_type.name}")
+    return members
+
+
+def python_members_missing_from_pin(python_sdl: str, pinned_sdl: str) -> list[str]:
+    """Printed members of ``python_sdl`` that ``pinned_sdl`` lacks (empty =
+    subset). See the module docstring for the exact coverage."""
+    return sorted(schema_members(python_sdl) - schema_members(pinned_sdl))
+
+
+def test_python_schema_is_a_subset_of_the_checked_in_pin() -> None:
+    """The pin is Go-owned; the Python schema may not expose anything it lacks."""
     assert _PINNED_SDL_PATH.exists(), (
-        f"Canonical SDL pin missing at {_PINNED_SDL_PATH}. Generate it with "
-        "`PYTHONPATH=src .venv/bin/python -m dev_health_ops.api.graphql."
-        "export_schema --out contracts/graphql/v1/schema.graphql`."
+        f"Canonical SDL pin missing at {_PINNED_SDL_PATH}."
+    )
+    missing = python_members_missing_from_pin(
+        schema.as_str(), _PINNED_SDL_PATH.read_text()
+    )
+    assert not missing, (
+        "The Python (Strawberry) schema exposes members that "
+        "contracts/graphql/v1/schema.graphql does not carry identically: "
+        + "; ".join(missing)
+        + ". The pin is the Go plane's schema and is never regenerated from "
+        "Python; add or align the member in the pin (then `go run "
+        "./cmd/gqlgen-guard generate`, update schema-digest.json and its "
+        "history row) in the same PR."
     )
 
-    pinned_sdl = _PINNED_SDL_PATH.read_text()
-    live_sdl = schema.as_str()
 
-    assert live_sdl == pinned_sdl, (
-        "GraphQL schema drift detected: the live Strawberry schema export no "
-        "longer matches contracts/graphql/v1/schema.graphql. Regenerate the "
-        "pin (see this test's module docstring for the exact command), "
-        "review the diff, and commit it alongside the resolver/type change "
-        "that caused the drift. Do not edit the pin file by hand."
-    )
+def test_a_pin_that_only_grows_still_passes() -> None:
+    """Go-owned growth (an extra type and field) must not trip the gate."""
+    grown = _PINNED_SDL_PATH.read_text() + "\ntype GoOnlyProbe {\n  id: String!\n}\n"
+    assert python_members_missing_from_pin(schema.as_str(), grown) == []
+
+
+def test_descriptions_are_the_only_exclusion() -> None:
+    """A changed description passes; nothing else about the member may change."""
+    base = 'type Query { "old" value(a: Int = 1): Int }'
+    assert python_members_missing_from_pin(base, base.replace('"old"', '"new"')) == []
+
+
+_BASE = """
+directive @d(a: Int = 1) on FIELD | QUERY
+directive @tag on OBJECT | SCHEMA
+scalar Sc
+interface Node { id: ID! }
+enum Color { RED GREEN }
+union U = A | B
+input In { n: Int = 1 }
+type A implements Node @tag { id: ID! }
+type B { x: Int }
+type Query { value(limit: Int = 1): Int }
+type Mutation { write: Int }
+type Mutation2 { write: Int }
+"""
+
+# One case per member class: (what it exercises, Python SDL, pin SDL).
+_CLASSES = {
+    "field (name)": (_BASE, _BASE.replace("x: Int", "y: Int")),
+    "field (type/nullability)": (_BASE, _BASE.replace("x: Int", "x: Int!")),
+    "argument (default)": (
+        _BASE,
+        _BASE.replace("limit: Int = 1", "limit: Int = 2"),
+    ),
+    "input field": (_BASE, _BASE.replace("n: Int = 1", "n: Int = 2")),
+    "enum value": (_BASE, _BASE.replace("RED GREEN", "RED")),
+    "union member": (_BASE, _BASE.replace("U = A | B", "U = A")),
+    "type header (implements/directive)": (
+        _BASE,
+        _BASE.replace("type A implements Node @tag", "type A"),
+    ),
+    "scalar": (_BASE, _BASE.replace("scalar Sc\n", "")),
+    "directive definition": (
+        _BASE,
+        _BASE.replace("FIELD | QUERY", "FIELD"),
+    ),
+    "schema directive": (
+        _BASE + "schema @tag { query: Query }",
+        _BASE + "schema { query: Query }",
+    ),
+    "root binding": (
+        _BASE + "schema { query: Query mutation: Mutation }",
+        _BASE + "schema { query: Query mutation: Mutation2 }",
+    ),
+}
+
+
+def test_every_member_class_is_compared() -> None:
+    """Each member class, changed in the pin alone, is reported."""
+    assert python_members_missing_from_pin(_BASE, _BASE) == []
+    for label, (python_sdl, pin_sdl) in _CLASSES.items():
+        missing = python_members_missing_from_pin(python_sdl, pin_sdl)
+        assert len(missing) == 1, (label, missing)
 
 
 def test_pinned_sdl_is_nonempty_and_well_formed() -> None:

@@ -3,6 +3,10 @@
 Usage:
     python3 -m dev_health_ops.api.graphql.export_schema [--out <path>]
 
+The output is a Python-only view for inspection and drift diagnostics. It is
+NOT the contract pin: contracts/graphql/v1/schema.graphql is owned by the Go
+plane and must never be overwritten from this export.
+
 If --out is provided, writes SDL to the given file path.
 Note: The --out path is primarily used by CI pipelines (e.g. live-e2e schema drift checks)
 to export the current SDL for comparison against stored schema files. In normal development,

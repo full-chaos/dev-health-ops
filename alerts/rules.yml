@@ -95,48 +95,8 @@ groups:
             ClickHouse is returning errors on {{ $value | humanizePercentage }} of queries.
 
   # ---------------------------------------------------------------------------
-  # Celery workers
-  # ---------------------------------------------------------------------------
-  - name: celery
-    interval: 60s
-    rules:
-      - alert: CeleryHighTaskFailureRate
-        expr: |
-          (
-            sum(rate(devhealth_celery_tasks_total{state="failure"}[15m])) by (task_name)
-            /
-            sum(rate(devhealth_celery_tasks_total[15m])) by (task_name)
-          ) > 0.1
-        for: 10m
-        labels:
-          severity: warning
-          team: platform
-        annotations:
-          summary: "Celery task {{ $labels.task_name }} failure rate > 10%"
-          description: |
-            {{ $labels.task_name }} is failing at {{ $value | humanizePercentage }}.
-            Check worker logs and Sentry.
-
-      - alert: CeleryLongRunningTask
-        expr: |
-          histogram_quantile(
-            0.95,
-            sum(rate(devhealth_celery_task_duration_seconds_bucket[15m])) by (le, task_name)
-          ) > 300
-        for: 15m
-        labels:
-          severity: warning
-          team: platform
-        annotations:
-          summary: "Celery task {{ $labels.task_name }} P95 > 5 minutes"
-          description: |
-            {{ $labels.task_name }} P95 duration is {{ $value | humanizeDuration }}.
-
-  # ---------------------------------------------------------------------------
   # Go worker runtime (CHAOS-3038)
   # ---------------------------------------------------------------------------
-  # These rules are additive during coexistence. Celery rules stay active until
-  # every kind has completed its explicit ownership cutover.
   - name: go_workers
     interval: 30s
     rules:

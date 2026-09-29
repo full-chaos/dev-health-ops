@@ -1,6 +1,6 @@
 ---
 page_id: op-rb-worker
-summary: Recover when Celery work stops advancing or a Go coexistence process, River queue, reconciler, schedule evaluator, or operator mutation fails.
+summary: Recover when work stops advancing or a Go worker process, River queue, reconciler, schedule evaluator, or operator mutation fails.
 content_type: runbook
 owner: platform-operations
 source_of_truth:
@@ -51,17 +51,6 @@ double-drives it.
 | Operator command reports `outcome_unknown` | Database commit ambiguity; inspect before retrying |
 | Operator command reports `audit_pending` | Mutation committed; audit finalization needs recovery |
 
-## Active Celery recovery (non-prod / historical)
-
-1. Confirm each configured queue has an intended deployed consumer.
-2. Confirm provider-specific and cost-class routing settings match worker queue lists.
-3. Check broker/result-backend connectivity and worker heartbeats.
-4. Inspect queue depth, oldest age, leases, retries, and terminal failures.
-5. Stop unsafe retry amplification before increasing concurrency.
-6. Recover one bounded job.
-7. Verify the domain run, downstream writes, and product freshness.
-8. Restore normal concurrency only after oldest age and failure rate decline.
-
 Do not increase worker count when the provider budget, database, queue, or downstream store is the bottleneck.
 
 ## Go coexistence recovery
@@ -98,10 +87,10 @@ Confirm `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER` is unset afterwards. Left set, a
 For the generic worker outbox:
 
 1. Confirm the producer committed a route-executable intent.
-2. Confirm known Celery-routed rows were not claimed for River.
+2. Confirm rows whose route is not executable were not claimed for River.
 3. Inspect reconciler readiness and the last successful loop step.
 4. Distinguish a transient persistence failure from an invalid job kind or route.
-5. Preserve deferred or terminal rows for audit; do not silently republish them to Celery.
+5. Preserve deferred or terminal rows for audit; do not silently republish them.
 6. After correction, process one bounded row and verify a single domain effect.
 
 ### Scheduled report delivery abandonment

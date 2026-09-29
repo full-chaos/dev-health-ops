@@ -606,9 +606,9 @@ services:
       # SAME change. Bare-image deployments must follow the two-phase rollout
       # in jobs/queues.py: expand consumer -Q lists first, then flip this.
       PROVIDER_SYNC_QUEUES_ENABLED: "true"
-      # CHAOS-3942/CHAOS-3088: /health/workers is Celery-authoritative until
-      # told otherwise. The Go fleet below is this file's unconditional
-      # default now, so it is the declared worker_instances fleet the
+      # CHAOS-3942/CHAOS-3088: /health/workers checks worker_instances presence.
+      # The Go fleet below is this file's unconditional default, so it is the
+      # declared fleet the
       # endpoint checks -- reconciler/scheduler/stream-* are excluded: they
       # run a separate role with their own /healthz and never register
       # worker_instances presence.

@@ -103,7 +103,7 @@ Current state:
 - each Go worker process must receive an explicit registered queue set;
 - deployment groups own queue concurrency, replicas, resources, and autoscaling;
 - one River client serves all selected queues in one worker process;
-- registered job kinds remain Celery-routed;
+- registered job kinds are River-routed; no Celery transport exists;
 - no production job is admitted to River solely because a binary or container is present;
 - readiness requires compatible roles, schema, registry, contracts, and complete compiled handlers;
 - future route values such as shadow, canary, or River require job-specific parity and rollback evidence;

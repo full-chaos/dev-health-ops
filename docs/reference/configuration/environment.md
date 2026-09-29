@@ -28,13 +28,13 @@ Document these as distinct responsibilities:
 
 | Family | Representative settings | Boundary |
 | --- | --- | --- |
-| Semantic PostgreSQL | `POSTGRES_URI`, pool settings, `PGBOUNCER_TRANSACTION_MODE` | API, Celery, and Go domain state; transaction-mode pooler is supported where configured |
+| Semantic PostgreSQL | `POSTGRES_URI`, pool settings, `PGBOUNCER_TRANSACTION_MODE` | API and Go domain state; transaction-mode pooler is supported where configured |
 | River queue control | `WORKER_DATABASE_URI`, `WORKER_DATABASE_MODE`, `WORKER_DATABASE_MAX_CONNS` | Dedicated PgBouncer session endpoint or direct PostgreSQL; transaction mode is rejected |
 | River coordinator control | `COORDINATOR_DATABASE_URI`, `COORDINATOR_DATABASE_MODE`, `WORKER_COORDINATOR_DATABASE_MAX_CONNS` | Dedicated PgBouncer session endpoint or direct PostgreSQL; transaction mode is rejected |
 | Worker domain pool | `WORKER_DOMAIN_DATABASE_MAX_CONNS` | Bounds the Go domain-state pool using `POSTGRES_URI` |
 | One-shot migrations | `MIGRATION_DATABASE_URI`, role-name settings | Direct elevated connection; never injected into long-running workers |
 | ClickHouse | `CLICKHOUSE_URI` and connection/query settings | Provider facts, analytics, and materializations |
-| Valkey/Redis | `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND` | Celery, budgets, streams, and distributed coordination |
+| Valkey/Redis | `REDIS_URL` | Rate limiting, budgets, streams, and distributed coordination |
 
 Inline values and `_FILE` forms are mutually exclusive where both are supported. Do not generate secret contents.
 
@@ -87,7 +87,7 @@ The API and sync workers need the same app client values. The redirect URI is th
 
 Generate current entries for:
 
-- Celery broker, result backend, queue lists, concurrency, and shutdown grace;
+- Go worker queue lists, concurrency, and shutdown grace;
 - provider-specific and cost-class routing;
 - leases, stale detection, retries, and backoff;
 - synchronization windows, watermarks, provider budgets, and deferrals;

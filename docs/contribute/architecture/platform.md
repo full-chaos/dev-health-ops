@@ -16,7 +16,7 @@ lifecycle: active
 
 # Platform architecture
 
-Dev Health has a Python product and data platform with additive Go worker foundations. The coexistence boundary is deliberate: Python still owns API, GraphQL, providers, processors, domain behavior, Celery jobs, and every current production route. Go components add versioned job contracts, process foundations, River compatibility, health, operator controls, and migration evidence without silently taking ownership.
+Dev Health has a Python product and data platform with additive Go worker foundations. The coexistence boundary is deliberate: Python still owns the API, GraphQL, providers, processors, and domain behavior it serves. The Go worker fleet owns every production job route and schedule; no Celery process exists in any shipped topology (CHAOS-4026, CHAOS-7059). Go components provide versioned job contracts, River execution, health, operator controls, and migration evidence.
 {: .fc-page-lede }
 
 ## Primary request and data paths
@@ -31,7 +31,7 @@ provider REST / webhook / Customer Push
   → provider or ingest boundary
   → normalization and canonical identity
   → sync plan, queue, or durable outbox
-  → Celery execution
+  → Go worker execution (River)
   → PostgreSQL / ClickHouse domain writes
   → metrics and product views
 ```
@@ -46,7 +46,7 @@ versioned job contract + checked-in route
   → domain effect and audit
 ```
 
-The checked-in sync-dispatch routes target River with Celery as the explicit rollback transport. Deployment still requires live Go consumers and an audited route apply; changing configuration alone does not activate a database route.
+The checked-in sync-dispatch routes target River and declare no rollback transport (`rollback_route: none`). Deployment requires live Go consumers and an audited route apply; changing configuration alone does not activate a database route.
 
 ## Ask Dev and Context Fabric runtime
 
@@ -122,11 +122,10 @@ compatible agent client
 - **Services** own business orchestration and domain decisions.
 - **Queries and compilers** own bounded storage access and calculation contracts.
 - **Providers** own source-specific authentication, pagination, retry, discovery, and normalization.
-- **Celery workers and Beat** own current asynchronous execution and schedules.
-- **Go worker foundations** own versioned job/runtime contracts, River compatibility, process health, operator controls, and future route migration scaffolding.
+- **Go workers** own asynchronous execution and schedules: versioned job/runtime contracts, River execution, process health, and operator controls.
 - **PostgreSQL** owns semantic/control state and operational authority.
 - **ClickHouse** owns source facts, analytics, and materializations.
-- **Valkey/Redis** coordinates Celery delivery, rate/budget state, and selected streams.
+- **Valkey/Redis** coordinates rate/budget state, and selected streams.
 - **Deployment artifacts** own process composition, routes, secrets, health, migrations, and rollback.
 
 ## Canonical operational model

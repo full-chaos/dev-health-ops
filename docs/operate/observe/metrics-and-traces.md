@@ -1,6 +1,6 @@
 ---
 page_id: op-metrics
-summary: Monitor API, Celery, Go worker foundations, provider delivery, synchronization, stores, model usage, and data freshness without publishing misleading zeros.
+summary: Monitor API, Go worker foundations, provider delivery, synchronization, stores, model usage, and data freshness without publishing misleading zeros.
 content_type: reference
 owner: platform-operations
 source_of_truth:
@@ -24,18 +24,6 @@ Monitor:
 - authentication and authorization failures;
 - PostgreSQL and ClickHouse query latency and pool saturation;
 - correlation IDs across API, worker, and provider calls.
-
-## Celery execution
-
-Monitor:
-
-- task throughput and duration by bounded task or queue family;
-- queue depth and oldest age;
-- active, retrying, failed, and terminal tasks;
-- lease expiry and stale-work repair;
-- normal and heavy-worker saturation;
-- Beat dispatch and duplicate-scheduler indicators;
-- broker/result-backend connectivity.
 
 ## Go worker coexistence
 

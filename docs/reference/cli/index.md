@@ -905,22 +905,10 @@ OpenAPI docs are served at `/docs` and GraphQL at the API's GraphQL endpoint whe
 **Celery is retired (CHAOS-4026, 2026-08-21): zero Python celery services run
 in prod since the 2026-08-19 stop.** `workers start-worker`/`workers
 start-scheduler` (which booted a real `celery worker`/`celery beat` process)
-were deleted along with it — they were the last CLI-level way to falsify
-CUT-18's "no Celery process is running" criterion. Go owns every periodic
+were deleted along with it, and `workers inspect` (a Celery control-plane
+reader) went with the Celery app (CHAOS-7059). Go owns every periodic
 maintenance cadence; see [Run workers and jobs](../../operate/run/workers-and-jobs.md)
 for the Go worker/scheduler/reconciler/stream-runner processes.
-
-### `workers inspect`
-
-Read-only: shows sanitized active/reserved/scheduled task state from
-Celery's control-plane RPC. Survives deliberately -- useful against the
-non-prod `tests/acceptance/compose.ask-dev.yml` acceptance fleet, which
-still boots a real Celery worker/beat directly via the `celery` CLI (not
-through `dev-hops`) -- and cannot itself start a process.
-
-```bash
-dev-hops workers inspect --state active
-```
 
 ### Worker operator CLI
 

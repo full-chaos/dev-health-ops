@@ -102,7 +102,7 @@ make go:container
 make go:verify
 ```
 
-`go:verify` includes the static, integration, and container families. Go tests must not mutate or normalize away the Celery baseline when comparing runtimes.
+`go:verify` includes the static, integration, and container families. Go tests must not mutate or normalize away recorded baseline evidence when comparing runtimes.
 
 Useful direct commands include:
 
@@ -132,7 +132,7 @@ go run ./cmd/dho contracts --help
 go run ./internal/workersctl --help
 ```
 
-Do not change a route from Celery to River without the job-specific shadow, parity, canary, and rollback evidence required by the migration contract.
+Do not change a job route without the job-specific shadow, parity, canary, and rollback evidence required by the migration contract.
 
 ## Start and inspect local services
 

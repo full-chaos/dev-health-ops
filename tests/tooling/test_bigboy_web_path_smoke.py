@@ -665,10 +665,11 @@ def test_home_without_freshness_fails_by_name(
     assert "home_field_missing=freshness" in capsys.readouterr().err
 
 
-def test_attribution_probe_never_sends_an_empty_id_list(
+def test_attribution_probe_sends_exactly_one_unmatched_id(
     smoke: ModuleType, web_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An empty workItemIds list skips the resolver's filter and scans the whole org."""
+    """An empty workItemIds list skips the resolver's filter and scans the whole org; a large
+    list is a heavy query: the probe sends exactly one id that matches no row."""
     seen: list[Any] = []
     fake = _fake_web(smoke, {})
 
@@ -680,4 +681,4 @@ def test_attribution_probe_never_sends_an_empty_id_list(
 
     monkeypatch.setattr(smoke, "request", spy)
     smoke.main()
-    assert seen and all(isinstance(ids, list) and ids for ids in seen)
+    assert seen and all(ids == ["smoke-probe-no-such-item"] for ids in seen)

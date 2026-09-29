@@ -704,6 +704,29 @@ a git worktree therefore needs no `ci/bigboy` symlink under the root; set `BIGBO
 run the tools from a different checkout. The first log line prints both (`root=... tools=...`), and
 the cut refuses a tools directory that is not one (`is not a directory`, or no `bigboy-repin.sh`).
 
+### go-api's ClickHouse login on bigboy (CHAOS-7162)
+
+`dho_api_ch` is declared to ClickHouse as a `users.d` file, not created inside the running container: the
+compose overlay `ci/bigboy/compose.bigboy.clickhouse-users.yml` mounts the host file `DHO_API_CH_USERS_XML`
+(default `$BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml`) read-only at
+`/etc/clickhouse-server/users.d/dho_api_ch.xml`, so recreating the ClickHouse container no longer loses the
+user (a recreate that did, after the login was `docker cp`ed in, is what made go-api fail every ClickHouse call
+with code 516). `ci/bigboy/render-dho-api-ch-users.py <authorization.go> <out>` writes the file. It takes no XML: it builds a fixed
+element table (`networks/ip`, `profile`, `quota`, `access_management`, `password_sha256_hex`, `grants/query`) whose only
+variable parts are the SHA-256 of the password in `API_CH_PASSWORD` (environment only, never printed) and the grants,
+read from the `APIPosture` manifest in the given `authorization.go` (the file at the ops sha being cut). No attribute,
+comment or text from any input reaches the output.
+
+The file must be world-readable (0644): it holds only the password hash and grants, and clickhouse-server runs as
+uid 101 in the container and **exits** on a mounted file it cannot read, so a 0600 file owned by the host user
+takes ClickHouse down. `ci/bigboy/check-dho-api-ch-user.sh` refuses such a file (or a missing one, which Docker
+would turn into a directory), and then requires the file to EQUAL the canonical render byte for byte: it re-renders
+from the posture manifest (this checkout's `authorization.go`, or `DHO_API_CH_POSTURE_GO`) and `API_CH_PASSWORD` in
+process and compares. The file is valid if and only if it is that render, so a comment, an edit, a malformed grant or
+a hash for another password is refused (rc 4, `CH_API_USER_FILE_MISMATCH`) without printing any content. After that it
+checks `dho_api_ch` is in `system.users` and that it logs in with `API_CH_PASSWORD`; `bigboy-cut.sh` runs it as the
+STEP `ch-api-user` and aborts before go-api is recreated when it fails. Do not hand-edit the file; regenerate it. Run it by hand before recreating ClickHouse.
+
 ### Automated in `bigboy-cut.sh` (CHAOS-7022): digest change = carry before swap; repoint after
 
 The rule above -- **carry BEFORE the roll, re-enable after** -- was, until CHAOS-7022, something

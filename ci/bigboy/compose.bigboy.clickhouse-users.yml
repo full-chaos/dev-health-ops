@@ -1,0 +1,18 @@
+# CHAOS-7162: bigboy declares the go-api's ClickHouse login (dho_api_ch) through a host file mounted into
+# ClickHouse's users.d, so it survives a container recreate. It used to be `docker cp`ed into the running
+# container's filesystem (bigboy-ch-login.sh); the 03:29Z CHAOS-7079 recreate rebuilt users.d from the
+# image and the user was lost, and go-api then failed every ClickHouse call with code 516.
+#
+# The file holds only <password_sha256_hex> and the grant statements (never a password), and MUST be
+# world-readable (0644): clickhouse-server runs as uid 101 inside the container and EXITS (code 91) when
+# a mounted users.d file it cannot read is 0600 and owned by the host user (executed against the pinned
+# image). ci/bigboy/check-dho-api-ch-user.sh refuses such a file (and any file that is not the canonical render) before anything is recreated, and
+# ci/bigboy/render-dho-api-ch-users.py writes it 0644.
+#
+# The host path is required, never defaulted here: a bind mount of a path that does not exist makes
+# Docker create a DIRECTORY there, and ClickHouse then fails to start. bigboy-cut.sh exports the default
+# ($BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml) and checks the file before it recreates go-api.
+services:
+  clickhouse:
+    volumes:
+      - ${DHO_API_CH_USERS_XML:?set DHO_API_CH_USERS_XML to the host path of dho_api_ch.xml}:/etc/clickhouse-server/users.d/dho_api_ch.xml:ro

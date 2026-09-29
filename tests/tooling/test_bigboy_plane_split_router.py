@@ -265,3 +265,62 @@ def test_allow_list_path_also_served_by_go_is_refused(gen: ModuleType) -> None:
     }
     with pytest.raises(SystemExit):
         gen.python_allow_list_from_doc(doc)
+
+
+def _doc(go: list[dict], query: list[dict], allow: list[dict] | None) -> dict:
+    ingress: dict = {"goApiPaths": go, "queryApiPaths": query}
+    doc: dict = {"ingress": ingress}
+    if allow is not None:
+        doc["ops"] = {"ingress": {"pythonAllowList": allow}}
+    return doc
+
+
+INTERNAL = {"path": "/api/v1/internal", "pathType": "Prefix"}
+
+
+@pytest.mark.parametrize(
+    ("go", "query", "allow"),
+    [
+        # Prefix allow entry covering a longer Go path (r1 P1: string equality missed it).
+        ([{"path": "/api/v1/internal/acr/health"}], [], None),
+        # Built-in defaults are checked too (r1 P1: defaults skipped the check).
+        ([{"path": "/graphql"}], [], None),
+        # Go path under a defaults Prefix, with a token segment.
+        ([{"path": "/graphql/{op}"}], [], None),
+        # A served Prefix (query) covering an allow-list Exact path.
+        (
+            [],
+            [{"path": "/api/v1/admin", "pathType": "Prefix"}],
+            [{"path": "/api/v1/admin/x", "pathType": "Exact"}, INTERNAL],
+        ),
+        # A regex-shaped query path matching an allow-list Exact path.
+        (
+            [],
+            [{"path": "/api/v1/people/[^/]+", "pathType": "ImplementationSpecific"}],
+            [{"path": "/api/v1/people/x", "pathType": "Exact"}, INTERNAL],
+        ),
+        # Identical strings still refused.
+        (
+            [{"path": "/api/v1/z"}],
+            [],
+            [{"path": "/api/v1/z", "pathType": "Exact"}, INTERNAL],
+        ),
+    ],
+)
+def test_allow_list_overlap_with_go_or_query_paths_is_refused(
+    gen: ModuleType, go: list[dict], query: list[dict], allow: list[dict] | None
+) -> None:
+    with pytest.raises(SystemExit):
+        gen.python_allow_list_from_doc(_doc(go, query, allow))
+
+
+def test_non_overlapping_allow_list_is_accepted(gen: ModuleType) -> None:
+    go = [
+        {"path": "/api/v1/internality/x"},
+        {"path": "/graphqlish"},
+        {"path": "/health"},
+    ]
+    assert (
+        gen.python_allow_list_from_doc(_doc(go, [], None))
+        == gen.DEFAULT_PYTHON_ALLOW_LIST
+    )

@@ -181,23 +181,26 @@ BIGBOY_LOCAL_PYTHON_PATHS: list[tuple[str, str]] = [
 ]
 
 
+def _norm_served(path: str) -> str:
+    """A Go/query path template with its whole-segment tokens replaced by a concrete segment."""
+    return re.sub(r"\{[a-zA-Z0-9_]+\}", "x", path).replace("[^/]+", "x")
+
+
+def _covers(path: str, path_type: str, other: str) -> bool:
+    """Would a rule (path, pathType) match the concrete path `other`? Whole-segment Prefix, like
+    ingress-nginx and the traefik terms this generator emits."""
+    if path_type == "Exact":
+        return other == path
+    base = path.rstrip("/")
+    return base == "" or other == base or other.startswith(base + "/")
+
+
 def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
     entries = ((doc.get("ops") or {}).get("ingress") or {}).get("pythonAllowList")
     if entries is None:
-        return list(DEFAULT_PYTHON_ALLOW_LIST)
-    out = [(e["path"], e["pathType"]) for e in entries]
-    # CHAOS-7198: an allow-list path that go-api/query-api also serve is Go-served (the regex
-    # split wins), so listing it sends the operator's intent the wrong way: refuse it.
-    ingress = doc.get("ingress") or {}
-    served = {e["path"] for e in (ingress.get("goApiPaths") or [])} | {
-        e["path"] for e in (ingress.get("queryApiPaths") or [])
-    }
-    clash = sorted(p for p, _ in out if p in served)
-    if clash:
-        raise SystemExit(
-            "generate-plane-split-router: ops.ingress.pythonAllowList paths also served by"
-            f" go-api/query-api: {clash}"
-        )
+        out = list(DEFAULT_PYTHON_ALLOW_LIST)
+    else:
+        out = [(e["path"], e["pathType"]) for e in entries]
     # Segment-exact, like ingress-nginx Prefix: only these Prefix paths cover /api/v1/internal.
     if not any(
         t == "Prefix" and p.rstrip("/") in ("", "/api", "/api/v1", "/api/v1/internal")
@@ -206,6 +209,31 @@ def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
         raise SystemExit(
             "generate-plane-split-router: ops.ingress.pythonAllowList must carry /api/v1/internal"
             " (Prefix): the Go api serves /api/v1/internal/acr/* with no credential check"
+        )
+    # CHAOS-7198: a Python allow-list rule that overlaps a path go-api/query-api serve loses to the
+    # higher-priority Go/query router, so the operator's intent silently goes the wrong way. Compare
+    # by matcher semantics (Exact vs whole-segment Prefix, both directions), on the EFFECTIVE list
+    # (built-in defaults included), never by string equality.
+    ingress = doc.get("ingress") or {}
+    served: list[tuple[str, str]] = [
+        (_norm_served(e["path"]), e.get("pathType", "Exact"))
+        for e in (ingress.get("goApiPaths") or [])
+    ] + [
+        (_norm_served(e["path"]), e.get("pathType", "Exact"))
+        for e in (ingress.get("queryApiPaths") or [])
+    ]
+    clash = sorted(
+        {
+            a
+            for a, at in out
+            for s, st in served
+            if _covers(a, at, s) or _covers(s, st, a)
+        }
+    )
+    if clash:
+        raise SystemExit(
+            "generate-plane-split-router: pythonAllowList paths overlap paths served by"
+            f" go-api/query-api (the Go/query router would win): {clash}"
         )
     return out
 

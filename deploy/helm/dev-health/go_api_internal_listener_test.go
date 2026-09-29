@@ -169,6 +169,16 @@ func TestGoAPIInternalListenerChart(t *testing.T) {
 	if got := openPorts(withEdge); !got[8010] || got[8091] || len(got) != 3 {
 		t.Errorf("the billing-edge extraArgs listener must be open, the internal port never: %v", got)
 	}
+	// The prod shape: the billing edge declared in extraEnv.
+	withEnv := render("--set-json", `goApi.extraEnv=[{"name":"DEV_HEALTH_API_BILLING_EDGE_ADDR","value":":8010"},{"name":"OTHER","value":":9999"}]`)
+	if got := openPorts(withEnv); !got[8010] || got[8091] || got[9999] || len(got) != 3 {
+		t.Errorf("the extraEnv billing-edge listener must be open (and only listener addresses): %v", got)
+	}
+	if out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set-json",
+		`goApi.extraEnv=[{"name":"DEV_HEALTH_API_BILLING_EDGE_ADDR","valueFrom":{"configMapKeyRef":{"name":"c","key":"k"}}}]`).CombinedOutput(); err == nil ||
+		!strings.Contains(string(out), "DEV_HEALTH_API_BILLING_EDGE_ADDR sets a listener address by valueFrom") {
+		t.Errorf("a valueFrom listener address must fail the render: err=%v\n%s", err, out)
+	}
 	viaInternal := render("--set", "goApi.extraArgs[0]=--api-billing-edge-addr=:8091")
 	if openPorts(viaInternal)[8091] {
 		t.Errorf("an extraArgs listener on the internal port opened it to every source")

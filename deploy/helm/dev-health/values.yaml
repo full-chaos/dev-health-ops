@@ -930,6 +930,11 @@ migrations:
       #    verb makes, it touches no org data. REQUIRED: the render refuses
       #    an empty value rather than guessing one.
       mintOrg: ""
+      # -- The post-upgrade repoint hook waits for query-api's rollout: it probes /buildinfo up to
+      #    `repointMaxAttempts` times, `repointRetryIntervalSeconds` apart (default 90 x 10s = 15
+      #    minutes), until it reports this image's own commit, and fails the hook otherwise.
+      repointMaxAttempts: 90
+      repointRetryIntervalSeconds: 10
     backoffLimit: 2
     activeDeadlineSeconds: 1800
     resources:

@@ -266,10 +266,35 @@ spec:
             - |
               set -eu
               BEARER=$(dho mint envelope -org "$MINT_ORG" -key-file /keys/envelope.pem)
+              # A post-upgrade hook runs when the Deployment is updated, not when its rollout has
+              # finished: the pods that answer /buildinfo can still be the OLD build, and a repoint
+              # against them rewrites nothing (running_build old, changed=0) yet the hook succeeds.
+              # This image is pinned to the same commit as query-api, so its own commit is the build
+              # the rollout must reach. Probe with a dry run that cross-checks it (-expect-build
+              # refuses while the running build differs) and retry a bounded number of times; fail
+              # the hook when the new build never answers; never repoint against the wrong one.
+              EXPECT_BUILD=$(dho version | sed -n 's/.*"commit":"\([0-9a-f]\{40\}\)".*/\1/p')
+              [ -n "$EXPECT_BUILD" ] || { echo "FAIL: this image reports no 40-hex commit, so the build to wait for is unknown" >&2; exit 1; }
+              attempt=1
+              until GO_API_ROUTING_BEARER="$BEARER" dho goapi routing repoint \
+                -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
+                -operations all-registered -recorded-by helm-post-upgrade \
+                -review-evidence "post-upgrade repoint readiness probe, release ${RELEASE_NAME}" \
+                -expect-build "$EXPECT_BUILD" -dry-run
+              do
+                [ "$attempt" -lt "$REPOINT_MAX_ATTEMPTS" ] || {
+                  echo "FAIL: query-api never reported build $EXPECT_BUILD after $attempt attempts; the rollout did not finish, so nothing was repointed" >&2
+                  exit 1
+                }
+                echo "waiting for query-api to report build $EXPECT_BUILD (attempt $attempt of $REPOINT_MAX_ATTEMPTS)"
+                attempt=$((attempt + 1))
+                sleep "$REPOINT_RETRY_INTERVAL_SECONDS"
+              done
               GO_API_ROUTING_BEARER="$BEARER" dho goapi routing repoint \
                 -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
                 -operations all-registered -recorded-by helm-post-upgrade \
-                -review-evidence "CHAOS-7023/D2811 post-upgrade repoint, release ${RELEASE_NAME}"
+                -review-evidence "post-upgrade repoint, release ${RELEASE_NAME}" \
+                -expect-build "$EXPECT_BUILD"
           env:
             - name: MINT_ORG
               value: {{ $mintOrg | quote }}
@@ -277,6 +302,10 @@ spec:
               value: {{ $queryApiURL | quote }}
             - name: RELEASE_NAME
               value: {{ .Release.Name | quote }}
+            - name: REPOINT_MAX_ATTEMPTS
+              value: {{ .Values.migrations.hook.goApiRoutingTools.repointMaxAttempts | quote }}
+            - name: REPOINT_RETRY_INTERVAL_SECONDS
+              value: {{ .Values.migrations.hook.goApiRoutingTools.repointRetryIntervalSeconds | quote }}
             # D2831 (#3369 r2 P1): same fix as routing-carry above -- source
             # from the role that owns the registry tables, never the Go
             # pgbouncer Secret's RIVER_DOMAIN_DATABASE_ROLE DSN.

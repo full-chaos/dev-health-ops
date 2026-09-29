@@ -42,8 +42,15 @@ def _run(
     ready_on_call: int,
     max_attempts: int,
     version_body: str | None = None,
+    token_valid_calls: int | None = None,
+    always_401: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    """ready_on_call: the 1-based repoint call that finally succeeds (0 = never)."""
+    """ready_on_call: the 1-based repoint call that finally succeeds (0 = never).
+
+    token_valid_calls: a minted routing envelope is honoured for this many repoint calls
+    after it was minted, then refused with an HTTP 401 (the real envelope lives 60 seconds,
+    shorter than the retry window; calls stand in for seconds so the test needs no sleeps).
+    always_401: every repoint is refused with a 401, whatever the credential."""
     version_body = version_body or f'{{"service":"dho","commit":"{_COMMIT}"}}'
     stub_bin = tmp_path / "bin"
     stub_bin.mkdir()
@@ -55,11 +62,19 @@ def _run(
         "#!/usr/bin/env bash\n"
         f'echo "$*" >> {calls}\n'
         'case "$*" in\n'
-        '  "mint envelope"*) echo fake-bearer ;;\n'
+        f'  "mint envelope"*) echo "tok-$(cat {counter})" ;;\n'
         f"  version) echo '{version_body}' ;;\n"
         '  *"routing repoint"*)\n'
         f"    n=$(( $(cat {counter}) + 1 )); echo $n > {counter}\n"
-        f'    [ {ready_on_call} -ne 0 ] && [ "$n" -ge {ready_on_call} ] && exit 0\n'
+        f"    minted_at=${{GO_API_ROUTING_BEARER#tok-}}\n"
+        f"    unauthorized='go-api-routing: refused: query-api rejected the effective-principal envelope credential (HTTP 401)'\n"
+        f'    [ {int(always_401)} -eq 1 ] && {{ echo "$unauthorized" >&2; exit 1; }}\n'
+        + (
+            f'    [ $(( n - 1 - minted_at )) -ge {token_valid_calls} ] && {{ echo "$unauthorized" >&2; exit 1; }}\n'
+            if token_valid_calls is not None
+            else ""
+        )
+        + f'    [ {ready_on_call} -ne 0 ] && [ "$n" -ge {ready_on_call} ] && exit 0\n'
         "    echo 'refused: cross-check does not match the running build' >&2; exit 1 ;;\n"
         "esac\n"
         "exit 0\n"
@@ -138,3 +153,27 @@ def test_an_image_with_no_commit_fails_before_any_repoint(tmp_path: Path) -> Non
     assert proc.returncode != 0, (proc.stdout, proc.stderr)
     assert not _repoints(log), log
     assert "reports no 40-hex commit" in proc.stderr, proc.stderr
+
+
+def test_a_short_lived_credential_is_minted_again_for_every_attempt(
+    tmp_path: Path,
+) -> None:
+    """The routing envelope lives 60 seconds and the retry window is minutes: a token minted
+    once expires mid-wait and every later attempt is refused with a 401, so the hook reported
+    "rollout did not finish" while the expected build was serving. Here a token is honoured
+    for 2 repoint calls; the build answers on call 5. Minting once fails; minting per attempt
+    succeeds."""
+    proc, log = _run(tmp_path, ready_on_call=5, max_attempts=10, token_valid_calls=2)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    mints = [line for line in log if line.startswith("mint envelope")]
+    assert len(_repoints(log)) == 5 and len(mints) == 5, log
+
+
+def test_a_401_is_reported_as_an_authentication_failure_and_not_retried(
+    tmp_path: Path,
+) -> None:
+    proc, log = _run(tmp_path, ready_on_call=0, max_attempts=10, always_401=True)
+    assert proc.returncode != 0, (proc.stdout, proc.stderr)
+    assert len(_repoints(log)) == 1, log
+    assert "HTTP 401" in proc.stderr and "authentication failure" in proc.stderr
+    assert "never reported build" not in proc.stderr, proc.stderr

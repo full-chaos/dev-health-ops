@@ -265,7 +265,6 @@ spec:
           args:
             - |
               set -eu
-              BEARER=$(dho mint envelope -org "$MINT_ORG" -key-file /keys/envelope.pem)
               # A post-upgrade hook runs when the Deployment is updated, not when its rollout has
               # finished: the pods that answer /buildinfo can still be the OLD build, and a repoint
               # against them rewrites nothing (running_build old, changed=0) yet the hook succeeds.
@@ -275,15 +274,29 @@ spec:
               # the rollout must reach. The repoint itself carries that cross-check (-expect-build
               # refuses, writing nothing, while the running build differs), and is retried under a
               # bounded number of attempts until it succeeds; the hook fails when it never does.
+              # The routing envelope lives 60 seconds, far shorter than the retry window, so it is
+              # minted again for every attempt; a 401 is then a real credential failure, reported as
+              # one and never retried as a rollout that has not finished.
               EXPECT_BUILD=$(dho version | sed -n 's/.*"commit":"\([0-9a-f]\{40\}\)".*/\1/p')
               [ -n "$EXPECT_BUILD" ] || { echo "FAIL: this image reports no 40-hex commit, so the build to wait for is unknown" >&2; exit 1; }
               attempt=1
-              until GO_API_ROUTING_BEARER="$BEARER" dho goapi routing repoint \
-                -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
-                -operations all-registered -recorded-by helm-post-upgrade \
-                -review-evidence "post-upgrade repoint, release ${RELEASE_NAME}" \
-                -expect-build "$EXPECT_BUILD"
+              while :
               do
+                BEARER=$(dho mint envelope -org "$MINT_ORG" -key-file /keys/envelope.pem)
+                status=0
+                output=$(GO_API_ROUTING_BEARER="$BEARER" dho goapi routing repoint \
+                  -registry-url "$QUERY_API_URL/registry" -buildinfo-url "$QUERY_API_URL/buildinfo" \
+                  -operations all-registered -recorded-by helm-post-upgrade \
+                  -review-evidence "post-upgrade repoint, release ${RELEASE_NAME}" \
+                  -expect-build "$EXPECT_BUILD" 2>&1) || status=$?
+                printf '%s\n' "$output"
+                [ "$status" -ne 0 ] || break
+                case "$output" in
+                  *"HTTP 401"*)
+                    echo "FAIL: query-api rejected the routing envelope (HTTP 401) on attempt $attempt; a freshly minted credential was refused, so this is an authentication failure, not a rollout that has not finished" >&2
+                    exit 1
+                    ;;
+                esac
                 [ "$attempt" -lt "$REPOINT_MAX_ATTEMPTS" ] || {
                   echo "FAIL: query-api never reported build $EXPECT_BUILD after $attempt attempts; the rollout did not finish, so nothing was repointed" >&2
                   exit 1

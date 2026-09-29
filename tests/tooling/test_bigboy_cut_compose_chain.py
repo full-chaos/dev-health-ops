@@ -27,8 +27,8 @@ def _chain() -> list[str]:
 
 def test_chain_includes_the_router_overlay_last() -> None:
     chain = _chain()
-    assert "ci/bigboy/compose.bigboy.router.yml" in chain, chain
-    assert chain[-1] == "ci/bigboy/compose.bigboy.router.yml", (
+    assert "$HERE/compose.bigboy.router.yml" in chain, chain
+    assert chain[-1] == "$HERE/compose.bigboy.router.yml", (
         "the router overlay must come last so its web.environment wins"
     )
 
@@ -36,12 +36,16 @@ def test_chain_includes_the_router_overlay_last() -> None:
 def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -> None:
     """Materialize the chain the script exports (stub base files, the REAL router overlay) and
     let `docker compose config` merge it: web must come out with BACKEND_URL and AUTH_URL."""
-    for rel in _chain():
-        target = tmp_path / rel
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "compose.bigboy.router.yml").write_text(ROUTER.read_text())
+    chain = [entry.replace("$HERE", str(tools)) for entry in _chain()]
+    for entry in chain:
+        if entry.startswith(str(tools)):
+            continue
+        target = tmp_path / entry
         target.parent.mkdir(parents=True, exist_ok=True)
-        if rel == "ci/bigboy/compose.bigboy.router.yml":
-            target.write_text(ROUTER.read_text())
-        elif rel == "compose.yml":
+        if entry == "compose.yml":
             target.write_text(
                 "services:\n"
                 "  web:\n    image: web:test\n    environment:\n      BACKEND_URL: http://api:8000\n"
@@ -60,7 +64,7 @@ def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -
         env={
             "PATH": "/usr/local/bin:/usr/bin:/bin",
             "HOME": str(tmp_path),
-            "COMPOSE_FILE": ":".join(_chain()),
+            "COMPOSE_FILE": ":".join(chain),
         },
     )
     assert proc.returncode == 0, proc.stderr

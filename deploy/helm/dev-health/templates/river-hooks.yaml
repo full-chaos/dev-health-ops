@@ -99,7 +99,7 @@ roles`/rivermigrate.queryAPILeg already treat a blank value as the only
 "query-api role" for the full rollout order this and the river-migrate
 Job's own QUERY_API_DATABASE_ROLE env below are steps 2 and 3 of.
 */}}
-{{- $provisionQueryAPI := ne .Values.config.QUERY_API_DATABASE_ROLE "" }}
+{{- $provisionQueryAPI := ne (.Values.config.QUERY_API_DATABASE_ROLE | default "") "" }}
 {{- /*
 CHAOS-6951: this Job runs `dho migrate roles` (CHAOS-6901), so, like the River
 hook below, its image must be a pinned operator image carrying dho as the
@@ -419,8 +419,10 @@ spec:
             `dho migrate roles` (rollout step 2). No password here: this Job
             only APPLIES grants to an EXISTING role, it never creates one.
             */}}
+            {{- if .Values.config.QUERY_API_DATABASE_ROLE }}
             - name: QUERY_API_DATABASE_ROLE
-              value: {{ .Values.config.QUERY_API_DATABASE_ROLE | default "" | quote }}
+              value: {{ .Values.config.QUERY_API_DATABASE_ROLE | quote }}
+            {{- end }}
           envFrom:
             - secretRef:
                 {{- if .Values.secrets.create }}

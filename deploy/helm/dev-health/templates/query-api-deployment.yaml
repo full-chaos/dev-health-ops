@@ -113,12 +113,15 @@ spec:
             registry pool -- a role name here with the DSN still on the owner
             role leaves the pod permanently NotReady, by design (fail closed).
             Plain value, not a Secret: the role name is not a credential; only
-            the DSN's password is. Empty (the default) is a real no-op --
-            query_route.go's own readiness check treats an unset role the same
-            as "not opted in yet".
+            the DSN's password is. Unset (the default) renders NOTHING here, so an existing
+            release's pod template is byte-identical and does not roll --
+            query_route.go's own readiness check treats an unset role as
+            "not opted in yet".
             */}}
+            {{- if .Values.config.QUERY_API_DATABASE_ROLE }}
             - name: QUERY_API_DATABASE_ROLE
-              value: {{ .Values.config.QUERY_API_DATABASE_ROLE | default "" | quote }}
+              value: {{ .Values.config.QUERY_API_DATABASE_ROLE | quote }}
+            {{- end }}
             - name: GO_API_ENVELOPE_JWKS_PATH
               value: {{ .Values.queryApi.envelope.jwksPath | quote }}
             - name: GO_API_ENVELOPE_ISSUER

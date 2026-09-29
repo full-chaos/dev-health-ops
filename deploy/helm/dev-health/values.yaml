@@ -966,10 +966,15 @@ config:
   #    deploy/go-workers/README.md "query-api role" for the full rollout
   #    order). Unlike the three roles above, this stays empty by default --
   #    it is not required for a fresh install, only for the full
-  #    least-privilege posture on an already-running cluster. Set it (and
-  #    queryApi.extraEnv + the GO_API_REGISTRY_POSTGRES_URI Secret value)
-  #    only after `dho migrate roles` has created the login.
-  QUERY_API_DATABASE_ROLE: ""
+  #    least-privilege posture on an already-running cluster. Set it (and the
+  #    GO_API_REGISTRY_POSTGRES_URI Secret value) only after `dho migrate
+  #    roles` has created the login. The query-api Deployment takes the role
+  #    from THIS value; do not also set QUERY_API_DATABASE_ROLE under
+  #    queryApi.extraEnv (a duplicate env name). Unset renders no env at all.
+  #    Deliberately NOT declared here: any key under `config` lands in the shared
+  #    ConfigMap, whose checksum rolls every worker Deployment, so even an empty
+  #    default would restart the whole fleet on upgrade. Set
+  #    `config.QUERY_API_DATABASE_ROLE` only when opting in.
   # -- CHAOS-5594: KEDA's postgresql scaler reads river_job backlog through
   #    this role, over the EXISTING transaction pooler (no new pooler
   #    deployment). SELECT-only on river_job -- grant it nothing else. Same

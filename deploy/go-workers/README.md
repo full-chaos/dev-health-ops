@@ -1190,8 +1190,8 @@ Secret value and unsetting the env, the role and grants stay and are harmless):
    `psql "$MIGRATION_DATABASE_URI" --set=ON_ERROR_STOP=1 --set=domain_role=... --set=queue_role=... --set=coordinator_role=... --set=domain_password=... --set=queue_password=... --set=coordinator_password=... --set=query_api_role=devhealth_query_api --set=query_api_password=... --file=scripts/worker/provision_river_roles.sql`
 3. Run `dho migrate river` with `QUERY_API_DATABASE_ROLE=devhealth_query_api`
    (the migrate Job). No traffic changes yet.
-4. ONE roll of the query-api Deployment: set `QUERY_API_DATABASE_ROLE`
-   (`queryApi.extraEnv`) AND point the `GO_API_REGISTRY_POSTGRES_URI` Secret value
+4. ONE roll of the query-api Deployment: set `config.QUERY_API_DATABASE_ROLE`
+   (the Deployment takes the env from it; do not also put it in `queryApi.extraEnv`) AND point the `GO_API_REGISTRY_POSTGRES_URI` Secret value
    at that role's DIRECT DSN (`...@<postgres-host>:5432/...`, not the transaction
    pooler: the pooler authenticates one role, and pgx's statement cache does not
    suit transaction pooling). The posture check gates readiness, so a wrong DSN or

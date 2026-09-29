@@ -384,11 +384,11 @@ def test_query_api_database_role_defaults_to_an_empty_noop() -> None:
     by itself, change what `dho migrate river` does on any existing
     deployment. rivermigrate.queryAPILeg treats a blank value as "apply
     nothing" (returns ("", nil, nil)), so the chart's own default must stay
-    the empty string, unlike the three REQUIRED runtime roles above it which
-    default to real names.
+    absent (no env at all), unlike the three REQUIRED runtime roles above it
+    which default to real names.
     """
     env = _river_env(_jobs(*_BOTH_ON))
-    assert env["QUERY_API_DATABASE_ROLE"]["value"] == ""
+    assert "QUERY_API_DATABASE_ROLE" not in env, sorted(env)
 
 
 def test_query_api_database_role_is_wired_through_to_the_river_job() -> None:
@@ -446,19 +446,42 @@ def test_query_api_database_role_is_wired_through_to_the_provisioning_job() -> N
 def _query_api_env(*sets: str) -> dict[str, dict]:
     deployments = _deployments("queryApi.enabled=true", *sets)
     container = deployments[_QUERY_API]["spec"]["template"]["spec"]["containers"][0]
+    names = [item["name"] for item in container["env"]]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    assert not duplicates, f"duplicate env names rendered: {duplicates}"
     return {item["name"]: item for item in container["env"]}
 
 
-def test_query_api_deployment_database_role_defaults_to_an_empty_noop() -> None:
+def test_query_api_database_role_adds_no_key_to_any_config_map_by_default() -> None:
+    """Every key under `config` lands in the shared ConfigMap, whose checksum
+    annotation rolls every worker Deployment. A declared-but-empty default would
+    therefore restart the whole fleet on upgrade, so the key must not exist
+    until an operator opts in; once set, it must reach the ConfigMap.
+    """
+
+    def config_map_keys(*sets: str) -> set[str]:
+        keys: set[str] = set()
+        for doc in _render("queryApi.enabled=true", *_BOTH_ON, *sets):
+            if doc.get("kind") == "ConfigMap":
+                keys |= set(doc.get("data") or {})
+        return keys
+
+    assert "QUERY_API_DATABASE_ROLE" not in config_map_keys()
+    assert "QUERY_API_DATABASE_ROLE" in config_map_keys(
+        "config.QUERY_API_DATABASE_ROLE=devhealth_query_api"
+    )
+
+
+def test_query_api_deployment_database_role_is_absent_by_default() -> None:
     """Rollout step 4's other half: query-api's own /readyz posture check
-    (query_route.go) treats an unset role the same "not opted in" way the
-    migrate-side leg does, so the Deployment's own default must also stay
-    empty -- setting a real role name here before the login exists and
-    GO_API_REGISTRY_POSTGRES_URI is repointed would just leave every pod
-    NotReady.
+    (query_route.go) treats an unset role as "not opted in", and the chart must
+    render NO env for it by default, so an existing release's pod template is
+    unchanged and does not roll on upgrade. Setting a real role name before the
+    login exists and GO_API_REGISTRY_POSTGRES_URI is repointed would leave
+    every pod NotReady.
     """
     env = _query_api_env()
-    assert env["QUERY_API_DATABASE_ROLE"]["value"] == ""
+    assert "QUERY_API_DATABASE_ROLE" not in env, sorted(env)
 
 
 def test_query_api_deployment_database_role_is_wired_through() -> None:

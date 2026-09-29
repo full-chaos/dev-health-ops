@@ -1,7 +1,7 @@
 """OpenTelemetry distributed tracing for dev-health-ops.
 
 Configures the OpenTelemetry SDK with an OTLP gRPC exporter and
-instruments FastAPI, HTTPX, SQLAlchemy, and Celery.
+instruments FastAPI, HTTPX, and SQLAlchemy.
 
 Environment variables:
     OTEL_ENABLED              — set to "false" to disable (default: true)
@@ -33,8 +33,8 @@ _initialized = False
 _metrics_initialized = False
 _meter_provider: Any = None
 
-# CHAOS-4317: init_tracing runs once at process startup (api/main.py,
-# workers/celery_app.py), during the same top-of-hour burst that can exhaust
+# CHAOS-4317: init_tracing runs once at process startup (api/main.py),
+# during the same top-of-hour burst that can exhaust
 # the container's pids/thread budget (pthread_create failing is exactly how
 # OTel's own init failed in the 2026-08-26 incident, one line before the
 # metrics-bridge subprocess hang). A bare try/except that silently returned
@@ -279,21 +279,6 @@ def instrument_fastapi_app(app: Any) -> None:
         logger.warning("FastAPI OTel instrumentation unavailable: %s", exc)
     except Exception as exc:
         logger.warning("FastAPI OTel instrumentation failed: %s", exc)
-
-
-def instrument_celery() -> None:
-    """Instrument Celery tasks with OpenTelemetry."""
-    if not _initialized:
-        return
-    try:
-        from opentelemetry.instrumentation.celery import CeleryInstrumentor
-
-        CeleryInstrumentor().instrument()
-        logger.info("Celery OpenTelemetry instrumentation applied")
-    except ImportError as exc:
-        logger.warning("Celery OTel instrumentation unavailable: %s", exc)
-    except Exception as exc:
-        logger.warning("Celery OTel instrumentation failed: %s", exc)
 
 
 def current_trace_parent() -> str | None:

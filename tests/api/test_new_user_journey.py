@@ -281,14 +281,14 @@ async def test_full_journey_register_login_create_sync_config(
     # The config is created integration-native (linked to an Integration), so it
     # is triggerable: the manual trigger routes through the fan-out planner.
     mock_dispatch = MagicMock()
-    mock_dispatch.apply_async.return_value = MagicMock(id="journey-task-id")
+    mock_dispatch.return_value = MagicMock(id="journey-task-id")
     with patch(
-        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
-        mock_dispatch.apply_async,
+        "dev_health_ops.workers.sync_units.dispatch_sync_run",
+        mock_dispatch,
     ):
         trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
     assert trigger_resp.status_code == 202, trigger_resp.text
-    mock_dispatch.apply_async.assert_not_called()
+    mock_dispatch.assert_not_called()
 
     trigger_data = trigger_resp.json()
     async with session_maker() as session:

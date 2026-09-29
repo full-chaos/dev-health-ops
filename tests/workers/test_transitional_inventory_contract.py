@@ -359,7 +359,12 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # their new lines -- untouched in surface, just shifted up by the
     # deletion. Net: 35 - 2 = 33.
     # One row owns the Go-only system.dimension_fold registry kind: 34.
-    assert inventory["row_count"] == 34
+    # CHAOS-7059: -3. The Celery app and both task decorators are deleted, so
+    # the celery_task rows for dispatch_sync_run and finalize_sync_run go, and
+    # so does the call_site_getattr_indirection row for the denied-active
+    # finalize publish (replaced by a durable outbox wakeup). The PagerDuty
+    # stream_surface row is only re-anchored (one line up). Net: 34 - 3 = 31.
+    assert inventory["row_count"] == 31
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

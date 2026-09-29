@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING, assert_never
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
-from kombu.exceptions import KombuError
 from pydantic import ValidationError
 from valkey.exceptions import ValkeyError
 
@@ -236,7 +235,7 @@ def _claim_delivery(
         if claimed:
             return ReplayClaimOutcome.CLAIMED
         stored_body_hash = client.get(replay_key)
-    except (ValkeyError, KombuError) as exc:
+    except ValkeyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_QUEUE_UNAVAILABLE_DETAIL,
@@ -276,7 +275,7 @@ def _release_replay_claim(
                 binding_id, _replay_identity(provider_subscription_id, event_id, body)
             )
         )
-    except (ValkeyError, KombuError):
+    except ValkeyError:
         logger.exception(
             "pagerduty_webhook.replay_release_failed binding_id=%s",
             binding_id,
@@ -326,7 +325,7 @@ def _accept_replay_claim(
                 xx=True,
                 ex=REPLAY_RETENTION_SECONDS,
             )
-    except (ValkeyError, KombuError) as exc:
+    except ValkeyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_QUEUE_UNAVAILABLE_DETAIL,
@@ -366,7 +365,7 @@ def _enqueue_event(
                 True,
             )
         )
-    except (ValkeyError, KombuError) as exc:
+    except ValkeyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_QUEUE_UNAVAILABLE_DETAIL,

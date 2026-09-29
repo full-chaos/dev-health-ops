@@ -148,9 +148,10 @@ var schedulerEligibilityParity = []eligibilityPredicate{
 			"not MATCH: Python is not being mirrored here, it is being " +
 			"knowingly diverged from. Python itself is retired in prod " +
 			"(CHAOS-4026, 2026-08-21: zero Python celery services run in " +
-			"prod since the 2026-08-19 stop; compose.py.workers.yml, which " +
-			"defines the beat service, is not included by the default " +
-			"compose.yml+compose.go.workers.yml stack, and " +
+			"prod since the 2026-08-19 stop; the Celery compose file that " +
+			"defined the beat service was retired (CHAOS-7059) and the " +
+			"default compose.yml+compose.go.workers.yml stack never " +
+			"included it, and " +
 			"deploy/values-go-workers-only.yaml sets beat.enabled: false) " +
 			"so there is no live Python surface to mirror this gate into.",
 	},

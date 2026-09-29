@@ -375,14 +375,9 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "imported by live sync_bootstrap.py, processors/dataset_adapters.py, api/external_ingest/consumer.py, and feature_flag_sync.py (itself LIVE per that file's own row) — 'run coroutine inside Celery task' helper. work_graph_tasks.py, a former importer, was deleted (CHAOS-3093)",
         "ticket": "n/a",
     },
-    "celery_app.py": {
-        "category": "c",
-        "evidence": "imported by ~20 workers files, including live ones, for `@celery_app.task` — Celery app factory, still load-bearing for the decorator even on live functions",
-        "ticket": "n/a",
-    },
     "config.py": {
         "category": "c",
-        "evidence": "used by queues.py, celery_app.py, and api/external_ingest/stream_health.py — env/config constants. queue_monitor.py, external_ingest_reconciler.py, and sync_reconciler.py, former importers, were deleted (CHAOS-3093)",
+        "evidence": "used by queues.py and api/external_ingest/stream_health.py, and read by the queue-contract tests — env/config constants. celery_app.py, its former loader, was deleted (CHAOS-7059). queue_monitor.py, external_ingest_reconciler.py, and sync_reconciler.py, former importers, were deleted (CHAOS-3093)",
         "ticket": "n/a",
     },
     "feature_flag_sync.py": {

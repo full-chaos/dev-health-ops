@@ -70,7 +70,6 @@ from tests._helpers import (
 from tests.test_budget_guard_cooldown import _observation, _sibling_unit
 from tests.test_sync_units import (
     _patch_db_session,
-    _patch_worker_enqueues,
     _seed_run,
 )
 
@@ -177,7 +176,6 @@ def _two_unit_run(db_session, monkeypatch, *, costs: dict[str, int], limit: int)
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", f'{{"github:rest_core": {limit}}}')
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     return run, alpha, beta
 
 

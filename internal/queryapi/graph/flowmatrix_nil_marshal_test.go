@@ -221,7 +221,7 @@ func TestResolveFlowMatrix_DegradePath_NilResult_MarshalsToEmptyArrays(t *testin
 	if degradedReasonResult == gqlgen.Null {
 		t.Fatalf("degrade path: degradedReason marshaled to graphql.Null -- CHAOS-7092's disclosure field did not survive the real swallow path")
 	}
-	wantReason := `"` + analytics.FlowMatrixExecutionFailedReason + `"`
+	wantReason := `"FLOW_MATRIX_EXECUTION_FAILED"` // the public contract string, pinned literally
 	if got := marshalToString(t, degradedReasonResult); got != wantReason {
 		t.Fatalf("degrade path: degradedReason expected %s, got %q", wantReason, got)
 	}

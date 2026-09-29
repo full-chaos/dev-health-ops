@@ -488,8 +488,10 @@ func TestResolve_FlowMatrix_ExecuteFailureSwallowsToEmpty(t *testing.T) {
 		t.Fatal("expected FlowMatrixResult.DegradedReason to be set on a swallowed execution failure -- " +
 			"the caller cannot tell this apart from a genuinely empty result otherwise (CHAOS-7092)")
 	}
-	if *result.FlowMatrix.DegradedReason != FlowMatrixExecutionFailedReason {
-		t.Fatalf("DegradedReason = %q, want %q", *result.FlowMatrix.DegradedReason, FlowMatrixExecutionFailedReason)
+	// The string is the public contract MCP clients match on: pinned as a
+	// literal, not through the constant that carries it.
+	if *result.FlowMatrix.DegradedReason != "FLOW_MATRIX_EXECUTION_FAILED" {
+		t.Fatalf("DegradedReason = %q, want %q", *result.FlowMatrix.DegradedReason, "FLOW_MATRIX_EXECUTION_FAILED")
 	}
 }
 

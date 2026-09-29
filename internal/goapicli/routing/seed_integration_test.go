@@ -331,6 +331,9 @@ func TestSeedAuditRowsShareOneCorrelationIDAndSayItWasASeed(t *testing.T) {
 	if n != 2 || len(ids) != 1 {
 		t.Fatalf("want 2 audit rows under 1 correlation id, got %d rows, %d ids", n, len(ids))
 	}
+	if strings.Count(stderrOut, `recorded_by="lane-seed-test"`) != 2 {
+		t.Fatalf("the seeded event must quote the operator-provided recorded_by:\n%s", stderrOut)
+	}
 	for id := range ids {
 		if strings.Count(stderrOut, "correlation_id="+id) != 2 {
 			t.Fatalf("stderr events must carry the audit correlation id %s:\n%s", id, stderrOut)

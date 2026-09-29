@@ -468,3 +468,14 @@ def test_the_renderer_emits_from_the_parsed_tree_only(tmp_path: Path) -> None:
     for banned in ("<!--", "<?", "note", "stray"):
         assert banned not in text, (banned, text)
     assert text.count("<password_sha256_hex>") == 1
+
+
+def test_the_renderer_drops_text_between_and_after_elements(tmp_path: Path) -> None:
+    """Text after a closing tag (an element's tail) is not copied either."""
+    body = _XML.replace("</grants>", "</grants>TAIL-BETWEEN").replace(
+        "</dho_api_ch>", "</dho_api_ch>TAIL-AFTER-USER"
+    )
+    proc = _render(tmp_path, _release_with(tmp_path, body), API_CH_PASSWORD="pw-1")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    text = (tmp_path / "out.xml").read_text()
+    assert "TAIL" not in text, text

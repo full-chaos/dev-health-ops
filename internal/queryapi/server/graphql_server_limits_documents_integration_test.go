@@ -22,7 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 )
 
-func TestEveryRegisteredDocumentExecutesUnderTheConfiguredLimits(t *testing.T) {
+func TestEveryRegisteredDocumentStaysUnderTheConfiguredLimits(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)

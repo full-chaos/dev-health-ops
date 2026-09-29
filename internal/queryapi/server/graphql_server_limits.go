@@ -35,7 +35,7 @@ import (
 // limits exist for the day a registered document itself grows past what
 // was measured here, not as a defense against an unregistered one, which
 // operationForDocument's digest gate already refuses outright).
-// TestEveryRegisteredDocumentExecutesUnderTheConfiguredLimits pins the
+// TestEveryRegisteredDocumentStaysUnderTheConfiguredLimits pins the
 // actual measured set against these numbers, so a future document that
 // needs more fails loudly there, in CI, not silently at request time in
 // production.

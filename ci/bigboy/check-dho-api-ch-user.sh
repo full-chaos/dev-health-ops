@@ -22,6 +22,12 @@ case "$mode" in
 esac
 grep -q '<dho_api_ch>' "$FILE" || { echo "CH_API_USER_FILE_FAIL: $FILE does not declare <dho_api_ch>" >&2; exit 1; }
 grep -Eq '<password_sha256_hex>[0-9a-f]{64}</password_sha256_hex>' "$FILE" || { echo "CH_API_USER_FILE_FAIL: $FILE has no 64-hex <password_sha256_hex> for dho_api_ch (never a plaintext <password>)" >&2; exit 1; }
+# A users.d file mounted world-readable holds only the password hash and grants: refuse a plaintext <password> and
+# anything URI-shaped (a DSN with credentials), which must never sit in a readable file.
+if grep -Eq 'password>|://' "$FILE"; then
+  echo "CH_API_USER_FILE_FAIL: $FILE contains a plaintext password element or a URI (\"password>\" or \"://\"); a world-readable users.d file may hold only <password_sha256_hex> and grants" >&2
+  exit 1
+fi
 echo "ch_api_user_file=ok path=$FILE mode=$mode"
 count=$(docker exec "$CH" clickhouse-client -q "SELECT count() FROM system.users WHERE name='dho_api_ch'" 2>/dev/null) || count=""
 [ "$count" = "1" ] || { echo "CH_API_USER_LIVE_FAIL: dho_api_ch is not in system.users of $CH (count=${count:-unreadable}); go-api would fail every ClickHouse call with code 516" >&2; exit 2; }

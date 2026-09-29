@@ -98,6 +98,22 @@ def test_a_file_that_does_not_declare_the_user_with_a_hash_is_refused(
     assert proc.returncode == 1 and "64-hex" in proc.stderr
 
 
+def test_a_file_holding_a_plaintext_password_or_a_uri_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The file is mounted world-readable, so it may hold only the hash and grants."""
+    for extra in (
+        "<password>hunter2</password>",
+        "<!-- clickhouse://dho_api_ch:pw@clickhouse:9000/default -->",
+    ):
+        body = _XML.replace("</dho_api_ch>", extra + "</dho_api_ch>")
+        proc = _check(tmp_path, _users_file(tmp_path, body=body))
+        assert proc.returncode == 1, (extra, proc.stdout, proc.stderr)
+        assert "plaintext password element or a URI" in proc.stderr
+        assert "hunter2" not in proc.stdout + proc.stderr
+        assert "pw@" not in proc.stdout + proc.stderr
+
+
 def test_a_user_missing_from_the_live_server_fails_with_its_own_code(
     tmp_path: Path,
 ) -> None:

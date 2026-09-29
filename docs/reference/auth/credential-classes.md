@@ -216,3 +216,14 @@ with a `gaps` entry, never a filled-in guess.
 This page is declared under the existing explicit `Reference:` nav block in
 `mkdocs.yml` (nav is explicit here, not `awesome-pages`) — see the `Auth:`
 entry alongside `API`, `GraphQL`, `CLI`, etc.
+
+## Go api: the internal listener (CHAOS-7181)
+
+The Go api serves `/api/v1/internal/acr/*` with **no credential check**: the
+network is the control, not a token. Those routes are mounted only on the
+internal listener (`--api-internal-addr` / `DEV_HEALTH_API_INTERNAL_ADDR`,
+chart `goApi.internal.port`, default 8091), never on the public api listener,
+which answers them 404. No Ingress may route to the internal Service
+(`<release>-go-api-internal`; the chart refuses an Ingress path to it), and the
+chart's NetworkPolicy admits only the pod selectors in
+`goApi.internal.allowedFrom` (acr's api pods); an empty list denies the port.

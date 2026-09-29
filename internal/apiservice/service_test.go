@@ -275,8 +275,6 @@ func TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured(t *testing.T) {
 func TestRoutesMountsEveryArea(t *testing.T) {
 	routes := Routes(Deps{}, nil)
 	want := map[string]bool{
-		"GET /api/v1/internal/acr/health":                      false,
-		"GET /api/v1/internal/acr/entitlements/{org_id}":       false,
 		"GET /api/v1/external-ingest/schemas":                  false,
 		"GET /api/v1/external-ingest/schemas/{schema_version}": false,
 		"GET /api/v1/external-ingest/availability":             false,

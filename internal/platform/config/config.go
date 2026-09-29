@@ -338,6 +338,12 @@ type Config struct {
 	// edge's shape, and a 404 for everything else. Empty = the listener is
 	// off.
 	APIBillingEdgeAddress string
+	// APIInternalAddress is the host:port of the internal listener (dho api
+	// only, CHAOS-7181): the unauthenticated /api/v1/internal/* routes, on a
+	// port no Ingress routes to (the NetworkPolicy is the auth boundary). The
+	// public api listener never serves those paths. Empty = the listener is
+	// off and those paths answer nowhere.
+	APIInternalAddress string
 	// QueryAPIAddress is the host:port of the query routes' listener and
 	// QueryAPIInternalAddress that of the internal one (dho query-api only; empty
 	// otherwise, and the internal one empty means no internal listener).
@@ -929,6 +935,27 @@ func Load(spec Spec) (Config, error) {
 				}
 			}
 		}
+		// The internal listener (CHAOS-7181) is opt-in like the billing edge and
+		// may overlap neither the api, operator nor billing-edge listener.
+		cfg.APIInternalAddress = strings.TrimSpace(envOrDefault(lookup, "DEV_HEALTH_API_INTERNAL_ADDR", ""))
+		if cfg.APIInternalAddress != "" {
+			if _, _, splitErr := net.SplitHostPort(cfg.APIInternalAddress); splitErr != nil {
+				return Config{}, fmt.Errorf(
+					"%s must be a host:port address", settingLabel("DEV_HEALTH_API_INTERNAL_ADDR"),
+				)
+			}
+			for _, other := range []struct{ value, name string }{
+				{cfg.APIAddress, "DEV_HEALTH_API_ADDR"}, {cfg.HTTPAddress, "DEV_HEALTH_HTTP_ADDR"},
+				{cfg.APIBillingEdgeAddress, "DEV_HEALTH_API_BILLING_EDGE_ADDR"},
+			} {
+				if other.value != "" && listenAddressesOverlap(cfg.APIInternalAddress, other.value) {
+					return Config{}, fmt.Errorf(
+						"%s must differ from %s: each listener has its own address",
+						settingLabel("DEV_HEALTH_API_INTERNAL_ADDR"), settingLabel(other.name),
+					)
+				}
+			}
+		}
 		// os.getenv("CORS_ALLOWED_ORIGINS", default): the default only when
 		// the variable is absent. A present empty or blank value is an empty
 		// allow-list, never the default.
@@ -1113,6 +1140,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 	if c.APIAddress != "" {
 		attrs = append(attrs,
 			slog.String("api_billing_edge_address", c.APIBillingEdgeAddress),
+			slog.String("api_internal_address", c.APIInternalAddress),
 			slog.String("api_address", c.APIAddress),
 			slog.Int("cors_allowed_origin_count", len(c.CORSAllowedOrigins)),
 		)

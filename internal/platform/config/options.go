@@ -220,6 +220,11 @@ var coreOptions = []Option{
 		Usage: "host:port for the billing-edge HTTP server (the Stripe webhook, /health, and a 404 for everything else); empty = off; must differ from --api-addr and --http-addr",
 	},
 	{
+		Flag: "api-internal-addr", Env: "DEV_HEALTH_API_INTERNAL_ADDR", Kind: KindString,
+		Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "host:port for the internal HTTP server (the unauthenticated /api/v1/internal/* routes; no Ingress may route to it, the NetworkPolicy is the boundary); empty = off; must differ from --api-addr, --http-addr and --api-billing-edge-addr",
+	},
+	{
 		Flag: "cors-allowed-origins", Env: "CORS_ALLOWED_ORIGINS", Kind: KindString,
 		Default: defaultCORSAllowedOrigins, Services: []string{APIServiceName}, Group: GroupRuntime,
 		Usage: "comma-separated CORS allow-list for the api (same format as the Python api)",

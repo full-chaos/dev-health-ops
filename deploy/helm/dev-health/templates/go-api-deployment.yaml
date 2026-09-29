@@ -18,6 +18,9 @@ OTEL_SERVICE_NAME=dev-health-ops, and this service names itself
 dev-health-api.
 */ -}}
 {{- if .Values.goApi.enabled }}
+{{- if and .Values.goApi.internal.enabled (or (eq (int .Values.goApi.internal.port) (int .Values.goApi.port)) (eq (int .Values.goApi.internal.port) (int .Values.goApi.operatorPort))) }}
+{{- fail "goApi.internal.port must differ from goApi.port and goApi.operatorPort: each listener has its own port" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -53,6 +56,9 @@ spec:
             - api
             - {{ printf "--api-addr=:%v" .Values.goApi.port | quote }}
             - {{ printf "--http-addr=:%v" .Values.goApi.operatorPort | quote }}
+            {{- if .Values.goApi.internal.enabled }}
+            - {{ printf "--api-internal-addr=:%v" .Values.goApi.internal.port | quote }}
+            {{- end }}
             {{- with .Values.goApi.corsAllowedOrigins }}
             - {{ printf "--cors-allowed-origins=%s" . | quote }}
             {{- end }}
@@ -66,6 +72,11 @@ spec:
             - name: operator
               containerPort: {{ .Values.goApi.operatorPort }}
               protocol: TCP
+            {{- if .Values.goApi.internal.enabled }}
+            - name: internal
+              containerPort: {{ .Values.goApi.internal.port }}
+              protocol: TCP
+            {{- end }}
           {{- with .Values.goApi.envFrom }}
           envFrom:
             {{- toYaml . | nindent 12 }}
@@ -140,4 +151,67 @@ spec:
       port: {{ .Values.goApi.port }}
       targetPort: http
       protocol: TCP
+{{- if .Values.goApi.internal.enabled }}
+---
+{{- /*
+CHAOS-7181: the unauthenticated /api/v1/internal/* routes (acr's entitlement
+client) live ONLY on this listener. It has no Ingress and no path in the public
+Service; the NetworkPolicy below is the auth boundary (no intranet bearer).
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dev-health.fullname" . }}-go-api-internal
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "go-api-internal" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | nindent 4 }}
+  ports:
+    - name: internal
+      port: {{ .Values.goApi.internal.port }}
+      targetPort: internal
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" . }}-go-api-internal
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "go-api-internal" "context" $) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # The public and operator listeners: open to every source, exactly as before this policy
+    # existed (Ingress, probes and scrapes).
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.goApi.port }}
+        - protocol: TCP
+          port: {{ .Values.goApi.operatorPort }}
+    {{- /*
+    The internal listener trusts every peer that can connect, so the network is the boundary:
+    only the pod selectors listed in goApi.internal.allowedFrom (acr's api pods, set by the
+    umbrella chart). An empty list renders NO rule for the internal port -- a `from` list that
+    is empty or absent would admit every source, so the rule is omitted, denying the port.
+    Never every pod in the namespace.
+    */}}
+    {{- with .Values.goApi.internal.allowedFrom }}
+    - from:
+        {{- range . }}
+        - podSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.goApi.internal.port }}
+    {{- end }}
+{{- end }}
 {{- end }}

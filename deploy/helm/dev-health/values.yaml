@@ -190,6 +190,18 @@ goApi:
     #    accepted in `repository` and used verbatim.
     tag: ""
     pullPolicy: IfNotPresent
+  # -- The internal listener (--api-internal-addr, CHAOS-7181): the unauthenticated
+  #    /api/v1/internal/* routes (acr's entitlement client). The public listener
+  #    never serves them and no Ingress may route to this port; the NetworkPolicy
+  #    this chart renders with it is the auth boundary (no intranet bearer).
+  internal:
+    enabled: true
+    port: 8091
+    # -- Pod selectors (each `{matchLabels: {...}}`) allowed to reach the internal
+    #    port. Empty admits NOBODY (the port is denied): the umbrella deploy chart
+    #    sets acr's api pods here, for example
+    #    `{matchLabels: {app.kubernetes.io/name: acr, app.kubernetes.io/instance: dev-health-acr, app.kubernetes.io/component: api}}`.
+    allowedFrom: []
   # -- Comma-separated CORS allow-list, same format and meaning as the Python
   #    api's CORS_ALLOWED_ORIGINS. Empty keeps the binary's default
   #    (http://localhost:3000, the Python api's own default).

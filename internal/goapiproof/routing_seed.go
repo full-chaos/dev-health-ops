@@ -125,6 +125,29 @@ func RoutedOperations(ctx context.Context, pool *pgxpool.Pool) (map[string]bool,
 	return out, nil
 }
 
+// RunningDigestRows reads, per operation, the document digest of its routing
+// row at schemaDigest (if any). `-all-unrouted` uses it to refuse when a row
+// already at the running schema digest disagrees with the registry.
+func RunningDigestRows(ctx context.Context, pool *pgxpool.Pool, schemaDigest string) (map[string]string, error) {
+	if pool == nil {
+		return nil, fmt.Errorf("%w: nil pool", ErrSeedRequestRefused)
+	}
+	rows, err := pool.Query(ctx, `SELECT selected_operation, document_digest FROM public.go_api_routing_state WHERE schema_digest = $1`, schemaDigest)
+	if err != nil {
+		return nil, fmt.Errorf("goapiproof: read routing rows at the running digest: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var operation, document string
+		if err := rows.Scan(&operation, &document); err != nil {
+			return nil, fmt.Errorf("goapiproof: scan routing row: %w", err)
+		}
+		out[operation] = document
+	}
+	return out, rows.Err()
+}
+
 func (r SeedRequest) validate() error {
 	switch {
 	case r.SchemaDigest == "" || r.RunningBuild == "":

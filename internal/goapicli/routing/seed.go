@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -114,6 +115,24 @@ func runSeed(argv []string) error {
 		if err != nil {
 			return classifyWriteError(err)
 		}
+		// A row already at the running schema digest under a document digest
+		// the registry does not report is a disagreement between the
+		// database and the deployed process; -all-unrouted must not write
+		// around it (`status` names it DOCUMENT_DRIFT).
+		atRunning, err := goapiproof.RunningDigestRows(ctx, pool, registry.SchemaDigest)
+		if err != nil {
+			return classifyWriteError(err)
+		}
+		var drifted []string
+		for operation, document := range atRunning {
+			if registered, ok := registry.DocumentDigest[operation]; ok && registered != document {
+				drifted = append(drifted, fmt.Sprintf("%s: row=%s registry=%s", operation, document, registered))
+			}
+		}
+		if len(drifted) > 0 {
+			sort.Strings(drifted)
+			return refuse("document digest DISAGREEMENT between the database and the running query-api for %d routed operation(s): %v.\n  -all-unrouted writes nothing around it; see `dho goapi routing status`.", len(drifted), drifted)
+		}
 		operations = goapiproof.UnroutedOperations(registry.DocumentDigest, routed)
 		if len(operations) == 0 {
 			fmt.Fprintf(stdout, "go-api-routing: seed schema_digest=%s candidate_build=%s nothing unrouted\n", registry.SchemaDigest, running)
@@ -149,19 +168,25 @@ func runSeed(argv []string) error {
 		PrincipalID:    principalID,
 		DryRun:         dryRun,
 	})
+	// A refusal reports every decision (nothing was written). Any OTHER error
+	// (audit failure, commit failure) prints no per-operation success line at
+	// all: those outcomes were never committed.
+	if err != nil && !errors.Is(err, goapiproof.ErrSeedRefused) {
+		if errors.Is(err, goapiproof.ErrSeedRequestRefused) {
+			return refuse("%v", err)
+		}
+		return classifyWriteError(err)
+	}
 	fmt.Fprintf(stdout, "go-api-routing: seed schema_digest=%s candidate_build=%s dry_run=%t\n", registry.SchemaDigest, running, dryRun)
 	for _, o := range outcomes {
 		fmt.Fprintf(stdout, "go-api-routing:   %-28s %-16s digest=%s %s\n", o.Operation, o.Action, o.DocumentDigest, o.Reason)
 		if o.Action == goapiproof.SeedActionCreated {
-			fmt.Fprintf(stderr, "go_api_routing.seeded operation=%s mode_after=shadow build_after=%s schema_digest=%s document_digest=%s recorded_by=%s audit_action=enable correlation_id=%s\n",
+			fmt.Fprintf(stderr, "go_api_routing.seeded operation=%s owner=go mode_after=shadow rollout=0 build_after=%s schema_digest=%s document_digest=%s recorded_by=%s audit_action=enable correlation_id=%s\n",
 				o.Operation, running, registry.SchemaDigest, o.DocumentDigest, common.recordedBy, o.CorrelationID)
 		}
 	}
 	if err != nil {
-		if errors.Is(err, goapiproof.ErrSeedRefused) || errors.Is(err, goapiproof.ErrSeedRequestRefused) {
-			return refuse("%v", err)
-		}
-		return classifyWriteError(err)
+		return refuse("%v", err)
 	}
 	return nil
 }

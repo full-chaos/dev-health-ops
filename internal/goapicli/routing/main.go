@@ -65,6 +65,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -403,6 +404,14 @@ func (c *commonFlags) requireProvenance() error {
 	}
 	if len(absent) > 0 {
 		return refuse("required flags are missing: %v -- a routing write is a decision, and a decision with no durable record is unreadable weeks later", absent)
+	}
+	// -recorded-by is echoed into one-line structured events on stderr
+	// (go_api_routing.*, go_api_proof_orgs.*). A newline or other control
+	// character would let the value forge a second event line.
+	for _, r := range c.recordedBy {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return refuse("-recorded-by must not contain control or line-separator characters (it is echoed into structured one-line events)")
+		}
 	}
 	return nil
 }

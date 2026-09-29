@@ -433,3 +433,50 @@ func TestSeedInsertLosingTheRaceReportsAlreadyPresent(t *testing.T) {
 		t.Fatalf("the loser must audit nothing, got %d", n)
 	}
 }
+
+// -all-unrouted must not write around a database/registry disagreement: a row
+// already at the running schema digest under a document digest the registry
+// does not report refuses the whole run.
+func TestSeedAllUnroutedRefusesWhenARoutedRowDisagreesWithTheRegistry(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	catalog := writeCatalog(t, seedDigests())
+	t.Setenv(bearerEnvVar, verbTestBearer)
+	server := startQueryAPI(t, localSchemaDigest(), seedDigests())
+	// home's row carries a document digest the registry does not report.
+	insertRowAt(t, pool, localSchemaDigest(), seedDigC, seedOpA, "shadow")
+	_, _, err := captureVerb(t, seedCmd(server.URL, dsn, catalog, "-all-unrouted")...)
+	if err == nil || !strings.Contains(err.Error(), "DISAGREEMENT") {
+		t.Fatalf("want a document digest disagreement refusal, got %v", err)
+	}
+	if n := len(readSeedRows(t, pool)); n != 1 {
+		t.Fatalf("nothing may be written around the disagreement, rows=%d", n)
+	}
+}
+
+// A failure AFTER the decisions (here the audit insert) rolls everything back
+// and must not print any created line or seeded event.
+func TestSeedAnAuditFailureRollsBackAndClaimsNothingWasCreated(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	catalog := writeCatalog(t, map[string]string{seedOpA: seedDigA})
+	t.Setenv(bearerEnvVar, verbTestBearer)
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{seedOpA: seedDigA})
+	ctx := context.Background()
+	for _, ddl := range []string{
+		`CREATE FUNCTION reject_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected audit failure'; END $$`,
+		`CREATE TRIGGER reject_audit BEFORE INSERT ON go_api_routing_audits FOR EACH ROW EXECUTE FUNCTION reject_audit()`,
+	} {
+		if _, err := pool.Exec(ctx, ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, stderrOut, err := captureVerb(t, seedCmd(server.URL, dsn, catalog, "-operations", seedOpA)...)
+	if err == nil {
+		t.Fatal("an audit failure must fail the run")
+	}
+	if strings.Contains(out, "created") || strings.Contains(stderrOut, "go_api_routing.seeded") {
+		t.Fatalf("a rolled-back run must not claim a creation:\nstdout=%s\nstderr=%s", out, stderrOut)
+	}
+	if countTable(t, pool, "go_api_routing_state") != 0 || countTable(t, pool, "go_api_candidate_build") != 0 {
+		t.Fatal("the failed run must leave nothing behind")
+	}
+}

@@ -86,13 +86,20 @@ func (l *Listener) Address() string {
 	return l.listener.Addr().String()
 }
 
-// Listeners builds the public listener over the plane and, when internalAddr is
-// set, the internal one (CHAOS-6780): the public one deletes the X-DH-Internal-*
-// identity headers before any handler sees them, the internal one, on a port no
-// Ingress routes to, alone honours them. internal is nil when internalAddr is empty.
+// Listeners builds the public listener over plane.Handler and, when
+// internalAddr is set, the internal one over plane.InternalHandler
+// (CHAOS-6780, route sets split CHAOS-7078): the public one deletes the
+// X-DH-Internal-* identity headers before any handler sees them, the
+// internal one, on a port no Ingress routes to, alone honours them, AND is
+// the only one that can ever reach a route mounted only on
+// InternalHandler. internal is nil when internalAddr is empty.
 //
 // extra, when non-nil, answers the paths it declares (the one-release operator
 // compatibility routes, OperatorCompat) and everything else goes to the plane's routes.
+// /healthz and /readyz are mounted on BOTH listeners (probes reach the query listener from
+// either network); /metrics is mounted on the INTERNAL one ONLY: a scrape endpoint
+// is operational detail, not a probe, and this compat shim's whole point is that its real,
+// permanent home is the operator listener's own -- never the public one.
 //
 // internalAllowedPeers (D2953), when non-empty, restricts the internal listener to
 // accepting a connection only from a peer address inside one of these CIDRs -- see
@@ -102,16 +109,29 @@ func (l *Listener) Address() string {
 // interface and no peer check is the exact gap D2953 was raised for. Ignored when
 // internalAddr is empty (there is no internal listener to restrict).
 func Listeners(publicAddr, internalAddr string, plane *Plane, extra http.Handler, internalAllowedPeers []*net.IPNet) (public, internal *Listener) {
-	base := plane.Handler
-	if extra != nil {
-		mux := http.NewServeMux()
-		mux.Handle("/healthz", extra)
-		mux.Handle("/readyz", extra)
-		mux.Handle("/metrics", extra)
-		mux.Handle("/", plane.Handler)
-		base = mux
+	publicBase := plane.Handler
+	internalBase := plane.InternalHandler
+	if internalBase == nil {
+		// Defensive: a Plane built by hand (a test, an older caller) that
+		// never set this falls back to the old, undifferentiated shape
+		// rather than serving the internal listener on a nil handler.
+		internalBase = plane.Handler
 	}
-	publicServer, internalServer := newListenerServers(publicAddr, internalAddr, base)
+	if extra != nil {
+		withExtra := func(base http.Handler, mountMetrics bool) http.Handler {
+			mux := http.NewServeMux()
+			mux.Handle("/healthz", extra)
+			mux.Handle("/readyz", extra)
+			if mountMetrics {
+				mux.Handle("/metrics", extra)
+			}
+			mux.Handle("/", base)
+			return mux
+		}
+		publicBase = withExtra(publicBase, false)
+		internalBase = withExtra(internalBase, true)
+	}
+	publicServer, internalServer := newListenerServers(publicAddr, internalAddr, publicBase, internalBase)
 	public = &Listener{name: "query-http", server: publicServer, errors: make(chan error, 1)}
 	if internalServer != nil {
 		if len(internalAllowedPeers) == 0 {

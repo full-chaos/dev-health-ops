@@ -574,6 +574,7 @@ smoke_query_api() {
   local container_name="dev-health-go-query-api-smoke-$$"
   local query_address
   local operator_address
+  local internal_address
   local exit_code
 
   printf 'container smoke: query-api\n'
@@ -589,13 +590,16 @@ smoke_query_api() {
     --name "${container_name}" \
     --publish "127.0.0.1::8090" \
     --publish "127.0.0.1::8080" \
+    --publish "127.0.0.1::8091" \
     --env "QUERY_API_ADDR=:8090" \
+    --env "QUERY_API_INTERNAL_ADDR=:8091" \
     --env "DEV_HEALTH_HTTP_ADDR=:8080" \
     "${CONTAINER_SECURITY_ARGS[@]}" \
     "${tag}" query-api >/dev/null
   query_address="$(docker port "${container_name}" 8090/tcp 2>/dev/null | head -n 1 || true)"
   operator_address="$(docker port "${container_name}" 8080/tcp 2>/dev/null | head -n 1 || true)"
-  if [ -z "${query_address}" ] || [ -z "${operator_address}" ]; then
+  internal_address="$(docker port "${container_name}" 8091/tcp 2>/dev/null | head -n 1 || true)"
+  if [ -z "${query_address}" ] || [ -z "${operator_address}" ] || [ -z "${internal_address}" ]; then
     printf 'container query-api exited before publishing its ports; its output was:\n' >&2
     docker logs "${container_name}" 2>&1 | tail -20 >&2
     die "dho query-api did not publish its listeners"
@@ -609,17 +613,21 @@ smoke_query_api() {
   wait_for_status "http://${query_address}/query" 404 \
     || die "dho query-api mounted /query with no route configured"
   # One release of compatibility (CHAOS-6447): the query listener still answers the
-  # probes and the scrape the chart points at it, in the old shapes, until the deploy
-  # repo moves them to the operator listener; the following release removes this.
+  # probes the chart points at it, in the old shapes, until the deploy repo moves them
+  # to the operator listener; the following release removes this. /metrics is NOT part
+  # of that shim: a scrape endpoint is operational detail, so the query (public)
+  # listener never answers it and only the internal listener does.
   wait_for_status "http://${query_address}/healthz" 200 \
     || die "dho query-api no longer answers /healthz on the query listener"
   wait_for_status "http://${query_address}/readyz" 200 \
     || die "dho query-api no longer answers /readyz on the query listener"
-  wait_for_status "http://${query_address}/metrics" 200 \
-    || die "dho query-api no longer answers /metrics on the query listener"
-  curl --silent --max-time 5 "http://${query_address}/metrics" \
+  wait_for_status "http://${internal_address}/metrics" 200 \
+    || die "dho query-api does not answer /metrics on the internal listener"
+  curl --silent --max-time 5 "http://${internal_address}/metrics" \
     | grep -E '^target_info\{.*service_name="dev-health-query-api"' >/dev/null \
-    || die "dho query-api compat /metrics on the query listener lost its target_info series"
+    || die "dho query-api /metrics on the internal listener lost its target_info series"
+  [ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 "http://${query_address}/metrics")" = "404" ] \
+    || die "dho query-api answered /metrics on the query (public) listener"
   [ "$(curl --silent --max-time 5 "http://${query_address}/readyz")" = "ready: /query not configured" ] \
     || die "dho query-api compat /readyz on the query listener is not the old body"
   # The query routes stay off the operator listener.

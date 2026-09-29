@@ -1650,9 +1650,9 @@ The fixed kinds are `dispatch_sync_run`, `finalize_sync_run`, `post_sync`, and
 are serialized per semantic database, persist audit intent before changing
 state, and may return `outcome_unknown`; inspect the route before retrying.
 
-The checked-in transport for all four sync-dispatch kinds is River, and the
-rollback transport recorded against them is `celery`. `routes apply` converges
-one unpaused Celery route to its checked-in River transport after proving the
+The checked-in transport for all four sync-dispatch kinds is River, and no
+rollback transport is recorded against them (`rollback_route: none`). `routes apply`
+converges one unpaused legacy-transport route to its checked-in River transport after proving the
 matching capability exists and no live outbox claim remains. It is idempotent
 when the route is already active.
 

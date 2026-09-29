@@ -66,8 +66,8 @@ The flag surface: `-Q/--queues` names the queues to consume and
 **The two fleets do not serve the same queues.** `-Q` names queues from the Go
 River topology (`coverage`, `heartbeat`, `investment`, `metrics`, `reports`,
 `retention`, `sync`, `sync_provider`, `webhooks`, `workgraph`). Four of those
-names — `metrics`, `reports`, `sync`, `webhooks` — are shared with the Celery
-app and mean the same thing; the rest exist in only one runtime. Selecting a
+names — `metrics`, `reports`, `sync`, `webhooks` — also appear in historical
+Celery-era records and mean the same thing there. Selecting a
 queue this fleet does not serve fails before readiness, because startup
 validation requires the selected queue set to equal the constructed handler
 set.

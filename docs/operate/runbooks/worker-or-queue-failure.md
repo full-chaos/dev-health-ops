@@ -14,7 +14,7 @@ lifecycle: active
 
 # Worker or queue failure
 
-Use this runbook when expected work is not created, a queue stops advancing, workers repeatedly retry without domain progress, or a Go coexistence process closes readiness. **Celery stopped in prod 2026-08-19 (CHAOS-4026); the Go worker stack owns every production route today.** The "Active Celery recovery" section below is retained for the non-prod Celery-based acceptance fleet and historical reference only -- confirm which runtime actually owns the route before following it.
+Use this runbook when expected work is not created, a queue stops advancing, workers repeatedly retry without domain progress, or a Go coexistence process closes readiness. **Celery stopped in prod 2026-08-19 (CHAOS-4026); the Go worker stack owns every production route today.**
 {: .fc-page-lede }
 
 ## Preserve the failing boundary

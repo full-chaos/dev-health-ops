@@ -43,12 +43,17 @@ def render(rendered_release: Path, password: str) -> str:
                     f"{KEY} must declare <dho_api_ch> with exactly one <password_sha256_hex> (found {count})"
                 )
             return rendered
-    raise SystemExit(f"no clickhouse-usersd ConfigMap with key {KEY} in {rendered_release}")
+    raise SystemExit(
+        f"no clickhouse-usersd ConfigMap with key {KEY} in {rendered_release}"
+    )
 
 
 def main(argv: list[str]) -> int:
     if len(argv) != 3:
-        print("usage: render-dho-api-ch-users.py <rendered-release.yaml> <out-file>", file=sys.stderr)
+        print(
+            "usage: render-dho-api-ch-users.py <rendered-release.yaml> <out-file>",
+            file=sys.stderr,
+        )
         return 2
     password = os.environ.get("API_CH_PASSWORD", "")
     if not password:

@@ -28,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/hotspots"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/operatingreview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/producttelemetry"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/recommendations"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/reports"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/reviewedges"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/security"
@@ -1237,9 +1238,46 @@ func (r *queryResolver) ReviewEdges(ctx context.Context, input model.ReviewEdges
 	return result, nil
 }
 
-// Recommendations is the resolver for the recommendations field.
+// Recommendations is the resolver for the recommendations field
+// (CHAOS-7065). Ports resolve_recommendations
+// (api/graphql/resolvers/recommendations.py) via recommendations.Resolve.
+//
+// Authorization mirrors Python: OrgIdAuthExtension (extensions.py) refuses
+// an operation whose orgId argument differs from the authenticated org with
+// "Access denied: cannot query org '<id>'" before the resolver runs, and the
+// resolver then scopes by the authorized org. Go does the same and fails
+// closed (no verified-superuser rebind), so a mismatched orgId never gets
+// another org's answer.
 func (r *queryResolver) Recommendations(ctx context.Context, orgID string, team string, window model.WindowInput) ([]model.Recommendation, error) {
-	panic(fmt.Errorf("not implemented: Recommendations - recommendations"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if orgID == "" || orgID != strings.TrimSpace(orgID) {
+		return nil, &gqlerror.Error{
+			Message: "A valid organization ID is required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if orgID != claims.OrgID {
+		return nil, &gqlerror.Error{
+			Message: "Access denied: cannot query org '" + orgID + "'",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	return recommendations.Resolve(ctx, r.ClickHouse, claims.OrgID, team, window, time.Now().UTC())
 }
 
 // Experiments is the resolver for the experiments field.

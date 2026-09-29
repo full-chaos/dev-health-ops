@@ -1248,6 +1248,27 @@ var operationSpecs = map[string]OperationSpec{
 			return map[string]any{"orgId": orgID, "workItemIds": []any{"wi-unknown-1"}, "teamId": nil}
 		},
 	},
+	// recommendations (CHAOS-7065): the base request names a team no
+	// organisation holds, so both planes answer an empty list -- the same
+	// "unknown identifier, empty answer" base case workUnitTeamAttributions
+	// uses. InstanceVariable stays empty on purpose (pr is the ONLY
+	// operation allowed to declare one -- TestPrDeclaresTheIdentifierIt
+	// CannotSupply pins that): an unknown team over a real dedup query
+	// answering [] on both planes is a real measurement, not the
+	// null-vs-null vacuous match pr's invented id would produce.
+	//
+	// No Parity/BaselineDefect/Variants entry: nobody has run a live
+	// two-plane comparison for this field yet, and a NON-empty comparison
+	// needs a real team id with a fired rule, resolved from the org's own
+	// data. That, the real captured web query, and the wire-parity
+	// manifest entry are CHAOS-7068's job -- same sequencing CHAOS-7070/
+	// 7064 agreed for `home`.
+	"recommendations": {
+		ResponseRoot: "recommendations",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "team": "team-unknown-1", "window": map[string]any{"value": 4, "unit": "WEEK"}}
+		},
+	},
 }
 
 // capacityForecastStochasticLeaves is the one StochasticLeafClass in this

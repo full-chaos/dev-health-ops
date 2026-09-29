@@ -1,0 +1,37 @@
+[
+ {
+  "window": "ok window",
+  "mode": "rows",
+  "rows": 2
+ },
+ {
+  "window": "ok window",
+  "mode": "empty",
+  "rows": 0
+ },
+ {
+  "window": "ok window",
+  "mode": "raises_at_once",
+  "rows": 0
+ },
+ {
+  "window": "ok window",
+  "mode": "raises_after_rows",
+  "rows": 0
+ },
+ {
+  "window": "oversized window",
+  "mode": "rows",
+  "exception": "OverflowError"
+ },
+ {
+  "window": "oversized window",
+  "mode": "raises_at_once",
+  "exception": "OverflowError"
+ },
+ {
+  "window": "oversized window",
+  "mode": "empty",
+  "exception": "OverflowError"
+ }
+]

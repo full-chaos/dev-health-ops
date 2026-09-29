@@ -45,6 +45,7 @@ var registeredOperations = []string{
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 	"workUnitTeamAttributions",
 	"workItemTeamAttributions",
+	"recommendations",
 }
 
 func TestAssertCoverageAcceptsTheRegisteredSet(t *testing.T) {
@@ -145,6 +146,12 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		// Same reasoning as workUnitTeamAttributions immediately above --
 		// an unknown work item id, no date range in the SDL at all.
 		"workItemTeamAttributions": true,
+		// recommendations' own SDL input is a fixed lookback (value+unit),
+		// not the harness's SinceUTC/UntilUTC date range -- its base
+		// request names an unknown team instead (same shape as
+		// workUnitTeamAttributions' unknown work unit above), so the
+		// harness's Window never reaches it either way.
+		"recommendations": true,
 
 		// The saved-report mutations take no window; the runner refuses them
 		// (RefusalNotAQueryDocument) before sending.

@@ -1,0 +1,540 @@
+[
+ {
+  "raw": "",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "[]",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "[{\"team_id\":\"t\",\"metric_table\":\"m\",\"field\":\"f\",\"window_start\":\"2026-04-01\",\"window_end\":\"2026-04-07\",\"value\":14.0}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "t",
+    "metric_table": "m",
+    "window_start": "2026-04-01",
+    "window_end": "2026-04-07",
+    "field": "f",
+    "value": 14.0
+   }
+  ]
+ },
+ {
+  "raw": "[null,{\"team_id\":\"t\",\"metric_table\":\"m\",\"field\":\"f\",\"window_start\":\"2026-04-01\",\"window_end\":\"2026-04-07\",\"value\":14.0}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "t",
+    "metric_table": "m",
+    "window_start": "2026-04-01",
+    "window_end": "2026-04-07",
+    "field": "f",
+    "value": 14.0
+   }
+  ]
+ },
+ {
+  "raw": "[5,\"x\",[1],{\"team_id\":\"t\",\"metric_table\":\"m\",\"field\":\"f\",\"window_start\":\"2026-04-01\",\"window_end\":\"2026-04-07\",\"value\":14.0}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "t",
+    "metric_table": "m",
+    "window_start": "2026-04-01",
+    "window_end": "2026-04-07",
+    "field": "f",
+    "value": 14.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"team_id\":\"t\",\"value\":null}]",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "[{\"team_id\":\"t\"}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "t",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 0.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"team_id\":null,\"metric_table\":null,\"field\":null,\"value\":1}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "None",
+    "metric_table": "None",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "None",
+    "value": 1.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"team_id\":5,\"metric_table\":true,\"field\":1.5,\"value\":2}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "5",
+    "metric_table": "True",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "1.5",
+    "value": 2.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"team_id\":[\"a\",1],\"metric_table\":{\"k\":null},\"field\":\"f\",\"value\":3}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "['a', 1]",
+    "metric_table": "{'k': None}",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "f",
+    "value": 3.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":true}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 1.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":false}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 0.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":\"2.5\"}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 2.5
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":\" 7 \"}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 7.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":\"1_000\"}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 1000.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":\"1__0\"}]",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "[{\"value\":\"abc\"}]",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "[{\"value\":\"\"}]",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "[{\"value\":\"inf\"}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": {
+     "nonfinite": "inf"
+    }
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":\"-Infinity\"}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": {
+     "nonfinite": "-inf"
+    }
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":\"nan\"}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": {
+     "nonfinite": "nan"
+    }
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":[1]}]",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "[{\"value\":{\"a\":1}}]",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "[{\"value\":1e999}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": {
+     "nonfinite": "inf"
+    }
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":NaN}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": {
+     "nonfinite": "nan"
+    }
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":Infinity}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": {
+     "nonfinite": "inf"
+    }
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":123456789012345678901234567890}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 1.2345678901234568e+29
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}]",
+  "python_exception": "OverflowError"
+ },
+ {
+  "raw": "[{\"window_start\":\"2026-04-01\"}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "2026-04-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 0.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"window_start\":\"20260401\",\"window_end\":\"2026-W14-3\"}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "2026-04-01",
+    "window_end": "2026-04-01",
+    "field": "",
+    "value": 0.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"window_start\":\"nope\"}]",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "[{\"window_start\":null,\"window_end\":0}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 0.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"window_start\":0}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 0.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"window_start\":20260401}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "2026-04-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 0.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"window_start\":true}]",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "[{\"window_start\":\"\",\"window_end\":\"2026-02-30\"}]",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "{\"a\":1}",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "\"abc\"",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "5",
+  "keep_row": false,
+  "evidence": []
+ },
+ {
+  "raw": "null",
+  "keep_row": false,
+  "evidence": []
+ },
+ {
+  "raw": "true",
+  "keep_row": false,
+  "evidence": []
+ },
+ {
+  "raw": "0",
+  "keep_row": false,
+  "evidence": []
+ },
+ {
+  "raw": "1.5",
+  "keep_row": false,
+  "evidence": []
+ },
+ {
+  "raw": "not json",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "[",
+  "keep_row": true,
+  "evidence": []
+ },
+ {
+  "raw": "[{\"value\":1},{\"value\":null},{\"value\":2}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 1.0
+   },
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 2.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"team_id\":\"t\",\"metric_table\":\"m\",\"field\":\"f\",\"window_start\":\"2026-04-01\",\"window_end\":\"2026-04-07\",\"value\":14.0},{\"window_start\":\"bad\"},{\"team_id\":\"t\",\"metric_table\":\"m\",\"field\":\"f\",\"window_start\":\"2026-04-01\",\"window_end\":\"2026-04-07\",\"value\":14.0}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "t",
+    "metric_table": "m",
+    "window_start": "2026-04-01",
+    "window_end": "2026-04-07",
+    "field": "f",
+    "value": 14.0
+   },
+   {
+    "team_id": "t",
+    "metric_table": "m",
+    "window_start": "2026-04-01",
+    "window_end": "2026-04-07",
+    "field": "f",
+    "value": 14.0
+   }
+  ]
+ },
+ {
+  "raw": "  [ {\"team_id\":\"t\",\"metric_table\":\"m\",\"field\":\"f\",\"window_start\":\"2026-04-01\",\"window_end\":\"2026-04-07\",\"value\":14.0} ]  ",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "t",
+    "metric_table": "m",
+    "window_start": "2026-04-01",
+    "window_end": "2026-04-07",
+    "field": "f",
+    "value": 14.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"value\":1,\"value\":2}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 2.0
+   }
+  ]
+ },
+ {
+  "raw": "[{\"team_id\":\"\\u00e9\\ud83d\\ude00\",\"value\":1}]",
+  "keep_row": true,
+  "evidence": [
+   {
+    "team_id": "\u00e9\ud83d\ude00",
+    "metric_table": "",
+    "window_start": "0001-01-01",
+    "window_end": "0001-01-01",
+    "field": "",
+    "value": 1.0
+   }
+  ]
+ }
+]

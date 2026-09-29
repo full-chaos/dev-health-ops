@@ -162,30 +162,14 @@ async def _check_redis_health() -> tuple[str, str]:
         return "redis", "down"
 
 
-async def _check_celery_health() -> tuple[str, str]:
-    """Inspect active Celery workers via the broker."""
-    try:
-        from dev_health_ops.workers.celery_app import celery_app
-
-        # Use inspect with a very short timeout so health checks stay fast.
-        inspect = celery_app.control.inspect(timeout=1.5)
-        active = await asyncio.to_thread(inspect.ping)
-        if active:
-            return "celery", "ok"
-        return "celery", "no_workers"
-    except Exception:
-        return "celery", "down"
-
-
 def _expected_worker_groups() -> list[str] | None:
     """Return the worker groups this deployment expects to be running.
 
     Sourced from ``EXPECTED_WORKER_GROUPS`` (comma-separated, e.g.
     ``"heavy,ops,sync,sync-provider"`` -- the ``--worker-group`` values
     ``cmd/dev-health-worker`` is deployed with). Full Chaos's own production
-    is Go-only and sets this; self-hosted/customer deployments that still run
-    Celery leave it unset, so ``/health/workers`` stays Celery-authoritative
-    for them (CHAOS-3942).
+    is Go-only and sets this; an unset variable means no fleet is declared and
+    ``/health/workers`` reports down (there is no Celery fleet to fall back to).
 
     Returns ``None`` when the variable is unset (no Go fleet declared). Returns
     a (possibly empty) list when it IS set -- an empty result there means the
@@ -254,7 +238,6 @@ async def _check_rate_limiter_backend() -> tuple[str, str]:
 __all__ = [
     "DEFAULT_CLICKHOUSE_URI",
     "_analytics_db_url",
-    "_check_celery_health",
     "_check_clickhouse_health",
     "_check_go_worker_presence",
     "_check_postgres_health",

@@ -92,6 +92,9 @@ def _docker_stub(stub_bin: Path, *, routing_response: str, routing_rc: int) -> N
     script.append(
         '[ -z "${DOCKER_STUB_COMPOSE_LOG:-}" ] || printf "%s\\n" "${COMPOSE_FILE:-}" >> "$DOCKER_STUB_COMPOSE_LOG"'
     )
+    script.append(
+        '[ -z "${DOCKER_STUB_ARGS_LOG:-}" ] || printf "%s\\n" "$*" >> "$DOCKER_STUB_ARGS_LOG"'
+    )
     script.append(f'if [[ "$args" == *"{_MIGRATE_MARKER}"* ]]; then')
     script.append("  exit 9")
     script.append("fi")

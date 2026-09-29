@@ -1,6 +1,6 @@
 """Sentry SDK integration for dev-health-ops.
 
-Initializes Sentry for FastAPI and Celery when SENTRY_DSN is set.
+Initializes Sentry for FastAPI when SENTRY_DSN is set.
 Safe to call multiple times (no-op if already initialised or DSN absent).
 
 Compatible with Sentry SaaS, self-hosted Sentry, and BugSink.
@@ -183,7 +183,6 @@ def init_sentry() -> bool:
 
     try:
         import sentry_sdk
-        from sentry_sdk.integrations.celery import CeleryIntegration
         from sentry_sdk.integrations.fastapi import FastApiIntegration
         from sentry_sdk.integrations.logging import LoggingIntegration
         from sentry_sdk.integrations.starlette import StarletteIntegration
@@ -201,7 +200,6 @@ def init_sentry() -> bool:
                 StarletteIntegration(transaction_style="endpoint"),
                 FastApiIntegration(transaction_style="endpoint"),
                 StrawberryIntegration(async_execution=True),
-                CeleryIntegration(monitor_beat_tasks=True),
                 LoggingIntegration(
                     level=logging.INFO,
                     event_level=logging.ERROR,
@@ -219,7 +217,7 @@ def init_sentry() -> bool:
 
     except ImportError:
         logger.warning(
-            "sentry-sdk not installed — install sentry-sdk[fastapi,celery] to enable Sentry"
+            "sentry-sdk not installed — install sentry-sdk[fastapi] to enable Sentry"
         )
         return False
     except Exception as exc:

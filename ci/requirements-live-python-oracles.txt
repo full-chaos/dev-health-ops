@@ -7,14 +7,11 @@
 # Keep direct imports and their transitives explicit: CI installs this file
 # with --no-deps so an undeclared dependency fails instead of drifting latest.
 alembic==1.20.0
-amqp==5.4.0
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1
 atlassian-gen-client==0.1.0b3
 bcrypt==5.0.0
-billiard==4.3.0
-celery==5.6.3
 certifi==2026.7.22
 cffi==2.1.1
 charset-normalizer==3.5.1
@@ -41,7 +38,6 @@ httpx2==2.13.1
 idna==3.20
 iniconfig==2.3.0
 jiter==0.17.0
-kombu==5.6.2
 limits==5.8.0
 lz4==4.4.5
 Mako==1.4.3
@@ -80,6 +76,5 @@ tzlocal==5.4.4
 urllib3==2.8.0
 uvicorn==0.53.0
 valkey==6.1.1
-vine==5.1.0
 wrapt==2.4.1
 zstandard==0.25.0

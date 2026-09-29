@@ -365,9 +365,8 @@ def _emit_bucket_decision(
 ) -> None:
     """Record one bucket's admission decision as a log line AND span data.
 
-    ``dispatch_sync_run`` already executes inside a Celery task span
-    (``workers/celery_app.py`` calls ``init_tracing`` + ``instrument_celery``),
-    so attaching to the CURRENT span needs no span management here and is a
+    ``dispatch_sync_run`` runs inside whatever span its caller has active, so
+    attaching to the CURRENT span needs no span management here and is a
     no-op when tracing is disabled. The structured log carries the same
     numbers so tests and log-only environments can assert them without a
     tracing backend.

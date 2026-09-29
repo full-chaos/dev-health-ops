@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from kombu.exceptions import KombuError
 from valkey.exceptions import ValkeyError
 
 from dev_health_ops.api.main import app
@@ -520,16 +519,15 @@ def test_receiver_rejects_a_revoked_binding_identically_to_an_unknown_one(
 
 @pytest.mark.parametrize(
     "stream_error",
-    [ValkeyError("stream unavailable"), KombuError("broker unavailable")],
+    [ValkeyError("stream unavailable")],
 )
 def test_receiver_releases_the_replay_claim_when_the_stream_write_fails(
     stream_error: Exception, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Given: the durable (non-expiring) replay claim succeeds but the
-    # subsequent Redis stream write raises. Both exception types _enqueue_event
-    # catches are exercised: KombuError used to be covered only through the
-    # Celery dispatch that CHAOS-4105 deleted, and would otherwise have been
-    # lost from coverage with it.
+    # subsequent Redis stream write raises the only exception type
+    # _enqueue_event catches (the Celery-era KombuError catch was removed with
+    # the Celery dependency: no broker call remains on this path).
     body = _body()
     deleted: list[str] = []
     xdel_calls: list[tuple[str, str]] = []

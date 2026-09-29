@@ -43,11 +43,6 @@ def test_init_sentry_configures_strawberry_async_execution(monkeypatch: Any) -> 
     )
     _install_integration_module(
         monkeypatch,
-        "sentry_sdk.integrations.celery",
-        "CeleryIntegration",
-    )
-    _install_integration_module(
-        monkeypatch,
         "sentry_sdk.integrations.fastapi",
         "FastApiIntegration",
     )
@@ -221,11 +216,6 @@ def test_init_sentry_disables_default_pii_and_registers_scrubber(
     monkeypatch.setitem(sys.modules, "sentry_sdk", sentry_sdk)
     monkeypatch.setitem(
         sys.modules, "sentry_sdk.integrations", ModuleType("integrations")
-    )
-    _install_integration_module(
-        monkeypatch,
-        "sentry_sdk.integrations.celery",
-        "CeleryIntegration",
     )
     _install_integration_module(
         monkeypatch,

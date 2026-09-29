@@ -1427,8 +1427,8 @@ func TestDisableAppliesLiveRowAndReportsStaleDigestAndLogsTheWrite(t *testing.T)
 	// M40: the per-row structured log, the only durable record of the
 	// write -- stated in full so a mutant that logs an EMPTY line, or logs
 	// the wrong operation/transition, is caught too.
-	wantLog := fmt.Sprintf("go_api_routing.disabled operation=%s from=canary to=python schema_digest=%s document_digest=%s recorded_by=lane-routing-verbs",
-		verbTestOperation, localSchemaDigest(), liveDigest)
+	wantLog := fmt.Sprintf("go_api_routing.disabled operation=%s from=canary to=python schema_digest=%s document_digest=%s recorded_by=%q",
+		verbTestOperation, localSchemaDigest(), liveDigest, "lane-routing-verbs")
 	if !strings.Contains(errOut, wantLog) {
 		t.Fatalf("stderr missing the disabled-row log line.\nwant substring: %s\ngot:\n%s", wantLog, errOut)
 	}

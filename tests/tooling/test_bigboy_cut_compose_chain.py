@@ -39,6 +39,12 @@ def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -
     tools = tmp_path / "tools"
     tools.mkdir()
     (tools / "compose.bigboy.router.yml").write_text(ROUTER.read_text())
+    users_overlay = ROUTER.parent / "compose.bigboy.clickhouse-users.yml"
+    (tools / "compose.bigboy.clickhouse-users.yml").write_text(
+        users_overlay.read_text()
+    )
+    users_file = tmp_path / "dho_api_ch.xml"
+    users_file.write_text("<clickhouse/>")
     chain = [entry.replace("$HERE", str(tools)) for entry in _chain()]
     for entry in chain:
         if entry.startswith(str(tools)):
@@ -50,6 +56,7 @@ def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -
                 "services:\n"
                 "  web:\n    image: web:test\n    environment:\n      BACKEND_URL: http://api:8000\n"
                 "  traefik:\n    image: traefik:test\n"
+                "  clickhouse:\n    image: clickhouse:test\n"
             )
         else:
             target.write_text("services: {}\n")
@@ -65,6 +72,7 @@ def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -
             "PATH": "/usr/local/bin:/usr/bin:/bin",
             "HOME": str(tmp_path),
             "COMPOSE_FILE": ":".join(chain),
+            "DHO_API_CH_USERS_XML": str(users_file),
         },
     )
     assert proc.returncode == 0, proc.stderr

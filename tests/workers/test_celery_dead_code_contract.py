@@ -29,10 +29,10 @@ executed internal/syncreconciler / internal/scheduler/sync Go tests in that
 PR's own TEST-EVIDENCE. No entries remain flagged-surviving after PR2a' --
 every Beat entry this file once deferred is now in _DEAD_BEAT_ENTRIES.
 
-This test imports the real ``celery_app`` (autodiscovery included) and the
-real ``beat_schedule`` and asserts the deleted task names are absent from
-both -- so a resurrected task (a stray ``@celery_app.task`` decorator, or a
-re-added beat entry) fails this test, not just a code review.
+CHAOS-7059 deleted the Celery app itself: these tests now scan the source
+(no celery import, no task decorator, no dead task function) and still read
+the real ``beat_schedule`` (empty), so a resurrected task or a re-added beat
+entry fails this test, not just a code review.
 
 Entries this PR did NOT delete (flagged to team-lead, not this test's
 concern) are asserted present in
@@ -42,6 +42,7 @@ drive-by deletion of a flagged-not-deleted entry also fails CI.
 
 from __future__ import annotations
 
+import ast
 import importlib
 import inspect
 from pathlib import Path
@@ -180,31 +181,118 @@ _DELETED_MODULES = (
 )
 
 
-def _celery_app():
-    from dev_health_ops.workers.celery_app import celery_app
-
-    return celery_app
-
-
 def _qualified(name: str) -> str:
     return f"dev_health_ops.workers.tasks.{name}"
 
 
-def test_dead_task_names_are_absent_from_the_registered_celery_app() -> None:
-    """A resurrected ``@celery_app.task`` under a dead name fails this test.
+def _src_modules() -> list[Path]:
+    src = _REPO_ROOT / "src" / "dev_health_ops"
+    return sorted(
+        path
+        for path in src.rglob("*.py")
+        if "alembic" not in path.relative_to(src).parts
+    )
+
+
+def _folded_string(node: ast.AST) -> str | None:
+    """A string literal, or a chain of ``+`` over string literals, folded."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _folded_string(node.left), _folded_string(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
+def _dynamic_banned_use(call: ast.Call) -> bool:
+    """A dynamic import of a Celery-family module, or a getattr that spells
+    ``apply_async`` / ``send_task`` out of constants."""
+    func = ast.unparse(call.func)
+    first = _folded_string(call.args[0]) if call.args else None
+    if func in {"importlib.import_module", "import_module", "__import__"}:
+        return first is not None and first.split(".")[0] in {
+            "celery",
+            "kombu",
+            "billiard",
+        }
+    if func == "getattr" and len(call.args) >= 2:
+        return _folded_string(call.args[1]) in {"apply_async", "send_task"}
+    return False
+
+
+def test_the_celery_app_and_every_celery_import_are_gone() -> None:
+    """CHAOS-7059: the Celery app is deleted, and nothing may bring it back.
+
+    Structural, not registry-based: the module is unimportable, and no source
+    file (Alembic history excluded, it only names routes as strings) imports
+    ``celery``, ``kombu`` or ``billiard`` or applies a task decorator.
+    """
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("dev_health_ops.workers.celery_app")
+    assert not (_WORKERS_SRC / "celery_app.py").exists()
+
+    modules = _src_modules()
+    assert len(modules) > 100, "the source scan found too few modules to mean anything"
+    banned_roots = {"celery", "kombu", "billiard"}
+    offenders: list[str] = []
+    for path in modules:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            where = f"{path.relative_to(_REPO_ROOT)}:{getattr(node, 'lineno', 0)}"
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            if any(name.split(".")[0] in banned_roots for name in names):
+                offenders.append(where)
+            if isinstance(node, ast.Call) and _dynamic_banned_use(node):
+                # importlib.import_module("celery") / __import__("kombu") and
+                # a getattr whose attribute name is built from constants.
+                offenders.append(where)
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr in {"apply_async", "send_task"}
+            ) or (
+                isinstance(node, ast.Constant)
+                and node.value in {"apply_async", "send_task"}
+            ):
+                # An attribute call, or the getattr(task, "apply_async") form.
+                offenders.append(where)
+            if isinstance(node, ast.FunctionDef):
+                for decorator in node.decorator_list:
+                    text = ast.unparse(decorator)
+                    if text.startswith(("celery_app.task", "shared_task", "app.task")):
+                        offenders.append(
+                            f"{path.relative_to(_REPO_ROOT)}:{node.lineno}"
+                        )
+    assert not offenders, (
+        "Celery machinery is back (CHAOS-7059 deleted it; Go owns every job): "
+        + ", ".join(offenders)
+    )
+
+
+def test_dead_task_names_are_not_defined_anywhere_in_workers() -> None:
+    """A resurrected task function under a dead name fails this test.
 
     This is the literal ask from CHAOS-4026's closing handoff: "a contract
-    test that imports the celery app and asserts claimed-by-Go task names
-    are absent/raise, so resurrection fails CI."
+    test that asserts claimed-by-Go task names are absent, so resurrection
+    fails CI." With the Celery app gone there is no registry to read, so the
+    check is over the ``workers/`` package's function definitions.
     """
-    app = _celery_app()
-    registered = set(app.tasks)
+    defined: dict[str, str] = {}
+    for path in sorted(_WORKERS_SRC.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defined.setdefault(node.name, path.name)
+    assert defined, "workers/ defines no functions: this test would prove nothing"
     for name in _DEAD_TASK_NAMES:
-        qualified = _qualified(name)
-        assert qualified not in registered, (
-            f"{qualified!r} is registered on the celery app -- a Go-owned "
-            "cadence (CHAOS-4026) resurrected. Its Python task must stay "
-            "deleted; Go owns this cadence now."
+        assert name not in defined, (
+            f"{_qualified(name)!r} is defined again in workers/{defined[name]} -- a "
+            "Go-owned cadence (CHAOS-4026) resurrected. Its Python task must "
+            "stay deleted; Go owns this cadence now."
         )
 
 

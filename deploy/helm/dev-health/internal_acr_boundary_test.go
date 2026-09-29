@@ -12,15 +12,12 @@ import (
 // and GET /api/v1/internal/acr/entitlements/{org_id} with no credential
 // check, by design: internal service-to-service calls carry none, and the
 // network boundary is the control (internal/apiservice/acr's package
-// comment). So the Go api must be reachable only inside the cluster.
+// comment). So no public path may resolve to the Go api for those URLs.
 //
-// Today the chart's Ingress has no branch that can route to the Go api, so
-// this test pins that no public-routing object names any Service whose
-// selector matches the go-api pods, even when a values file asks for it,
-// and that no such Service and no go-api pod exposes a port outside the
-// cluster network. When a go-api Ingress branch is added, this test fails;
-// replace its routing check then with one that no path routed to the Go api
-// covers /api/v1/internal/acr.
+// CHAOS-7047: a host may now route "/" to go-api (the Go default backend), so
+// the check resolves the winning rule for the internal acr URLs the way
+// ingress-nginx does (Exact beats the longest Prefix) and requires that it is
+// not a go-api Service; ingress.pythonAllowList must carry /api/v1/internal.
 func TestInternalACRRoutesStayOffThePublicIngress(t *testing.T) {
 	output, err := exec.Command("helm", "template", "b", ".",
 		"--set", "goApi.enabled=true",
@@ -28,11 +25,8 @@ func TestInternalACRRoutesStayOffThePublicIngress(t *testing.T) {
 		// A values file that routes a path to every Service the Ingress
 		// template knows, and asks it for the Go api on the internal acr
 		// prefix and on the whole api.
-		"--set-json", `ingress.hosts=[{"host":"h","paths":[`+
-			`{"path":"/api/v1/internal/acr","pathType":"Prefix","service":"go-api"},`+
-			`{"path":"/api/v1","pathType":"Prefix","service":"go-api"},`+
-			`{"path":"/api","pathType":"Prefix","service":"api"},`+
-			`{"path":"/","pathType":"Prefix","service":"web"}]}]`,
+		"--set-json", `ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[`+
+			`{"path":"/","pathType":"Prefix","service":"go-api"}]}]`,
 	).CombinedOutput()
 	if err != nil {
 		t.Fatalf("render failed: %v\n%s", err, output)
@@ -91,12 +85,25 @@ func TestInternalACRRoutesStayOffThePublicIngress(t *testing.T) {
 		if kind == "Ingress" {
 			ingresses++
 		}
-		for _, name := range reachGoAPI {
-			// A YAML scalar, plain or quoted, as a backend's name or
-			// (older Ingress) serviceName.
-			reference := regexp.MustCompile(`(?m)^\s*(- )?(name|serviceName):\s*["']?` + regexp.QuoteMeta(name) + `["']?\s*$`)
-			if reference.MatchString(document) {
-				t.Errorf("a %s routes to Service %s, which reaches the Go api; the Go api serves /api/v1/internal/acr/* with no credential check:\n%s", kind, name, document)
+		if kind != "Ingress" {
+			// Any other routing kind must not name a Service that reaches the Go api.
+			for _, name := range reachGoAPI {
+				reference := regexp.MustCompile(`(?m)^\s*(- )?(name|serviceName):\s*["']?` + regexp.QuoteMeta(name) + `["']?\s*$`)
+				if reference.MatchString(document) {
+					t.Errorf("a %s routes to Service %s, which reaches the Go api:\n%s", kind, name, document)
+				}
+			}
+			continue
+		}
+		for _, url := range []string{"/api/v1/internal/acr/health", "/api/v1/internal/acr/entitlements/o"} {
+			backend := winningBackend(document, url)
+			if backend == "" {
+				t.Errorf("no rule of the Ingress matches %s:\n%s", url, document)
+			}
+			for _, name := range reachGoAPI {
+				if backend == name {
+					t.Errorf("%s resolves to Service %s, which reaches the Go api; the Go api serves /api/v1/internal/acr/* with no credential check:\n%s", url, name, document)
+				}
 			}
 		}
 	}
@@ -149,4 +156,81 @@ func documentKind(document string) string {
 		}
 	}
 	return ""
+}
+
+// winningBackend returns the backend Service name ingress-nginx picks for url
+// among the Ingress document's paths: an Exact match, else the longest Prefix
+// (whole-segment) match.
+func winningBackend(document, url string) string {
+	rule := regexp.MustCompile(`(?m)^\s*- path: (\S+)\n\s+pathType: (\w+)\n\s+backend:\n\s+service:\n\s+name: (\S+)`)
+	best, bestLen := "", -1
+	for _, m := range rule.FindAllStringSubmatch(document, -1) {
+		path, kind, name := m[1], m[2], m[3]
+		switch {
+		case kind == "Exact" && url == path:
+			return name
+		case kind == "Prefix" && (path == "/" || url == path || strings.HasPrefix(url, path+"/")):
+			if len(path) > bestLen {
+				best, bestLen = name, len(path)
+			}
+		}
+	}
+	return best
+}
+
+// TestGoCatchAllRenderGuards pins the CHAOS-7047 render guards: a "/" to go-api
+// needs the allow-list opt-in, the allow-list must cover /api/v1/internal, and
+// no go-api path may cover /api/v1/internal.
+func TestGoCatchAllRenderGuards(t *testing.T) {
+	render := func(hosts, allow string) (string, error) {
+		args := []string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts=" + hosts}
+		if allow != "" {
+			args = append(args, "--set-json", "ingress.pythonAllowList="+allow)
+		}
+		out, err := exec.Command("helm", args...).CombinedOutput()
+		return string(out), err
+	}
+	// rewrite/regex/snippet-class annotations with a go-api route.
+	for _, ann := range []string{"use-regex", "rewrite-target", "app-root", "configuration-snippet", "server-snippet", "permanent-redirect", "temporal-redirect"} {
+		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
+			"--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/`+ann+`=/$1`,
+			"--set-json", `ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "ingress.annotations "+ann+" on an Ingress that routes to go-api") {
+			t.Errorf("%s with a go-api route must fail the render: err=%v\n%s", ann, err, out)
+		}
+	}
+	// A referenced backend Service must exist.
+	for name, args := range map[string][]string{
+		"goApi disabled": {"--set", "goApi.enabled=false"},
+		"api disabled":   {"--set", "goApi.enabled=true", "--set", "api.enabled=false"},
+	} {
+		full := append([]string{"template", "b", ".", "--set", "ingress.enabled=true", "--set-json",
+			`ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`}, args...)
+		out, err := exec.Command("helm", full...).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "enabled is false") {
+			t.Errorf("%s: a route to a disabled Service must fail the render: err=%v\n%s", name, err, out)
+		}
+	}
+	catchAll := `[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
+	if out, err := render(catchAll, ""); err != nil {
+		t.Fatalf("default allow-list must render: %v\n%s", err, out)
+	}
+	for name, c := range map[string]struct{ hosts, allow, want string }{
+		"no opt-in":                 {`[{"host":"h","paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`, "", "without pythonAllowList"},
+		"allow-list drops internal": {catchAll, `[{"path":"/graphql","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
+		"string prefix only":        {catchAll, `[{"path":"/api/v1/int","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
+		"sibling -x":                {catchAll, `[{"path":"/api/v1/internal-x","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
+		"sibling s":                 {catchAll, `[{"path":"/api/v1/internals","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
+		"exact internal only":       {catchAll, `[{"path":"/api/v1/internal","pathType":"Exact"}]`, "must cover /api/v1/internal"},
+		"regex path":                {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"^/api/v1/(internal|internal/acr/.*)","pathType":"ImplementationSpecific","service":"go-api"}]}]`, "", "only literal Prefix/Exact"},
+		"regex chars in prefix":     {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api/v1/(internal)","pathType":"Prefix","service":"go-api"}]}]`, "", "only literal Prefix/Exact"},
+		"implementation specific":   {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/x","pathType":"ImplementationSpecific","service":"go-api"}]}]`, "", "only literal Prefix/Exact"},
+		"go-api /api":               {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api","pathType":"Prefix","service":"go-api"}]}]`, "", "covers /api/v1/internal"},
+		"go-api internal":           {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api/v1/internal/acr","pathType":"Prefix","service":"go-api"}]}]`, "", "covers /api/v1/internal"},
+	} {
+		out, err := render(c.hosts, c.allow)
+		if err == nil || !strings.Contains(out, c.want) {
+			t.Errorf("%s: want render failure containing %q, got err=%v\n%s", name, c.want, err, out)
+		}
+	}
 }

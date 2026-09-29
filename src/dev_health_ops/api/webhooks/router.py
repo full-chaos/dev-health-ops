@@ -4,7 +4,7 @@ All webhooks follow the same pattern:
 1. Validate signature/token (via dependency)
 2. Parse provider-specific headers
 3. Create canonical WebhookEvent
-4. Dispatch to Celery task for async processing
+4. Hand the event to the durable outbox for async processing
 5. Return accepted response immediately
 
 This ensures webhooks don't timeout during heavy processing.
@@ -369,7 +369,6 @@ async def webhooks_health() -> dict:
 
     Verifies:
     - Router is mounted
-    - Celery connection (if configured)
     - Webhook secrets are configured
     """
     import os
@@ -380,19 +379,10 @@ async def webhooks_health() -> dict:
         "jira": bool(os.getenv("JIRA_WEBHOOK_SECRET")),
     }
 
-    celery_available = False
-    try:
-        from dev_health_ops.workers.celery_app import celery_app
-
-        celery_available = celery_app is not None
-
-    except Exception as exc:
-        # If Celery is not configured or unavailable, log and report as not available.
-        logger.warning("Celery health check failed in /webhooks/health: %s", exc)
-        pass
-
     return {
         "status": "ok",
         "secrets_configured": secrets_configured,
-        "celery_available": celery_available,
+        # Celery is retired (CHAOS-4026); the key stays because clients read it,
+        # and internal/api/webhookintake always answers false too.
+        "celery_available": False,
     }

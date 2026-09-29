@@ -36,6 +36,7 @@ from dev_health_ops.models import (
     WorkerJobRoute,
 )
 from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_FINALIZE,
     OUTBOX_KIND_POST_SYNC,
     OUTBOX_STATUS_PENDING,
 )
@@ -213,32 +214,21 @@ def _seed_zero_unit_run(
     return run
 
 
-def _patch_worker_enqueues(monkeypatch):
-    """Capture the run-level Celery enqueues dispatch still makes.
+def _finalize_wakeups(session, run) -> list[SyncDispatchOutbox]:
+    """The durable finalize wakeups armed for a run.
 
-    CHAOS-4054 step 4: a provider unit is never published to Celery any more,
-    so there is no per-unit signature left to fake here. What a dispatch pass
-    stages for a unit is a durable ``sync.provider_unit`` outbox row, which the
-    tests read straight from ``WorkerJobOutbox``; the redispatch countdown and
-    the finalize hand-off are the only Celery publishes that remain.
+    The only run-level hand-off dispatch makes is a ``finalize_sync_run`` outbox
+    row (CHAOS-7059 deleted the Celery publish it used to make on the total-cap
+    denial branch); the outbox relay runs finalize from it.
     """
-
-    from dev_health_ops.workers import sync_units
-
-    dispatch_calls = []
-    finalize_calls = []
-
-    monkeypatch.setattr(
-        sync_units.dispatch_sync_run,
-        "apply_async",
-        lambda args=None, queue=None, **kwargs: dispatch_calls.append((args, queue)),
+    return (
+        session.query(SyncDispatchOutbox)
+        .filter(
+            SyncDispatchOutbox.sync_run_id == run.id,
+            SyncDispatchOutbox.kind == OUTBOX_KIND_FINALIZE,
+        )
+        .all()
     )
-    monkeypatch.setattr(
-        sync_units.finalize_sync_run,
-        "apply_async",
-        lambda args=None, queue=None: finalize_calls.append((args, queue)),
-    )
-    return dispatch_calls, finalize_calls
 
 
 def _outbox_unit_keys(session):
@@ -934,7 +924,6 @@ def test_dispatch_sync_run_redispatches_only_planned_units(db_session, monkeypat
     recent_dispatching.updated_at = datetime.now(timezone.utc)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -984,7 +973,6 @@ def test_dispatch_sync_run_routes_only_the_matrix_routable_unit_to_river(
     db_session.add(unroutable_unit)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -1137,7 +1125,6 @@ def test_dispatch_planned_caught_up_github_family_keeps_one_writer(
     run, unit = _plan_caught_up_github_work_item_family(db_session)
     assert run is not None
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     assert sync_units.dispatch_sync_run(str(run.id)) == {
         "status": "dispatched",
@@ -1160,7 +1147,6 @@ def test_dispatch_sync_run_github_work_items_claim_stages_one_river_writer(
         processor_flags=_GITHUB_WORK_ITEM_FAMILY_FLAGS,
     )
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     assert sync_units.dispatch_sync_run(str(run.id)) == {
         "status": "dispatched",
@@ -1194,7 +1180,6 @@ def test_dispatch_sync_run_github_work_item_direct_alias_never_stages_a_writer(
         processor_flags=_GITHUB_WORK_ITEM_FAMILY_FLAGS,
     )
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     with pytest.raises(WorkerJobRouteError, match="canonical"):
         sync_units.dispatch_sync_run(str(run.id))
@@ -1240,7 +1225,6 @@ def test_dispatch_sync_run_github_work_items_rejects_partial_canonical_claim(
         processor_flags=processor_flags,
     )
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     with pytest.raises(WorkerJobRouteError, match="complete canonical"):
         sync_units.dispatch_sync_run(str(run.id))
@@ -1303,7 +1287,6 @@ def test_dispatch_enabled_atomic_work_item_family_rejects_before_staging(
         processor_flags=processor_flags,
     )
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     with pytest.raises(WorkerJobRouteError, match="complete canonical family"):
         sync_units.dispatch_sync_run(str(run.id))
@@ -1365,7 +1348,6 @@ def test_dispatch_pagerduty_incident_family_preserves_independent_d16_claims(
         "require_canonical_incident_feature_for_update_sync",
         lambda *_args: None,
     )
-    _patch_worker_enqueues(monkeypatch)
 
     assert sync_units.dispatch_sync_run(str(run.id)) == {
         "status": "dispatched",
@@ -1447,7 +1429,6 @@ def test_dispatch_plannable_aggregate_route_has_only_the_river_writer(
         processor_flags=processor_flags,
     )
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     if provider == "pagerduty":
         monkeypatch.setattr(
             sync_units,
@@ -1495,7 +1476,6 @@ def test_dispatch_sync_run_non_plannable_alias_pair_never_stages_a_writer(
         dataset_key="pr-comments",
     )
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     assert sync_units.dispatch_sync_run(str(run.id)) == {
         "status": "noop",
@@ -1558,7 +1538,6 @@ def test_dispatch_sync_run_route_faults_fail_closed(db_session, monkeypatch, sta
         route_row.update({WorkerJobRoute.transport: "celery"})
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     with pytest.raises(WorkerJobRouteError):
         sync_units.dispatch_sync_run(str(run.id))
@@ -1583,7 +1562,6 @@ def test_dispatch_sync_run_provider_outbox_claim_rolls_back_and_dedupes(
         dataset_key="feature-flags",
     )
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     real_enqueue = sync_units.enqueue_worker_job
 
     def die_after_staging(*args, **kwargs):
@@ -1684,7 +1662,6 @@ def test_dispatch_sync_run_routes_every_matrix_ready_pair_independently(
     db_session.add_all([github_unit, unrouted_unit])
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -1821,7 +1798,6 @@ def test_dispatch_sync_run_denial_fails_planned_units_and_spares_in_flight(
     db_session.add(still_planned)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     reason = "sync run cancelled by operator"
     monkeypatch.setattr(
         sync_units.DispatchGuard,
@@ -1885,7 +1861,6 @@ def test_dispatch_sync_run_concurrency_cap_defers_before_routing(
     db_session.add(uncapped_unit)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setattr(
         sync_units.DispatchGuard,
         "authorize_run",
@@ -1971,7 +1946,6 @@ def test_dispatch_sync_run_reclaims_stale_units_and_redecides_each_pair(
     db_session.add(unroutable_unit)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -2021,8 +1995,6 @@ def test_dispatch_sync_run_continues_accepted_run_after_planner_config_pause(
     db_session.add(config)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -2093,7 +2065,6 @@ def test_paused_config_with_stale_dispatching_reclaims_accepted_work(
     db_session.add_all([running, planned, config])
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls = _patch_worker_enqueues(monkeypatch)
 
     dispatch_result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -2113,8 +2084,7 @@ def test_paused_config_with_stale_dispatching_reclaims_accepted_work(
         SyncRunStatus.FAILED.value,
     }
     assert run.completed_at is None
-    assert dispatch_calls == []
-    assert finalize_calls == []
+    assert _finalize_wakeups(db_session, run) == []
     assert _outbox_unit_keys(db_session) == {
         f"sync.provider_unit:{stale_dispatching.id}",
         f"sync.provider_unit:{planned.id}",
@@ -2184,7 +2154,6 @@ def test_total_cap_hard_deny_with_stale_dispatching_does_not_redispatch(
     db_session.add_all([running, planned])
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls = _patch_worker_enqueues(monkeypatch)
     reason = "sync run unit cap exceeded: 3/1"
     monkeypatch.setattr(
         sync_units.DispatchGuard,
@@ -2224,8 +2193,9 @@ def test_total_cap_hard_deny_with_stale_dispatching_does_not_redispatch(
         SyncRunStatus.FAILED.value,
     }
     assert run.completed_at is None
-    assert dispatch_calls == []
-    assert finalize_calls == [((str(run.id),), "sync")]
+    wakeups = _finalize_wakeups(db_session, run)
+    assert len(wakeups) == 1
+    assert wakeups[0].status == OUTBOX_STATUS_PENDING
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 
@@ -2340,8 +2310,6 @@ def test_dispatch_sync_run_continues_accepted_run_after_child_config_pause(
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
 
-    _patch_worker_enqueues(monkeypatch)
-
     result = sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(run)
@@ -2363,7 +2331,6 @@ def test_dispatch_sync_run_logs_budget_guard_would_allow(
 
     run, unit = _seed_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     with caplog.at_level(logging.INFO, logger="dev_health_ops.sync.budget_guard"):
         result = sync_units.dispatch_sync_run(str(run.id))
@@ -2394,7 +2361,6 @@ def test_dispatch_sync_run_logs_budget_guard_would_defer_without_deferring(
 
     run, unit = _seed_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv(
         "SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS",
         json.dumps({"github:rest_core": 1}),
@@ -2443,7 +2409,6 @@ def test_dispatch_sync_run_logs_linear_budget_guard_route_family_dry_run(
         processor_flags=_GITHUB_WORK_ITEM_FAMILY_FLAGS,
     )
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv(
         "SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS",
         json.dumps({"linear:graphql_cost:issues": 1, "linear:graphql_cost": 100}),
@@ -2481,7 +2446,6 @@ def test_dispatch_sync_run_enforces_budget_deferral(db_session, monkeypatch):
 
     run, unit = _seed_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls = _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"github:rest_core": 1}))
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "120")
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
@@ -2500,8 +2464,7 @@ def test_dispatch_sync_run_enforces_budget_deferral(db_session, monkeypatch):
     assert unit.result is not None
     assert unit.result["error_category"] == "budget_deferred"
     assert unit.result["budget_guard"][0]["decision"] == "deferred"
-    assert dispatch_calls == []
-    assert finalize_calls == []
+    assert _finalize_wakeups(db_session, run) == []
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 
@@ -2521,7 +2484,6 @@ def test_dispatch_sync_run_enforces_launchdarkly_budget_deferral(
         processor_flags={"sync_feature_flags": True},
     )
     _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls = _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv(
         "SYNC_BUDGET_BUCKET_LIMITS",
         json.dumps(
@@ -2546,8 +2508,7 @@ def test_dispatch_sync_run_enforces_launchdarkly_budget_deferral(
         entry["decision"] == "deferred" and entry["route_family"] == "audit_log"
         for entry in unit.result["budget_guard"]
     )
-    assert dispatch_calls == []
-    assert finalize_calls == []
+    assert _finalize_wakeups(db_session, run) == []
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 
@@ -2574,7 +2535,6 @@ def test_dispatch_sync_run_budget_reservation_blocks_second_unit(
     db_session.add(second)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"github:rest_core": 2}))
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "60")
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
@@ -2621,7 +2581,6 @@ def test_dispatch_sync_run_budget_reservation_expires(db_session, monkeypatch):
     db_session.flush()
     stale_reserved.updated_at = datetime.now(timezone.utc) - timedelta(minutes=30)
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"github:rest_core": 2}))
 
     result = sync_units.dispatch_sync_run(str(run.id))
@@ -2655,7 +2614,6 @@ def test_dispatch_sync_run_budget_release_after_terminal_unit(db_session, monkey
     db_session.add(completed)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"github:rest_core": 2}))
 
     result = sync_units.dispatch_sync_run(str(run.id))
@@ -2693,7 +2651,6 @@ def test_dispatch_sync_run_github_budget_route_family_isolates_contents_blob(
     db_session.flush()
     active_files.updated_at = datetime.now(timezone.utc)
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv(
         "SYNC_BUDGET_BUCKET_LIMITS",
         json.dumps({"github:contents_blob:blame": 8, "github:contents_blob": 1}),
@@ -2724,7 +2681,6 @@ def test_dispatch_sync_run_does_not_terminalize_when_unit_enqueue_fails(
 
     run, unit = _seed_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     def enqueue_dies(*args, **kwargs):
         raise RuntimeError("outbox write failed")
@@ -2755,7 +2711,6 @@ def test_dispatch_sync_run_redispatches_stale_dispatching_units(
     unit.updated_at = datetime.now(timezone.utc) - timedelta(minutes=30)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
     assert result["queued_units"] == 1
@@ -2772,7 +2727,6 @@ def test_dispatch_sync_run_does_not_reclaim_stale_running_units(
     unit.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
     assert result == {
@@ -2796,7 +2750,6 @@ def test_dispatch_sync_run_does_not_reclaim_fresh_running_units(
     unit.updated_at = datetime.now(timezone.utc)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    _patch_worker_enqueues(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
     assert result == {

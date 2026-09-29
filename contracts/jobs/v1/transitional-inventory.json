@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 34,
+  "row_count": 31,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -52,78 +52,6 @@
     }
   ],
   "rows": [
-    {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:130",
-      "surface": "dispatch_sync_run",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 130
-      },
-      "queue_or_cadence": "sync",
-      "dispatches": "sync.provider_unit outbox rows (per unit)",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "native Go coordinators (sync fan-out)"
-      },
-      "target_kind_id": "route:dispatch_sync_run",
-      "current_implementation_state": "native_go",
-      "verification_status": "verified",
-      "compatibility_dependency": "The checked-in `dispatch_sync_run` route is River; this Celery task remains only as the declared rollback_route=celery compatibility target.",
-      "deletion_evidence_requirement": "Delete this Python task after the Celery rollback route is retired and the native Go dispatch coordinator has completed the required rollback and soak evidence.",
-      "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "transport-routes.json kind dispatch_sync_run, route=river, rollback_route=celery. CORRECTION (2026-08-22, CHAOS-4082): this note previously claimed the deployed sync_dispatch_transport_routes row was still transport='celery' because 0049 seeded it that way and no migration flips it. A production dump disproves that -- all four kinds are transport='river', paused=false, generation=2, applied by an operator via `dho workers routes apply`. The native Go coordinator is the RUNNING route, not merely the checked-in one. CHAOS-4054 step 4: this task no longer dispatches run_sync_unit -- the Celery fallthrough is deleted and every admitted unit is staged in the durable sync.provider_unit outbox. A pair the capability matrix does not route is terminalized as feature_disabled instead."
-    },
-    {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:547",
-      "surface": "finalize_sync_run",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 547
-      },
-      "queue_or_cadence": "sync",
-      "dispatches": "self",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "native Go coordinators"
-      },
-      "target_kind_id": "route:finalize_sync_run",
-      "current_implementation_state": "native_go",
-      "verification_status": "verified",
-      "compatibility_dependency": "The checked-in `finalize_sync_run` route is River; this Celery task remains only as the declared rollback_route=celery compatibility target.",
-      "deletion_evidence_requirement": "Delete this Python task after the Celery rollback route is retired and the native Go finalizer has completed the required rollback and soak evidence.",
-      "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "transport-routes.json kind finalize_sync_run, route=river, rollback_route=celery; the deployed sync_dispatch_transport_routes row is transport='river', paused=false, generation=2 (a production dump on 2026-08-22 under CHAOS-4082 disproved this note's earlier claim that it was still 'celery'; 0049 seeds 'celery' and no migration flips it, but an operator applied it with `dho workers routes apply`), so the native Go coordinator is the RUNNING route, not merely the checked-in one"
-    },
-    {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1154",
-      "surface": "getattr(finalize_sync_run,'apply_async')",
-      "class": "call_site_getattr_indirection",
-      "source": {
-        "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1154
-      },
-      "queue_or_cadence": "n/a",
-      "dispatches": "finalize_sync_run",
-      "dispatch_mechanism": "getattr_indirection_dispatch_call",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "native Go coordinators"
-      },
-      "target_kind_id": null,
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
-      "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
-      "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "grep-evading form; internal to unit completion"
-    },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:12",
       "surface": "investment.materialize",
@@ -749,12 +677,12 @@
       "notes": "Go consumer name go-external-ingest, dependencies.go:367; groups match"
     },
     {
-      "id": "stream_surface:src/dev_health_ops/api/webhooks/pagerduty.py:341",
+      "id": "stream_surface:src/dev_health_ops/api/webhooks/pagerduty.py:340",
       "surface": "PagerDuty webhook event stream",
       "class": "stream_surface",
       "source": {
         "file": "src/dev_health_ops/api/webhooks/pagerduty.py",
-        "line": 341
+        "line": 340
       },
       "queue_or_cadence": "pagerduty-webhook-consumers",
       "dispatches": "internal/jobs/pagerduty (Go stream consumer)",

@@ -43,12 +43,6 @@ def test_dispatch_terminalizes_run_when_feature_flips_off(
     run, unit = plan_run(state)
     disable_feature_for_org(state, state.enabled_org_id)
     patch_dispatch(monkeypatch, state.session)
-    finalize_calls: list[str] = []
-    monkeypatch.setattr(
-        sync_units,
-        "_enqueue_denied_active_finalize",
-        lambda run_id: finalize_calls.append(run_id),
-    )
 
     # When
     result = sync_units.dispatch_sync_run(str(run.id))
@@ -64,7 +58,6 @@ def test_dispatch_terminalizes_run_when_feature_flips_off(
     assert unit.available_at is None
     assert unit.attempts == 0
     assert state.session.query(SyncWatermark).count() == 0
-    assert finalize_calls == []
     finalizer = (
         state.session.query(SyncDispatchOutbox)
         .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_FINALIZE)
@@ -84,12 +77,6 @@ def test_repeated_dispatch_denial_is_idempotent_and_never_retries(
     run, unit = plan_run(state)
     disable_feature_for_org(state, state.enabled_org_id)
     patch_dispatch(monkeypatch, state.session)
-    finalize_calls: list[str] = []
-    monkeypatch.setattr(
-        sync_units,
-        "_enqueue_denied_active_finalize",
-        lambda run_id: finalize_calls.append(run_id),
-    )
     first = sync_units.dispatch_sync_run(str(run.id))
 
     # When
@@ -103,7 +90,6 @@ def test_repeated_dispatch_denial_is_idempotent_and_never_retries(
     assert unit.status == SyncRunUnitStatus.FAILED.value
     assert unit.available_at is None
     assert unit.attempts == 0
-    assert finalize_calls == []
     assert (
         state.session.query(SyncDispatchOutbox)
         .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_FINALIZE)
@@ -123,12 +109,6 @@ def test_zero_unit_denial_schedules_finalizer_once(
     run = plan_zero_unit_run(state)
     disable_feature_for_org(state, state.enabled_org_id)
     patch_dispatch(monkeypatch, state.session)
-    finalize_calls: list[str] = []
-    monkeypatch.setattr(
-        sync_units,
-        "_enqueue_denied_active_finalize",
-        lambda run_id: finalize_calls.append(run_id),
-    )
 
     # When
     result = sync_units.dispatch_sync_run(str(run.id))
@@ -137,7 +117,6 @@ def test_zero_unit_denial_schedules_finalizer_once(
     state.session.refresh(run)
     assert result["status"] == "feature_disabled"
     assert run.status == SyncRunStatus.FAILED.value
-    assert finalize_calls == []
     assert (
         state.session.query(SyncDispatchOutbox)
         .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_FINALIZE)
@@ -157,15 +136,6 @@ def test_denial_never_publishes_terminal_finalizer(
     run, unit = plan_run(state)
     disable_feature_for_org(state, state.enabled_org_id)
     patch_dispatch(monkeypatch, state.session)
-
-    def reject_enqueue(_run_id: str) -> None:
-        raise AssertionError("terminal finalizer must not be published")
-
-    monkeypatch.setattr(
-        sync_units,
-        "_enqueue_denied_active_finalize",
-        reject_enqueue,
-    )
 
     # When
     result = sync_units.dispatch_sync_run(str(run.id))
@@ -205,12 +175,6 @@ def test_dispatch_terminalizes_running_claim_when_feature_flips_off(
     state.session.commit()
     disable_feature_for_org(state, state.enabled_org_id)
     patch_dispatch(monkeypatch, state.session)
-    finalize_calls: list[str] = []
-    monkeypatch.setattr(
-        sync_units,
-        "_enqueue_denied_active_finalize",
-        lambda run_id: finalize_calls.append(run_id),
-    )
 
     # When
     result = sync_units.dispatch_sync_run(str(run.id))
@@ -226,4 +190,3 @@ def test_dispatch_terminalizes_running_claim_when_feature_flips_off(
     assert unit.available_at is None
     assert unit.lease_owner is None
     assert unit.lease_expires_at is None
-    assert finalize_calls == []

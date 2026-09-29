@@ -364,14 +364,8 @@ def test_zero_unit_dispatch_finalizes_not_loops(db_session, monkeypatch):
         db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
     )
 
-    redispatches = []
     finalize_calls = []
 
-    monkeypatch.setattr(
-        sync_units.dispatch_sync_run,
-        "apply_async",
-        lambda args=None, queue=None, countdown=None: redispatches.append(args),
-    )
     monkeypatch.setattr(
         sync_units,
         "finalize_sync_run",
@@ -383,7 +377,12 @@ def test_zero_unit_dispatch_finalizes_not_loops(db_session, monkeypatch):
     assert result["status"] == "noop"
     # Must call finalize, not schedule a redispatch loop.
     assert len(finalize_calls) == 1, "zero-unit run must call finalize"
-    assert len(redispatches) == 0, "zero-unit run must not schedule redispatch"
+    redispatch_wakeups = (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
+        .count()
+    )
+    assert redispatch_wakeups == 0, "zero-unit run must not schedule redispatch"
 
 
 def _seed_zero_unit_run(db_session):
@@ -859,10 +858,6 @@ def test_long_running_unit_counts_against_cap_and_is_not_re_enqueued(
 
     monkeypatch.setattr(
         db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
-    )
-
-    monkeypatch.setattr(
-        sync_units.dispatch_sync_run, "apply_async", lambda *a, **k: None
     )
 
     result = sync_units.dispatch_sync_run(str(run.id))

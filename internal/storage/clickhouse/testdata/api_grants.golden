@@ -1,0 +1,17 @@
+GRANT SELECT, INSERT, ALTER DELETE ON default.teams
+GRANT SELECT, INSERT, ALTER DELETE ON default.identities
+GRANT SELECT ON default.team_sync_policies
+GRANT SELECT, INSERT ON default.team_provider_observations
+GRANT SELECT, INSERT ON default.team_drift_changes
+GRANT INSERT ON default.team_memberships
+GRANT INSERT ON default.manual_attribution_fallbacks
+GRANT SELECT ON default.repo_metrics_daily
+GRANT SELECT ON default.user_metrics_daily
+GRANT SELECT ON default.team_metrics_daily
+GRANT SELECT ON default.work_item_metrics_daily
+GRANT SELECT ON default.repo_complexity_daily
+GRANT SELECT ON default.compounding_risk_daily
+GRANT INSERT ON default.telemetry_signal_bucket
+GRANT SELECT ON default.llm_token_usage
+GRANT SELECT ON default.work_unit_investments
+GRANT SELECT ON default.work_items

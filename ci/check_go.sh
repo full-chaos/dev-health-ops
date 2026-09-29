@@ -558,6 +558,28 @@ check_live_python_oracles() {
     fi
   done
 
+  printf 'go test -count=1: internal/fixturescli (contract-2 ordering stamp vs the live Python operational producer)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestOrderingStampMatchesTheLivePythonProducer)$' \
+        ./internal/fixturescli
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/fixturescli-ordering-oracle"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the fixturescli ordering stamp was not compared with the live Python producer\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/api/policy (api decisions vs live Python)\n'
   if ! (
     cd "${ROOT}"

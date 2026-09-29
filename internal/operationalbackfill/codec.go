@@ -145,6 +145,10 @@ func encodeField(out *bytes.Buffer, name string, value any) error {
 			return fmt.Errorf("invalid operational ordering field %s: invalid UTF-8 text", name)
 		}
 		valueType, encoded = "string", []byte(typed)
+	case UUIDText:
+		// Python holds source_id and repo_id as UUID; the codec writes it as its
+		// lower-case canonical text under its own type tag.
+		valueType, encoded = "uuid", []byte(strings.ToLower(string(typed)))
 	case int64:
 		valueType, encoded = "integer", []byte(strconv.FormatInt(typed, 10))
 	case float64:
@@ -228,8 +232,12 @@ func pyLower(text string) string {
 	return strings.ToLower(strings.ReplaceAll(text, "İ", "i̇"))
 }
 
+// UUIDText is a UUID field value (source_id, repo_id): the type tag differs
+// from a string's, so the conflict key differs.
+type UUIDText string
+
 // OrderingField is one named value of an operational entity, in the dataclass
-// declaration order. A value is nil, bool, string, int64, float64 or time.Time.
+// declaration order. A value is nil, bool, string, UUIDText, int64, float64 or time.Time.
 type OrderingField struct {
 	Name  string
 	Value any

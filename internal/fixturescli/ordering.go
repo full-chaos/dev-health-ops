@@ -132,6 +132,13 @@ func orderingValue(column FrozenColumn, value any) (any, error) {
 			}
 		}
 		return nil, fmt.Errorf("%q is not a time", text)
+	case column.Name == "source_id" || column.Name == "repo_id":
+		// The producer's dataclass holds these two as UUID, whatever the column type.
+		text, isText := value.(string)
+		if !isText {
+			return nil, fmt.Errorf("%v is not a UUID string", value)
+		}
+		return operationalbackfill.UUIDText(text), nil
 	case strings.HasPrefix(base, "Float"):
 		number, err := strconv.ParseFloat(fmt.Sprint(value), 64)
 		if err != nil {

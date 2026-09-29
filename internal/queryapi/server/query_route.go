@@ -28,6 +28,8 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
+	"github.com/99designs/gqlgen/graphql/handler/extension"
+	"github.com/99designs/gqlgen/graphql/handler/transport"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -3174,8 +3176,41 @@ func newProofOrgAllowed(pool *pgxpool.Pool) func(context.Context, string) bool {
 // error presenter. The venue oracle builds the same server, so what it measures
 // is what serves.
 func newGraphQLServer(resolver *graph.Resolver) *gqlhandler.Server {
+	return newGraphQLServerWithLimits(resolver, graphQLComplexityLimit, graphQLDepthLimit)
+}
+
+// newGraphQLServerWithLimits is newGraphQLServer with its two query limits as
+// parameters, so a test can drive the real HTTP pipeline against a limit small
+// enough for this schema's shallow documents to exceed (no registered document
+// nests past graphQLDepthLimit, so the production depth limit cannot be
+// exceeded over HTTP).
+func newGraphQLServerWithLimits(resolver *graph.Resolver, complexityLimit, depthMax int) *gqlhandler.Server {
 	schema := graph.NewExecutableSchema(graph.Config{Resolvers: resolver})
-	gqlHandler := gqlhandler.NewDefaultServer(schema)
+	// CHAOS-7078: gqlhandler.NewDefaultServer's own doc comment says it
+	// plainly -- "Deprecated: This was and is just an example ... Not for
+	// prod". It turns ON introspection, Automatic Persisted Queries, GET,
+	// websocket and multipart transports, with no depth or complexity
+	// limit anywhere. Built explicitly instead:
+	//   - POST only. This route is never browsed and every existing
+	//     identity/envelope check already assumes a POST body; GET,
+	//     websocket, multipart and the OPTIONS transport are all simply
+	//     absent, not merely disabled.
+	//   - no introspection, no APQ. An unregistered document has no
+	//     operation name and no go_api_routing_state row can exist for it
+	//     -- operationForDocument's digest gate (below) already refuses
+	//     it outright; APQ's hash-registration flow would be a second,
+	//     weaker path toward the same shape this route exists to keep
+	//     closed, and introspection has no legitimate caller on a route
+	//     the Python edge alone forwards to.
+	//   - a fixed complexity limit and a depth limit (gqlgen ships no
+	//     depth limiter of its own), both sized from the real
+	//     registered-document set -- see graphql_server_limits.go's doc
+	//     comment for the measurement and graphql_server_limits_test.go
+	//     for the pin.
+	gqlHandler := gqlhandler.New(schema)
+	gqlHandler.AddTransport(transport.POST{})
+	gqlHandler.Use(extension.FixedComplexityLimit(complexityLimit))
+	gqlHandler.Use(depthLimit{Max: depthMax})
 	gqlHandler.AroundFields(graph.RefuseNullForNonNullArguments)
 	gqlHandler.Use(graph.OperationOrgGuard{})
 	// CHAOS-4647 diagnostic: the process log carries nothing per-request,

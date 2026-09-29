@@ -594,3 +594,33 @@ func TestGenerateVerbRefusesANonUTCServer(t *testing.T) {
 		t.Fatalf("a refused non-UTC load wrote rows: %v -> %v", before, after)
 	}
 }
+
+// CHAOS-7053: the migrated head is contract 2 (the ordering columns, and CHECK ordering_contract = 2
+// on the operational tables). The frozen world was written against the legacy tables; loaded as it
+// is it took ordering_contract = 0 and the server refused it (code 469, "Constraint
+// ordering_contract_v2 ... is violated"). The verb stamps the ordering columns when the table has them.
+func TestGenerateVerbLoadsTheWorldIntoAContractTwoHead(t *testing.T) {
+	t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "2")
+	ch := startClickHouse(t)
+	stopMerges(t, ch.httpDSN)
+	if shape := strings.TrimSpace(clickHouseHTTP(t, ch.httpDSN, "SELECT count() FROM system.columns WHERE database = currentDatabase() AND table = 'operational_incidents' AND name = 'ordering_contract' FORMAT TSV")); shape != "1" {
+		t.Fatalf("the control is vacuous: operational_incidents has no ordering_contract column (%s) so this is not a contract-2 head", shape)
+	}
+	code, _, stderr := runGenerateVerb(t, nil, acrArgs(ch.instance.URI)...)
+	if code != cli.ExitOK {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	for _, table := range []string{"operational_incidents", "operational_services", "operational_service_repository_mappings"} {
+		got := strings.TrimSpace(clickHouseHTTP(t, ch.httpDSN,
+			"SELECT count(), countIf(ordering_contract = 2), countIf(source_conflict_key != ''), countIf(source_revision > 0), countIf(ingest_revision > 0) FROM "+table+" FORMAT TSV"))
+		fields := strings.Fields(got)
+		if len(fields) != 5 || fields[0] == "0" {
+			t.Fatalf("%s: stamped counts %q: the world loaded no rows", table, got)
+		}
+		for _, count := range fields[1:] {
+			if count != fields[0] {
+				t.Fatalf("%s: rows %s, contract-2 %s, key %s, revision %s, ingest %s: every row must carry all four ordering values", table, fields[0], fields[1], fields[2], fields[3], fields[4])
+			}
+		}
+	}
+}

@@ -222,3 +222,22 @@ func TestUnknownSinkIsNotEchoed(t *testing.T) {
 		t.Fatal("the unknown sink is echoed")
 	}
 }
+
+func TestDeriveOrderingEncodesIntegerFloatAndTombstoneRank(t *testing.T) {
+	at := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	fields := []OrderingField{{"id", "x"}, {"n", int64(3)}, {"c", float64(0.5)}, {"title", "t"}, {"observed_at", at}}
+	live, err := DeriveOrdering("operational_incident", fields, at, at, at, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead, err := DeriveOrdering("operational_incident", fields, at, at, at, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live.ConflictKey != dead.ConflictKey || live.SourceRevision.Cmp(dead.SourceRevision) >= 0 {
+		t.Fatalf("a tombstone must share the key and outrank the live row: %s vs %s", live.SourceRevision, dead.SourceRevision)
+	}
+	if !strings.Contains(live.ConflictKey, "696e7465676572") || !strings.Contains(live.ConflictKey, "666c6f61743634") {
+		t.Fatalf("the key does not carry the integer type: %s", live.ConflictKey)
+	}
+}

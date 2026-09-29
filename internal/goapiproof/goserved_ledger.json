@@ -4,6 +4,7 @@
     {
       "operation": "capacityForecast",
       "two_plane_ops_sha": "33ebad6b2d1747302667fb14902dafaa1bdf99ea",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/jobs/metrics/numerical/capacity_golden_rot_guard_test.go", "test": "TestCapacityForecastGoldenMatchesLivePython"},
         {"file": "internal/jobs/metrics/numerical/capacity_forecast_test.go", "test": "TestCapacityForecastMatchesPython"},
@@ -13,6 +14,7 @@
     {
       "operation": "capacityForecasts",
       "two_plane_ops_sha": "33ebad6b2d1747302667fb14902dafaa1bdf99ea",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/jobs/metrics/numerical/capacity_golden_rot_guard_test.go", "test": "TestCapacityForecastGoldenMatchesLivePython"},
         {"file": "internal/jobs/metrics/numerical/capacity_forecast_test.go", "test": "TestCapacityForecastMatchesPython"},
@@ -22,6 +24,7 @@
     {
       "operation": "throughputForecast",
       "two_plane_ops_sha": "33ebad6b2d1747302667fb14902dafaa1bdf99ea",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/throughputforecast/kernel_golden_test.go", "test": "TestForecastThroughputCapacityMatchesLivePythonBitExact"},
         {"file": "internal/queryapi/throughputforecast/kernel_golden_test.go", "test": "TestNoHistoryPayloadMatchesLivePythonBitExact"},
@@ -67,6 +70,7 @@
     {
       "operation": "complexityTimeseries",
       "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/complexitytimeseries/complexitytimeseries_golden_test.go", "test": "TestComplexityTimeseriesMatchesTheFrozenGolden"},
         {"file": "internal/queryapi/complexitytimeseries/complexitytimeseries_test.go", "test": "TestPyWeekday_MatchesPythonConvention"},
@@ -76,6 +80,7 @@
     {
       "operation": "hotspots",
       "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/hotspots/hotspots_golden_test.go", "test": "TestHotspotsMatchesTheFrozenGolden"},
         {"file": "internal/queryapi/hotspots/hotspots_test.go", "test": "TestQuotePython_MatchesPythonQuoteDefaultSafeSet"},
@@ -85,6 +90,7 @@
     {
       "operation": "cognitiveLoad",
       "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/cognitiveload/cognitiveload_golden_test.go", "test": "TestCognitiveLoadMatchesTheFrozenGolden"},
         {"file": "internal/queryapi/cognitiveload/cognitiveload_test.go", "test": "TestResolve_TeamAndRepoCombined_OwnedByADifferentTeam_NeverPatternFallback_ReturnsEmpty"},
@@ -103,6 +109,7 @@
     {
       "operation": "catalogValues",
       "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/analytics/catalog_golden_test.go", "test": "TestCatalogMatchesTheFrozenGolden"},
         {"file": "internal/queryapi/analytics/catalog_test.go", "test": "TestCanonicalRepositoryValues"},
@@ -112,6 +119,7 @@
     {
       "operation": "acrRepositoryScopes",
       "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/analytics/catalog_golden_test.go", "test": "TestCatalogMatchesTheFrozenGolden"},
         {"file": "internal/queryapi/analytics/catalog_test.go", "test": "TestCanonicalRepositoryValues"},
@@ -130,6 +138,7 @@
     {
       "operation": "securityOverview",
       "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/security/secoverview_golden_test.go", "test": "TestSecurityOverviewMatchesTheFrozenGolden"},
         {"file": "internal/queryapi/security/security_test.go", "test": "TestResolveOverview_ParsesAndScopes"},
@@ -139,6 +148,7 @@
     {
       "operation": "workGraphEdges",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
         {"file": "internal/queryapi/workgraph/workgraph_test.go", "test": "TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse"},
@@ -148,6 +158,7 @@
     {
       "operation": "workGraphFlow",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
         {"file": "internal/queryapi/workgraph/flow_test.go", "test": "TestResolveFlow_AggregatesInflowAndOutflowPerNodeType"},
@@ -157,6 +168,7 @@
     {
       "operation": "workGraphArtifacts",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
         {"file": "internal/queryapi/workgraph/artifacts_evidence_tiebreak_integration_test.go", "test": "TestResolveArtifactsEvidenceMatchesPythonReaderLiteral"},
@@ -250,6 +262,7 @@
     {
       "operation": "compoundingRisk",
       "two_plane_ops_sha": "8b08058f369cbe5415ebebb282c4fed5fac266c5",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/compoundingrisk/resolve_test.go", "test": "TestTeamPoints_MatchesPythonCells"},
         {"file": "internal/queryapi/compoundingrisk/compoundingrisk_integration_test.go", "test": "TestRealClickHouse_RepoBreakout"},
@@ -323,6 +336,7 @@
     {
       "operation": "securityAlerts",
       "two_plane_ops_sha": "9d6512ef7ee24aaac9c293f7fdbb5ea52c36dab6",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/security/security_test.go", "test": "TestBuildFilter_Enumeration"},
         {"file": "internal/queryapi/security/security_integration_test.go", "test": "TestRealClickHouse_Alerts"},
@@ -388,6 +402,7 @@
     {
       "operation": "investmentBreakdown",
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/analytics/resolve_test.go", "test": "TestResolve_Investment_ResolvesEndToEnd"},
         {"file": "internal/queryapi/analytics/breakdown_seeded_integration_test.go", "test": "TestCompileBreakdown_ThemeCount_SeededRealClickHouse_ExactAggregate"},
@@ -397,6 +412,7 @@
     {
       "operation": "investmentFull",
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "enable_limit": "no production proof path exists for an operation with no routing row: the proof route does not mount on production and the edge dispatches only routed rows; Go-served proof (PROVEN_GO_ONLY, the Python execution path is deleted) on bigboy at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff, receipt _records/bigboy-0c4f8cf8/",
       "guards": [
         {"file": "internal/queryapi/analytics/resolve_test.go", "test": "TestResolve_Investment_EvidenceQualityStats_PopulatedWhenUseInvestmentTrue"},
         {"file": "internal/queryapi/analytics/sankeycoverage_seeded_integration_test.go", "test": "TestResolveSankeyCoverage_SeededRealClickHouse_ExactShares"},
@@ -447,6 +463,31 @@
         {"file": "internal/queryapi/analytics/breakdown_test.go", "test": "TestCompileBreakdown_TestopsCoverageMeasure"},
         {"file": "internal/queryapi/analytics/breakdown_test.go", "test": "TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "home",
+      "unproven_reason": "Python home was deleted (CHAOS-7070), so no two-plane baseline exists and the proof route refuses it (response_carried_graphql_errors); the Go plane serves it, receipt _records/bigboy-0c4f8cf8/ (bigboy, ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff)",
+      "enable_limit": "no production proof path exists for an operation with no routing row and no Python baseline: the proof route does not mount on production and the edge dispatches only routed rows; the deleted Python path leaves nothing to compare, so the Go-served evidence is the golden and live-ClickHouse suites named below plus the bigboy Go-served run at ops build 0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff (receipt _records/bigboy-0c4f8cf8/)",
+      "guards": [
+        {"file": "internal/queryapi/home/golden_test.go", "test": "TestGoldenOrgScopeDefault"},
+        {"file": "internal/queryapi/home/golden_scoped_test.go", "test": "TestGoldenTeamScoped"}
+      ]
+    },
+    {
+      "operation": "recommendations",
+      "two_plane_ops_sha": "0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff",
+      "guards": [
+        {"file": "internal/queryapi/recommendations/goldens_live_python_oracle_test.go", "test": "TestGoldensAreWhatPythonProducesNow"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "workItemTeamAttributions",
+      "two_plane_ops_sha": "0c4f8cf86f7cfb486a2ba73be7b1a88ccd4155ff",
+      "guards": [
+        {"file": "internal/queryapi/graph/workitemteamattributions_org_guard_test.go", "test": "TestWorkItemTeamAttributions_OrgIDMismatchIsRefused"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     }
   ]

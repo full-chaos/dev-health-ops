@@ -131,6 +131,15 @@ _QUERIES = {
         'query { workUnitTeamAttributions(orgId: "org-1") { workUnitId } }',
         None,
     ),
+    "workItemTeamAttributions": (
+        'query { workItemTeamAttributions(orgId: "org-1") { workItemId } }',
+        None,
+    ),
+    "recommendations": (
+        'query { recommendations(orgId: "org-1", team: "team-1", '
+        "window: {value: 4, unit: WEEK}) { ruleId } }",
+        None,
+    ),
     "securityOverview": (
         'query { securityOverview(orgId: "org-1") { kpis { openTotal } } }',
         None,
@@ -242,9 +251,14 @@ def test_the_go_served_ledger_names_exactly_the_raising_fields() -> None:
         "testOpsTest": "analytics",
         "testOpsCoverage": "analytics",
     }
+    # Operations whose Python field was deleted outright (not left raising):
+    # the ledger names them for the enable/prove tooling, and there is no
+    # Strawberry field left to raise.
+    no_python_field = {"home"}
     fields = {
         named_documents.get(entry["operation"], entry["operation"])
         for entry in ledger["entries"]
+        if entry["operation"] not in no_python_field
     }
     assert sorted(fields) == sorted(_QUERIES)
 
@@ -293,3 +307,13 @@ def test_every_document_over_the_analytics_root_has_its_own_ledger_row() -> None
         "testOpsTest",
         "testOpsCoverage",
     } <= operations
+
+
+def test_home_stays_absent_from_the_python_schema() -> None:
+    """`home` is exempt from the ledger-vs-schema.py check because its Python
+    field was deleted outright (CHAOS-7070). The exemption is only sound while
+    the field stays absent: a Python `home` field would answer from Python
+    beside the Go plane with no raise and no check noticing."""
+    query_type = schema._schema.query_type
+    assert query_type is not None
+    assert "home" not in query_type.fields

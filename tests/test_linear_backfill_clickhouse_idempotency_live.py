@@ -422,85 +422,9 @@ def test_sprints_final_collapses_duplicate_retry_rows(sink: Any) -> None:
         _delete_org_rows(sink, org_id, ["sprints"])
 
 
-def test_team_attribution_latest_snapshot_retry_keeps_results_stable(
-    sink: Any,
-) -> None:
-    from dev_health_ops.api.graphql.context import GraphQLContext
-    from dev_health_ops.api.graphql.resolvers.team_attribution import (
-        resolve_work_item_team_attributions,
-    )
-    from dev_health_ops.metrics.schemas import WorkItemTeamAttributionRecord
-
-    assert CLICKHOUSE_URI is not None
-    org_id = f"test-chaos-2710-attr-{uuid.uuid4()}"
-    repo_id = uuid.uuid4()
-    work_item_id = f"linear:CHAOS-{uuid.uuid4()}"
-    computed_at = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    context = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client)
-
-    def candidate_rows(ts: datetime) -> list[WorkItemTeamAttributionRecord]:
-        return [
-            WorkItemTeamAttributionRecord(
-                work_item_id=work_item_id,
-                provider="linear",
-                source="native_team",
-                is_primary=1,
-                confidence="high",
-                evidence="native_team_key=CHAOS",
-                computed_at=ts,
-                repo_id=repo_id,
-                team_id="team-a",
-                team_name="Team A",
-                org_id=org_id,
-            ),
-            WorkItemTeamAttributionRecord(
-                work_item_id=work_item_id,
-                provider="linear",
-                source="assignee_membership",
-                is_primary=0,
-                confidence="medium",
-                evidence="assignee=alice@example.com",
-                computed_at=ts,
-                repo_id=repo_id,
-                team_id="team-b",
-                team_name="Team B",
-                org_id=org_id,
-            ),
-        ]
-
-    try:
-        sink.write_work_item_team_attributions(candidate_rows(computed_at))
-        before = asyncio.run(
-            resolve_work_item_team_attributions(context, work_item_ids=[work_item_id])
-        )
-
-        sink.write_work_item_team_attributions(
-            candidate_rows(computed_at + timedelta(minutes=5))
-        )
-        after = asyncio.run(
-            resolve_work_item_team_attributions(context, work_item_ids=[work_item_id])
-        )
-
-        before_rows = [
-            (row.team_id, row.source.value, row.is_primary) for row in before
-        ]
-        after_rows = [(row.team_id, row.source.value, row.is_primary) for row in after]
-        assert before_rows == after_rows
-        assert after_rows == [
-            ("team-a", "native_team", True),
-            ("team-b", "assignee_membership", False),
-        ]
-    finally:
-        _delete_org_rows(sink, org_id, ["work_item_team_attributions"])
-
-
 def test_scenario_9_complete_window_retry_rewrite_does_not_duplicate_surfaces(
     sink: Any,
 ) -> None:
-    from dev_health_ops.api.graphql.context import GraphQLContext
-    from dev_health_ops.api.graphql.resolvers.team_attribution import (
-        resolve_work_item_team_attributions,
-    )
     from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
     from dev_health_ops.metrics.schemas import WorkItemTeamAttributionRecord
 
@@ -515,7 +439,6 @@ def test_scenario_9_complete_window_retry_rewrite_does_not_duplicate_surfaces(
     created_at = start + timedelta(hours=1)
     occurred_at = start + timedelta(hours=2)
     version_at = start + timedelta(hours=3)
-    context = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client)
     loader = ClickHouseDataLoader(sink.client, org_id=org_id)
     tables = [
         "work_item_team_attributions",
@@ -736,8 +659,15 @@ def test_scenario_9_complete_window_retry_rewrite_does_not_duplicate_surfaces(
         dependencies = asyncio.run(
             loader.load_work_item_dependencies(source_work_item_ids=[work_item_id])
         )
-        attributions = asyncio.run(
-            resolve_work_item_team_attributions(context, work_item_ids=[work_item_id])
+        attributions = _rows(
+            sink,
+            """
+            SELECT team_id, source, is_primary
+            FROM work_item_team_attributions FINAL
+            WHERE org_id = %(org_id)s AND work_item_id = %(work_item_id)s
+            ORDER BY is_primary DESC, team_id
+            """,
+            {"org_id": org_id, "work_item_id": work_item_id},
         )
         interactions = _rows(
             sink,
@@ -787,7 +717,8 @@ def test_scenario_9_complete_window_retry_rewrite_does_not_duplicate_surfaces(
             "reopen_events": reopen_events,
             "sprints": sprints,
             "team_attributions": [
-                (row.team_id, row.source.value, row.is_primary) for row in attributions
+                (row["team_id"], row["source"], bool(row["is_primary"]))
+                for row in attributions
             ],
         }
 

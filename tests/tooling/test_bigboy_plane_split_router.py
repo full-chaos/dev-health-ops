@@ -79,7 +79,18 @@ def assert_internal_only(name: str, rule: str) -> None:
     )
     # Remove the path regex body (it legitimately contains `|`), then the shape must be exact.
     skeleton = PATH_CALL.sub("PathRegexp(P)", rule).strip()
-    assert skeleton in {"Host(`traefik`)", "Host(`traefik`) && PathRegexp(P)"}, (
+    # CHAOS-7047: the Python allow-list router ANDs the Host clause with a parenthesised
+    # group of literal Path()/PathPrefix() terms.
+    skeleton = re.sub(
+        r"\((?:Path|PathPrefix)\(`[^`]+`\)(?: \|\| (?:Path|PathPrefix)\(`[^`]+`\))*\)",
+        "(PATHS)",
+        skeleton,
+    )
+    assert skeleton in {
+        "Host(`traefik`)",
+        "Host(`traefik`) && PathRegexp(P)",
+        "Host(`traefik`) && (PATHS)",
+    }, (
         f"{name}: rule can match without the internal Host clause: {skeleton}"
     )
 
@@ -94,7 +105,12 @@ def test_dynamic_config_rules_are_internal_only(
         )
     )
     routers = doc["http"]["routers"]
-    assert set(routers) == {"go-api-paths", "query-api-paths", "api-internal-catchall"}
+    assert set(routers) == {
+        "go-api-paths",
+        "query-api-paths",
+        "python-allowlist",
+        "api-internal-catchall",
+    }
     for name, router in routers.items():
         assert_internal_only(name, router["rule"])
         assert router["entryPoints"] == ["web"]
@@ -146,3 +162,57 @@ def test_checker_rejects_public_or_hostless_rules(bad_rule: str) -> None:
     """The checker itself must fail on each D2735-class shape (guard observed failing)."""
     with pytest.raises(AssertionError):
         assert_internal_only("planted", bad_rule)
+
+
+def _route(doc: dict, path: str) -> str:
+    """Resolve `path` on Host(`traefik`) the way traefik does: highest priority matching
+    router wins. Understands only the rule forms the generator emits."""
+    best = None
+    for router in doc["http"]["routers"].values():
+        rule = router["rule"]
+        m = re.search(r"PathRegexp\(`([^`]+)`\)", rule)
+        if m:
+            ok = re.match(m.group(1), path) is not None
+        elif "&&" in rule:
+            terms = re.findall(r"(Path|PathPrefix)\(`([^`]+)`\)", rule)
+            ok = any(
+                (k == "Path" and path == v) or (k == "PathPrefix" and path.startswith(v))
+                for k, v in terms
+            )
+        else:
+            ok = True
+        if ok and (best is None or router["priority"] > best["priority"]):
+            best = router
+    assert best is not None
+    return doc["http"]["services"][best["service"]]["loadBalancer"]["servers"][0]["url"]
+
+
+def test_default_backend_is_go_and_allow_list_stays_python(
+    gen: ModuleType, values_file: Path
+) -> None:
+    """CHAOS-7047: an unknown path reaches the Go api; only the allow-list reaches Python."""
+    go_paths, query_paths = gen.load_paths(str(values_file))
+    doc = yaml.safe_load(
+        gen.emit_dynamic_config(
+            gen.combined_regex(go_paths), gen.combined_regex(query_paths)
+        )
+    )
+    assert _route(doc, "/no/such/path") == "http://go-api:8000"
+    assert _route(doc, "/graphqlx") == "http://go-api:8000"
+    assert _route(doc, "/api/v1/work-units") == "http://query-api:8090"
+    assert _route(doc, "/health") == "http://go-api:8000"
+    for py in (
+        "/graphql",
+        "/api/v1/admin/llm-settings/readiness",
+        "/api/v1/internal/acr/health",
+        "/docs",
+        "/openapi.json",
+    ):
+        assert _route(doc, py) == "http://api:8000", py
+    assert _route(doc, "/api/v1/admin/llm-settings/readiness/x") == "http://go-api:8000"
+
+
+def test_allow_list_override_must_cover_internal(gen: ModuleType) -> None:
+    doc = {"ops": {"ingress": {"pythonAllowList": [{"path": "/graphql", "pathType": "Prefix"}]}}}
+    with pytest.raises(SystemExit):
+        gen.python_allow_list_from_doc(doc)

@@ -207,6 +207,24 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	if response.Header.Get("X-Request-ID") == "" || response.Header.Get("X-Frame-Options") != "DENY" {
 		t.Fatalf("transport headers missing: %v", response.Header)
 	}
+
+	// CHAOS-7047: the Go api is the ingress default backend, so ANY unrouted
+	// path (including the introspection paths the Python api used to serve)
+	// gets this native 404, stamped x-dev-health-plane: go.
+	for _, path := range []string{"/", "/docs", "/redoc", "/openapi.json", "/metrics", "/no/such/path", "/graphql"} {
+		resp, err := http.Get("http://" + server.Address() + path)
+		if err != nil {
+			t.Fatalf("get %s: %v", path, err)
+		}
+		got, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound || string(got) != `{"detail":"Not Found"}` {
+			t.Errorf("%s: %d %s, want the native 404", path, resp.StatusCode, got)
+		}
+		if plane := resp.Header.Get(buildstamp.PlaneHeader); plane != "go" {
+			t.Errorf("%s: %s = %q, want go", path, buildstamp.PlaneHeader, plane)
+		}
+	}
 }
 
 // TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured proves the other

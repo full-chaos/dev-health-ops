@@ -102,6 +102,15 @@ func TestFlowMatrixResult_NilNodesAndEdges_MarshalToEmptyArrays_NotError(t *test
 	if got := marshalToString(t, edgesResult); got != "[]" {
 		t.Fatalf("edges: expected the literal empty array \"[]\", got %q", got)
 	}
+
+	// CHAOS-7092 negative control: a genuinely nil DegradedReason (obj
+	// above never set it) must marshal to graphql.Null -- proving the
+	// field's absence looks like absence, not like an empty string, so
+	// a client can tell "not degraded" from "degraded, reason unset".
+	degradedReasonResult := ec._FlowMatrixResult_degradedReason(ctx, field, obj)
+	if degradedReasonResult != gqlgen.Null {
+		t.Fatalf("degradedReason: expected graphql.Null for a nil *string, got %q", marshalToString(t, degradedReasonResult))
+	}
 }
 
 // TestMarshalNSankeyNodeSlice_Nil_ProducesEmptyArray pins the specific
@@ -201,6 +210,20 @@ func TestResolveFlowMatrix_DegradePath_NilResult_MarshalsToEmptyArrays(t *testin
 	}
 	if got := marshalToString(t, edgesResult); got != "[]" {
 		t.Fatalf("degrade path: edges expected \"[]\", got %q", got)
+	}
+
+	// CHAOS-7092: the caller-visible half of this same real degrade
+	// path -- degradedReason must marshal through the REAL generated
+	// field function to the actual string value, not graphql.Null, so
+	// a real /query response for this exact swallow carries the
+	// disclosure this ticket exists to add.
+	degradedReasonResult := ec._FlowMatrixResult_degradedReason(ctx, field, result.FlowMatrix)
+	if degradedReasonResult == gqlgen.Null {
+		t.Fatalf("degrade path: degradedReason marshaled to graphql.Null -- CHAOS-7092's disclosure field did not survive the real swallow path")
+	}
+	wantReason := `"FLOW_MATRIX_EXECUTION_FAILED"` // the public contract string, pinned literally
+	if got := marshalToString(t, degradedReasonResult); got != wantReason {
+		t.Fatalf("degrade path: degradedReason expected %s, got %q", wantReason, got)
 	}
 }
 

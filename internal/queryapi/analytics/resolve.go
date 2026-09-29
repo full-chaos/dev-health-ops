@@ -547,11 +547,30 @@ func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, in
 		RecordInvestmentRepoJoinDedupCollisions(ctx, client, orgID)
 	}
 	nodes, edges, execErr := ExecuteFlowMatrix(ctx, client, nodesQuery, edgesQuery)
+	// The swallow-to-empty behaviour itself is unchanged
+	// (analytics.py:959-961's own "logs and degrades" is a parity-declared
+	// answer, and changing it would change web's answer too).
+	// What was missing is a way for the CALLER to tell this genuinely
+	// empty flowMatrix apart from one that swallowed a real execution
+	// failure: degradedReason is additive-only, non-nil ONLY on this
+	// path, so an unaffected client sees exactly what it always has.
+	var degradedReason *string
 	if execErr != nil {
 		// Swallow: analytics.py:959-961 logs and degrades to empty.
 		recordDegradation(ctx, "flowMatrix", execErr)
 		nodes, edges = nil, nil
+		reason := FlowMatrixExecutionFailedReason
+		degradedReason = &reason
 	}
 
-	return &model.FlowMatrixResult{Nodes: nodes, Edges: edges}, nil
+	return &model.FlowMatrixResult{Nodes: nodes, Edges: edges, DegradedReason: degradedReason}, nil
 }
+
+// FlowMatrixExecutionFailedReason is CHAOS-7092's disclosure value for
+// flowMatrix's swallow-to-empty path -- Go-only (no matching Python
+// string to mirror; analytics.py's own degrade never exposed a reason
+// to its own caller, only to its logger), same STABLE, machine-readable
+// SCREAMING_SNAKE_CASE convention as
+// featureflags.EventNotMaterializedReason and
+// workgraph.MembershipNotMaterialized.
+const FlowMatrixExecutionFailedReason = "FLOW_MATRIX_EXECUTION_FAILED"

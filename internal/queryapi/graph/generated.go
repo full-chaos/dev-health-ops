@@ -682,8 +682,9 @@ type ComplexityRoot struct {
 	}
 
 	FlowMatrixResult struct {
-		Edges func(childComplexity int) int
-		Nodes func(childComplexity int) int
+		DegradedReason func(childComplexity int) int
+		Edges          func(childComplexity int) int
+		Nodes          func(childComplexity int) int
 	}
 
 	Freshness struct {
@@ -4466,6 +4467,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.FeatureFlagRegistryResult.TotalCount(childComplexity), true
+
+	case "FlowMatrixResult.degradedReason":
+		if e.complexity.FlowMatrixResult.DegradedReason == nil {
+			break
+		}
+
+		return e.complexity.FlowMatrixResult.DegradedReason(childComplexity), true
 
 	case "FlowMatrixResult.edges":
 		if e.complexity.FlowMatrixResult.Edges == nil {
@@ -9262,6 +9270,11 @@ input FlowMatrixRequestInput {
 type FlowMatrixResult {
   nodes: [SankeyNode!]!
   edges: [SankeyEdge!]!
+  """Non-null only when the underlying ClickHouse execution failed and
+  was swallowed to an empty nodes/edges result (Python-parity
+  behaviour, analytics.py:959-961) -- CHAOS-7092: the caller must be
+  able to tell a genuinely empty result apart from a degraded one."""
+  degradedReason: String
 }
 
 type Freshness {
@@ -24105,6 +24118,8 @@ func (ec *executionContext) fieldContext_AnalyticsResult_flowMatrix(_ context.Co
 				return ec.fieldContext_FlowMatrixResult_nodes(ctx, field)
 			case "edges":
 				return ec.fieldContext_FlowMatrixResult_edges(ctx, field)
+			case "degradedReason":
+				return ec.fieldContext_FlowMatrixResult_degradedReason(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type FlowMatrixResult", field.Name)
 		},
@@ -32649,6 +32664,47 @@ func (ec *executionContext) fieldContext_FlowMatrixResult_edges(_ context.Contex
 				return ec.fieldContext_SankeyEdge_value(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type SankeyEdge", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FlowMatrixResult_degradedReason(ctx context.Context, field graphql.CollectedField, obj *model.FlowMatrixResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_FlowMatrixResult_degradedReason(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DegradedReason, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_FlowMatrixResult_degradedReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FlowMatrixResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -65212,6 +65268,8 @@ func (ec *executionContext) _FlowMatrixResult(ctx context.Context, sel ast.Selec
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "degradedReason":
+			out.Values[i] = ec._FlowMatrixResult_degradedReason(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

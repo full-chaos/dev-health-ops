@@ -62,142 +62,6 @@ require_cmd() {
   fi
 }
 
-run_dev_hops() {
-  if command -v dev-hops >/dev/null 2>&1; then
-    dev-hops "$@"
-    return
-  fi
-  # CHAOS-4411/4181/4407: `uv run dev-hops` here would trigger uv's own
-  # implicit sync of the local editable project -- reintroducing both the
-  # shared-cache lock (no UV_CACHE_DIR carries into a fresh `uv run`) and the
-  # setuptools_scm worktree hang the AGENTS.md `--no-install-project` recipe
-  # exists to avoid. The pure-module invocation needs neither.
-  python3 -m dev_health_ops.cli "$@"
-}
-
-# CHAOS-7040 deleted this file's only long-running-process launch (the
-# Python `dev-hops api` boot) along with it its exec-flavored counterpart,
-# exec_dev_hops() -- dead code once that call site was gone. run_dev_hops()
-# above is still used (fixtures generate, below).
-
-require_cmd go
-require_cmd psql
-require_cmd curl
-
-# ---------------------------------------------------------------------------
-# Connection settings. Defaults match this job's own services: block in
-# .github/workflows/live-e2e.yml; every value is overridable for local runs.
-# ---------------------------------------------------------------------------
-POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
-POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-POSTGRES_SUPERUSER="${POSTGRES_SUPERUSER:-postgres}"
-POSTGRES_SUPERUSER_PASSWORD="${POSTGRES_SUPERUSER_PASSWORD:-postgres}"
-POSTGRES_DB="${POSTGRES_DB:-test_db}"
-
-CLICKHOUSE_HOST="${CLICKHOUSE_HOST:-localhost}"
-CLICKHOUSE_HTTP_PORT="${CLICKHOUSE_HTTP_PORT:-8123}"
-CLICKHOUSE_NATIVE_PORT="${CLICKHOUSE_NATIVE_PORT:-9000}"
-CLICKHOUSE_USER="${CLICKHOUSE_USER:-ch}"
-CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-ch}"
-CLICKHOUSE_DB="${CLICKHOUSE_DB:-default}"
-
-VALKEY_HOST="${VALKEY_HOST:-localhost}"
-VALKEY_PORT="${VALKEY_PORT:-6379}"
-
-# Analytics DSNs: Python's clickhouse-connect speaks HTTP (8123); Go's
-# clickhouse-go speaks the native wire protocol (9000). Pointing the Go
-# binaries at 8123 fails immediately with "ClickHouse readiness check failed"
-# (confirmed by hand; see deploy/go-workers/README.md).
-CLICKHOUSE_URI_HTTP="clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@${CLICKHOUSE_HOST}:${CLICKHOUSE_HTTP_PORT}/${CLICKHOUSE_DB}"
-CLICKHOUSE_URI_NATIVE="clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@${CLICKHOUSE_HOST}:${CLICKHOUSE_NATIVE_PORT}/${CLICKHOUSE_DB}"
-POSTGRES_SUPERUSER_URI="postgresql+asyncpg://${POSTGRES_SUPERUSER}:${POSTGRES_SUPERUSER_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
-
-RIVER_DOMAIN_ROLE="devhealth_domain"
-RIVER_QUEUE_ROLE="devhealth_queue"
-RIVER_COORDINATOR_ROLE="devhealth_coordinator"
-RIVER_DOMAIN_PASSWORD="devhealth_domain"
-RIVER_QUEUE_PASSWORD="devhealth_queue"
-RIVER_COORDINATOR_PASSWORD="devhealth_coordinator"
-
-SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY:-ci-metrics-executed-proof-key}"
-ORG_ID="${METRICS_PROOF_ORG_ID:-c0ffee00-dead-4bee-8bad-f00dfeedface}"
-REPO_NAME="${METRICS_PROOF_REPO_NAME:-ci-metrics-executed-proof/repo}"
-BACKFILL_DAYS="${METRICS_PROOF_BACKFILL_DAYS:-7}"
-
-WORKER_HTTP_PORT="${METRICS_PROOF_WORKER_PORT:-18085}"
-RECONCILER_HTTP_PORT="${METRICS_PROOF_RECONCILER_PORT:-18086}"
-
-READINESS_ATTEMPTS="${METRICS_PROOF_READINESS_ATTEMPTS:-60}"
-READINESS_SLEEP_SECS="${METRICS_PROOF_READINESS_SLEEP_SECS:-2}"
-COMPUTE_WAIT_ATTEMPTS="${METRICS_PROOF_COMPUTE_WAIT_ATTEMPTS:-40}"
-COMPUTE_WAIT_SLEEP_SECS="${METRICS_PROOF_COMPUTE_WAIT_SLEEP_SECS:-3}"
-
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/metrics-executed-proof.XXXXXX")"
-BIN_DIR="${TMP_DIR}/bin"
-mkdir -p "${BIN_DIR}"
-
-WORKER_PID=""
-RECONCILER_PID=""
-
-# CHAOS-5025: per-process teardown bound. The old cleanup() below did a bare
-# `wait "${pid}"` with no bound at all, so ONE service that ignored SIGTERM
-# pinned the whole job until GitHub's 6h cancel (run 33822295135: the proof
-# itself PASSED at 00:41:40Z, then teardown hung for 5h55m).
-TEARDOWN_WAIT_SECS="${METRICS_PROOF_TEARDOWN_WAIT_SECS:-60}"
-# Validate it (codex r1 P2). An unvalidated value is not merely untidy: `[ x -lt
-# abc ]` FAILS inside the watchdog's `while` and the `elapsed` `if`, and `set -e`
-# does NOT exit on a failing condition in either context -- so a typo'd override
-# silently turned graceful teardown into an IMMEDIATE SIGKILL with the escalation
-# warning suppressed too (executed: `TEARDOWN_WAIT_SECS=abc` -> child killed, no
-# WARNING line). Fail closed to the default, loudly, exactly as the API-side
-# parser does for its own env var. (ci/lib/go_worker_fixture.sh)
-validate_teardown_wait_secs
-
-CLEANUP_DONE=""
-cleanup() {
-  local rc=$?
-  # Re-entrancy guard (codex r2 P3). The trap is installed for EXIT, INT and
-  # TERM, so a SIGINT arriving while cleanup is already running re-enters it on
-  # bash's function-return path -- observed: `pop_var_context: head of
-  # shell_variables not a function context`, `local: can only be used in a
-  # function`, and cleanup exiting 1 instead of completing. Run once, and drop
-  # the traps on entry so the second signal cannot re-enter at all.
-  if [ -n "${CLEANUP_DONE}" ]; then
-    return "${rc}"
-  fi
-  CLEANUP_DONE=1
-  # Block re-entry from a second signal while tearing down, but do NOT clear the
-  # EXIT trap here -- on_signal() below manages that, because clearing EXIT from
-  # inside cleanup is what let a cancelled run fall through and resume.
-  trap '' INT TERM
-  # CHAOS-5025's kill-order comment (worker/reconciler before the api) is
-  # moot: CHAOS-7040 deletes the Python `dev-hops api` process from this
-  # script entirely (it was never load-bearing here -- run with the boot
-  # removed reproduced the identical readback JSON, see the PR's
-  # TEST-EVIDENCE). Only worker/reconciler remain to stop.
-  stop_worker_stack
-  rm -rf "${TMP_DIR}" >/dev/null 2>&1 || true
-  return "${rc}"
-}
-# A trapped INT/TERM runs the handler and then RESUMES the script -- it does not
-# exit (codex r3 P1). With `cleanup` bound directly to INT/TERM, a cancelled run
-# tore down its services, deleted TMP_DIR, and then carried on executing the
-# proof against nothing; the previous re-entrancy fix made it worse by also
-# ignoring every later signal, so the run could no longer be stopped at all.
-# Handle signals explicitly: tear down once, drop the EXIT trap so cleanup does
-# not run twice, restore the signal's default disposition, and re-raise it so
-# the script dies of the signal and reports 128+signum rather than continuing.
-on_signal() {
-  local sig="$1"
-  cleanup
-  trap - EXIT
-  trap - "${sig}"
-  kill -"${sig}" "$$"
-}
-trap cleanup EXIT
-trap 'on_signal INT' INT
-trap 'on_signal TERM' TERM
-
 # Binary builds and River provisioning are shared with
 # ci/run_live_backend_e2e.sh -- see ci/lib/go_worker_fixture.sh.
 build_go_binaries
@@ -280,13 +144,18 @@ echo "   -- fixtures generate (CHAOS-4276: git_commits + a repo-pattern team for
 # 2-team/1-repo seed here would have exercised membership fallback instead
 # of the repo-pattern-first path this job's comment above says it proves.
 # One team keeps the repo genuinely single-owner.
-ORG_ID="${ORG_ID}" CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
-  run_dev_hops fixtures generate \
+# dho loads the frozen world (CHAOS-7301) and refuses a PostgreSQL URI in its environment.
+env -u DATABASE_URI -u POSTGRES_URI -u DATABASE_URL ORG_ID="${ORG_ID}" OTEL_ENABLED=false \
+  "${BIN_DIR}/dho" fixtures generate \
   --sink "${CLICKHOUSE_URI_HTTP}" \
+  --db-type clickhouse \
   --org "${ORG_ID}" \
+  --provider synthetic \
   --repo-name "${REPO_NAME}" \
   --repo-count 1 \
   --days "${BACKFILL_DAYS}" \
+  --commits-per-day 5 \
+  --pr-count 20 \
   --team-count 1 \
   --seed 4276
 

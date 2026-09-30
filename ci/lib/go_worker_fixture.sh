@@ -54,6 +54,10 @@ build_go_binaries() {
 # to have run (BIN_DIR/dho).
 # ---------------------------------------------------------------------------
 migrate_and_assert_river() {
+  # dho applies only the head (ordering contract 2); the worker and reconciler
+  # the caller starts later must read the operational tables under the same
+  # contract or they refuse (ordering_contract_mismatch).
+  export OPERATIONAL_ORDERING_CONTRACT=2
   echo "==> applying Postgres (Alembic) migrations"
   # DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 is required here, not optional: a
   # plain `migrate postgres upgrade` targets ONLY the application_schema
@@ -102,18 +106,14 @@ migrate_and_assert_river() {
 # provision_river -- applies the ClickHouse migration, the three River
 # runtime roles, the pinned River schema, and the sync-orchestration
 # transport flip a fresh CI database needs before the Go worker can process
-# anything. Call AFTER migrate_and_assert_river. Reads: CLICKHOUSE_URI_HTTP,
+# anything. Call AFTER migrate_and_assert_river. Reads: CLICKHOUSE_URI_NATIVE,
 # POSTGRES_HOST/PORT/SUPERUSER/SUPERUSER_PASSWORD/DB, RIVER_DOMAIN_ROLE/
 # QUEUE_ROLE/COORDINATOR_ROLE (+ their _PASSWORD counterparts), BIN_DIR,
-# ROOT_DIR. Requires run_dev_hops() to already be defined by the caller and build_go_binaries to have run.
+# ROOT_DIR. Requires build_go_binaries to have run (BIN_DIR/dho) and CLICKHOUSE_URI_NATIVE.
 # ---------------------------------------------------------------------------
 provision_river() {
   echo "==> applying ClickHouse migrations"
-  # Stays on the Python chain (contract-1 schema) until CHAOS-7301 freezes the
-  # generate worlds: the Python `fixtures generate` writes contract-0 rows, which
-  # the head (contract 2) schema rejects, and dho refuses a contract-1 database.
-  CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" OTEL_ENABLED=false \
-    run_dev_hops migrate clickhouse upgrade
+  CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}" "${BIN_DIR}/dho" migrate clickhouse upgrade
 
   echo "==> provisioning the three River runtime roles (scripts/worker/provision_river_roles.sql)"
   PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \

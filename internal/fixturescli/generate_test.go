@@ -62,8 +62,13 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 				t.Fatalf("%s: %v", path, err)
 			}
 		}
-		if derived != 1 || len(world.Tables) < 50 || rows < 20000 {
-			t.Fatalf("%s: %d table(s), %d derived, %d row(s): the world is not what the acr end-to-end run writes", path, len(world.Tables), derived, rows)
+		minTables, minRows := 50, 20000
+		if !world.Params.WithMetrics {
+			// The raw sets (CHAOS-7301) carry no derived metrics: fewer tables, fewer rows.
+			minTables, minRows = 20, 1000
+		}
+		if derived != 1 || len(world.Tables) < minTables || rows < minRows {
+			t.Fatalf("%s: %d table(s), %d derived, %d row(s): the world is not what its callers write", path, len(world.Tables), derived, rows)
 		}
 	}
 }

@@ -28,24 +28,11 @@ require_cmd() {
   fi
 }
 
-run_dev_hops() {
-  if command -v dev-hops >/dev/null 2>&1; then
-    dev-hops "$@"
-    return
-  fi
-  # CHAOS-4411/4181/4407: `uv run dev-hops` here would trigger uv's own
-  # implicit sync of the local editable project -- reintroducing both the
-  # shared-cache lock (no UV_CACHE_DIR carries into a fresh `uv run`) and the
-  # setuptools_scm worktree hang the AGENTS.md `--no-install-project` recipe
-  # exists to avoid. The pure-module invocation needs neither.
-  python3 -m dev_health_ops.cli "$@"
-}
-
 exec_dev_hops() {
   if command -v dev-hops >/dev/null 2>&1; then
     exec dev-hops "$@"
   fi
-  # See run_dev_hops() above (CHAOS-4411/4181/4407) for why `uv run dev-hops`
+  # (CHAOS-4411/4181/4407) why `uv run dev-hops`
   # is skipped here too.
   exec python3 -m dev_health_ops.cli "$@"
 }
@@ -561,13 +548,18 @@ wait_for_redis
 # Python compute of any kind. For real executed-proof of the metrics
 # pipeline generally, see the `metrics-executed-proof` job in
 # .github/workflows/live-e2e.yml and ci/assert_metrics_executed_proof.py.
+# dho loads a frozen world (CHAOS-7301) into a migrated ClickHouse: migrate first,
+# to the head (ordering contract 2, which the worker started later must also use).
+export OPERATIONAL_ORDERING_CONTRACT=2
+build_go_binaries
+CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}" "${BIN_DIR}/dho" migrate clickhouse upgrade
 echo "==> generating deterministic ClickHouse fixtures (raw git/PR/team data only)"
 (
   export ORG_ID="${E2E_ORG_ID}"
   unset POSTGRES_URI
   unset DATABASE_URI
   unset DATABASE_URL
-  run_dev_hops fixtures generate \
+  "${BIN_DIR}/dho" fixtures generate \
     --sink "${CLICKHOUSE_URI}" \
     --db-type clickhouse \
     --repo-name "${FIXTURE_REPO_NAME}" \

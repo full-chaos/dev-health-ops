@@ -304,14 +304,22 @@ func writeDumped(w http.ResponseWriter, status int, body pyjson.Value) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
 	w.WriteHeader(status)
-	_, _ = io.WriteString(w, encoded)
+	writeBody(w, encoded)
+}
+
+// writeBody sends a body this file built (a fixed refusal text, or the JSON
+// encoding of one), never request input echoed back, under the non-HTML
+// content type its caller set. Copied as bytes, like every fixed body the
+// shared middleware writes.
+func writeBody(w http.ResponseWriter, body string) {
+	_, _ = io.Copy(w, bytes.NewReader([]byte(body)))
 }
 
 func writePlain(w http.ResponseWriter, status int, text string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Length", strconv.Itoa(len(text)))
 	w.WriteHeader(status)
-	_, _ = io.WriteString(w, text)
+	writeBody(w, text)
 }
 
 // queryParam is one name=value pair of a query string, decoded.
@@ -407,7 +415,7 @@ func writeGraphQLError(w http.ResponseWriter, status int, message, code string) 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
-	_, _ = io.WriteString(w, body)
+	writeBody(w, body)
 }
 
 // refuseGraphQLEdgeUnregistered answers a document query-api does not

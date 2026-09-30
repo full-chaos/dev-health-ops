@@ -288,6 +288,10 @@ func TestPerHostPythonAllowList(t *testing.T) {
 		"entry not a map":         {`["/graphql"]`, "literal /path"},
 		"string value":            {`"yes"`, "must be true or a list"},
 		"map value":               {`{"path":"/x"}`, "must be true or a list"},
+		"root entry":              {`[{"path":"/","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "whole host to the Python api"},
+		"root entry only":         {`[{"path":"/","pathType":"Prefix"}]`, "whole host to the Python api"},
+		"duplicate entry":         {`[{"path":"/graphql","pathType":"Prefix"},{"path":"/graphql","pathType":"Exact"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "duplicates another rule"},
+		"entry repeats host path": {`[{"path":"/api/v1/internal","pathType":"Prefix"},{"path":"/","pathType":"Exact"}]`, "whole host to the Python api"},
 		"null value":              {`null`, "must be true or a list"},
 		"zero value":              {`0`, "must be true or a list"},
 		"empty string value":      {`""`, "must be true or a list"},
@@ -297,5 +301,11 @@ func TestPerHostPythonAllowList(t *testing.T) {
 		if err == nil || !strings.Contains(o, c.want) {
 			t.Errorf("%s: want render failure containing %q, got err=%v\n%s", name, c.want, err, o)
 		}
+	}
+	// An allow-list path that repeats one of the host's own paths is refused (two rules on one path).
+	dup := `[{"host":"h","pythonAllowList":[{"path":"/graphql","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}],` +
+		`"paths":[{"path":"/","pathType":"Prefix","service":"go-api"},{"path":"/graphql","pathType":"Prefix","service":"web"}]}]`
+	if o, err := render(dup); err == nil || !strings.Contains(o, "duplicates another rule") {
+		t.Errorf("an allow-list path repeating a host path must fail the render: err=%v\n%s", err, o)
 	}
 }

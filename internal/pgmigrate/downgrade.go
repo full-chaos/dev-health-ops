@@ -295,7 +295,7 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 	})
 	if err != nil {
 		result, err := verifyFailedDowngrade(ctx, reconnect, recorded, err)
-		logger.Info("migrate downgrade outcome", "outcome", result.Action, "recorded", result.Recorded)
+		logOutcome(logger, target, recorded, result)
 		return result, err
 	}
 	for _, step := range steps {
@@ -305,8 +305,25 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 	if result.Recorded, err = Recorded(ctx, conn); err != nil {
 		return result, err
 	}
-	logger.Info("migrate downgrade outcome", "outcome", result.Action, "recorded", result.Recorded)
+	logOutcome(logger, target, recorded, result)
 	return result, nil
+}
+
+// String is the target as the operator typed it.
+func (t DowngradeTarget) String() string {
+	if t.Revision != "" {
+		return t.Revision
+	}
+	return "-" + strconv.Itoa(t.Steps)
+}
+
+// logOutcome is the one final line of a downgrade run: direction, the revisions it
+// started from and was asked to reach, the revision set OBSERVED afterwards (read back,
+// never inferred) and the outcome: committed, rolled_back or unknown. The per-step lines
+// fire BEFORE their SQL runs, so only this line says what the database holds.
+func logOutcome(logger *slog.Logger, target DowngradeTarget, from []string, result DowngradeResult) {
+	outcome := map[string]string{"downgraded": "committed", "changed": "committed", "unchanged": "rolled_back", "outcome_unknown": "unknown"}[result.Action]
+	logger.Info("migrate outcome", "direction", "down", "from", from, "requested", target.String(), "observed", result.Recorded, "outcome", outcome)
 }
 
 // verifyFailedDowngrade reports the outcome of a downgrade whose transaction returned

@@ -447,7 +447,7 @@ func TestDowngradeReportsOnlyVerifiedStateAfterALostCommitAcknowledgement(t *tes
 			t.Fatalf("the server holds %v, want the committed 0066 0138", got)
 		}
 		if code != cli.ExitFailure || stdout != "" || strings.Contains(stderr, "rolled back") ||
-			!strings.Contains(stderr, "verified by re-read: the database CHANGED") || !strings.Contains(stderr, "[0066 0138]") || !strings.Contains(stderr, `"msg":"migrate downgrade outcome","outcome":"changed"`) {
+			!strings.Contains(stderr, "verified by re-read: the database CHANGED") || !strings.Contains(stderr, "[0066 0138]") || !strings.Contains(stderr, `"msg":"migrate outcome","direction":"down","from":["0066","0145"],"requested":"0138","observed":["0066","0138"],"outcome":"committed"`) {
 			t.Fatalf("exit %d stdout %q stderr %q, want a failure that reports the verified committed state", code, stdout, stderr)
 		}
 	})
@@ -458,10 +458,40 @@ func TestDowngradeReportsOnlyVerifiedStateAfterALostCommitAcknowledgement(t *tes
 		if !proxy.dropped.Load() {
 			t.Fatal("the proxy never saw the COMMIT: the fault was not injected")
 		}
-		if code != cli.ExitFailure || strings.Contains(stderr, "rolled back") || !strings.Contains(stderr, "outcome unknown") {
+		if code != cli.ExitFailure || strings.Contains(stderr, "rolled back") || !strings.Contains(stderr, "outcome unknown") || !strings.Contains(stderr, `"direction":"down"`) || !strings.Contains(stderr, `"outcome":"unknown"`) {
 			t.Fatalf("exit %d stderr %q, want a failure that says the outcome is unknown", code, stderr)
 		}
 	})
+}
+
+// The upgrade verb ends with the same final outcome line: a run that failed at 0142
+// after 0139-0141 committed says "partial" with the observed revisions, not "committed".
+func TestUpgradeVerbLogsTheVerifiedOutcome(t *testing.T) {
+	d := newDownInstance(t)
+	uri := d.at(t, 0)
+	if _, err := connect(t, uri).Exec(context.Background(), "SELECT 1 AS conflict INTO webhook_sync_requests"); err != nil {
+		t.Fatal(err)
+	}
+	resolve := pgmigrate.ResolveDSN(func(secrets.LookupEnv, io.Writer) (secrets.Value, string, bool) {
+		return secrets.NewValue(uri), "test", true
+	})
+	var run func(context.Context, cli.Env) int
+	for _, child := range pgmigrate.Command(resolve).Children {
+		if child.Name == "upgrade" {
+			run = child.Run
+		}
+	}
+	var out, errs bytes.Buffer
+	code := run(context.Background(), cli.Env{Lookup: func(key string) (string, bool) {
+		if key == pgmigrate.CutoverEnv {
+			return "1", true
+		}
+		return "", false
+	}, Stdout: &out, Stderr: &errs})
+	want := `"msg":"migrate outcome","direction":"up","from":["0066","0138"],"requested":"head","observed":["0066","0141"],"outcome":"partial"`
+	if code != cli.ExitFailure || !strings.Contains(errs.String(), want) {
+		t.Fatalf("exit %d stderr %q, want a failure with the line %s", code, errs.String(), want)
+	}
 }
 
 // insertSetupRevocation adds a row only 0141's reverse cannot keep.

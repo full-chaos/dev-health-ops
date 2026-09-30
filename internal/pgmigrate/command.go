@@ -140,7 +140,22 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		}
 		return writeResult(env.Stdout, env.Stderr, status)
 	}
-	result, err := UpgradeLogged(ctx, conn, baseline, chain, logging.NewJSON(env.Stderr, slog.LevelInfo))
+	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
+	before, _ := Recorded(ctx, conn)
+	result, err := UpgradeLogged(ctx, conn, baseline, chain, logger)
+	// One final line per run, from state read back afterwards: the step logs fire
+	// before their SQL. A failed upgrade's outcome is what alembic_version holds now.
+	observed, readErr := Recorded(ctx, conn)
+	outcome := "committed"
+	switch {
+	case readErr != nil:
+		outcome = "unknown"
+	case err != nil && sameSet(observed, before):
+		outcome = "rolled_back"
+	case err != nil:
+		outcome = "partial"
+	}
+	logger.Info("migrate outcome", "direction", "up", "from", before, "requested", "head", "observed", observed, "outcome", outcome)
 	if err != nil {
 		var below BelowHeadError
 		var ahead AheadOfBuildError

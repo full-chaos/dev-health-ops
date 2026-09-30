@@ -681,3 +681,24 @@ func TestMCPGraphQLServerRefusesMutationsAndUnlistedRootsByItself(t *testing.T) 
 		})
 	}
 }
+
+// acr-api sends role "viewer" (and superuser/impersonation "false") on every
+// call: that exact header set is served, and the role is forced to "" before
+// dispatch, so no resolver can grant it anything.
+func TestMCPServesTheViewerRoleAcrSends(t *testing.T) {
+	l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
+	rec := mcpDo(l.mcp, http.MethodPost, mcpHeaders(mcpTestOrg, "viewer", "false", "false"), mcpBody(t, mcpHotspotsQuery, mcpHotspotsVariables(mcpTestOrg)))
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"errors"`) {
+		t.Fatalf("role viewer: status %d, want 200 with no errors; body %s", rec.Code, rec.Body.String())
+	}
+	claims, status, reason := mcpAuthenticate(func() *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/query", nil)
+		for key, values := range mcpHeaders(mcpTestOrg, "viewer", "false", "false") {
+			r.Header[key] = values
+		}
+		return r
+	}())
+	if reason != "" || status != 0 || claims.Role != "" || claims.IsSuperuser || claims.ImpersonationActive || claims.OrgID != mcpTestOrg {
+		t.Fatalf("viewer claims = %+v (status %d reason %q), want org only with role forced to \"\"", claims, status, reason)
+	}
+}

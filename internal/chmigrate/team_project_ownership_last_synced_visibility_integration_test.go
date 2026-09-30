@@ -94,8 +94,15 @@ func TestLastSyncedCursorContractAgainstRealClickHouse(t *testing.T) {
 	if slow > slowVisible.UnixMilli() {
 		t.Fatalf("a row's last_synced (%d) is later than the moment its insert returned (%d): a stamp must never be in the future of visibility", slow, slowVisible.UnixMilli())
 	}
-	if slow <= cursor {
-		t.Logf("cell 2: the slow row was stamped BEFORE the fast row became visible: a cursor at %d skips it; the consumer needs a lag of at least %d ms here", cursor, cursor-slow)
+	// The gap the consumer's safety lag must cover, pinned: the slow row is stamped when its insert
+	// starts, so it is stamped BEFORE the fast row that became visible first, and it becomes visible
+	// only after the 2 s statement. If ClickHouse ever stamps at completion this fails, and the
+	// consumer contract in the PR body must be re-derived rather than left as written.
+	if slow >= cursor {
+		t.Fatalf("the slow row's stamp %d is not before the fast row's cursor %d: the stamp no longer precedes visibility, re-derive the consumer lag contract", slow, cursor)
+	}
+	if gap := slowVisible.UnixMilli() - slow; gap < 1500 {
+		t.Fatalf("stamp-to-visibility gap = %d ms, want at least 1500 ms for a statement that slept 2 s", gap)
 	}
 
 	// Cell 3, async insert: the stamp is the server's flush time, never earlier than the client's send.

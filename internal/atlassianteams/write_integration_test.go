@@ -4,6 +4,7 @@ package atlassianteams
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -263,5 +264,64 @@ func TestAFailedWriteLeavesNoTeamWithoutItsMembers(t *testing.T) {
 	}
 	if got := lines(t, conn, `SELECT toString(count()) FROM teams WHERE org_id = 'org-1' AND provider = 'jira'`); got[0] != "0" {
 		t.Fatalf("%s teams committed although a later table failed", got[0])
+	}
+}
+
+// A row whose provider time is old must still carry the time it was written:
+// a consumer cursor keyed on updated_at (the provider time) never sees it once
+// the cursor has passed that time.
+func TestOwnershipLastSyncedIsTheIngestTimeNotTheProviderTime(t *testing.T) {
+	conn := openClickHouse(t)
+	ctx := context.Background()
+	provider := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	g := newGateway(t, standard)
+	p := params(everything)
+	p.Now = provider
+	rows, err := Collect(ctx, g.client(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().UTC().Add(-time.Second)
+	if _, err := Write(ctx, conn, "org-1", rows, everything); err != nil {
+		t.Fatal(err)
+	}
+	after := time.Now().UTC().Add(time.Second)
+
+	got := lines(t, conn, `SELECT concat(toString(toUnixTimestamp64Milli(updated_at)), '|', toString(toUnixTimestamp64Milli(last_synced))) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira' AND valid_to IS NULL`)
+	if len(got) == 0 {
+		t.Fatal("no ownership row was written")
+	}
+	for _, line := range got {
+		var updated, synced int64
+		if _, err := fmt.Sscanf(line, "%d|%d", &updated, &synced); err != nil {
+			t.Fatal(err)
+		}
+		if updated != provider.UnixMilli() {
+			t.Fatalf("updated_at = %d, want the provider time %d to stay in its own column", updated, provider.UnixMilli())
+		}
+		if ts := time.UnixMilli(synced).UTC(); ts.Before(before) || ts.After(after) {
+			t.Fatalf("last_synced = %s, want the ingest time between %s and %s", ts, before, after)
+		}
+	}
+
+	// The closing row a later run writes for a retracted link is a write too.
+	g.respond = func(req request) (int, any) {
+		if req.Operation == "TeamworkGraph_teamActiveProjects" {
+			return 200, connection("teamworkGraph_teamActiveProjects", "")
+		}
+		return standard(req)
+	}
+	p.Now = provider.Add(time.Hour)
+	rows, err = Collect(ctx, g.client(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Write(ctx, conn, "org-1", rows, everything); err != nil {
+		t.Fatal(err)
+	}
+	closed := lines(t, conn, `SELECT toString(count()) FROM team_project_ownership WHERE org_id = 'org-1' AND provider = 'jira' AND valid_to IS NOT NULL AND last_synced > toDateTime64('2021-01-01 00:00:00', 3, 'UTC')`)
+	if closed[0] == "0" {
+		t.Fatal("no closing row carries an ingest-time last_synced")
 	}
 }

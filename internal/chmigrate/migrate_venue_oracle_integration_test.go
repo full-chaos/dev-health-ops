@@ -78,7 +78,7 @@ type migrateFact struct {
 
 const (
 	migrateGolden       = "testdata/migrate_golden.json"
-	migrateGoldenSHA256 = "0365fa5b91403320e81e12b073c4c7981ba3d7c7ca9338a754c75d6e0cc422ee"
+	migrateGoldenSHA256 = "09738aa01060c2f894925d5f0bcf8092cab63afe88088c1a06024f446a379635"
 )
 
 var (
@@ -522,10 +522,18 @@ func runMigrateScenarios(t *testing.T, live bool) *migrateEnv {
 	py = e.pythonFact(t, name, func() migrateFact { return e.pythonStatus(t, pyHead, "--check") })
 	goFact, status = e.goStatus(t, goHead, "--check")
 	// Named divergence: Python reads only the version rows (exit 0, nothing
-	// pending); dho reads the schema too and exits 1.
-	e.requireSameStatus(t, name, goHead, py, goFact, status, cli.ExitFailure)
-	if status.State != "schema_mismatch" || !reflect.DeepEqual(status.MissingObjects, []string{view.Name}) || py.Exit != 0 || py.PendingN != 0 {
-		t.Errorf("%s: dho %s missing objects %v, python exit %d pending %v; want schema_mismatch naming %s and python blind to it", name, status.State, status.MissingObjects, py.Exit, py.PendingN, view.Name)
+	// pending); dho reads the schema too and exits 1. Once a chain file is
+	// recorded dho trusts schema_migrations as Python does, because the chain
+	// may have dropped a baseline object, so the two agree and dho reports the
+	// head (the mismatch itself is pinned by TestBaselineIsTheExecutedPythonChain
+	// on a database with no chain file recorded).
+	wantState, wantExit, wantMissing := "schema_mismatch", cli.ExitFailure, []string{view.Name}
+	if len(e.chain) > 0 {
+		wantState, wantExit, wantMissing = "at_head", cli.ExitOK, nil
+	}
+	e.requireSameStatus(t, name, goHead, py, goFact, status, wantExit)
+	if status.State != wantState || len(status.MissingObjects) != len(wantMissing) || (len(wantMissing) > 0 && !reflect.DeepEqual(status.MissingObjects, wantMissing)) || py.Exit != 0 || py.PendingN != 0 {
+		t.Errorf("%s: dho %s missing objects %v, python exit %d pending %v; want %s naming %v and python blind to it", name, status.State, status.MissingObjects, py.Exit, py.PendingN, wantState, wantMissing)
 	}
 
 	// ---- foreign: dho refuses, Python applies the chain on top ----

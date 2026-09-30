@@ -19,7 +19,7 @@ import (
 const (
 	teamsInsert       = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`
 	membershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
-	ownershipInsert   = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
+	ownershipInsert   = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, last_synced)`
 
 	existingProjectKeysQuery = "SELECT id, project_keys FROM teams FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND id IN {team_ids:Array(String)}"
 )
@@ -470,11 +470,12 @@ func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []
 		return err
 	}
 	defer func() { _ = batch.Abort() }()
+	ingestedAt := time.Now().UTC()
 	for _, row := range rows {
 		key := row.ProjectKey
 		if err := batch.Append(
 			row.OrgID, row.Provider, row.TeamID, row.ProjectID, &key, row.Source, row.IsPrimary, row.Specificity,
-			row.Priority, row.ValidFrom, (*time.Time)(nil), row.UpdatedAt,
+			row.Priority, row.ValidFrom, (*time.Time)(nil), row.UpdatedAt, ingestedAt,
 		); err != nil {
 			return err
 		}
@@ -483,7 +484,7 @@ func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []
 		closedAt := now
 		if err := batch.Append(
 			orgID, Provider, row.teamID, row.projectID, row.projectKey, row.source, row.isPrimary, row.specificity,
-			row.priority, row.validFrom, &closedAt, now,
+			row.priority, row.validFrom, &closedAt, now, ingestedAt,
 		); err != nil {
 			return err
 		}

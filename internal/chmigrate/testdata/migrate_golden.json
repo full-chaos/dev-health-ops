@@ -3,7 +3,7 @@
   "name": "status empty --check",
   "exit": 1,
   "applied": 0,
-  "pending": 108,
+  "pending": 109,
   "pending_digests": [
    "0857491f6528ad55ff803903be8497df422a8a3d5e618c313bc58574d1d9e070",
    "0933d5b3c1d4ae271f2b8441045627c8f6bbf3f4cb53aa507e782fadb74dcb3c",
@@ -112,15 +112,16 @@
    "faeb5af4b85b65eb7e60539c6cf16d4dfa74a4efcb953a956ed71bfbb7966d41",
    "fb63cfeccf07affeb055d2a037d97b32d647ff7ee5f8382ba124c9b2b705b9a3",
    "fc152276354c087ac1cf03b06253a875703661187602fde2a7f9ad310e7ce9ab",
-   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906"
+   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906",
+   "ffebdd2a182a3e573504831a9c25a6fb345dfbf3f41fafa677021dec0bc1e8ed"
   ],
-  "total": 108
+  "total": 109
  },
  {
   "name": "status empty",
   "exit": 0,
   "applied": 0,
-  "pending": 108,
+  "pending": 109,
   "pending_digests": [
    "0857491f6528ad55ff803903be8497df422a8a3d5e618c313bc58574d1d9e070",
    "0933d5b3c1d4ae271f2b8441045627c8f6bbf3f4cb53aa507e782fadb74dcb3c",
@@ -229,15 +230,16 @@
    "faeb5af4b85b65eb7e60539c6cf16d4dfa74a4efcb953a956ed71bfbb7966d41",
    "fb63cfeccf07affeb055d2a037d97b32d647ff7ee5f8382ba124c9b2b705b9a3",
    "fc152276354c087ac1cf03b06253a875703661187602fde2a7f9ad310e7ce9ab",
-   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906"
+   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906",
+   "ffebdd2a182a3e573504831a9c25a6fb345dfbf3f41fafa677021dec0bc1e8ed"
   ],
-  "total": 108
+  "total": 109
  },
  {
   "name": "status foreign --check",
   "exit": 1,
   "applied": 0,
-  "pending": 108,
+  "pending": 109,
   "pending_digests": [
    "0857491f6528ad55ff803903be8497df422a8a3d5e618c313bc58574d1d9e070",
    "0933d5b3c1d4ae271f2b8441045627c8f6bbf3f4cb53aa507e782fadb74dcb3c",
@@ -346,21 +348,22 @@
    "faeb5af4b85b65eb7e60539c6cf16d4dfa74a4efcb953a956ed71bfbb7966d41",
    "fb63cfeccf07affeb055d2a037d97b32d647ff7ee5f8382ba124c9b2b705b9a3",
    "fc152276354c087ac1cf03b06253a875703661187602fde2a7f9ad310e7ce9ab",
-   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906"
+   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906",
+   "ffebdd2a182a3e573504831a9c25a6fb345dfbf3f41fafa677021dec0bc1e8ed"
   ],
-  "total": 108
+  "total": 109
  },
  {
   "name": "upgrade fresh",
   "exit": 0,
   "applied": 0,
   "pending": 0,
-  "schema": "192dd8861464d67af568766aca035e9a33ad71cf5c339a31d1aa748ad2143008"
+  "schema": "3ba29330a817d0607d84bfa5dee3ef9126e01e4086e5f49d3742bb6845b8b10d"
  },
  {
   "name": "status head --check",
   "exit": 0,
-  "applied": 108,
+  "applied": 109,
   "pending": 0,
   "applied_digests": [
    "0857491f6528ad55ff803903be8497df422a8a3d5e618c313bc58574d1d9e070",
@@ -470,14 +473,15 @@
    "faeb5af4b85b65eb7e60539c6cf16d4dfa74a4efcb953a956ed71bfbb7966d41",
    "fb63cfeccf07affeb055d2a037d97b32d647ff7ee5f8382ba124c9b2b705b9a3",
    "fc152276354c087ac1cf03b06253a875703661187602fde2a7f9ad310e7ce9ab",
-   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906"
+   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906",
+   "ffebdd2a182a3e573504831a9c25a6fb345dfbf3f41fafa677021dec0bc1e8ed"
   ],
-  "total": 108
+  "total": 109
  },
  {
   "name": "status head",
   "exit": 0,
-  "applied": 108,
+  "applied": 109,
   "pending": 0,
   "applied_digests": [
    "0857491f6528ad55ff803903be8497df422a8a3d5e618c313bc58574d1d9e070",
@@ -587,14 +591,15 @@
    "faeb5af4b85b65eb7e60539c6cf16d4dfa74a4efcb953a956ed71bfbb7966d41",
    "fb63cfeccf07affeb055d2a037d97b32d647ff7ee5f8382ba124c9b2b705b9a3",
    "fc152276354c087ac1cf03b06253a875703661187602fde2a7f9ad310e7ce9ab",
-   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906"
+   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906",
+   "ffebdd2a182a3e573504831a9c25a6fb345dfbf3f41fafa677021dec0bc1e8ed"
   ],
-  "total": 108
+  "total": 109
  },
  {
   "name": "status python reads the dho-built database",
   "exit": 0,
-  "applied": 108,
+  "applied": 109,
   "pending": 0,
   "applied_digests": [
    "0857491f6528ad55ff803903be8497df422a8a3d5e618c313bc58574d1d9e070",
@@ -704,21 +709,22 @@
    "faeb5af4b85b65eb7e60539c6cf16d4dfa74a4efcb953a956ed71bfbb7966d41",
    "fb63cfeccf07affeb055d2a037d97b32d647ff7ee5f8382ba124c9b2b705b9a3",
    "fc152276354c087ac1cf03b06253a875703661187602fde2a7f9ad310e7ce9ab",
-   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906"
+   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906",
+   "ffebdd2a182a3e573504831a9c25a6fb345dfbf3f41fafa677021dec0bc1e8ed"
   ],
-  "total": 108
+  "total": 109
  },
  {
   "name": "upgrade python on the dho-built database",
   "exit": 0,
   "applied": 0,
   "pending": 0,
-  "schema": "192dd8861464d67af568766aca035e9a33ad71cf5c339a31d1aa748ad2143008=192dd8861464d67af568766aca035e9a33ad71cf5c339a31d1aa748ad2143008"
+  "schema": "3ba29330a817d0607d84bfa5dee3ef9126e01e4086e5f49d3742bb6845b8b10d=3ba29330a817d0607d84bfa5dee3ef9126e01e4086e5f49d3742bb6845b8b10d"
  },
  {
   "name": "status below head --check",
   "exit": 1,
-  "applied": 107,
+  "applied": 108,
   "pending": 1,
   "applied_digests": [
    "0857491f6528ad55ff803903be8497df422a8a3d5e618c313bc58574d1d9e070",
@@ -827,17 +833,18 @@
    "faeb5af4b85b65eb7e60539c6cf16d4dfa74a4efcb953a956ed71bfbb7966d41",
    "fb63cfeccf07affeb055d2a037d97b32d647ff7ee5f8382ba124c9b2b705b9a3",
    "fc152276354c087ac1cf03b06253a875703661187602fde2a7f9ad310e7ce9ab",
-   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906"
+   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906",
+   "ffebdd2a182a3e573504831a9c25a6fb345dfbf3f41fafa677021dec0bc1e8ed"
   ],
   "pending_digests": [
    "946f094a2a73dcb638afb06230691d737e216a6f93c1a41608e126238ebcca81"
   ],
-  "total": 108
+  "total": 109
  },
  {
   "name": "status below head",
   "exit": 0,
-  "applied": 107,
+  "applied": 108,
   "pending": 1,
   "applied_digests": [
    "0857491f6528ad55ff803903be8497df422a8a3d5e618c313bc58574d1d9e070",
@@ -946,24 +953,25 @@
    "faeb5af4b85b65eb7e60539c6cf16d4dfa74a4efcb953a956ed71bfbb7966d41",
    "fb63cfeccf07affeb055d2a037d97b32d647ff7ee5f8382ba124c9b2b705b9a3",
    "fc152276354c087ac1cf03b06253a875703661187602fde2a7f9ad310e7ce9ab",
-   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906"
+   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906",
+   "ffebdd2a182a3e573504831a9c25a6fb345dfbf3f41fafa677021dec0bc1e8ed"
   ],
   "pending_digests": [
    "946f094a2a73dcb638afb06230691d737e216a6f93c1a41608e126238ebcca81"
   ],
-  "total": 108
+  "total": 109
  },
  {
   "name": "upgrade python below the head",
   "exit": 0,
   "applied": 0,
   "pending": 0,
-  "schema": "192dd8861464d67af568766aca035e9a33ad71cf5c339a31d1aa748ad2143008"
+  "schema": "3ba29330a817d0607d84bfa5dee3ef9126e01e4086e5f49d3742bb6845b8b10d"
  },
  {
   "name": "status schema mismatch --check",
   "exit": 0,
-  "applied": 108,
+  "applied": 109,
   "pending": 0,
   "applied_digests": [
    "0857491f6528ad55ff803903be8497df422a8a3d5e618c313bc58574d1d9e070",
@@ -1073,9 +1081,10 @@
    "faeb5af4b85b65eb7e60539c6cf16d4dfa74a4efcb953a956ed71bfbb7966d41",
    "fb63cfeccf07affeb055d2a037d97b32d647ff7ee5f8382ba124c9b2b705b9a3",
    "fc152276354c087ac1cf03b06253a875703661187602fde2a7f9ad310e7ce9ab",
-   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906"
+   "fe40da1a6b915b12eabeeef2c840a82a47d0661af607f05fe8764e34cebe8906",
+   "ffebdd2a182a3e573504831a9c25a6fb345dfbf3f41fafa677021dec0bc1e8ed"
   ],
-  "total": 108
+  "total": 109
  },
  {
   "name": "upgrade python over a foreign database",

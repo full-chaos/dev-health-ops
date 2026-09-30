@@ -237,8 +237,8 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 // neither may become usable from outside the cluster by riding the product
 // path. So a request carrying the internal headers, a second Authorization
 // value, no bearer, or a bearer that is not an edge token (any other JWT
-// alg, the envelope's EdDSA included) is refused, and so is every request
-// when this pod has no edge secret configured. The token itself is checked
+// alg, the envelope's EdDSA included) is refused. A request with no
+// authenticator bound to it (edgeAuth nil) is refused as undecidable. The token itself is checked
 // exactly as /query's edge carrier checks it (authenticateEdgeCarrier), except
 // that the impersonation session is the one the middleware in front already
 // read (decidedImpersonation), never a second read.
@@ -260,8 +260,12 @@ func authenticateEdgeTokenOnly(r *http.Request, edgeAuth *policy.Authenticator) 
 		return authctx.Claims{}, edgeRefused
 	}
 	if edgeAuth == nil {
-		noteRefusal(r, "edge_not_configured", "edge")
-		return authctx.Claims{}, edgeRefused
+		// No chain bound an authenticator to the request: nothing can be
+		// decided with the answers the middleware saw, so it is refused as a
+		// check that could not be made.
+		log.Printf("query-api: internal request refused: reason=edge_not_bound carrier=edge path=%s request_id=%s",
+			r.URL.Path, envelopeRequestID(r))
+		return authctx.Claims{}, edgeUnavailable
 	}
 	if alg, ok := jwtHeaderAlg(token); !ok || alg != principal.EdgeAlgorithm {
 		noteRefusal(r, "not_an_edge_token", "edge")

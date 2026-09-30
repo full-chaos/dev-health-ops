@@ -137,6 +137,10 @@ func graphQLEdgeChain(query http.HandlerFunc, deps graphQLEdgeDeps) http.Handler
 	handler = graphQLEdgeLimits(deps.maxBytes, handler)
 	handler = scope.Impersonation(handler)
 	handler = scope.OrgScope(handler)
+	// Outside every consumer of the caller's identity, so the org scope, the
+	// impersonation middleware and the pipeline read each fact of it once and
+	// see one answer.
+	handler = deps.auth.ReadOnce(handler)
 	handler = correlationID(handler)
 	handler = pyheaders.UnhandledErrorShape(handler)
 	return withProofProvenance(handler.ServeHTTP, runningBuild())
@@ -230,9 +234,11 @@ func graphQLEdgeLimits(limit int, next http.Handler) http.Handler {
 // {"detail": "Authentication required"} (graphql/app.py get_context); a
 // store the check could not read is the unhandled 500 its database error
 // raised there -- never a 401, which would tell the client its credential is
-// bad when nothing was decided.
-func authenticateGraphQLEdge(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator) (authctx.Claims, bool) {
-	claims, outcome := authenticateEdgeTokenOnly(r, edgeAuth)
+// bad when nothing was decided. The authenticator is the one the chain bound
+// to the request (graphQLEdgeChain), the same instance the middleware read
+// the caller with, so the pipeline gets their answers, not new reads.
+func authenticateGraphQLEdge(w http.ResponseWriter, r *http.Request) (authctx.Claims, bool) {
+	claims, outcome := authenticateEdgeTokenOnly(r, policy.BoundAuthenticator(r.Context()))
 	switch outcome {
 	case edgeAccepted:
 		// The identity the resolvers run as, beside the response headers

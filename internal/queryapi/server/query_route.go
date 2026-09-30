@@ -3380,7 +3380,7 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 		// below.
 		var claims authctx.Claims
 		if edge {
-			authenticated, ok := authenticateGraphQLEdge(w, r, edgeAuth)
+			authenticated, ok := authenticateGraphQLEdge(w, r)
 			if !ok {
 				return
 			}

@@ -489,17 +489,33 @@ func TestGraphQLEdgeIsNotMountedWithoutAnEdgeSecret(t *testing.T) {
 	}
 }
 
-// TestGraphQLEdgeRefusesWhenTheEdgeCarrierIsNotConfigured: the pipeline's own
-// guard for a handler built without the authenticator.
-func TestGraphQLEdgeRefusesWhenTheEdgeCarrierIsNotConfigured(t *testing.T) {
-	handler, seen := iaDispatchWithEdge(t, nil, nil, nil)
-	member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
-	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query": `+jsonQuote(t, iaDocument)+`}`))
-	request.Header.Set("Authorization", "Bearer "+member)
-	recorder := httptest.NewRecorder()
-	newGraphQLEdgeHandler(handler)(recorder, request)
-	if recorder.Code != http.StatusUnauthorized || len(*seen) != 0 {
-		t.Fatalf("got %d ran=%d, want 401 and nothing run", recorder.Code, len(*seen))
+// TestGraphQLEdgeRefusesARequestNoChainPrepared: the pipeline authenticates
+// with the authenticator the chain bound to the request, so a request that
+// reached it without the chain is refused as a check that could not be made
+// (the 500), whatever authenticator the handler itself was built with, and
+// nothing runs.
+func TestGraphQLEdgeRefusesARequestNoChainPrepared(t *testing.T) {
+	store := &fakeEdgeStore{
+		states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}},
+		found:   map[uuid.UUID]bool{ecUser: true},
+		members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
+	}
+	var logged strings.Builder
+	previous := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	for name, auth := range map[string]*policy.Authenticator{"no authenticator": nil, "its own authenticator": ecEdgeAuth(t, store)} {
+		logged.Reset()
+		var nilStore policy.Store
+		if auth != nil {
+			nilStore = store
+		}
+		handler, seen := iaDispatchWithEdge(t, nil, auth, nilStore)
+		member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
+		recorder := edgePostAs(t, newGraphQLEdgeHandler(handler), member)
+		if recorder.Code != http.StatusInternalServerError || len(*seen) != 0 || !strings.Contains(logged.String(), "reason=edge_not_bound") {
+			t.Errorf("%s: %d ran=%d logged %q, want the 500, nothing run, and the reason", name, recorder.Code, len(*seen), logged.String())
+		}
 	}
 }
 
@@ -721,10 +737,10 @@ func TestGraphQLEdgeAuthenticatorReportsAStoreItCannotReadAsUnavailable(t *testi
 		var outcome edgeOutcome = -1
 		recorder := httptest.NewRecorder()
 		answered := false
-		decided := policy.NewScope(auth, nil).Impersonation(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		decided := auth.ReadOnce(policy.NewScope(auth, nil).Impersonation(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, outcome = authenticateEdgeTokenOnly(r, auth)
-			_, answered = authenticateGraphQLEdge(w, r, auth)
-		}))
+			_, answered = authenticateGraphQLEdge(w, r)
+		})))
 		request := httptest.NewRequest(http.MethodPost, "/graphql", nil)
 		request.Header.Set("Authorization", "Bearer "+member)
 		decided.ServeHTTP(recorder, request)
@@ -826,8 +842,9 @@ func TestGraphQLEdgeReadsTheImpersonationSessionOnce(t *testing.T) {
 
 // TestGraphQLEdgeRefusesARequestNoMiddlewareDecided: the pipeline takes the
 // impersonation decision from the middleware in front of it, so a request that
-// reached it without one is refused as a check that could not be made, never
-// served as a principal that is not impersonating.
+// reached it without one (an authenticator bound, no impersonation middleware)
+// is refused as a check that could not be made, never served as a principal
+// that is not impersonating.
 func TestGraphQLEdgeRefusesARequestNoMiddlewareDecided(t *testing.T) {
 	store := &fakeEdgeStore{
 		states:   map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
@@ -840,7 +857,7 @@ func TestGraphQLEdgeRefusesARequestNoMiddlewareDecided(t *testing.T) {
 	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": true})
 	mux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { ran++ }))
 	auth := ecEdgeAuth(t, store)
-	bare := newGraphQLEdgeHandler(newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil))
+	bare := auth.ReadOnce(newGraphQLEdgeHandler(newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil)))
 	var logged strings.Builder
 	previous := log.Writer()
 	log.SetOutput(&logged)

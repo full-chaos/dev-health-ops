@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 type contextKey int
@@ -18,6 +20,7 @@ const (
 	orgIDKey contextKey = iota
 	impersonationKey
 	impersonationDecidedKey
+	readsKey
 )
 
 // OrgIDFrom returns the request's resolved org (the contextvar
@@ -152,7 +155,19 @@ func (a *Authenticator) IsMember(ctx context.Context, userID, orgID string) (boo
 	if !okUser || !okOrg {
 		return false, nil
 	}
-	return a.store.IsMember(ctx, user, org)
+	reads := a.readsFor(ctx)
+	if reads == nil {
+		return a.store.IsMember(ctx, user, org)
+	}
+	reads.mu.Lock()
+	defer reads.mu.Unlock()
+	key := [2]uuid.UUID{user, org}
+	if got, ok := reads.members[key]; ok {
+		return got.member, got.err
+	}
+	member, err := a.store.IsMember(ctx, user, org)
+	reads.members[key] = memberRead{member: member, err: err}
+	return member, err
 }
 
 // Impersonation is ImpersonationMiddleware. For a caller whose token claims
@@ -181,7 +196,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		session, err := s.auth.store.ActiveImpersonation(r.Context(), user.ID)
+		session, err := s.auth.activeImpersonation(r.Context(), user.ID)
 		if err != nil {
 			// Fail closed: an admin whose active session could not be read
 			// must not be served as though no session existed (that would

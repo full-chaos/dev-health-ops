@@ -69,8 +69,8 @@ func (h *ProductTelemetryHandler) Handle(ctx context.Context, message streamrunn
 	if !ok {
 		return &streamrunner.PermanentError{Reason: "missing_events"}
 	}
-	var events []productEvent
-	if err := json.Unmarshal([]byte(raw), &events); err != nil {
+	events, nonFinite, err := decodeProductEvents(raw)
+	if err != nil {
 		return &streamrunner.PermanentError{Reason: "invalid_events_json"}
 	}
 	if len(events) == 0 || len(events) > 500 {
@@ -100,6 +100,9 @@ func (h *ProductTelemetryHandler) Handle(ctx context.Context, message streamrunn
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("persist product telemetry: %w", err)
 	}
+	// Only now, with the whole entry validated and durably written, are the nulled numbers
+	// "stored": counting earlier overstated storage for an entry refused or retried.
+	recordNonFiniteNulled(ctx, message, nonFinite)
 	return nil
 }
 

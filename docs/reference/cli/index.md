@@ -6,7 +6,7 @@ Complete reference for the dev-health-ops command-line interface.
 
 ## Overview
 
-The CLI entry point is `dev-hops` (module `dev_health_ops.cli`). Command groups:
+The operator CLI is `dho` (Go). The Python `dev-hops` CLI (module `dev_health_ops.cli`) is being deleted (CHAOS-6469); verbs below that show `dev-hops` still run only until their `dho` port lands, and a `dho` equivalent is named where one exists. Command groups:
 
 - `sync` : ingest provider data (git, prs, blame, cicd, deployments, incidents, security, tests, teams) -- `work-items` is native-only now (see `sync work-items` below)
 - `teams` : team catalog operations (ClickHouse-backed sync)

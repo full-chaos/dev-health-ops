@@ -218,15 +218,7 @@ Notes:
 
 ## Container images
 
-The repository builds one Python image from `docker/Dockerfile`, `dev-hops-api`, which runs `dev-hops api` on port 8000. (The `dev-hops-runner` image, a generic `dev-hops` entrypoint, is no longer built: run CLI jobs with `dho`, the Go image, or `dev-hops` from a checkout.)
-
-Build the image:
-
-```bash
-IMAGE_REGISTRY=ghcr.io/myorg/dev-health-ops \
-VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo latest) \
-  ./scripts/build-images.sh
-```
+CI builds one Python image from `docker/Dockerfile`, `dev-hops-api`, which runs `dev-hops api` on port 8000 (no local build script; removed with the Python API by CHAOS-6264). (The `dev-hops-runner` image, a generic `dev-hops` entrypoint, is no longer built: run CLI jobs with `dho`, the Go image, or `dev-hops` from a checkout.)
 
 Run the API image:
 

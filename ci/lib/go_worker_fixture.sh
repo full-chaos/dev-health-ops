@@ -50,8 +50,8 @@ build_go_binaries() {
 # migrate_and_assert_river -- applies the Postgres (Alembic) migration with
 # the River cutover opt-in, then fails closed immediately if the cutover did
 # not actually take. Reads: POSTGRES_SUPERUSER_URI, POSTGRES_HOST/PORT/
-# SUPERUSER/SUPERUSER_PASSWORD/DB, EXIT_FAILURE. Requires run_dev_hops() to
-# already be defined by the caller.
+# SUPERUSER/SUPERUSER_PASSWORD/DB, EXIT_FAILURE. Requires build_go_binaries
+# to have run (BIN_DIR/dho).
 # ---------------------------------------------------------------------------
 migrate_and_assert_river() {
   echo "==> applying Postgres (Alembic) migrations"
@@ -67,9 +67,9 @@ migrate_and_assert_river() {
   # post-sync fanout's outbox row sits pending forever with no error (the
   # CHAOS-4266 root cause). Safe here only because this job's Postgres is its
   # own throwaway CI database, never a shared or production-adjacent one.
-  DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
-    DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 \
-    run_dev_hops --db "${POSTGRES_SUPERUSER_URI}" migrate postgres upgrade
+  MIGRATION_DATABASE_URI="${POSTGRES_SUPERUSER_URI}" \
+    DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 RIVER_DATABASE_SCHEMA=river \
+    "${BIN_DIR}/dho" migrate postgres upgrade
 
   # Fail closed, immediately, if the cutover above did not actually take:
   # this gate exists because a silently-wrong dispatch topology reads as a
@@ -105,10 +105,13 @@ migrate_and_assert_river() {
 # anything. Call AFTER migrate_and_assert_river. Reads: CLICKHOUSE_URI_HTTP,
 # POSTGRES_HOST/PORT/SUPERUSER/SUPERUSER_PASSWORD/DB, RIVER_DOMAIN_ROLE/
 # QUEUE_ROLE/COORDINATOR_ROLE (+ their _PASSWORD counterparts), BIN_DIR,
-# ROOT_DIR. Requires run_dev_hops() to already be defined by the caller.
+# ROOT_DIR. Requires run_dev_hops() to already be defined by the caller and build_go_binaries to have run.
 # ---------------------------------------------------------------------------
 provision_river() {
   echo "==> applying ClickHouse migrations"
+  # Stays on the Python chain (contract-1 schema) until CHAOS-7301 freezes the
+  # generate worlds: the Python `fixtures generate` writes contract-0 rows, which
+  # the head (contract 2) schema rejects, and dho refuses a contract-1 database.
   CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" OTEL_ENABLED=false \
     run_dev_hops migrate clickhouse upgrade
 

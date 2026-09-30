@@ -28,25 +28,31 @@ type leaf struct {
 	V string `json:"v"`
 }
 
-func requireOracleEnv(t *testing.T) string {
+// generatorsPythonBuild is the build whose generators answered the frozen
+// corpora: a build that still carried the Python fixtures generators.
+const generatorsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// openOracle opens the golden of one oracle test (file under testdata/golden,
+// its pinned digest) and returns it with the root its Python runs from while
+// recording.
+func openOracle(t *testing.T, file, digest string) (*venueoracle.Golden, string) {
 	t.Helper()
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR") == "" {
-		t.Fatal("live Python oracle opt-in requires a proof directory from ci/check_go.sh")
-	}
 	_, currentFile, _, _ := runtime.Caller(0)
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
-	python := pyoracle.Resolve(t, repoRoot)
-	probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
-	pyoracle.RequireDeployed(t, python, probe, probeErr)
-	return python
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/" + file + ".json",
+		PythonBuild: generatorsPythonBuild,
+		SHA256:      digest,
+		Recipe: "git worktree add --detach $DIR " + generatorsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/fixturesgen/ -test '^" + t.Name() + "$' -python-root $DIR",
+	})
+	return golden, golden.PythonRoot(t, repoRoot)
 }
 
-// askPython sends every request line to ONE python process running the oracle program
-// and returns its answer lines, one per request.
-func askPython(t *testing.T, python string, requests []any) []json.RawMessage {
+// askPython sends every request line to ONE run of the oracle program and
+// returns its answer lines, one per request: executed on the pinned build while
+// recording, read from the golden otherwise.
+func askPython(t *testing.T, golden *venueoracle.Golden, root string, requests []any) []json.RawMessage {
 	t.Helper()
 	var input strings.Builder
 	for _, request := range requests {
@@ -57,38 +63,43 @@ func askPython(t *testing.T, python string, requests []any) []json.RawMessage {
 		input.Write(line)
 		input.WriteByte('\n')
 	}
-	command := exec.Command(python, "-c", generatorsOracleProgram)
-	command.Stdin = strings.NewReader(input.String())
-	command.Env = append(os.Environ(), "PYTHONHASHSEED=0")
-	output, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
+	env := map[string]string{"PYTHONHASHSEED": "0"}
+	request := venueoracle.ProgramRequest("generators", generatorsOracleProgram, []byte(input.String()), env)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		python := pyoracle.Resolve(t, root)
+		probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
+		pyoracle.RequireDeployed(t, python, probe, probeErr)
+		command := exec.Command(python, "-c", generatorsOracleProgram)
+		command.Stdin = strings.NewReader(input.String())
+		command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"),
+			"PYTHONDONTWRITEBYTECODE=1", "PYTHONHASHSEED=" + env["PYTHONHASHSEED"]}
+		output, err := command.Output()
+		if err != nil {
+			var stderr []byte
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				stderr = exitErr.Stderr
+			}
+			t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr))
 		}
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr))
-	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}
+	})
+	golden.Consumed(t, answers...)
+	lines := strings.Split(strings.TrimSpace(venueoracle.UnpackBody(t, answers[0].Body)), "\n")
 	if len(lines) != len(requests) {
 		t.Fatalf("python answered %d for %d requests", len(lines), len(requests))
 	}
-	answers := make([]json.RawMessage, len(lines))
+	out := make([]json.RawMessage, len(lines))
 	for i, line := range lines {
-		answers[i] = json.RawMessage(line)
+		out[i] = json.RawMessage(line)
 	}
-	return answers
+	return out
 }
 
-func writeProofs(t *testing.T, name string) {
+// finish ends an oracle's use of its golden.
+func finish(t *testing.T, golden *venueoracle.Golden) {
 	t.Helper()
-	if t.Failed() {
-		return
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if err := os.WriteFile(filepath.Join(proof, name), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 type randomOp struct {
@@ -152,16 +163,16 @@ func floatLeaf(value float64) leaf {
 
 func intLeaf(value int64) leaf { return leaf{"int", strconv.FormatInt(value, 10)} }
 
-// TestRandMatchesLivePython drives Rand and a REAL random.Random over the same operation
+// TestRandMatchesThePythonRandom drives Rand and a REAL random.Random over the same operation
 // sequences and compares every value: getrandbits, randrange, randint, choice and random().
-func TestRandMatchesLivePython(t *testing.T) {
-	python := requireOracleEnv(t)
+func TestRandMatchesThePythonRandom(t *testing.T) {
+	golden, root := openOracle(t, "pyrand", "f2c38c30de260eb1f819a66cf30ceb6f81744c46e86b77a18a2d36bd0b7a501a")
 	corpus, seeds := randomCorpus()
 	requests := make([]any, len(corpus))
 	for i := range corpus {
 		requests[i] = corpus[i]
 	}
-	answers := askPython(t, python, requests)
+	answers := askPython(t, golden, root, requests)
 	compared := 0
 	for index, request := range corpus {
 		var want struct {
@@ -204,7 +215,7 @@ func TestRandMatchesLivePython(t *testing.T) {
 		}
 	}
 	t.Logf("%d random draws over %d seeds match the live CPython generator", compared, len(seeds))
-	writeProofs(t, "fixtures-pyrand")
+	finish(t, golden)
 }
 
 type telemetryCase struct {
@@ -278,14 +289,14 @@ func columnValue(row ProductTelemetryRow, column string) (leaf, bool) {
 	return leaf{}, false
 }
 
-// TestProductTelemetryMatchesLivePython runs the REAL ProductTelemetryGenerator and the REAL
+// TestProductTelemetryMatchesThePythonGenerator runs the REAL ProductTelemetryGenerator and the REAL
 // persist_product_telemetry_events (only the ClickHouse client is a capture) and compares every
 // column of every row with GenerateProductTelemetry. The compared columns are the production
 // module's PRODUCT_TELEMETRY_COLUMNS: a column added there that Go does not know fails the test
 // instead of being skipped. ingested_at is the wall clock of the write, not of the generation, so
 // it is the one column not compared, and the test says so by requiring it to be exactly that.
-func TestProductTelemetryMatchesLivePython(t *testing.T) {
-	python := requireOracleEnv(t)
+func TestProductTelemetryMatchesThePythonGenerator(t *testing.T) {
+	golden, root := openOracle(t, "product_telemetry", "0eeb9adbfbd7ad517f4102d7975fccab03a46132e4b9314e7f151caa0b7b4ecd")
 	corpus := telemetryCorpus()
 	requests := make([]any, len(corpus))
 	for i, c := range corpus {
@@ -293,7 +304,7 @@ func TestProductTelemetryMatchesLivePython(t *testing.T) {
 			"sessions_per_day": c.SessionsPerDay, "seed": c.Seed, "end_time": c.EndTime}
 		requests[i] = request
 	}
-	answers := askPython(t, python, requests)
+	answers := askPython(t, golden, root, requests)
 	rowsCompared, nonEmpty := 0, 0
 	for index, c := range corpus {
 		label := fmt.Sprintf("org=%q days=%d sessions=%d seed=%v end=%s", c.OrgID, c.Days, c.SessionsPerDay, c.Seed, c.EndTime)
@@ -348,15 +359,15 @@ func TestProductTelemetryMatchesLivePython(t *testing.T) {
 	if nonEmpty < len(corpus)/2 {
 		t.Fatalf("only %d of %d cases generated rows", nonEmpty, len(corpus))
 	}
-	t.Logf("%d cases, %d rows compared column by column with the live Python producer", len(corpus), rowsCompared)
-	writeProofs(t, "fixtures-product-telemetry")
+	t.Logf("%d cases, %d rows compared column by column with the Python producer's frozen answers", len(corpus), rowsCompared)
+	finish(t, golden)
 }
 
 // TestSyntheticOrgIDsMatchThePythonFallback compares the fallback org ids with the ones the
 // Python verb's own expression yields.
 func TestSyntheticOrgIDsMatchThePythonFallback(t *testing.T) {
-	python := requireOracleEnv(t)
-	answers := askPython(t, python, []any{map[string]any{"kind": "synthetic_orgs", "count": 12}})
+	golden, root := openOracle(t, "synthetic_orgs", "281d6ec4d963a643bf2768ec336560a63c6d4519bf3fa26682a07a24865089dc")
+	answers := askPython(t, golden, root, []any{map[string]any{"kind": "synthetic_orgs", "count": 12}})
 	var want struct {
 		IDs []string `json:"ids"`
 	}
@@ -367,5 +378,5 @@ func TestSyntheticOrgIDsMatchThePythonFallback(t *testing.T) {
 	if len(want.IDs) != 12 || strings.Join(got, ",") != strings.Join(want.IDs, ",") {
 		t.Fatalf("go %v python %v", got, want.IDs)
 	}
-	writeProofs(t, "fixtures-synthetic-orgs")
+	finish(t, golden)
 }

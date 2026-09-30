@@ -2,9 +2,9 @@ package adminops
 
 import (
 	"bufio"
+	"bytes"
 	_ "embed"
 	"encoding/json"
-	"fmt"
 	"io"
 	"math/rand"
 	"os"
@@ -72,57 +72,67 @@ func leafText(value *string) string {
 	return *value
 }
 
-// TestCredentialArgsVenueOracleMatchesThePythonParser runs every command line of argsCorpus through the
+// credentialArgsPythonBuild is the build whose argparse answered the frozen
+// corpus: a build that still carried the Python CLI.
+const credentialArgsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// TestCredentialArgsMatchTheFrozenPythonParser runs every command line of argsCorpus through the
 // REAL argparse (build_parser().parse_args) and through parseCredentialArgs and compares whether it parses,
-// whether it is help, and every value the handler reads.
-func TestCredentialArgsVenueOracleMatchesThePythonParser(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	root, err := filepath.Abs(filepath.Join("..", ".."))
+// whether it is help, and every value the handler reads. The parser's answers were executed once on
+// credentialArgsPythonBuild and are frozen in testdata/golden/credential_args.json (the recipe regenerates
+// them by execution); the corpus and the program are part of the golden's key.
+func TestCredentialArgsMatchTheFrozenPythonParser(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "-c", credentialArgsOracleProgram)
-	command.Env = append(os.Environ(), "PYTHONHASHSEED=0", "PYTHONPATH="+filepath.Join(root, "src"), "DISABLE_DOTENV=1", "OTEL_ENABLED=false")
-	stdin, err := command.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stderr strings.Builder
-	command.Stderr = &stderr
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = stdin.Close(); _ = command.Wait() })
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/credential_args.json",
+		PythonBuild: credentialArgsPythonBuild,
+		SHA256:      "16c39e1d8d90b8682256a5252829413471dc87082e1457ddec84feb485c97c92",
+		Recipe: "git worktree add --detach $DIR " + credentialArgsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/adminops/ -test '^TestCredentialArgsMatchTheFrozenPythonParser$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
 
 	corpus := argsCorpus()
-	go func() {
-		writer := bufio.NewWriterSize(stdin, 1<<20)
-		for _, item := range corpus {
-			raw, _ := json.Marshal(map[string]any{"verb": item[0], "args": item[1]})
-			_, _ = writer.Write(raw)
-			_ = writer.WriteByte('\n')
+	var input bytes.Buffer
+	for _, item := range corpus {
+		raw, _ := json.Marshal(map[string]any{"verb": item[0], "args": item[1]})
+		input.Write(raw)
+		input.WriteByte('\n')
+	}
+	env := map[string]string{"PYTHONHASHSEED": "0", "DISABLE_DOTENV": "1", "OTEL_ENABLED": "false"}
+	request := venueoracle.ProgramRequest("credential args corpus", credentialArgsOracleProgram, input.Bytes(), env)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		python := pyoracle.Resolve(t, root)
+		command := exec.Command(python, "-c", credentialArgsOracleProgram)
+		command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
+		for key, value := range env {
+			command.Env = append(command.Env, key+"="+value)
 		}
-		_ = writer.Flush()
-		_ = stdin.Close()
-	}()
-	reader := bufio.NewReaderSize(stdout, 1<<20)
+		command.Stdin = bytes.NewReader(input.Bytes())
+		var stderr strings.Builder
+		command.Stderr = &stderr
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("live python: %v\n%s", pyoracle.RunError(python, err, nil), stderr.String())
+		}
+		// Packed: the corpus answers are megabytes of near-identical lines.
+		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}
+	})
+	golden.Consumed(t, answers...)
+	reader := bufio.NewReader(strings.NewReader(venueoracle.UnpackBody(t, answers[0].Body)))
 	mismatches, parsed, refused, helped := 0, 0, 0, 0
 	for index, item := range corpus {
 		verb, args := item[0].(string), item[1].([]string)
 		line, err := reader.ReadBytes('\n')
 		if err != nil && err != io.EOF {
-			t.Fatalf("python answer %d: %v\n%s", index, err, stderr.String())
+			t.Fatalf("python answer %d: %v", index, err)
 		}
 		var want argsAnswer
 		if err := json.Unmarshal(line, &want); err != nil {
-			t.Fatalf("python answer %d %q: %v\n%s", index, line, err, stderr.String())
+			t.Fatalf("python answer %d %q: %v", index, line, err)
 		}
 		got, perr := parseCredentialArgs(verb, args)
 		switch {
@@ -203,10 +213,11 @@ func TestCredentialArgsVenueOracleMatchesThePythonParser(t *testing.T) {
 	if mismatches > 0 {
 		t.Fatalf("%d of %d command lines differ", mismatches, len(corpus))
 	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
+	if _, err := reader.ReadByte(); err != io.EOF {
+		t.Fatalf("python answered more lines than the %d of the corpus", len(corpus))
 	}
-	_ = fmt.Sprint
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 func credentialText(args credentialArgs) string {

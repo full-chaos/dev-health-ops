@@ -3,7 +3,6 @@ package pgmigrate
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -132,31 +131,5 @@ func TestHistoryRefusesVerboseAndPositionals(t *testing.T) {
 	code, stdout, _ := runHistoryVerb(t, history)
 	if code != cli.ExitOK || !strings.HasSuffix(stdout, "<base> -> 0001, Initial consolidated schema migration.\n") {
 		t.Errorf("history: exit %d, stdout ends %q", code, stdout[max(0, len(stdout)-80):])
-	}
-}
-
-// downgrade refuses whatever the target: nothing is read, nothing is written,
-// and the refusal names the forward-only design and both ways back.
-func TestDowngradeRefuses(t *testing.T) {
-	for _, target := range []string{"-1", "base", "0139", "0066@base"} {
-		code, stdout, stderr := runHistoryVerb(t, downgrade, target)
-		if code != cli.ExitRefused || stdout != "" {
-			t.Errorf("downgrade %s: exit %d stdout %q, want exit 3 and nothing on stdout", target, code, stdout)
-		}
-		var body struct {
-			Error struct{ Code, Detail string }
-		}
-		if err := json.Unmarshal([]byte(stderr), &body); err != nil {
-			t.Fatalf("downgrade %s: stderr %q is not the error line: %v", target, stderr, err)
-		}
-		if body.Error.Code != "forward_only" || !strings.Contains(body.Error.Detail, "forward-only") ||
-			!strings.Contains(body.Error.Detail, "restore the database from a backup") || !strings.Contains(body.Error.Detail, "alembic downgrade") {
-			t.Errorf("downgrade %s: error %+v does not name the design and both recoveries", target, body.Error)
-		}
-	}
-	for _, args := range [][]string{{}, {"a", "b"}, {"--nope", "0139"}} {
-		if code, _, _ := runHistoryVerb(t, downgrade, args...); code != cli.ExitUsage {
-			t.Errorf("downgrade %v: exit %d, want 2", args, code)
-		}
 	}
 }

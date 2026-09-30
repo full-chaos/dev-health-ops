@@ -78,9 +78,11 @@ func Command(resolve ResolveDSN) cli.Command {
 			},
 			{
 				Name:    "downgrade",
-				Summary: "refused: the PostgreSQL migrator is forward-only",
+				Summary: "revert the PostgreSQL revisions above a target (revision id 0138-0145, or -N), as `alembic downgrade` does; refuses, before it connects, a target whose steps are not ported",
 				Kind:    cli.Verb,
-				Run:     downgrade,
+				Run: func(ctx context.Context, env cli.Env) int {
+					return downgrade(ctx, resolve, env)
+				},
 			},
 		},
 	}

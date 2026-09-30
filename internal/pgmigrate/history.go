@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -195,35 +194,3 @@ func history(_ context.Context, env cli.Env) int {
 	}
 	return cli.ExitOK
 }
-
-// ForwardOnlyDetail is the refusal `downgrade` gives.
-const ForwardOnlyDetail = "dho does not run Alembic downgrades: the PostgreSQL migrator is forward-only (a captured baseline plus the revisions after it, with no down steps). " +
-	"To go back, restore the database from a backup taken before the upgrade, or run `alembic downgrade` (dev-hops migrate postgres downgrade) from the Python image of the release you are returning to"
-
-// downgrade is `dho migrate postgres downgrade REVISION`: it always refuses, before
-// it resolves a DSN or touches a database.
-func downgrade(_ context.Context, env cli.Env) int {
-	// argparse takes "-1" as a positional (no option looks like a number), and so
-	// does this verb: only a real flag or a help request is not a target.
-	var targets []string
-	for _, arg := range env.Args {
-		switch {
-		case arg == "-h" || arg == "--help":
-			fmt.Fprintln(env.Stderr, "Usage of dho migrate postgres downgrade REVISION: refused (the PostgreSQL migrator is forward-only)")
-			return cli.ExitOK
-		case strings.HasPrefix(arg, "-") && arg != "-" && !negativeNumber.MatchString(arg):
-			fmt.Fprintf(env.Stderr, "argument error: unknown flag %s\n", arg)
-			return cli.ExitUsage
-		default:
-			targets = append(targets, arg)
-		}
-	}
-	if len(targets) != 1 {
-		fmt.Fprintln(env.Stderr, "argument error: exactly one target revision is required (e.g. -1, base, or a revision)")
-		return cli.ExitUsage
-	}
-	_ = json.NewEncoder(env.Stderr).Encode(map[string]any{"error": map[string]string{"code": "forward_only", "detail": ForwardOnlyDetail}})
-	return cli.ExitRefused
-}
-
-var negativeNumber = regexp.MustCompile(`^-\d+$|^-\d*\.\d+$`)

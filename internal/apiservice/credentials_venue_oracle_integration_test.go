@@ -246,7 +246,8 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, credentialsGolden("admin", "TestVenueOracleCredentialAdmin", adminOracleGoldenDigest))
 	var seed venueFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden,
+		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			seed = venueSeed(t, ctx, admin)

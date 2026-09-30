@@ -176,7 +176,8 @@ func TestAdminLLMBudgetVenueOracle(t *testing.T) {
 	windowStart, _ := llmbudget.MonthWindow(budgetNow)
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, JWTKey: jwtKey,
+		Golden: golden,
+		Root:   root, JWTKey: jwtKey,
 		PythonEnv: []string{"BYO_LLM_MAX_BUDGET_MICRO_USD=" + operatorMax},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {

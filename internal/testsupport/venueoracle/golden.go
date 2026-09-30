@@ -528,6 +528,9 @@ func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, req
 			g.recorded.Requests = append(g.recorded.Requests, entry)
 		}
 	} else {
+		if err := g.frozenVenueErr(v); err != nil {
+			t.Fatal(err)
+		}
 		var err error
 		if answers, err = g.frozenAnswers(requests); err != nil {
 			t.Fatal(err)
@@ -541,6 +544,16 @@ func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, req
 		g.state = statePython
 	}
 	return answers
+}
+
+// frozenVenueErr is an error when a frozen golden's answers are asked for
+// through a venue built with Python: its test forgot Options.Golden, so it
+// still needs the Python substrate the golden exists to retire.
+func (g *Golden) frozenVenueErr(v *Venue) error {
+	if v != nil && !v.frozen {
+		return fmt.Errorf("golden %s is frozen but its venue was built with Python: pass the golden to venueoracle.Start (Options.Golden) so a frozen run needs no Python", g.spec.Path)
+	}
+	return nil
 }
 
 func (g *Golden) frozenAnswers(requests []Request) ([]Response, error) {

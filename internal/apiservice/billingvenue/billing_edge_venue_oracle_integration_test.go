@@ -49,7 +49,8 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 		pythonEnv = append(pythonEnv, key+"="+value)
 	}
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Golden: golden,
+		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			return billingSeed(t, ctx, admin).tokenSpecs()
 		},

@@ -95,6 +95,7 @@ func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest string) {
 		pythonEnv = append(pythonEnv, "SETTINGS_ENCRYPTION_KEY="+llmVenueEncryptionKey)
 	}
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden:    golden,
 		Root:      root,
 		JWTKey:    jwtKey,
 		PythonEnv: pythonEnv,

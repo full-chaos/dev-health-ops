@@ -77,6 +77,7 @@ var openers = map[string]struct {
 	"internal/testsupport/containers/remote.go":            {kindTest, "test containers"},
 	"internal/testsupport/pgschema/pgschema.go":            {kindTest, "test schema helper"},
 	"internal/testsupport/venueoracle/venueoracle.go":      {kindTest, "venue oracle harness"},
+	"internal/testsupport/venueoracle/gosubstrate.go":      {kindTest, "venue oracle harness: the Go-built schema of a frozen venue"},
 	"tests/compatibility/river/go/probe.go":                {kindTest, "compatibility probe"},
 	"tests/compatibility/river/nminus1/probe.go":           {kindTest, "compatibility probe"},
 }

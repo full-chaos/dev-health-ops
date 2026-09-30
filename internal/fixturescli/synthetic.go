@@ -206,6 +206,45 @@ func (table FrozenTable) Structure() string {
 	return strings.Join(parts, ", ")
 }
 
+// serverStampedColumns are columns whose value is the server's own write time (a DEFAULT now64): a
+// loader never sends them, because a replayed capture-time value would place the loaded rows behind
+// any reader cursor taken after the capture (team_project_ownership.last_synced, CHAOS-7264).
+var serverStampedColumns = map[string]map[string]bool{
+	"team_project_ownership": {"last_synced": true},
+}
+
+// WithoutServerStamped is the table without its server-stamped columns, rows included, so an insert
+// names only the columns a writer owns and the server DEFAULT stamps the rest at load time.
+func (table FrozenTable) WithoutServerStamped() FrozenTable {
+	drop := serverStampedColumns[table.Name]
+	if len(drop) == 0 {
+		return table
+	}
+	keep := make([]int, 0, len(table.Columns))
+	for index, column := range table.Columns {
+		if !drop[column.Name] {
+			keep = append(keep, index)
+		}
+	}
+	if len(keep) == len(table.Columns) {
+		return table
+	}
+	out := FrozenTable{Name: table.Name, Columns: make([]FrozenColumn, len(keep)), Rows: make([][]any, len(table.Rows))}
+	for position, index := range keep {
+		out.Columns[position] = table.Columns[index]
+	}
+	for rowIndex, row := range table.Rows {
+		projected := make([]any, 0, len(keep))
+		for _, index := range keep {
+			if index < len(row) {
+				projected = append(projected, row[index])
+			}
+		}
+		out.Rows[rowIndex] = projected
+	}
+	return out
+}
+
 func (table FrozenTable) columnList() string {
 	names := make([]string, len(table.Columns))
 	for index, column := range table.Columns {
@@ -227,6 +266,7 @@ func (target FrozenTarget) Load(ctx context.Context, conn driver.Conn, delta tim
 	// (256 KiB) is below one chunk of the largest table.
 	insertContext := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"max_query_size": maxQuerySize}))
 	for _, table := range target.Tables {
+		table = table.WithoutServerStamped()
 		rows, err := table.ShiftTimes(delta)
 		if err != nil {
 			return counts, err

@@ -250,13 +250,15 @@ func TestHistoryVenueOracleMatchesAlembic(t *testing.T) {
 		frozen.History[scenario.name] = want
 	}
 
-	// downgrade: dho refuses and leaves the database; Alembic then downgrades it.
+	// downgrade: dho refuses a target outside its ported range and leaves the database;
+	// Alembic then downgrades it (the ported targets are compared in
+	// TestDowngradeVenueOracleMatchesPythonDowngrade).
 	uri, _ := revisionsDatabase(t)
 	before := recordedVersions(t, uri)
-	for _, target := range []string{"0139", "-1", "base"} {
+	for _, target := range []string{"base", "0066"} {
 		var stdout, stderr bytes.Buffer
 		code := historyChild(t, "downgrade")(context.Background(), cli.Env{Args: []string{target}, Stdout: &stdout, Stderr: &stderr})
-		if code != cli.ExitRefused || stdout.Len() != 0 || !strings.Contains(stderr.String(), "forward_only") {
+		if code != cli.ExitRefused || stdout.Len() != 0 || !strings.Contains(stderr.String(), `"error"`) {
 			t.Errorf("dho downgrade %s: exit %d stdout %q stderr %q, want a refusal (exit 3)", target, code, stdout.String(), stderr.String())
 		}
 		if after := recordedVersions(t, uri); !reflect.DeepEqual(after, before) {

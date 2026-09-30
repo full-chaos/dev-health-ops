@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -29,6 +30,11 @@ const (
 
 // llmSettingKeys is llm_settings.py's LLM_SETTING_KEYS, in delete order.
 var llmSettingKeys = []string{"provider", "model", "api_key", "base_url", "concurrency"}
+
+// llmRoleCertificationPrefix is roles.py's ROLE_CERTIFICATION_SETTING_KEY plus
+// the ":" of _role_setting_key: the per-role certification rows. The platform
+// key (platform_ask_dev_role_certification_profile:...) does not start with it.
+const llmRoleCertificationPrefix = "ask_dev_role_certification_profile:"
 
 // lookupEnv reads the process environment; a variable so a test can point
 // the budget ceiling at a fixed value without touching the real one.
@@ -452,18 +458,44 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if !h.requireBYOLLMAccess(ctx, w, orgID, true) {
 		return
 	}
-	tag, err := h.store.Pool.Exec(ctx,
-		`DELETE FROM settings WHERE org_id = $1 AND category = $2 AND key = ANY($3)`,
-		orgID, llmCategory, llmSettingKeys)
+	credentialsDeleted, err := h.deleteLLMSettingsRows(ctx, orgID)
 	if err != nil {
 		h.internalError(ctx, w, "delete llm settings", err)
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	if credentialsDeleted == 0 {
 		policy.WriteDetail(w, http.StatusNotFound, "LLM settings not found", nil)
 		return
 	}
 	out := pyjson.NewObject()
 	out.Set("deleted", true)
 	policy.WriteModel(w, http.StatusOK, out, nil)
+}
+
+// deleteLLMSettingsRows is the one delete both the HTTP route and the
+// `admin llm-settings delete` operator path run (CHAOS-6975). The org's
+// readiness record and every role certification row are derived from the
+// credentials, so they go in the same statement (Python left them behind).
+// It returns how many CREDENTIAL rows existed: orphan derived rows are cleared
+// but are not a credential, so a caller answers "not found" on zero.
+func (h *handlers) deleteLLMSettingsRows(ctx context.Context, orgID string) (int, error) {
+	rows, err := h.store.Pool.Query(ctx,
+		`DELETE FROM settings WHERE org_id = $1 AND category = $2
+		   AND (key = ANY($3) OR key = $4 OR starts_with(key, $5)) RETURNING key`,
+		orgID, llmCategory, llmSettingKeys, askDevAgentReadinessKey, llmRoleCertificationPrefix)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	credentials := 0
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return 0, err
+		}
+		if slices.Contains(llmSettingKeys, key) {
+			credentials++
+		}
+	}
+	return credentials, rows.Err()
 }

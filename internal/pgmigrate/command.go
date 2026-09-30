@@ -78,9 +78,11 @@ func Command(resolve ResolveDSN) cli.Command {
 			},
 			{
 				Name:    "downgrade",
-				Summary: "refused: the PostgreSQL migrator is forward-only",
+				Summary: "revert the PostgreSQL revisions above a target (revision id 0138-0145, or -N), as `alembic downgrade` does; refuses, before it connects, a target whose steps are not ported",
 				Kind:    cli.Verb,
-				Run:     downgrade,
+				Run: func(ctx context.Context, env cli.Env) int {
+					return downgrade(ctx, resolve, env)
+				},
 			},
 		},
 	}
@@ -138,7 +140,14 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		}
 		return writeResult(env.Stdout, env.Stderr, status)
 	}
-	result, err := UpgradeLogged(ctx, conn, baseline, chain, logging.NewJSON(env.Stderr, slog.LevelInfo))
+	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
+	before, _ := Recorded(ctx, conn)
+	result, err := UpgradeLogged(ctx, conn, baseline, chain, logger)
+	// One final line per run, from state read back afterwards: the step logs fire
+	// before their SQL. A failed upgrade's outcome is what alembic_version holds now.
+	observed, readErr := Recorded(ctx, conn)
+	logRunOutcome(logger, "up", before, "head", observed, outcomeOf(runFacts{
+		Refused: isRefusal(err), Err: err, ReadFailed: readErr != nil, Changed: !sameSet(observed, before)}))
 	if err != nil {
 		var below BelowHeadError
 		var ahead AheadOfBuildError

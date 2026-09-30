@@ -112,24 +112,30 @@ func worldColumns(t *testing.T, dsn, table string) []FrozenColumn {
 	return columns
 }
 
+// dumpWorldTable is the table as a world holds it: the server-stamped columns (last_synced of
+// team_project_ownership) are left out, because a loader never sends them and a capture-time value
+// would be replayed into the load, and the rows are sorted after that projection.
 func dumpWorldTable(t *testing.T, dsn, table string) FrozenTable {
 	t.Helper()
 	frozen := FrozenTable{Name: table, Columns: worldColumns(t, dsn, table)}
 	body := strings.TrimSpace(clickHouseHTTP(t, dsn, "SELECT * FROM `"+table+"` FORMAT JSONCompactEachRow"))
-	if body == "" {
-		return frozen
-	}
-	lines := strings.Split(body, "\n")
-	sort.Strings(lines)
-	for _, line := range lines {
-		var row []any
-		decoder := json.NewDecoder(strings.NewReader(line))
-		decoder.UseNumber()
-		if err := decoder.Decode(&row); err != nil {
-			t.Fatalf("%s: %v", table, err)
+	if body != "" {
+		for _, line := range strings.Split(body, "\n") {
+			var row []any
+			decoder := json.NewDecoder(strings.NewReader(line))
+			decoder.UseNumber()
+			if err := decoder.Decode(&row); err != nil {
+				t.Fatalf("%s: %v", table, err)
+			}
+			frozen.Rows = append(frozen.Rows, row)
 		}
-		frozen.Rows = append(frozen.Rows, row)
 	}
+	frozen = frozen.WithoutServerStamped()
+	sort.Slice(frozen.Rows, func(i, j int) bool {
+		left, _ := json.Marshal(frozen.Rows[i])
+		right, _ := json.Marshal(frozen.Rows[j])
+		return string(left) < string(right)
+	})
 	return frozen
 }
 
@@ -680,5 +686,63 @@ func assertStoredStampMatchesStoredRow(t *testing.T, dsn string, world FrozenWor
 	}
 	if checked == 0 {
 		t.Fatalf("%s: no stored rows were checked", name)
+	}
+}
+
+// A frozen world never carries a server-stamped column, and loading it never sends one: the rows a
+// load writes are stamped by the server when they are loaded, so a reader cursor taken after the
+// capture (and before the load) still sees them.
+func TestLoadWorldStampsServerStampedColumnsAtLoadTime(t *testing.T) {
+	for _, set := range generateParameterSets {
+		world, err := LoadFrozenWorld(set.Params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frozenAt, err := time.Parse(time.RFC3339Nano, world.FrozenAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, table := range world.Tables {
+			for _, column := range table.Columns {
+				if serverStampedColumns[table.Name][column.Name] {
+					t.Fatalf("the frozen world still carries the server-stamped column %s.%s: re-freeze it", table.Name, column.Name)
+				}
+			}
+		}
+		t.Run(set.Params.RepoName, func(t *testing.T) {
+			ch := startClickHouse(t)
+			stopMerges(t, ch.httpDSN)
+			load, closeConn := openNative(t, ch)
+			defer closeConn()
+			// A world frozen before the column was server-stamped carries capture-time values: the
+			// loader itself must refuse to replay them.
+			replayed := world
+			replayed.Tables = append([]WorldTable(nil), world.Tables...)
+			for index, table := range replayed.Tables {
+				if table.Name != "team_project_ownership" {
+					continue
+				}
+				table.Columns = append(append([]FrozenColumn(nil), table.Columns...), FrozenColumn{Name: "last_synced", Type: "DateTime64(3, 'UTC')"})
+				rows := make([][]any, len(table.Rows))
+				for rowIndex, row := range table.Rows {
+					rows[rowIndex] = append(append([]any(nil), row...), "2020-01-01 00:00:00.000")
+				}
+				table.Rows = rows
+				replayed.Tables[index] = table
+			}
+			startedAt := time.Now().UTC().Add(-time.Second)
+			if _, err := load(context.Background(), replayed, world.OrgID, frozenAt); err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			for tableName, columns := range serverStampedColumns {
+				for column := range columns {
+					out := strings.TrimSpace(clickHouseHTTP(t, ch.httpDSN, fmt.Sprintf("SELECT count(), countIf(`%s` >= toDateTime64(%d, 3, 'UTC')) FROM `%s` FORMAT TSV", column, startedAt.UnixMilli()/1000, tableName)))
+					fields := strings.Fields(out)
+					if len(fields) != 2 || fields[0] == "0" || fields[0] != fields[1] {
+						t.Fatalf("%s.%s: rows / rows stamped at or after the load start = %q, want every loaded row stamped by the server at load time (and at least one row)", tableName, column, out)
+					}
+				}
+			}
+		})
 	}
 }

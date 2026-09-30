@@ -18,7 +18,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
-const secretToken = "tok-SECRET-9f8e7d"
+const canary = "leakcanary"
 
 type accessHarness struct {
 	logs    *bytes.Buffer
@@ -120,9 +120,9 @@ func itemsRoute() Route {
 
 func TestAccessLineAndMetricsForAKnownRouteCarryThePatternNeverThePath(t *testing.T) {
 	h := newAccessHarness(t, slog.LevelInfo, nil, itemsRoute())
-	response := h.do(http.MethodGet, "/v1/items/item-7731?api_key="+secretToken, map[string]string{
-		"Authorization": "Bearer " + secretToken,
-		"Cookie":        "session=" + secretToken,
+	response := h.do(http.MethodGet, "/v1/items/item-7731?api_key="+canary, map[string]string{
+		"Authorization": "Bearer " + canary,
+		"Cookie":        "session=" + canary,
 		RequestIDHeader: "req-abc-1",
 	})
 	if response.Code != http.StatusNoContent {
@@ -152,7 +152,7 @@ func TestAccessLineAndMetricsForAKnownRouteCarryThePatternNeverThePath(t *testin
 			t.Errorf("access line carries unexpected field %q", key)
 		}
 	}
-	for _, leaked := range []string{"item-7731", secretToken, "api_key", "Bearer", "session="} {
+	for _, leaked := range []string{"item-7731", canary, "api_key", "Bearer", "session="} {
 		if strings.Contains(h.logs.String(), leaked) {
 			t.Errorf("log leaks %q:\n%s", leaked, h.logs.String())
 		}
@@ -170,7 +170,7 @@ func TestAccessLineAndMetricsForAKnownRouteCarryThePatternNeverThePath(t *testin
 func TestUnknownPathsShareOneUnmatchedSeriesAndNeverLogTheRawPath(t *testing.T) {
 	h := newAccessHarness(t, slog.LevelInfo, nil, itemsRoute())
 	for index := 0; index < 40; index++ {
-		response := h.do(http.MethodGet, fmt.Sprintf("/probe/%d/%s", index, secretToken), nil)
+		response := h.do(http.MethodGet, fmt.Sprintf("/probe/%d/%s", index, canary), nil)
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("unknown path answered %d, want 404", response.Code)
 		}
@@ -186,7 +186,7 @@ func TestUnknownPathsShareOneUnmatchedSeriesAndNeverLogTheRawPath(t *testing.T) 
 			t.Errorf("unknown path line = %v, want route=unmatched status=404", line)
 		}
 	}
-	if strings.Contains(h.logs.String(), "probe") || strings.Contains(h.logs.String(), secretToken) {
+	if strings.Contains(h.logs.String(), "probe") || strings.Contains(h.logs.String(), canary) {
 		t.Errorf("log carries the raw path:\n%s", h.logs.String())
 	}
 }
@@ -217,7 +217,7 @@ func TestRefusalsBeforeTheHandlerStayAttributedToTheirRoute(t *testing.T) {
 
 func TestAnUnknownMethodTokenIsOneBoundedLabel(t *testing.T) {
 	h := newAccessHarness(t, slog.LevelInfo, nil, itemsRoute())
-	for _, method := range []string{"BREW", "PROPFIND", "X-" + secretToken} {
+	for _, method := range []string{"BREW", "PROPFIND", "X-" + canary} {
 		request := httptest.NewRequest(http.MethodGet, "/v1/items/a", nil)
 		request.Method = method
 		h.handler.ServeHTTP(httptest.NewRecorder(), request)
@@ -231,14 +231,14 @@ func TestAnUnknownMethodTokenIsOneBoundedLabel(t *testing.T) {
 			t.Errorf("series %q, want method=OTHER", key)
 		}
 	}
-	if strings.Contains(h.logs.String(), secretToken) || strings.Contains(h.logs.String(), "BREW") {
+	if strings.Contains(h.logs.String(), canary) || strings.Contains(h.logs.String(), "BREW") {
 		t.Errorf("log carries the raw method:\n%s", h.logs.String())
 	}
 }
 
 func TestAPanickingHandlerIsCountedAs5xx(t *testing.T) {
 	boom := Route{Method: http.MethodGet, Pattern: "/v1/boom", Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		panic("kaboom " + secretToken)
+		panic("kaboom " + canary)
 	})}
 	h := newAccessHarness(t, slog.LevelInfo, nil, boom)
 	if code := h.do(http.MethodGet, "/v1/boom", nil).Code; code != http.StatusInternalServerError {

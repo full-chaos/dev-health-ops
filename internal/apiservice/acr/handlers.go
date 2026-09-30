@@ -8,8 +8,7 @@
 // (deploy/helm/dev-health's TestInternalACRRoutesStayOffThePublicIngress
 // pins that no Ingress routes to the Go api). CHAOS-7181: apiservice mounts
 // these routes on the internal listener only (apiservice.InternalRoutes); the
-// public api listener has none unless the one-roll bridge
-// (Deps.ACRPublicCompat) is on. The
+// public api listener has none. The
 // agent_context_runtime entitlement decision itself is ported in full via
 // internal/api/licensing, this package's only dependency for it.
 package acr

@@ -83,9 +83,6 @@ func dependencyFailure(ctx context.Context, logger *slog.Logger, dependency, rea
 // package (internal/api/<area>, internal/apiservice/<area>) never opens its
 // own.
 type Deps struct {
-	// ACRPublicCompat mounts the two acr internal routes on the public
-	// listener too (CHAOS-7181 one-roll bridge; default off).
-	ACRPublicCompat bool
 	// SyncJiraHTTP is the sync config create path's Jira project discovery
 	// HTTP client (nil: the area's default); a test sets one that trusts
 	// its fake Jira's certificate.

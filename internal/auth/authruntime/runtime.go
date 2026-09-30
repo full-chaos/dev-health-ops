@@ -24,6 +24,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authstore"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -252,6 +253,13 @@ func configure(
 	}); err != nil {
 		closeStore()
 		return nil, err
+	}
+
+	// The shared httpapi server records its request counter and duration
+	// histogram through OTel; without this source they never reach /metrics.
+	// Fails soft: a broken exporter leaves them unexported, never stops boot.
+	if err := apimetrics.Register(registry); err != nil {
+		logger.Warn("register OTel instruments on the operator /metrics", "error", err)
 	}
 
 	operatorHTTP, err := health.NewServer(health.ServerOptions{

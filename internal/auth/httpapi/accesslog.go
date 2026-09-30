@@ -20,7 +20,9 @@ const UnmatchedRoute = "unmatched"
 const (
 	requestsMetricName = "dev_health_api_http_requests_total"
 	durationMetricName = "dev_health_api_http_request_duration_seconds"
-	maxLoggedRequestID = 128
+	// invalidRequestID is what a log line carries for a client-supplied id
+	// outside the narrow correlation charset.
+	invalidRequestID = "invalid"
 )
 
 var durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
@@ -156,17 +158,13 @@ func (o *accessObserver) observe(r *http.Request, pattern string, status int, el
 	if o.duration != nil {
 		o.duration.Record(ctx, elapsed.Seconds(), attrs)
 	}
-	requestID := RequestIDFrom(ctx)
-	if len(requestID) > maxLoggedRequestID {
-		requestID = requestID[:maxLoggedRequestID]
-	}
 	o.logger.LogAttrs(ctx, slog.LevelInfo, "http request",
 		slog.String("method", method),
 		slog.String("route", pattern),
 		slog.Int("status", status),
 		slog.Float64("duration_ms", float64(elapsed.Microseconds())/1000),
 		slog.String("listener", o.listener),
-		slog.String("request_id", requestID),
+		slog.String("request_id", LoggableRequestID(ctx)),
 	)
 }
 
@@ -181,4 +179,21 @@ func statusClass(status int) string {
 	default:
 		return "other"
 	}
+}
+
+// LoggableRequestID is the request id bound to ctx as it may appear in a log
+// line. The api echoes any non-empty X-Request-Id a client sends, so the
+// bound value is client-controlled; only one inside the narrow correlation
+// charset and length (acceptableRequestID, which every generated id meets) is
+// logged, anything else is "invalid". A header value such as "Bearer <token>"
+// therefore never reaches a log.
+func LoggableRequestID(ctx context.Context) string {
+	id := RequestIDFrom(ctx)
+	if id == "" {
+		return ""
+	}
+	if !acceptableRequestID(id) {
+		return invalidRequestID
+	}
+	return id
 }

@@ -272,17 +272,48 @@ func TestListenerLabelDefaultsToTheServerName(t *testing.T) {
 	}
 }
 
-func TestAnOverlongRequestIDIsTruncatedInTheLog(t *testing.T) {
+func TestOnlyAnIdInsideTheCorrelationCharsetIsLogged(t *testing.T) {
+	cases := []struct{ name, id, want string }{
+		{"plain", "req-abc_1.2:3", "req-abc_1.2:3"},
+		{"uuid", "0b1b2c3d-0000-4000-8000-000000000000", "0b1b2c3d-0000-4000-8000-000000000000"},
+		{"bearer shaped", "Bearer review-only-" + canary, invalidRequestID},
+		{"space", "a b", invalidRequestID},
+		{"semicolon", "a;b", invalidRequestID},
+		{"non ascii", "caf\u00e9", invalidRequestID},
+		{"longest accepted", strings.Repeat("r", maxInboundRequestID), strings.Repeat("r", maxInboundRequestID)},
+		{"one over", strings.Repeat("r", maxInboundRequestID+1), invalidRequestID},
+		{"far over", strings.Repeat("r", 4000), invalidRequestID},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newAccessHarness(t, slog.LevelInfo, func(o *ServerOptions) {
+				o.AcceptRequestID = func(id string) bool { return id != "" }
+			}, itemsRoute())
+			h.do(http.MethodGet, "/v1/items/a", map[string]string{RequestIDHeader: tc.id})
+			lines := h.accessLines(t)
+			if len(lines) != 1 || lines[0]["request_id"] != tc.want {
+				t.Errorf("access lines = %v, want one with request_id %q", lines, tc.want)
+			}
+			if strings.Contains(h.logs.String(), canary) {
+				t.Errorf("log carries the canary:\n%s", h.logs.String())
+			}
+		})
+	}
+}
+
+func TestThePanicLogSharesTheRequestIDRule(t *testing.T) {
+	boom := Route{Method: http.MethodGet, Pattern: "/v1/boom", Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})}
 	h := newAccessHarness(t, slog.LevelInfo, func(o *ServerOptions) {
 		o.AcceptRequestID = func(id string) bool { return id != "" }
-	}, itemsRoute())
-	h.do(http.MethodGet, "/v1/items/a", map[string]string{RequestIDHeader: strings.Repeat("r", 4000)})
-	lines := h.accessLines(t)
-	if len(lines) != 1 {
-		t.Fatalf("got %d lines, want 1", len(lines))
+	}, boom)
+	h.do(http.MethodGet, "/v1/boom", map[string]string{RequestIDHeader: "Bearer " + canary})
+	if !strings.Contains(h.logs.String(), "handler panicked") {
+		t.Fatalf("no panic log:\n%s", h.logs.String())
 	}
-	if id, _ := lines[0]["request_id"].(string); len(id) != maxLoggedRequestID {
-		t.Errorf("request_id length = %d, want %d", len(id), maxLoggedRequestID)
+	if strings.Contains(h.logs.String(), canary) {
+		t.Errorf("a log line carries the client id:\n%s", h.logs.String())
 	}
 }
 
@@ -384,5 +415,11 @@ func TestAnAbortedResponseKeepsWhatWasCommittedAndOtherwiseHasNoStatusClass(t *t
 	}
 	if got := h.series(t, requestsMetricName); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("requests = %v, want %v", got, want)
+	}
+}
+
+func TestALoggableRequestIDIsEmptyWhenNoneWasBound(t *testing.T) {
+	if got := LoggableRequestID(context.Background()); got != "" {
+		t.Errorf("LoggableRequestID(no id) = %q, want empty", got)
 	}
 }

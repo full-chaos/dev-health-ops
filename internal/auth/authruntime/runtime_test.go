@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -652,5 +653,43 @@ func TestRoutesAreEmpty(t *testing.T) {
 				"so mounting one is a deliberate change that must update the dormancy claim",
 			got,
 		)
+	}
+}
+
+// TestTheAuthServiceScrapeCarriesItsPerRouteRequestSeries drives the real
+// Execute path: a request to the API listener, then a scrape of the operator
+// /metrics. The shared httpapi server counts the request through OTel, so the
+// series reaches the scrape only if Execute registers the OTel source.
+func TestTheAuthServiceScrapeCarriesItsPerRouteRequestSeries(t *testing.T) {
+	ports := reservePorts(t, 2)
+	apiAddress, operatorAddress := ports[0], ports[1]
+	env := brokenEnvironment(t, apiAddress, operatorAddress)
+	env[authconfig.EnvLogLevel] = "info"
+	logs, stop := runService(t, env)
+	client := &http.Client{Timeout: 10 * time.Second}
+	defer client.CloseIdleConnections()
+
+	api := awaitResponse(t, client, "http://"+apiAddress+"/v1/never-registered/customer-8841")
+	_ = api.Body.Close()
+	scrape := awaitResponse(t, client, "http://"+operatorAddress+"/metrics")
+	body, err := io.ReadAll(scrape.Body)
+	_ = scrape.Body.Close()
+	if err != nil {
+		t.Fatalf("read /metrics: %v", err)
+	}
+	// The OTel provider is process-wide, so earlier tests in this package may
+	// have counted too: the series must exist with a non-zero count.
+	want := regexp.MustCompile(`(?m)^dev_health_api_http_requests_total\{listener="auth-api-http",method="GET",route="unmatched",status_class="4xx"\} [1-9][0-9]*$`)
+	if !want.Match(body) {
+		t.Errorf("operator /metrics lacks the unmatched request series\n%s", body)
+	}
+	if bytes.Contains(body, []byte("customer-8841")) {
+		t.Errorf("operator /metrics carries the raw path:\n%s", body)
+	}
+	if code := stop(); code != 0 {
+		t.Fatalf("Execute exited %d, want 0", code)
+	}
+	if !strings.Contains(logs.String(), `"route":"unmatched"`) || strings.Contains(logs.String(), "customer-8841") {
+		t.Errorf("access log missing the unmatched line or carrying the raw path:\n%s", logs.String())
 	}
 }

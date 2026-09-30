@@ -202,13 +202,17 @@ def test_default_backend_is_go_and_allow_list_stays_python(
     assert _route(doc, "/health") == "http://go-api:8000"
     for py in (
         "/graphql",
-        "/api/v1/admin/llm-settings/readiness",
         "/api/v1/internal/acr/health",
         "/docs",
         "/openapi.json",
     ):
         assert _route(doc, py) == "http://api:8000", py
-    assert _route(doc, "/api/v1/admin/llm-settings/readiness/x") == "http://go-api:8000"
+    # CHAOS-7198: llm-settings/readiness is Go-served, no longer on the Python allow-list.
+    assert _route(doc, "/api/v1/admin/llm-settings/readiness") == "http://go-api:8000"
+    assert (
+        "/api/v1/admin/llm-settings/readiness",
+        "Exact",
+    ) not in gen.DEFAULT_PYTHON_ALLOW_LIST
 
 
 def test_allow_list_override_must_cover_internal(gen: ModuleType) -> None:

@@ -169,7 +169,6 @@ def emit_labels(go_regex: str, query_regex: str) -> str:
 # (path, pathType).
 DEFAULT_PYTHON_ALLOW_LIST: list[tuple[str, str]] = [
     ("/graphql", "Prefix"),
-    ("/api/v1/admin/llm-settings/readiness", "Exact"),
     ("/api/v1/internal", "Prefix"),
 ]
 # Kept on Python on bigboy/local ONLY (D2983: prod blocks these at the ingress; local keeps

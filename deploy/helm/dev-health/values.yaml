@@ -1010,8 +1010,6 @@ ingress:
   pythonAllowList:
     - path: /graphql
       pathType: Prefix
-    - path: /api/v1/admin/llm-settings/readiness
-      pathType: Exact
     - path: /api/v1/internal
       pathType: Prefix
   tls: []

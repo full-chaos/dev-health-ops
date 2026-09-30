@@ -43,7 +43,7 @@ type GitLabTeamCatalogClickHouseEffects struct {
 }
 
 const gitlabTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`
-const gitlabTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, last_synced)`
+const gitlabTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 const gitlabTeamCatalogMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 const gitlabTeamCatalogProjectsInsert = `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced)`
 
@@ -335,9 +335,8 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeOwnership(ctx context.Contex
 		return err
 	}
 	defer batch.Abort()
-	ingestedAt := time.Now().UTC()
 	for _, row := range rows {
-		if err := batch.Append(row.OrgID, row.Provider, row.TeamID, row.ProjectID, row.ProjectKey, row.Source, row.IsPrimary, row.Specificity, row.Priority, row.ValidFrom, row.ValidTo, row.UpdatedAt, ingestedAt); err != nil {
+		if err := batch.Append(row.OrgID, row.Provider, row.TeamID, row.ProjectID, row.ProjectKey, row.Source, row.IsPrimary, row.Specificity, row.Priority, row.ValidFrom, row.ValidTo, row.UpdatedAt); err != nil {
 			return err
 		}
 	}

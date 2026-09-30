@@ -56,3 +56,49 @@ func TestTeamProjectOwnershipWritersStampIngestTimeAgainstMigratedSchema(t *test
 		}
 	}
 }
+
+// A write delayed between building the batch and sending it (the lease check sits there) must be
+// stamped when the server runs the insert, after the delay: a stamp taken before the delay would
+// land behind a consumer cursor that had already read a newer row.
+func TestTeamProjectOwnershipLastSyncedIsTakenAfterADelayedLeaseCheck(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	provider := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	projectKey := "PLAT"
+	var released time.Time
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error {
+		time.Sleep(400 * time.Millisecond)
+		released = time.Now().UTC()
+		return nil
+	})
+
+	writers := map[string]func() error{
+		"jira": func() error {
+			return JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,
+				[]jiraTeamCatalogOwnershipRow{normalizeJiraOwnershipRow("org-delay", "PLAT", projectKey, provider)})
+		},
+		"gitlab": func() error {
+			return GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,
+				[]gitlabTeamCatalogOwnershipRow{normalizeGitLabOwnershipRow("org-delay", "gl:org", projectKey, gitlabTeamCatalogBaseSpecificity, provider)})
+		},
+		"linear": func() error {
+			return LinearReferenceCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,
+				[]linearReferenceOwnershipRow{{
+					OrgID: "org-delay", Provider: "linear", TeamID: "ENG", ProjectID: "project-1", ProjectKey: &projectKey,
+					Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: provider, UpdatedAt: provider,
+				}})
+		},
+	}
+	for name, write := range writers {
+		if err := write(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var syncedMillis int64
+		query := `SELECT toUnixTimestamp64Milli(last_synced) FROM team_project_ownership FINAL WHERE org_id = 'org-delay' AND provider = ?`
+		if err := conn.QueryRow(ctx, query, name).Scan(&syncedMillis); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if syncedMillis < released.UnixMilli() {
+			t.Fatalf("%s: last_synced = %d is before the delayed lease check returned at %d: the stamp was taken before the delay", name, syncedMillis, released.UnixMilli())
+		}
+	}
+}

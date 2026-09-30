@@ -234,3 +234,57 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 		}
 	}
 }
+
+// TestPerHostPythonAllowList pins CHAOS-7221: a host's pythonAllowList may be a list (that host's
+// own allow-list, e.g. the in-cluster host keeps /metrics on Python) while `true` keeps using the
+// shared ingress.pythonAllowList; every guard runs on the EFFECTIVE list.
+func TestPerHostPythonAllowList(t *testing.T) {
+	render := func(hosts string) (string, error) {
+		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
+			"--set-json", "ingress.hosts="+hosts).CombinedOutput()
+		return string(out), err
+	}
+	hostRules := func(out, host string) string {
+		at := strings.Index(out, `- host: "`+host+`"`)
+		if at < 0 {
+			t.Fatalf("host %s not rendered:\n%s", host, out)
+		}
+		rest := out[at+1:]
+		if next := strings.Index(rest, "\n    - host:"); next >= 0 {
+			return out[at : at+1+next]
+		}
+		return out[at:]
+	}
+	own := `[{"path":"/graphql","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"},{"path":"/metrics","pathType":"Exact"}]`
+	both := `[{"host":"shared.test","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]},` +
+		`{"host":"own.test","pythonAllowList":` + own + `,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
+	out, err := render(both)
+	if err != nil {
+		t.Fatalf("per-host list must render: %v\n%s", err, out)
+	}
+	shared, ownRules := hostRules(out, "shared.test"), hostRules(out, "own.test")
+	if strings.Contains(shared, "path: /metrics") {
+		t.Errorf("a host with pythonAllowList: true must use the shared list (no /metrics):\n%s", shared)
+	}
+	if !strings.Contains(ownRules, "path: /metrics") || !strings.Contains(ownRules, "path: /graphql") || !strings.Contains(ownRules, "path: /api/v1/internal") {
+		t.Errorf("a host with its own list must render exactly that list:\n%s", ownRules)
+	}
+	if !strings.Contains(strings.SplitN(strings.SplitN(ownRules, "path: /metrics", 2)[1], "path:", 2)[0], "b-dev-health-api") {
+		t.Errorf("/metrics must back onto the Python api Service:\n%s", ownRules)
+	}
+	for name, c := range map[string]struct{ list, want string }{
+		"list drops internal":     {`[{"path":"/metrics","pathType":"Exact"}]`, "must cover /api/v1/internal"},
+		"empty list":              {`[]`, "without pythonAllowList"},
+		"regex entry":             {`[{"path":"/api/v1/(internal)","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "literal /path"},
+		"implementation specific": {`[{"path":"/x","pathType":"ImplementationSpecific"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "Prefix|Exact"},
+		"entry not a map":         {`["/graphql"]`, "literal /path"},
+		"string value":            {`"yes"`, "must be true or a list"},
+		"map value":               {`{"path":"/x"}`, "must be true or a list"},
+	} {
+		hosts := `[{"host":"h","pythonAllowList":` + c.list + `,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
+		o, err := render(hosts)
+		if err == nil || !strings.Contains(o, c.want) {
+			t.Errorf("%s: want render failure containing %q, got err=%v\n%s", name, c.want, err, o)
+		}
+	}
+}

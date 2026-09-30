@@ -77,9 +77,17 @@ spec:
                 {{- end }}
           {{- end }}
           {{- if $host.pythonAllowList }}
+          {{- /* CHAOS-7221: `true` uses the shared ingress.pythonAllowList; a LIST is this host's own allow-list (the in-cluster host keeps /metrics on Python). */}}
+          {{- $allow := $.Values.ingress.pythonAllowList }}
+          {{- if kindIs "slice" $host.pythonAllowList }}{{- $allow = $host.pythonAllowList }}
+          {{- else if not (kindIs "bool" $host.pythonAllowList) }}{{- fail (printf "ingress.hosts %q pythonAllowList must be true or a list of {path, pathType}, got %s" $host.host (kindOf $host.pythonAllowList)) }}
+          {{- end }}
           {{- if not $.Values.api.enabled }}{{- fail (printf "ingress.hosts %q pythonAllowList routes to the Python api but api.enabled is false (the Service would not exist)" $host.host) }}{{- end }}
           {{- $coversInternal := false }}
-          {{- range $.Values.ingress.pythonAllowList }}
+          {{- range $allow }}
+          {{- if not (and (kindIs "map" .) (kindIs "string" .path) (regexMatch "^/[A-Za-z0-9_./-]*$" .path) (has .pathType (list "Prefix" "Exact"))) }}
+          {{- fail (printf "ingress.hosts %q pythonAllowList entry %v must be {path: literal /path, pathType: Prefix|Exact}" $host.host .) }}
+          {{- end }}
           {{- if and (eq .pathType "Prefix") (has (trimSuffix "/" .path) (list "" "/api" "/api/v1" "/api/v1/internal")) }}{{- $coversInternal = true }}{{- end }}
           - path: {{ .path }}
             pathType: {{ .pathType }}
@@ -90,7 +98,7 @@ spec:
                   number: {{ $.Values.api.port }}
           {{- end }}
           {{- if not $coversInternal }}
-          {{- fail (printf "ingress.pythonAllowList must cover /api/v1/internal (Prefix): the Go api serves /api/v1/internal/acr/* without a credential check; host %q" $host.host) }}
+          {{- fail (printf "the Python allow-list (ingress.pythonAllowList, or the host's own pythonAllowList list) must cover /api/v1/internal (Prefix): the Go api serves /api/v1/internal/acr/* without a credential check; host %q" $host.host) }}
           {{- end }}
           {{- end }}
     {{- end }}

@@ -93,9 +93,10 @@ type productBatch struct {
 	rows    [][]any
 	sent    bool
 	sendErr error
+	aborts  int
 }
 
-func (b *productBatch) Abort() error { return nil }
+func (b *productBatch) Abort() error { b.aborts++; return nil }
 func (b *productBatch) Append(v ...any) error {
 	b.rows = append(b.rows, append([]any(nil), v...))
 	return nil

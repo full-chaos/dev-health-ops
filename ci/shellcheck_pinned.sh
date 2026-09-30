@@ -140,7 +140,6 @@ FILES=(
   "${ROOT}/docker/init-extra-dbs.sh"
   "${ROOT}/scripts/acceptance/container_source_guard.sh"
   "${ROOT}/scripts/acceptance/run_wave4_corpus.sh"
-  "${ROOT}/scripts/build-images.sh"
   "${ROOT}/scripts/run_py_tool.sh"
   "${ROOT}/tests/compatibility/provider/run.sh"
   "${ROOT}/.github/docs-legacy/examples/customer-push/generic-runner.sh"

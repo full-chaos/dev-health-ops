@@ -265,7 +265,6 @@ def test_volatile_columns_cover_every_timestamp_this_world_writes() -> None:
     assert _VOLATILE_COLUMNS == frozenset(
         {
             "last_synced",
-            "ingested_at",
             "updated_at",
             "created_at",
             "computed_at",

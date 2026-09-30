@@ -395,7 +395,14 @@ func TestGenerateVenueOracleMatchesThePythonProducer(t *testing.T) {
 		ch := startClickHouse(t)
 		stopMerges(t, ch.httpDSN)
 		before := rowCounts(t, ch.httpDSN)
+		pythonStart := time.Now().UTC().Add(-time.Second)
 		pythonGenerate(t, ch.httpDSN, set.Org, set.Params)
+		// CHAOS-7265 executed cell: the Python work_items writers name their columns and omit
+		// ingested_at, so the server stamps every row they write (insert_work_items / write_work_items).
+		stamped := strings.Fields(strings.TrimSpace(clickHouseHTTP(t, ch.httpDSN, fmt.Sprintf("SELECT count(), countIf(ingested_at >= toDateTime64(%d, 3, 'UTC')) FROM work_items FORMAT TSV", pythonStart.Unix()))))
+		if len(stamped) != 2 || stamped[0] == "0" || stamped[0] != stamped[1] {
+			t.Fatalf("Python producer work_items rows / rows server-stamped at write = %v, want all, and at least one", stamped)
+		}
 		after := rowCounts(t, ch.httpDSN)
 		changed := map[string]int{}
 		for name, count := range after {
@@ -408,7 +415,13 @@ func TestGenerateVenueOracleMatchesThePythonProducer(t *testing.T) {
 		frozen := map[string]int{}
 		for _, table := range world.Tables {
 			frozen[table.Name] = len(table.Rows)
-			columns := worldColumns(t, ch.httpDSN, table.Name)
+			// The frozen world never carries a server-stamped column (the loader would refuse to replay it).
+			var columns []FrozenColumn
+			for _, column := range worldColumns(t, ch.httpDSN, table.Name) {
+				if !serverStampedColumns[table.Name][column.Name] {
+					columns = append(columns, column)
+				}
+			}
 			if !reflect.DeepEqual(columns, table.Columns) {
 				t.Fatalf("%s: the schema's columns differ from the frozen ones", table.Name)
 			}

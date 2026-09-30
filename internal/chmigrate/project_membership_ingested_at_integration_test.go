@@ -116,7 +116,7 @@ func TestIngestedAtMigrationGivesLegacyRowsOneStableValueAndTheViewExposesIt(t *
 	viewStamp := func(source, subject string) int64 {
 		return readInt(`SELECT toUnixTimestamp64Milli(last_synced) FROM project_membership_presence WHERE source = '` + source + `' AND subject_id = '` + subject + `'`)
 	}
-	if got, want := viewStamp("transition", "1"), readInt(`SELECT toUnixTimestamp64Milli(max(ingested_at)) FROM project_membership_transitions WHERE subject_id = '1'`); got != want {
+	if got, want := viewStamp("transition", "1"), readInt(`SELECT toUnixTimestamp64Milli(max(ingested_at)) FROM project_membership_transitions FINAL WHERE subject_id = '1'`); got != want {
 		t.Fatalf("transition arm: view.last_synced = %d, want max(ingested_at) %d", got, want)
 	}
 	if got, want := viewStamp("work_item_column", "W1"), readInt(`SELECT toUnixTimestamp64Milli(ingested_at) FROM work_items WHERE work_item_id = 'W1'`); got != want {

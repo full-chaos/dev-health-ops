@@ -18,13 +18,12 @@
 //     trusted, a valid untrusted X-Real-IP is the client; else the peer.
 //
 // Trust contract (r1 finding, CHAOS-7204): a proxy listed in TRUSTED_PROXIES must
-// APPEND its peer to X-Forwarded-For (ingress-nginx compute-full-forwarded-for=true)
-// or REPLACE the header with that peer (compute-full-forwarded-for=false, no
-// use-forwarded-headers). Either way the rightmost hop is written by the proxy,
-// not the client. A proxy that forwards a client-written header UNCHANGED
-// (use-forwarded-headers=true with compute-full-forwarded-for=false, in front of
-// nothing that appends) does not meet the contract: no peer-based rule can tell
-// its client-written last hop from a real one, so do not list such a proxy.
+// APPEND its peer to X-Forwarded-For or REPLACE the header with that peer, so the
+// rightmost hop is written by the proxy, not the client. Prod ingress-nginx runs
+// replace mode (use-forwarded-headers=true, compute-full-forwarded-for=false:
+// upstream sees only the real client). A proxy that forwards a client-written
+// header UNCHANGED does not meet the contract: no peer-based rule can tell its
+// client-written last hop from a real one, so do not list such a proxy.
 //
 // Addresses come back canonical (IPv4-mapped IPv6 unmapped, zone, port and
 // brackets dropped) so one client cannot split across several bucket keys.

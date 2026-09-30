@@ -709,29 +709,47 @@ func TestLoadWorldStampsServerStampedColumnsAtLoadTime(t *testing.T) {
 			replayed := world
 			replayed.Tables = append([]WorldTable(nil), world.Tables...)
 			for index, table := range replayed.Tables {
-				if table.Name != "team_project_ownership" {
-					continue
+				// A literal list, NOT serverStampedColumns: a test that derived the replayed columns from
+				// the map under test could not notice an entry missing from it.
+				for _, column := range map[string][]string{
+					"team_project_ownership": {"last_synced"},
+					"work_items":             {"ingested_at"},
+				}[table.Name] {
+					columnType := "DateTime64(3, 'UTC')"
+					table.Columns = append(append([]FrozenColumn(nil), table.Columns...), FrozenColumn{Name: column, Type: columnType})
+					rows := make([][]any, len(table.Rows))
+					for rowIndex, row := range table.Rows {
+						rows[rowIndex] = append(append([]any(nil), row...), "2020-01-01 00:00:00.000")
+					}
+					table.Rows = rows
+					replayed.Tables[index] = table
 				}
-				table.Columns = append(append([]FrozenColumn(nil), table.Columns...), FrozenColumn{Name: "last_synced", Type: "DateTime64(3, 'UTC')"})
-				rows := make([][]any, len(table.Rows))
-				for rowIndex, row := range table.Rows {
-					rows[rowIndex] = append(append([]any(nil), row...), "2020-01-01 00:00:00.000")
-				}
-				table.Rows = rows
-				replayed.Tables[index] = table
 			}
 			startedAt := time.Now().UTC().Add(-time.Second)
 			if _, err := load(context.Background(), replayed, world.OrgID, frozenAt); err != nil {
 				t.Fatalf("load: %v", err)
 			}
-			for tableName, columns := range serverStampedColumns {
-				for column := range columns {
+			measured := 0
+			for tableName, columns := range map[string][]string{
+				"team_project_ownership":         {"last_synced"},
+				"work_items":                     {"ingested_at"},
+				"project_membership_transitions": {"ingested_at"},
+			} {
+				for _, column := range columns {
 					out := strings.TrimSpace(clickHouseHTTP(t, ch.httpDSN, fmt.Sprintf("SELECT count(), countIf(`%s` >= toDateTime64(%d, 3, 'UTC')) FROM `%s` FORMAT TSV", column, startedAt.UnixMilli()/1000, tableName)))
 					fields := strings.Fields(out)
-					if len(fields) != 2 || fields[0] == "0" || fields[0] != fields[1] {
-						t.Fatalf("%s.%s: rows / rows stamped at or after the load start = %q, want every loaded row stamped by the server at load time (and at least one row)", tableName, column, out)
+					if len(fields) != 2 || fields[0] != fields[1] {
+						t.Fatalf("%s.%s: rows / rows stamped at or after the load start = %q, want every loaded row stamped by the server at load time", tableName, column, out)
+					}
+					// A table the world holds no rows for (project_membership_transitions: the generator
+					// writes none) proves nothing; the measurement below must still happen somewhere.
+					if fields[0] != "0" {
+						measured++
 					}
 				}
+			}
+			if measured == 0 {
+				t.Fatal("no server-stamped table held a loaded row: the measurement did not happen")
 			}
 		})
 	}

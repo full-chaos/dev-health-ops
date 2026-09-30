@@ -273,6 +273,9 @@ FIXTURE_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 _VOLATILE_COLUMNS = frozenset(
     {
         "last_synced",
+        # CHAOS-7265: server DEFAULT now64(3) insert time on work_items and
+        # project_membership_transitions -- wall-clock by construction.
+        "ingested_at",
         "updated_at",
         "created_at",
         "computed_at",

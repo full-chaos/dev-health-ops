@@ -231,6 +231,21 @@ func (target FrozenTarget) Load(ctx context.Context, conn driver.Conn, delta tim
 		if err != nil {
 			return counts, err
 		}
+		// The frozen rows carry no ordering columns; a contract-2 (head) database requires them
+		// (CHECK ordering_contract = 2), so an operational table is stamped as `fixtures generate` does.
+		if _, operational := operationalFamilies[table.Name]; operational {
+			contractTwo, err := liveHasOrderingColumns(ctx, conn, table.Name)
+			if err != nil {
+				return counts, err
+			}
+			if contractTwo {
+				stamped, stampedRows, err := stampOrdering(WorldTable{FrozenTable: table}, rows)
+				if err != nil {
+					return counts, err
+				}
+				table, rows = stamped.FrozenTable, stampedRows
+			}
+		}
 		statement := "INSERT INTO `" + table.Name + "` (" + table.columnList() + ") SELECT " + table.columnList() +
 			" FROM format(JSONCompactEachRow, ?, ?)"
 		for start := 0; start < len(rows); start += insertChunk {

@@ -418,3 +418,41 @@ func TestLoadSyntheticVenueOracleMatchesThePythonProducer(t *testing.T) {
 	t.Logf("compared %d row(s) across %d parameter set(s) and %d target(s)", compared, len(syntheticParameterSets), len(Targets))
 	venueoracle.WriteProof(t)
 }
+
+// CHAOS-7301: at the migration head (ordering contract 2) the operational tables refuse a row whose
+// ordering_contract is not 2, and the frozen incident rows carry no ordering columns. The loader must
+// stamp them, or `load-synthetic --target incidents` fails (code 469) on the CI head schema.
+func TestLoadSyntheticIncidentsIntoAHeadSchema(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start clickhouse: %v", err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	migrate := exec.Command("go", "run", "../../cmd/dho", "migrate", "clickhouse", "upgrade")
+	migrate.Env = append(os.Environ(), "CLICKHOUSE_URI="+instance.URI, "OPERATIONAL_ORDERING_CONTRACT=2")
+	if output, err := migrate.CombinedOutput(); err != nil {
+		t.Fatalf("dho migrate clickhouse upgrade: %v\n%s", err, output)
+	}
+	set := syntheticParameterSets[0]
+	conn, err := chstorage.Open(ctx, chstorage.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	counts, err := LoadSynthetic(ctx, conn, set.Org, set.Repo, set.Days, "incidents", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("load incidents into a head schema: %v", err)
+	}
+	if counts["operational_service_repository_mappings"] == 0 {
+		t.Fatalf("no mapping row was loaded: %v", counts)
+	}
+	var stamped, all uint64
+	row := conn.QueryRow(ctx, "SELECT countIf(ordering_contract = 2), count() FROM operational_service_repository_mappings")
+	if err := row.Scan(&stamped, &all); err != nil {
+		t.Fatal(err)
+	}
+	if all == 0 || stamped != all {
+		t.Fatalf("mapping rows with ordering_contract 2: %d of %d", stamped, all)
+	}
+}

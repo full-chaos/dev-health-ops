@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"math"
 	"math/big"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
+	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -396,8 +396,10 @@ func impersonationAuditMetadata(ctx context.Context, user *policy.User) []byte {
 }
 
 // requestAuditEntry fills entry's RequestMetadata the way
-// api/utils/audit.py's extract_request_metadata does: X-Forwarded-For
-// (first hop) or else the direct peer, User-Agent, and X-Request-ID, each
+// api/utils/audit.py's extract_request_metadata does: the client
+// address (clientip.FromRequest: rightmost untrusted X-Forwarded-For hop behind
+// a TRUSTED_PROXIES peer, else the direct peer; never the client-writable
+// leftmost hop, CHAOS-7204), User-Agent, and X-Request-ID, each
 // present only when the header/value is non-empty. Used by emit_audit_log-
 // shaped writes (member_invited, password_changed) -- never by
 // impersonation start/stop, which use impersonationAuditMetadata instead
@@ -405,12 +407,8 @@ func impersonationAuditMetadata(ctx context.Context, user *policy.User) []byte {
 func requestAuditEntry(r *http.Request, entry audit.Entry) audit.Entry {
 	metadata := pyjson.NewObject()
 	hasAny := false
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		ip, _, _ := strings.Cut(forwarded, ",")
-		metadata.Set("ip_address", strings.TrimSpace(ip))
-		hasAny = true
-	} else if host, _, splitErr := net.SplitHostPort(r.RemoteAddr); splitErr == nil && host != "" {
-		metadata.Set("ip_address", host)
+	if ip := clientip.FromRequest(r); ip != "" {
+		metadata.Set("ip_address", ip)
 		hasAny = true
 	}
 	if ua := r.Header.Get("User-Agent"); ua != "" {

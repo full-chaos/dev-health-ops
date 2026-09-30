@@ -4,41 +4,20 @@
 package ratelimit
 
 import (
-	"net"
 	"net/http"
-	"os"
-	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
 )
 
-// ForwardedIP is get_forwarded_ip: the TCP peer, unless the peer is listed
-// in TRUSTED_PROXIES (read on every call, as os.getenv is) and the request
-// carries X-Forwarded-For, in which case the header's first hop, stripped.
+// ForwardedIP is the rate-limit client address: get_forwarded_ip's shape (the
+// TCP peer, or the forwarded client when the peer is in TRUSTED_PROXIES), but
+// the forwarded client is the RIGHTMOST untrusted X-Forwarded-For hop, never the
+// leftmost, which a client can write (CHAOS-7204). The rule lives in
+// clientip.FromRequest; this only adds the "unknown" key for a request with no
+// peer address, as slowapi does.
 func ForwardedIP(r *http.Request) string {
-	peer := "unknown"
-	if r.RemoteAddr != "" {
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			peer = host
-		} else {
-			peer = r.RemoteAddr
-		}
+	if ip := clientip.FromRequest(r); ip != "" {
+		return ip
 	}
-	forwarded := r.Header.Get("X-Forwarded-For")
-	if forwarded == "" {
-		return peer
-	}
-	if !trustedProxies()[peer] {
-		return peer
-	}
-	first := strings.SplitN(forwarded, ",", 2)[0]
-	return strings.TrimSpace(first)
-}
-
-func trustedProxies() map[string]bool {
-	set := make(map[string]bool)
-	for _, part := range strings.Split(os.Getenv("TRUSTED_PROXIES"), ",") {
-		if trimmed := strings.TrimSpace(part); trimmed != "" {
-			set[trimmed] = true
-		}
-	}
-	return set
+	return "unknown"
 }

@@ -21,6 +21,9 @@ import (
 // for row-diff proof). The org and its members are seeded directly by SQL
 // -- no org route is exercised here, that is CHAOS-6305's own oracle.
 func TestUserCRUDAndPasswordChangeMatchesThePythonAPI(t *testing.T) {
+	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
+	// the header's first hop. Trust this test's loopback peer so both planes agree.
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-user-crud-flow-32-bytes!!"

@@ -477,6 +477,9 @@ func (h *Harness) compareRows(name, query string) {
 // rewrites it); replaying, it compares against that golden.
 func Run(h *Harness) string {
 	h.T.Helper()
+	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
+	// the header's first hop. Trust the loopback peer so both planes agree.
+	h.T.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	if h.Python == nil {
 		h.golden = LoadGolden(h.T)
 	}

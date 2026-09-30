@@ -277,8 +277,29 @@ func TestPerHostPythonAllowList(t *testing.T) {
 	if got := strings.Count(shared, "- path: "); got != 3 {
 		t.Errorf("shared-list host must render exactly the 2 default paths plus \"/\", got %d paths:\n%s", got, shared)
 	}
-	if !strings.Contains(strings.SplitN(strings.SplitN(ownRules, "path: /metrics", 2)[1], "path:", 2)[0], "b-dev-health-api") {
-		t.Errorf("/metrics must back onto the Python api Service:\n%s", ownRules)
+	// Every allow-listed path, on both hosts, backs onto the Python api Service and "/" onto the Go api (r2 P3:
+	// the security-relevant /api/v1/internal backend was not asserted).
+	backendOf := func(rules, path string) string {
+		parts := strings.SplitN(rules, "- path: "+path+"\n", 2)
+		if len(parts) < 2 {
+			t.Fatalf("path %s not rendered:\n%s", path, rules)
+		}
+		return strings.SplitN(parts[1], "- path:", 2)[0]
+	}
+	for _, path := range []string{"/graphql", "/api/v1/internal", "/metrics"} {
+		if !strings.Contains(backendOf(ownRules, path), "name: b-dev-health-api\n") {
+			t.Errorf("own-list host: %s must back onto the Python api Service:\n%s", path, ownRules)
+		}
+	}
+	for _, path := range []string{"/graphql", "/api/v1/internal"} {
+		if !strings.Contains(backendOf(shared, path), "name: b-dev-health-api\n") {
+			t.Errorf("shared-list host: %s must back onto the Python api Service:\n%s", path, shared)
+		}
+	}
+	for _, rules := range []string{ownRules, shared} {
+		if !strings.Contains(backendOf(rules, "/"), "name: b-dev-health-go-api\n") {
+			t.Errorf(`"/" must back onto the Go api Service:\n%s`, rules)
+		}
 	}
 	for name, c := range map[string]struct{ list, want string }{
 		"list drops internal":     {`[{"path":"/metrics","pathType":"Exact"}]`, "must cover /api/v1/internal"},

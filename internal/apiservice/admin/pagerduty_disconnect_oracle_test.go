@@ -103,6 +103,7 @@ func TestPagerDutyDisconnectVenueOracle(t *testing.T) {
 	adminID, memberID := uuid.MustParse(venueoracle.StableUUID("pd-disc-admin")), uuid.MustParse(venueoracle.StableUUID("pd-disc-member"))
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{

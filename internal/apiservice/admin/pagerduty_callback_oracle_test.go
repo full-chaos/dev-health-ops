@@ -350,6 +350,7 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 	const oldOAuthPlain = `{"access_token":"old-at","refresh_token":"%s","expires_at":"2099-01-01T00:00:00Z","granted_scopes":[]}`
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{

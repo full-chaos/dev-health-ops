@@ -37,6 +37,7 @@ func TestSyncConfigDeleteVenueOracle(t *testing.T) {
 	t.Setenv("HIDE_MIGRATED_CHILD_CONFIGS", " On ")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden:    golden,
 		Root:      golden.PythonRoot(t, root),
 		JWTKey:    jwtKey,
 		PythonEnv: []string{"HIDE_MIGRATED_CHILD_CONFIGS= On "},

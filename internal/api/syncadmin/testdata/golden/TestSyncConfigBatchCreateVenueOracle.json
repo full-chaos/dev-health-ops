@@ -23,7 +23,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d01954bc-7b55-4623-8fcf-4edeb012a3f7"
+        "x-request-id": "37d4de74-f2f4-4e99-8361-d21313a0db7d"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     },
@@ -43,7 +43,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a7b67b1d-eeda-459f-b0a1-68c4324bcfac"
+        "x-request-id": "2abbca0f-29c5-4541-95e8-d03dc8169328"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -63,7 +63,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "68d83c2f-fed9-4460-a8fe-911430dbcebc"
+        "x-request-id": "607caa6f-4910-4950-b3d1-46a2cdde6bca"
       },
       "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",8],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
     },
@@ -83,7 +83,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ba26af73-454a-495c-bcbc-058faf6a8bb1"
+        "x-request-id": "69ea6036-4e43-46ff-be20-ab3e887797e9"
       },
       "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[\"x\"]}]}"
     },
@@ -103,7 +103,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "4371b9b7-3cdc-4023-abca-b79efa6cfd9f"
+        "x-request-id": "a81d6b95-0b5f-4cfd-ba3c-e5c54fac55b8"
       },
       "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"name\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"provider\"],\"msg\":\"Field required\",\"input\":{}}]}"
     },
@@ -123,7 +123,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0db031cf-8dd6-4dd9-a195-f06f915726c0"
+        "x-request-id": "dd4cfbe4-b6e7-43a3-94a7-284eea763897"
       },
       "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"name\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
     },
@@ -143,7 +143,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "733db3c7-5493-4d73-a7bd-e1c0d27008bb"
+        "x-request-id": "9ca41567-3d3a-413c-8d13-ec8a2af1e4b1"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"credential_id\"],\"msg\":\"Input should be a valid string\",\"input\":5},{\"type\":\"list_type\",\"loc\":[\"body\",\"sync_targets\"],\"msg\":\"Input should be a valid list\",\"input\":\"git\"},{\"type\":\"dict_type\",\"loc\":[\"body\",\"sync_options\"],\"msg\":\"Input should be a valid dictionary\",\"input\":[]},{\"type\":\"list_type\",\"loc\":[\"body\",\"repos\"],\"msg\":\"Input should be a valid list\",\"input\":\"a\"},{\"type\":\"string_type\",\"loc\":[\"body\",\"schedule_cron\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"string_type\",\"loc\":[\"body\",\"timezone\"],\"msg\":\"Input should be a valid string\",\"input\":[]},{\"type\":\"int_parsing\",\"loc\":[\"body\",\"initial_sync_depth\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"abc\"}]}"
     },
@@ -163,7 +163,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "195ef928-963f-467b-9403-60d2ce01d9cb"
+        "x-request-id": "cadaa37a-33e2-46ad-98a9-7b9de6a0f7ec"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"repos\",1],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
     },
@@ -183,7 +183,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f487437a-d4a7-4410-bb16-c1c93821814f"
+        "x-request-id": "111d8822-73dd-461c-b50a-fd0ae7561c00"
       },
       "body": "{\"detail\":[{\"type\":\"list_type\",\"loc\":[\"body\",\"sync_targets\"],\"msg\":\"Input should be a valid list\",\"input\":null},{\"type\":\"dict_type\",\"loc\":[\"body\",\"sync_options\"],\"msg\":\"Input should be a valid dictionary\",\"input\":null},{\"type\":\"list_type\",\"loc\":[\"body\",\"repos\"],\"msg\":\"Input should be a valid list\",\"input\":null}]}"
     },
@@ -203,7 +203,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f9931009-9f6f-4565-840f-0f91a48d9483"
+        "x-request-id": "b6fa8c9b-7670-4917-9d51-836b84b6d8bc"
       },
       "body": "{\"detail\":\"feature_disabled: canonical incident ingestion is disabled (org_override_disabled)\"}"
     },
@@ -223,9 +223,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "68d3449a-d886-449f-9af3-b10ec5f2f3ed"
+        "x-request-id": "33f515ef-378c-46b0-a424-60fecc3f2d0c"
       },
-      "body": "{\"parent\":{\"id\":\"8862cb06-89ae-4603-92fa-bfa8d6183afe\",\"name\":\"gh batch\",\"provider\":\"GitHub\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"x\":1,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"b503f46d-95f8-4683-9063-a173ea26bcaa\",\"name\":\"gh batch\",\"provider\":\"GitHub\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"x\":1,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "github no owner",
@@ -243,9 +243,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e6989a21-e3ff-4b75-8026-ea1e27d7ee87"
+        "x-request-id": "a87a4e3c-ed1d-4f59-98bb-59472add4e97"
       },
-      "body": "{\"parent\":{\"id\":\"ba2bd7de-822f-4034-ad15-511269d8cca2\",\"name\":\"gh no owner\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"270533b7-80ac-4568-8414-23fd106b37f9\",\"name\":\"gh no owner\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "github group as owner",
@@ -263,9 +263,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2a9667e6-f052-49f3-a8b2-9369e07111c2"
+        "x-request-id": "c5aae1e1-3716-436e-9a5d-81e3e80e1ef8"
       },
-      "body": "{\"parent\":{\"id\":\"7cd3fa4c-f3ee-421b-9e64-572a0593f496\",\"name\":\"gh group\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"grp\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"c1b67f7b-fae3-44f7-9194-0213603fe266\",\"name\":\"gh group\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"grp\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "github no repos",
@@ -283,9 +283,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "18c9006c-8157-4f28-8219-26543b5df002"
+        "x-request-id": "b7bdf000-aab1-4d63-bdb8-7a21d5ccea01"
       },
-      "body": "{\"parent\":{\"id\":\"050d1525-0098-49ec-90d6-0e5b4c363963\",\"name\":\"gh empty\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"13461c9f-a3b4-4f33-9f30-f75644421379\",\"name\":\"gh empty\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "github scheduled",
@@ -303,9 +303,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b90708b6-bf22-4c55-8040-527168c050a3"
+        "x-request-id": "2ff6ef88-b035-43a5-8467-3bd1822d4263"
       },
-      "body": "{\"parent\":{\"id\":\"49e6edc3-54c7-4bf5-aa37-db7575f30f13\",\"name\":\"gh cron\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"schedule_cron\":\"0 */6 * * *\",\"timezone\":\"Europe/Paris\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"7b297c54-ec96-4fad-a09f-59eeef5c7849\",\"name\":\"gh cron\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"schedule_cron\":\"0 */6 * * *\",\"timezone\":\"Europe/Paris\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "github duplicate repo",
@@ -336,9 +336,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d2db0d96-8d6f-4f7f-81ea-2b1e204ba7e0"
+        "x-request-id": "67fc1dca-8449-4409-a67e-bf6e848fc491"
       },
-      "body": "{\"parent\":{\"id\":\"9d7cf08b-61a6-405f-9e50-4989d974412c\",\"name\":\"jira batch\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"owner\":\"ENG\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"1a6125b4-d315-41bd-bb44-07f7be6d2a90\",\"name\":\"jira batch\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"owner\":\"ENG\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "linear repos",
@@ -356,9 +356,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0fae3094-22ef-4085-8038-2e3b0eaed1b4"
+        "x-request-id": "541864c6-07f4-4a04-8713-89478cb8bbcb"
       },
-      "body": "{\"parent\":{\"id\":\"7fcfeeba-f31b-4df3-a939-e76912c20069\",\"name\":\"linear batch\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"f2a41530-2fa7-4f67-a118-2ee3ee794644\",\"name\":\"linear batch\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "malformed auto-import",
@@ -376,7 +376,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2cb29df7-c6ea-49f6-8924-5df1bd62a117"
+        "x-request-id": "85676ca1-09e4-4a22-83ca-1b95e744dfc8"
       },
       "body": "{\"detail\":{\"message\":\"auto-import category flags must be true or false\",\"malformed_auto_import_category_values\":{\"auto_import_teams\":\"yes\"}}}"
     },
@@ -396,7 +396,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "80111c45-9d2a-4e33-8f31-e994d41cde55"
+        "x-request-id": "e4a9bc94-305c-457c-ab33-dc738e112488"
       },
       "body": "{\"detail\":{\"message\":\"github does not support the requested auto-import categories\",\"unsupported_auto_import_categories\":{\"projects\":\"GitHub attributes ownership via repos, not projects.\"}}}"
     },
@@ -416,9 +416,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "67286ad5-2217-4adf-99d9-f24e3a9ef9ab"
+        "x-request-id": "70e01c99-4141-4cc4-968e-1d4dcc7a65e5"
       },
-      "body": "{\"parent\":{\"id\":\"83ccd6e8-1bb8-4a41-a9d0-c7be2c28edbc\",\"name\":\"gl batch\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"e0f0c39f-0fc7-400e-8b43-f02a000b302b\",\"name\":\"gl batch\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:44149\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "gitlab unknown name",
@@ -436,7 +436,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8b3a9975-6a12-489d-829e-0df7016d27aa"
+        "x-request-id": "7e9075ad-93ed-4433-a0af-d73858fc0f21"
       },
       "body": "{\"detail\":\"Could not resolve GitLab projects — not found in group 'gitlab-examples/maven': nope\"}"
     },
@@ -456,7 +456,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1aa2f568-6397-42e0-80ae-f4623b4f24d0"
+        "x-request-id": "3c71dd1f-6412-41f8-882f-18219de6f050"
       },
       "body": "{\"detail\":\"Could not resolve GitLab projects — ambiguous (multiple projects share this name, use the full path): Simple Maven Example\"}"
     },
@@ -476,7 +476,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e90fba74-c1fe-4c97-a828-d924a969c0f9"
+        "x-request-id": "0b7d9ffc-6cf0-4d11-bf7c-4de9d75ffa31"
       },
       "body": "{\"detail\":\"Could not resolve GitLab projects — not found in group 'gitlab-examples/ops': anything\"}"
     },
@@ -496,9 +496,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "621c5d8d-1362-4b3b-a3a7-7031d026c5ef"
+        "x-request-id": "0cf9f96e-570d-45cb-babb-eeffb4aa44ab"
       },
-      "body": "{\"detail\":\"Failed to list GitLab projects for group 'gitlab-examples/no-such-group-for-venue-test': gitlab resource not found on project:GET /groups/{id}/projects: http://127.0.0.1:39015/api/v4/groups/gitlab-examples%2Fno-such-group-for-venue-test/projects?page=1\u0026per_page=100\"}"
+      "body": "{\"detail\":\"Failed to list GitLab projects for group 'gitlab-examples/no-such-group-for-venue-test': gitlab resource not found on project:GET /groups/{id}/projects: http://127.0.0.1:44149/api/v4/groups/gitlab-examples%2Fno-such-group-for-venue-test/projects?page=1\u0026per_page=100\"}"
     },
     {
       "name": "gitlab ids with failed listing",
@@ -516,9 +516,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "327e8a6c-c0b8-4a8b-b3ec-6a47516642c2"
+        "x-request-id": "ef46c537-3b27-44fb-affc-22e87239e4d6"
       },
-      "body": "{\"parent\":{\"id\":\"f9a4f357-353b-4ec9-b119-633cf411c202\",\"name\":\"gl ids no listing\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"owner\":\"gitlab-examples/no-such-group-for-venue-test\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"f58e342d-0cc6-4d55-886f-576d1a828381\",\"name\":\"gl ids no listing\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"owner\":\"gitlab-examples/no-such-group-for-venue-test\",\"gitlab_url\":\"http://127.0.0.1:44149\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "gitlab invalid token",
@@ -536,7 +536,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "370d6f4b-f359-4cd2-8abb-f19c2fc71266"
+        "x-request-id": "0df05367-2851-4bcb-83d7-8826b8e69372"
       },
       "body": "{\"detail\":\"Failed to list GitLab projects for group 'gitlab-examples/maven': gitlab authentication failed on project:GET /groups/{id}/projects\"}"
     },
@@ -556,7 +556,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e4d565a5-badf-4c26-80c6-7aa54eb9a19c"
+        "x-request-id": "8566c895-d070-450a-acc6-664d6d2880e4"
       },
       "body": "{\"detail\":\"GitLab batch create requires credential_id to resolve project names to project ids\"}"
     },
@@ -576,9 +576,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2e85a919-a7b5-486b-8899-489845a04ee5"
+        "x-request-id": "53bcc6f6-49bd-4904-84c2-916d1e987d04"
       },
-      "body": "{\"parent\":{\"id\":\"5058a483-4199-446b-b3cf-a9b8a2f490a8\",\"name\":\"gl no cred ids\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"a6c7ba10-555f-4edc-a6b8-f422ac9d531c\",\"name\":\"gl no cred ids\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "gitlab no group, name",
@@ -596,7 +596,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f19c0a12-5a96-48ff-8b8b-18dc52e97248"
+        "x-request-id": "f255f65d-a9f1-4098-90d8-c5187e0888f6"
       },
       "body": "{\"detail\":\"GitLab batch create requires a group (sync_options.group or sync_options.owner) to resolve project names\"}"
     },
@@ -616,9 +616,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8d2547b9-c8c8-4971-b66c-eb0777441244"
+        "x-request-id": "8173c373-4d9d-4aa6-9ac0-1cba865ee1a0"
       },
-      "body": "{\"parent\":{\"id\":\"fb5beb50-316e-4bc6-b155-22e298a59b0c\",\"name\":\"gl no group ids\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"f3d67a99-c02b-4976-8930-673fe043d8f9\",\"name\":\"gl no group ids\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"gitlab_url\":\"http://127.0.0.1:44149\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "gitlab no token, name",
@@ -636,7 +636,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "bdc5da41-fccd-48a2-8142-7279754f22f1"
+        "x-request-id": "c642b36e-ebc1-4533-bf10-2c9a69e530af"
       },
       "body": "{\"detail\":\"GitLab credential missing token\"}"
     },
@@ -656,9 +656,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "19d4709e-c39a-4095-9ce6-8f9efc9380bb"
+        "x-request-id": "d80eba32-a2c4-4c39-bc99-4203a18e04f2"
       },
-      "body": "{\"parent\":{\"id\":\"0dcad81e-14d5-407c-961b-9dee1cf4b4d9\",\"name\":\"gl no token id\",\"provider\":\"gitlab\",\"credential_id\":\"e95043a4-7fb4-551e-ab6a-b8cd7618fd77\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"6fe0af05-a906-4bcc-8bc1-345349895f0c\",\"name\":\"gl no token id\",\"provider\":\"gitlab\",\"credential_id\":\"e95043a4-7fb4-551e-ab6a-b8cd7618fd77\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:44149\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "gitlab url from credential config",
@@ -676,9 +676,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1d057b42-d740-4c53-aaab-fdda0491d88b"
+        "x-request-id": "6abb9093-6323-41b5-8707-6ef87f5870ad"
       },
-      "body": "{\"parent\":{\"id\":\"19d8bcd6-ec6a-4c08-ae7b-7d680426ea65\",\"name\":\"gl config url\",\"provider\":\"gitlab\",\"credential_id\":\"a1ba6455-3c16-5a93-b8df-056258aa0982\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"owner\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"e49301e9-2993-4fce-a383-381c14bf60a7\",\"name\":\"gl config url\",\"provider\":\"gitlab\",\"credential_id\":\"a1ba6455-3c16-5a93-b8df-056258aa0982\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"owner\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:44149\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "gitlab url from options",
@@ -696,9 +696,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b13e31e7-a4b3-4779-91b8-f2ab5ec53503"
+        "x-request-id": "00960c27-55e5-45cc-95df-e30ed46928b2"
       },
-      "body": "{\"parent\":{\"id\":\"7611eb71-d904-4867-b267-49d4ce02770c\",\"name\":\"gl option url\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"acme\",\"gitlab_url\":\"https://gitlab.example.test\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"6d7ecf34-335f-4550-a7ac-cf3452d048cc\",\"name\":\"gl option url\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"acme\",\"gitlab_url\":\"https://gitlab.example.test\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "gitlab credential not decryptable",
@@ -716,7 +716,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3b41fb86-58bd-4552-b61a-8fd99f0966c0"
+        "x-request-id": "3637f79d-05b6-4730-b651-ee6c171e964f"
       },
       "body": "{\"detail\":\"Credential not found\"}"
     },
@@ -736,7 +736,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "267ea7e4-7f5b-43b6-9b2c-e44f81de24aa"
+        "x-request-id": "bbb453cd-3487-42af-b47c-a1ce15bbab60"
       },
       "body": "{\"detail\":\"Credential not found\"}"
     },
@@ -756,9 +756,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d916a58d-3410-4729-97aa-08247c06ba2c"
+        "x-request-id": "014238d2-d7bd-4e70-af93-e72dfac707e5"
       },
-      "body": "{\"parent\":{\"id\":\"67081e7c-8b19-47a3-b733-755a0659df5f\",\"name\":\"gl none\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"f35f9c97-0c57-410e-8453-7255c454639e\",\"name\":\"gl none\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "gitlab credential id not a uuid",
@@ -776,7 +776,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "68d61995-0f0b-46f7-b099-6a89ce9d0588"
+        "x-request-id": "db2d3309-dff5-4cfd-9ec6-893c5c657957"
       },
       "body": "{\"detail\":\"Credential not found\"}"
     },
@@ -796,9 +796,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2c302980-a91f-4f7e-bdc8-bd7f9797583d"
+        "x-request-id": "31e0dbe9-a541-4445-bed3-da1465d0227f"
       },
-      "body": "{\"parent\":{\"id\":\"3e66145b-e3fd-49fe-89cd-e2989cd017c2\",\"name\":\"gl empty cred id\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"41a4b6ae-d252-4453-a02d-01a23bd04f59\",\"name\":\"gl empty cred id\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "gitlab duplicate names",
@@ -842,7 +842,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0f721059-acb0-4c20-a151-720b3f5499b8"
+        "x-request-id": "1c74c4c7-b835-48c2-baca-f30caf2a3f86"
       },
       "body": "{\"detail\":\"feature_disabled: canonical incident ingestion is disabled (org_override_disabled)\"}"
     },
@@ -862,7 +862,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d243fba4-3319-465d-a228-35c28fb3c671"
+        "x-request-id": "5898dc22-39ae-4011-b27f-d845ad99f69b"
       },
       "body": "{\"detail\":[{\"type\":\"int_from_float\",\"loc\":[\"body\",\"initial_sync_depth\"],\"msg\":\"Input should be a valid integer, got a number with a fractional part\",\"input\":29.9}]}"
     },
@@ -882,9 +882,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "dd48c811-0d70-4ad5-b872-168244306f32"
+        "x-request-id": "f809e15c-012c-4528-b6b0-66c4483e8268"
       },
-      "body": "{\"parent\":{\"id\":\"bb8afef5-3be8-4f32-b1ff-59c0c069d93d\",\"name\":\"gh depth whole\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"b28fc8fc-fb6a-42e6-9954-d52883808b8e\",\"name\":\"gh depth whole\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "gitlab page above int32",
@@ -902,9 +902,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "04cbfff0-773a-4021-8e75-ee652dc2cc63"
+        "x-request-id": "e5dffc66-ce7b-4b65-970a-a9e695f793e3"
       },
-      "body": "{\"parent\":{\"id\":\"da97635d-abe6-472c-9c02-bc13c65ee042\",\"name\":\"gl overflow\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"overflow\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"86b1aa56-76f9-4322-9880-6cf42420149b\",\"name\":\"gl overflow\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"overflow\",\"gitlab_url\":\"http://127.0.0.1:44149\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "over the repo limit",
@@ -922,7 +922,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "02c64c2a-2e5c-42f3-b50b-0f3355d70e88"
+        "x-request-id": "0fa6ec44-ca5a-4231-ad95-91cf8833f1f7"
       },
       "body": "{\"detail\":\"Limit exceeded: max_repos (5/3)\"}"
     },
@@ -942,9 +942,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0565541b-78b5-40d2-8328-7b05499cd91a"
+        "x-request-id": "d9de8c14-4142-4a99-b126-c54ed166b394"
       },
-      "body": "{\"parent\":{\"id\":\"f02ada25-e5d3-4a21-a015-e23ad12e5e93\",\"name\":\"b at\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"e34b72c2-65e3-4f3b-b662-f2ab71bcb6bf\",\"name\":\"b at\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "past the limit after",
@@ -962,7 +962,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "62dbfa22-b93b-4fdf-bac4-60a9e0a2f535"
+        "x-request-id": "b14ba52d-849e-484b-80e3-80b8241d2b04"
       },
       "body": "{\"detail\":\"Limit exceeded: max_repos (4/3)\"}"
     },
@@ -982,9 +982,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8f5355c3-680d-4fe7-80a8-2ca455d60916"
+        "x-request-id": "5a08b81d-11df-4b30-81a6-4ca9a303a861"
       },
-      "body": "[{\"id\":\"8862cb06-89ae-4603-92fa-bfa8d6183afe\",\"name\":\"gh batch\",\"provider\":\"GitHub\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"x\":1,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"49e6edc3-54c7-4bf5-aa37-db7575f30f13\",\"name\":\"gh cron\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"schedule_cron\":\"0 */6 * * *\",\"timezone\":\"Europe/Paris\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"bb8afef5-3be8-4f32-b1ff-59c0c069d93d\",\"name\":\"gh depth whole\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"050d1525-0098-49ec-90d6-0e5b4c363963\",\"name\":\"gh empty\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"7cd3fa4c-f3ee-421b-9e64-572a0593f496\",\"name\":\"gh group\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"grp\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"ba2bd7de-822f-4034-ad15-511269d8cca2\",\"name\":\"gh no owner\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"83ccd6e8-1bb8-4a41-a9d0-c7be2c28edbc\",\"name\":\"gl batch\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"19d8bcd6-ec6a-4c08-ae7b-7d680426ea65\",\"name\":\"gl config url\",\"provider\":\"gitlab\",\"credential_id\":\"a1ba6455-3c16-5a93-b8df-056258aa0982\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"owner\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"3e66145b-e3fd-49fe-89cd-e2989cd017c2\",\"name\":\"gl empty cred id\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"f9a4f357-353b-4ec9-b119-633cf411c202\",\"name\":\"gl ids no listing\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"owner\":\"gitlab-examples/no-such-group-for-venue-test\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"5058a483-4199-446b-b3cf-a9b8a2f490a8\",\"name\":\"gl no cred ids\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"fb5beb50-316e-4bc6-b155-22e298a59b0c\",\"name\":\"gl no group ids\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"0dcad81e-14d5-407c-961b-9dee1cf4b4d9\",\"name\":\"gl no token id\",\"provider\":\"gitlab\",\"credential_id\":\"e95043a4-7fb4-551e-ab6a-b8cd7618fd77\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"67081e7c-8b19-47a3-b733-755a0659df5f\",\"name\":\"gl none\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"7611eb71-d904-4867-b267-49d4ce02770c\",\"name\":\"gl option url\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"acme\",\"gitlab_url\":\"https://gitlab.example.test\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"da97635d-abe6-472c-9c02-bc13c65ee042\",\"name\":\"gl overflow\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"overflow\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"9d7cf08b-61a6-405f-9e50-4989d974412c\",\"name\":\"jira batch\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"owner\":\"ENG\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"7fcfeeba-f31b-4df3-a939-e76912c20069\",\"name\":\"linear batch\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}]"
+      "body": "[{\"id\":\"b503f46d-95f8-4683-9063-a173ea26bcaa\",\"name\":\"gh batch\",\"provider\":\"GitHub\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"x\":1,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"270533b7-80ac-4568-8414-23fd106b37f9\",\"name\":\"gh no owner\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"c1b67f7b-fae3-44f7-9194-0213603fe266\",\"name\":\"gh group\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"grp\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"13461c9f-a3b4-4f33-9f30-f75644421379\",\"name\":\"gh empty\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"7b297c54-ec96-4fad-a09f-59eeef5c7849\",\"name\":\"gh cron\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"schedule_cron\":\"0 */6 * * *\",\"timezone\":\"Europe/Paris\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"b28fc8fc-fb6a-42e6-9954-d52883808b8e\",\"name\":\"gh depth whole\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"e0f0c39f-0fc7-400e-8b43-f02a000b302b\",\"name\":\"gl batch\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:44149\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"f58e342d-0cc6-4d55-886f-576d1a828381\",\"name\":\"gl ids no listing\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"owner\":\"gitlab-examples/no-such-group-for-venue-test\",\"gitlab_url\":\"http://127.0.0.1:44149\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"a6c7ba10-555f-4edc-a6b8-f422ac9d531c\",\"name\":\"gl no cred ids\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"f3d67a99-c02b-4976-8930-673fe043d8f9\",\"name\":\"gl no group ids\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"gitlab_url\":\"http://127.0.0.1:44149\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"6fe0af05-a906-4bcc-8bc1-345349895f0c\",\"name\":\"gl no token id\",\"provider\":\"gitlab\",\"credential_id\":\"e95043a4-7fb4-551e-ab6a-b8cd7618fd77\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:44149\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"e49301e9-2993-4fce-a383-381c14bf60a7\",\"name\":\"gl config url\",\"provider\":\"gitlab\",\"credential_id\":\"a1ba6455-3c16-5a93-b8df-056258aa0982\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"owner\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:44149\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"6d7ecf34-335f-4550-a7ac-cf3452d048cc\",\"name\":\"gl option url\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"acme\",\"gitlab_url\":\"https://gitlab.example.test\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"f35f9c97-0c57-410e-8453-7255c454639e\",\"name\":\"gl none\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"41a4b6ae-d252-4453-a02d-01a23bd04f59\",\"name\":\"gl empty cred id\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"86b1aa56-76f9-4322-9880-6cf42420149b\",\"name\":\"gl overflow\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"overflow\",\"gitlab_url\":\"http://127.0.0.1:44149\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"1a6125b4-d315-41bd-bb44-07f7be6d2a90\",\"name\":\"jira batch\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"owner\":\"ENG\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"f2a41530-2fa7-4f67-a118-2ee3ee794644\",\"name\":\"linear batch\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}]"
     },
     {
       "name": "divergent: out-of-range cron",
@@ -1002,9 +1002,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "65476db3-dc59-4449-8eba-8b73aef0ca02"
+        "x-request-id": "c5919574-4c18-4a62-a020-e524d33a8079"
       },
-      "body": "{\"parent\":{\"id\":\"33d79e1d-7493-4a8d-ac68-eb018141240d\",\"name\":\"gh cron 60\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"schedule_cron\":\"60 * * * *\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"8230adc3-e060-435c-ac75-94d0c9ccd8b3\",\"name\":\"gh cron 60\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"schedule_cron\":\"60 * * * *\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "divergent: croniter-only cron and unknown timezone",
@@ -1022,9 +1022,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3b7003c5-3e5d-4636-96ba-0ab47bd2c2a2"
+        "x-request-id": "68543e19-bd0b-4a33-920b-7d574056421f"
       },
-      "body": "{\"parent\":{\"id\":\"fa86450d-d7a1-480d-b1e4-4494ad139437\",\"name\":\"gh sched\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"schedule_cron\":\"@hourly\",\"timezone\":\"Mars/Base\",\"initial_sync_depth\":9999,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"0c1e0898-b0e1-4394-8d2b-4336f7ab16d9\",\"name\":\"gh sched\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"schedule_cron\":\"@hourly\",\"timezone\":\"Mars/Base\",\"initial_sync_depth\":9999,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "divergent: unknown timezone",
@@ -1042,9 +1042,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d796c9ad-117b-4126-a42c-10386bbe6471"
+        "x-request-id": "2ef9d2f2-51ae-467e-9117-895049d91559"
       },
-      "body": "{\"parent\":{\"id\":\"34341443-bf84-400a-875f-9f6b2347952c\",\"name\":\"gh tz\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"schedule_cron\":\"0 * * * *\",\"timezone\":\"Mars/Base\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+      "body": "{\"parent\":{\"id\":\"d47e8b71-304f-46bf-8ea5-ecd8ef6fcbbc\",\"name\":\"gh tz\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"schedule_cron\":\"0 * * * *\",\"timezone\":\"Mars/Base\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
     },
     {
       "name": "divergent: duplicate name",

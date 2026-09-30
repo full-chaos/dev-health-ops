@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"path"
 	"regexp"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
@@ -27,8 +29,8 @@ import (
 // no down SQL, so dho refuses BEFORE it resolves a DSN or touches a database when the
 // target itself is outside the range, and refuses before the first step when the
 // recorded state would need a step outside it. Faithful to Python otherwise: each
-// reverted revision commits on its own (a failure mid-walk leaves the earlier
-// reversals in place, as Alembic does), and explicit targets leave the other branch
+// walk runs in ONE transaction (Alembic's env.py wraps the whole walk in
+// context.begin_transaction(): a failing step rolls back every earlier step), and explicit targets leave the other branch
 // (0066) where it is.
 //
 // Divergences from Python, named here and in the change's RISK-NOTES:
@@ -248,10 +250,12 @@ type DowngradeResult struct {
 	Reverted []string `json:"reverted,omitempty"`
 }
 
-// Downgrade reverts the planned steps, each in its own transaction (Alembic commits
-// per migration) together with the alembic_version update that records it. A failed
-// step rolls back alone and leaves the earlier steps committed.
-func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, down []DownFile, target DowngradeTarget) (DowngradeResult, error) {
+// Downgrade reverts the planned steps in ONE transaction, with the alembic_version
+// updates that record them: Alembic's env.py runs the whole walk inside one
+// context.begin_transaction() and PostgreSQL DDL is transactional, so a step that
+// fails rolls back every step before it and the database is exactly as it was.
+// logger gets one line per step (Python logs one INFO line per migration).
+func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, down []DownFile, target DowngradeTarget, logger *slog.Logger) (DowngradeResult, error) {
 	known, err := embeddedKnown(baseline, chain)
 	if err != nil {
 		return DowngradeResult{}, err
@@ -270,8 +274,12 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 		return DowngradeResult{Recorded: recorded}, *refusal
 	}
 	result := DowngradeResult{Action: "at_target", Recorded: recorded}
-	for _, step := range steps {
-		err := inTransaction(ctx, conn, func(tx pgx.Tx) error {
+	if len(steps) == 0 {
+		return result, nil
+	}
+	err = inTransaction(ctx, conn, func(tx pgx.Tx) error {
+		for _, step := range steps {
+			logger.Info("migrate downgrade step", "revision", step.Revision, "to", step.Previous)
 			tag, err := tx.Exec(ctx, "UPDATE alembic_version SET version_num = $1 WHERE version_num = $2", step.Previous, step.Revision)
 			if err != nil {
 				return fmt.Errorf("%s: record the revision: %w", step.Revision, err)
@@ -282,15 +290,16 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 			if _, err := tx.Exec(ctx, sqlOf[step.Revision]); err != nil {
 				return fmt.Errorf("down %s: %w", step.Revision, err)
 			}
-			return nil
-		})
-		if err != nil {
-			after, _ := Recorded(ctx, conn)
-			return DowngradeResult{Action: "failed", Recorded: after, Reverted: result.Reverted}, err
 		}
-		result.Reverted = append(result.Reverted, step.Revision)
-		result.Action = "downgraded"
+		return nil
+	})
+	if err != nil {
+		return DowngradeResult{Action: "rolled_back", Recorded: recorded}, fmt.Errorf("%w (the whole downgrade was rolled back: alembic_version still holds %v)", err, recorded)
 	}
+	for _, step := range steps {
+		result.Reverted = append(result.Reverted, step.Revision)
+	}
+	result.Action = "downgraded"
 	if result.Recorded, err = Recorded(ctx, conn); err != nil {
 		return result, err
 	}
@@ -350,7 +359,7 @@ func downgrade(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 		return writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
 	}
 	defer conn.Close(context.Background())
-	result, err := Downgrade(ctx, conn, baseline, chain, down, target)
+	result, err := Downgrade(ctx, conn, baseline, chain, down, target, logging.NewJSON(env.Stderr, slog.LevelInfo))
 	if err != nil {
 		var state DowngradeRefusal
 		if errors.As(err, &state) {

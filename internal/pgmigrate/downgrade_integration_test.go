@@ -298,24 +298,77 @@ func TestDowngradeRefusalsLeaveTheDatabaseAlone(t *testing.T) {
 	}
 }
 
-// Python commits each reverted revision on its own, so a failure mid-walk leaves the
-// earlier reversals in place; dho mirrors that. A table the down step drops is removed
-// first, so the step fails: the steps before it stay committed, the failing one rolls
-// back whole, and exit is 1.
-func TestDowngradeFailureMidWalkKeepsTheCommittedSteps(t *testing.T) {
+// Alembic runs the whole downgrade walk in one transaction (env.py wraps it in
+// context.begin_transaction()), so a step that fails rolls back every step before it;
+// dho does the same. A valid row (purpose 'setup') makes 0141's down violate the
+// restored check constraint after 0145, 0144, 0143 and 0142 were reverted: nothing may
+// change, and the error says so.
+func TestDowngradeFailureMidWalkRollsBackTheWholeWalk(t *testing.T) {
 	d := newDownInstance(t)
 	chain, _ := pgmigrate.LoadChain()
 	uri := d.at(t, len(chain))
-	// 0144's down drops saml_assertion_replays; without it that step fails.
-	if _, err := connect(t, uri).Exec(context.Background(), "DROP TABLE saml_assertion_replays"); err != nil {
+	insertSetupRevocation(t, uri)
+	before := schemaShape(t, uri)
+	code, _, stderr := goDowngrade(t, uri, "0140")
+	if code != cli.ExitFailure || !strings.Contains(stderr, "downgrade_failed") || !strings.Contains(stderr, "down 0141") || !strings.Contains(stderr, "rolled back") {
+		t.Fatalf("exit %d stderr %s, want downgrade_failed naming 0141 and the rollback", code, stderr)
+	}
+	if got := schemaShape(t, uri); got != before {
+		t.Fatalf("the failed walk changed the database:\n%s", shapeDiff(before, got))
+	}
+	if got := alembicVersions(t, uri); !reflect.DeepEqual(got, []string{"0066", "0145"}) {
+		t.Fatalf("alembic_version %v after the failed walk, want 0066 and 0145", got)
+	}
+}
+
+// insertSetupRevocation adds a row only 0141's reverse cannot keep.
+func insertSetupRevocation(t *testing.T, uri string) {
+	t.Helper()
+	conn := connect(t, uri)
+	rows, err := conn.Query(context.Background(), "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = 'provider_oauth_revocations' ORDER BY ordinal_position")
+	if err != nil {
 		t.Fatal(err)
 	}
-	code, _, stderr := goDowngrade(t, uri, "0143")
-	if code != cli.ExitFailure || !strings.Contains(stderr, "downgrade_failed") {
-		t.Fatalf("exit %d stderr %s, want downgrade_failed", code, stderr)
+	type column struct {
+		name, kind, nullable string
+		def                  *string
 	}
-	if got := alembicVersions(t, uri); !reflect.DeepEqual(got, []string{"0066", "0144"}) {
-		t.Fatalf("alembic_version %v after the failed step, want 0066 and 0144 (0145 reverted and committed, 0144 rolled back)", got)
+	var columns []column
+	for rows.Next() {
+		var c column
+		if err := rows.Scan(&c.name, &c.kind, &c.nullable, &c.def); err != nil {
+			t.Fatal(err)
+		}
+		columns = append(columns, c)
+	}
+	rows.Close()
+	var names, values []string
+	for _, c := range columns {
+		if c.nullable == "YES" || c.def != nil {
+			if c.name != "purpose" {
+				continue
+			}
+		}
+		names = append(names, c.name)
+		switch {
+		case c.name == "purpose":
+			values = append(values, "'setup'")
+		case c.kind == "uuid":
+			values = append(values, "gen_random_uuid()")
+		case strings.HasPrefix(c.kind, "timestamp"):
+			values = append(values, "now()")
+		case c.kind == "integer" || c.kind == "bigint":
+			values = append(values, "1")
+		case c.kind == "boolean":
+			values = append(values, "false")
+		case c.kind == "jsonb" || c.kind == "json":
+			values = append(values, "'{}'")
+		default:
+			values = append(values, "'x'")
+		}
+	}
+	if _, err := conn.Exec(context.Background(), "INSERT INTO provider_oauth_revocations ("+strings.Join(names, ", ")+") VALUES ("+strings.Join(values, ", ")+")"); err != nil {
+		t.Fatalf("insert a setup revocation: %v", err)
 	}
 }
 
@@ -356,6 +409,19 @@ func TestDowngradeVenueOracleMatchesPythonDowngrade(t *testing.T) {
 		if pyCode != 0 || goCode != cli.ExitFailure || schemaShape(t, goURI) != before {
 			t.Errorf("downgrade %s: python exit %d (%s), dho exit %d: want python 0 and dho a refusal that changed nothing", target, pyCode, pyOutput, goCode)
 		}
+	}
+	// A failing walk: both roll the whole walk back and leave the same database.
+	pyFail, goFail := d.at(t, len(chain)), d.at(t, len(chain))
+	insertSetupRevocation(t, pyFail)
+	insertSetupRevocation(t, goFail)
+	pyBefore := schemaShape(t, pyFail)
+	pyCode, _ := pythonDowngrade(t, pyFail, "0140")
+	goCode, _, _ := goDowngrade(t, goFail, "0140")
+	if pyCode == 0 || goCode != cli.ExitFailure {
+		t.Errorf("failing walk: python exit %d, dho exit %d, want both to fail", pyCode, goCode)
+	}
+	if schemaShape(t, pyFail) != pyBefore || schemaShape(t, goFail) != pyBefore {
+		t.Errorf("failing walk: Python or dho left the database changed:\n%s", shapeDiff(pyBefore, schemaShape(t, goFail)))
 	}
 	// -1 on a single-head database (no 0066): the same result from both.
 	pythonURI, goURI := d.at(t, len(chain)), d.at(t, len(chain))

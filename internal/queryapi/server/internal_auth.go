@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -101,7 +102,7 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 // get_authenticated_user does the same (services/auth.py:350), never
 // re-verified against a live row on either plane today.
 func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store, token string) (authctx.Claims, bool) {
-	claims, outcome := checkEdgeCarrier(r, edgeAuth, edgeStore, token)
+	claims, outcome := checkEdgeCarrier(r, edgeAuth, token, liveImpersonation(edgeStore))
 	if outcome != edgeAccepted {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return authctx.Claims{}, false
@@ -120,9 +121,47 @@ const (
 	edgeUnavailable             // a live check could not be read: nothing was decided
 )
 
+// impersonationSource answers the active impersonation session that makes
+// user's effective identity the target's, or nil. An error decided nothing.
+type impersonationSource func(ctx context.Context, user *policy.User) (*policy.Impersonation, error)
+
+// liveImpersonation is /query's source: nothing in front of /query read the
+// session, so the store is read here, once, for a caller the live users row
+// confirms is a superuser.
+func liveImpersonation(store policy.Store) impersonationSource {
+	return func(ctx context.Context, user *policy.User) (*policy.Impersonation, error) {
+		if !user.IsSuperuser {
+			return nil, nil
+		}
+		return store.ActiveImpersonation(ctx, user.ID)
+	}
+}
+
+// errImpersonationUndecided: the request reached the /graphql pipeline
+// without passing the Impersonation middleware, so nobody read the session.
+var errImpersonationUndecided = errors.New("impersonation not decided for this request")
+
+// decidedImpersonation is /graphql's source: the session policy.Scope's
+// Impersonation middleware read for this request in front of the pipeline
+// (graphQLEdgeChain), the one that set X-Impersonating on the response. A
+// second store read here could see a session start or end between the two
+// and serve one identity under the other's headers. The Python edge read it
+// once as well: its ImpersonationMiddleware set the contextvar that
+// get_context and effective_principal_identity read, whatever the later
+// users-row read said. So this source applies the middleware's decision as
+// it stands, and a request no middleware decided is refused, never served
+// as a principal that is not impersonating.
+func decidedImpersonation(ctx context.Context, _ *policy.User) (*policy.Impersonation, error) {
+	if !policy.ImpersonationDecided(ctx) {
+		return nil, errImpersonationUndecided
+	}
+	return policy.ImpersonationFrom(ctx), nil
+}
+
 // checkEdgeCarrier is the decision of authenticateEdgeCarrier, logged and
-// counted, without an answer written.
-func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store, token string) (authctx.Claims, edgeOutcome) {
+// counted, without an answer written. sessionOf says where the impersonation
+// session comes from (liveImpersonation, decidedImpersonation).
+func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token string, sessionOf impersonationSource) (authctx.Claims, edgeOutcome) {
 	ctx := r.Context()
 	user, err := edgeAuth.Authenticate(ctx, token)
 	if err != nil {
@@ -139,30 +178,32 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, edgeStore
 	orgID := user.OrgID
 	role := user.Role
 	impersonationActive := false
-	if user.IsSuperuser {
-		session, sessionErr := edgeStore.ActiveImpersonation(ctx, user.ID)
-		if sessionErr != nil {
-			// FAIL CLOSED (D2919 condition 2, reversing this file's own
-			// earlier draft): a superuser who IS impersonating must never
-			// be served as the plain, non-impersonated principal during a
-			// database fault -- that would let them pass a
-			// "not-impersonating" gate (e.g. RequirePlatformAdmin) exactly
-			// while genuinely impersonating. Every live check on this path
-			// fails closed; this is not the one exception. go-api's own
-			// Scope.Impersonation (internal/api/policy/scope.go) refuses on
-			// this same lookup failure too.
-			log.Printf("query-api: internal request refused: reason=edge_impersonation_lookup_failed carrier=edge path=%s request_id=%s",
-				r.URL.Path, envelopeRequestID(r))
-			return authctx.Claims{}, edgeUnavailable
+	session, sessionErr := sessionOf(ctx, user)
+	if sessionErr != nil {
+		// FAIL CLOSED: a superuser who IS impersonating must never be
+		// served as the plain, non-impersonated principal because the
+		// session could not be read (a database fault) or was never read
+		// (no middleware decided it) -- that would let them pass a
+		// "not-impersonating" gate (e.g. RequirePlatformAdmin) exactly
+		// while genuinely impersonating. Every live check on this path
+		// fails closed; this is not the one exception. go-api's own
+		// Scope.Impersonation (internal/api/policy/scope.go) refuses on
+		// this same lookup failure too.
+		reason := "edge_impersonation_lookup_failed"
+		if errors.Is(sessionErr, errImpersonationUndecided) {
+			reason = "edge_impersonation_undecided"
 		}
-		if session != nil {
-			// The effective principal while impersonating is the TARGET's:
-			// org and role both, as the Python edge stated it to /query
-			// (principal_envelope.py effective_principal_identity).
-			orgID = session.TargetOrgID.String()
-			role = session.TargetRole
-			impersonationActive = true
-		}
+		log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
+			reason, r.URL.Path, envelopeRequestID(r))
+		return authctx.Claims{}, edgeUnavailable
+	}
+	if session != nil {
+		// The effective principal while impersonating is the TARGET's:
+		// org and role both, as the Python edge stated it to /query
+		// (principal_envelope.py effective_principal_identity).
+		orgID = session.TargetOrgID.String()
+		role = session.TargetRole
+		impersonationActive = true
 	}
 
 	// Membership existence for the token's own claimed org (D2905
@@ -198,8 +239,10 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, edgeStore
 // value, no bearer, or a bearer that is not an edge token (any other JWT
 // alg, the envelope's EdDSA included) is refused, and so is every request
 // when this pod has no edge secret configured. The token itself is checked
-// exactly as /query's edge carrier checks it (authenticateEdgeCarrier).
-func authenticateEdgeTokenOnly(r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store) (authctx.Claims, edgeOutcome) {
+// exactly as /query's edge carrier checks it (authenticateEdgeCarrier), except
+// that the impersonation session is the one the middleware in front already
+// read (decidedImpersonation), never a second read.
+func authenticateEdgeTokenOnly(r *http.Request, edgeAuth *policy.Authenticator) (authctx.Claims, edgeOutcome) {
 	if len(r.Header.Values("Authorization")) > 1 {
 		noteRefusal(r, "ambiguous_carrier", "authorization")
 		return authctx.Claims{}, edgeRefused
@@ -224,7 +267,7 @@ func authenticateEdgeTokenOnly(r *http.Request, edgeAuth *policy.Authenticator, 
 		noteRefusal(r, "not_an_edge_token", "edge")
 		return authctx.Claims{}, edgeRefused
 	}
-	return checkEdgeCarrier(r, edgeAuth, edgeStore, token)
+	return checkEdgeCarrier(r, edgeAuth, token, decidedImpersonation)
 }
 
 // refuseAmbiguousCarrier answers 401 and reports true when the request

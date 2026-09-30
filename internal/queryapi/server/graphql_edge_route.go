@@ -231,10 +231,16 @@ func graphQLEdgeLimits(limit int, next http.Handler) http.Handler {
 // store the check could not read is the unhandled 500 its database error
 // raised there -- never a 401, which would tell the client its credential is
 // bad when nothing was decided.
-func authenticateGraphQLEdge(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store) (authctx.Claims, bool) {
-	claims, outcome := authenticateEdgeTokenOnly(r, edgeAuth, edgeStore)
+func authenticateGraphQLEdge(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator) (authctx.Claims, bool) {
+	claims, outcome := authenticateEdgeTokenOnly(r, edgeAuth)
 	switch outcome {
 	case edgeAccepted:
+		// The identity the resolvers run as, beside the response headers
+		// the middleware set, so a served request can be traced to both.
+		slog.DebugContext(r.Context(), "query-api: /graphql identity",
+			slog.String("org_id", claims.OrgID), slog.String("role", claims.Role),
+			slog.Bool("is_superuser", claims.IsSuperuser), slog.Bool("impersonation_active", claims.ImpersonationActive),
+			slog.String("request_id", envelopeRequestID(r)))
 		return claims, true
 	case edgeUnavailable:
 		policy.WriteInternal(w)

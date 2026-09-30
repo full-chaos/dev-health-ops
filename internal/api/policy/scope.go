@@ -17,6 +17,7 @@ type contextKey int
 const (
 	orgIDKey contextKey = iota
 	impersonationKey
+	impersonationDecidedKey
 )
 
 // OrgIDFrom returns the request's resolved org (the contextvar
@@ -33,6 +34,15 @@ func OrgIDFrom(ctx context.Context) string {
 func ImpersonationFrom(ctx context.Context) *Impersonation {
 	value, _ := ctx.Value(impersonationKey).(*Impersonation)
 	return value
+}
+
+// ImpersonationDecided reports whether the Impersonation middleware ran for
+// the request and let it through. Only then does a nil ImpersonationFrom mean
+// "not impersonating" rather than "nobody looked": a handler that serves the
+// effective identity from the middleware's decision refuses without one.
+func ImpersonationDecided(ctx context.Context) bool {
+	decided, _ := ctx.Value(impersonationDecidedKey).(bool)
+	return decided
 }
 
 // Scope holds the two request-wide middlewares. They run for every request
@@ -153,6 +163,9 @@ func (a *Authenticator) IsMember(ctx context.Context, userID, orgID string) (boo
 // other authorization lookups (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Every path below that calls next has decided; the refusals return
+		// without calling it.
+		r = r.WithContext(context.WithValue(r.Context(), impersonationDecidedKey, true))
 		if !maybeSuperuser(r) {
 			next.ServeHTTP(w, r)
 			return

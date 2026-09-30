@@ -286,6 +286,29 @@ func TestEdgeCarrier_ImpersonatingSuperuserSetsImpersonationActive(t *testing.T)
 	}
 }
 
+// TestEdgeCarrier_SessionOfAUserTheRowSaysIsNotASuperuserIsIgnored: only a
+// caller the live users row confirms is a superuser can be impersonating, so
+// a session row left behind for a caller whose superuser flag was cleared
+// (even one whose token still claims it) changes nothing: the caller is
+// served as themself, a member of their own org.
+func TestEdgeCarrier_SessionOfAUserTheRowSaysIsNotASuperuserIsIgnored(t *testing.T) {
+	store := &fakeEdgeStore{
+		states:   map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: false, TokenVersion: 5}},
+		found:    map[uuid.UUID]bool{ecUser: true},
+		members:  map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
+		sessions: map[uuid.UUID]*policy.Impersonation{ecUser: {TargetUserID: ecTarget, TargetOrgID: uuid.MustParse("44444444-4444-4444-4444-444444444444"), TargetRole: "viewer"}},
+	}
+	auth := ecEdgeAuth(t, store)
+	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", isSuperuser: true, tokenVersion: 5})
+
+	rec := ecPost(handler, token)
+	want := authctx.Claims{OrgID: ecOrg.String(), Role: "admin"}
+	if rec.Code != http.StatusOK || len(*seen) != 1 || (*seen)[0] != want {
+		t.Fatalf("got %d claims=%v, want 200 and exactly %+v", rec.Code, *seen, want)
+	}
+}
+
 // TestEdgeCarrier_TwoAuthorizationHeadersAreAmbiguous is D2891's
 // refuseAmbiguousCarrier extension: two bearer tokens can name two
 // identities the same way one bearer plus the internal headers can: taking

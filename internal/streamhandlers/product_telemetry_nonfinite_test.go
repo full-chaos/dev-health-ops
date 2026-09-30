@@ -63,21 +63,40 @@ func TestProductTelemetryStillRefusesWhatIsInvalid(t *testing.T) {
 	event := func(name, payload string) string {
 		return `[{"name":"` + name + `","schemaVersion":"1","eventId":"e","ts":"2026-01-01T00:00:00Z","sessionId":"s","anonymousUserId":"a","payload":` + payload + `}]`
 	}
+	// event2 is a valid event whose field `field` carries the non-finite literal instead.
+	event2 := func(field, literal string) string {
+		values := map[string]string{"name": `"page_viewed"`, "schemaVersion": `"1"`, "eventId": `"e"`, "ts": `"2026-01-01T00:00:00Z"`, "sessionId": `"s"`, "anonymousUserId": `"a"`, "payload": `{}`}
+		values[field] = literal
+		var parts []string
+		for _, key := range []string{"name", "schemaVersion", "eventId", "ts", "sessionId", "anonymousUserId", "payload", "orgIdHash", "routePattern"} {
+			if value, ok := values[key]; ok {
+				parts = append(parts, `"`+key+`":`+value)
+			}
+		}
+		return "[{" + strings.Join(parts, ",") + "}]"
+	}
 	cases := map[string]struct{ events, reason string }{
-		"truncated document":                  {`[{"name": "page_viewed", "payload": {"x": NaN}`, "invalid_events_json"},
-		"garbage":                             {`not json NaN`, "invalid_events_json"},
-		"non-finite as a bare top-level":      {`NaN`, "invalid_event_count"},
-		"empty list":                          {`[]`, "invalid_event_count"},
-		"non-finite event name":               {`[{"name": NaN, "schemaVersion":"1","eventId":"e","ts":"2026-01-01T00:00:00Z","sessionId":"s","anonymousUserId":"a","payload":{}}]`, "invalid_telemetry_event"},
-		"non-finite timestamp":                {`[{"name":"page_viewed","schemaVersion":"1","eventId":"e","ts":Infinity,"sessionId":"s","anonymousUserId":"a","payload":{}}]`, "invalid_telemetry_event"},
-		"non-finite next to a blocked key":    {event("page_viewed", `{"x": NaN, "email": "a@example.test"}`), "blocked_telemetry_payload"},
-		"non-finite inside a nested payload":  {event("page_viewed", `{"x": [NaN]}`), "invalid_telemetry_payload"},
-		"non-finite inside an object payload": {event("page_viewed", `{"x": {"y": Infinity}}`), "invalid_telemetry_payload"},
-		"unknown event name":                  {event("nope", `{"x": NaN}`), "invalid_telemetry_event"},
+		"truncated document":                   {`[{"name": "page_viewed", "payload": {"x": NaN}`, "invalid_events_json"},
+		"garbage":                              {`not json NaN`, "invalid_events_json"},
+		"non-finite as a bare top-level":       {`NaN`, "invalid_events_json"},
+		"empty list":                           {`[]`, "invalid_event_count"},
+		"non-finite event name":                {`[{"name": NaN, "schemaVersion":"1","eventId":"e","ts":"2026-01-01T00:00:00Z","sessionId":"s","anonymousUserId":"a","payload":{}}]`, "invalid_events_json"},
+		"non-finite timestamp":                 {`[{"name":"page_viewed","schemaVersion":"1","eventId":"e","ts":Infinity,"sessionId":"s","anonymousUserId":"a","payload":{}}]`, "invalid_events_json"},
+		"non-finite org hash (optional field)": {event2("orgIdHash", "NaN"), "invalid_events_json"},
+		"non-finite route pattern":             {event2("routePattern", "Infinity"), "invalid_events_json"},
+		"non-finite session id":                {event2("sessionId", "-Infinity"), "invalid_events_json"},
+		"non-finite next to a blocked key":     {event("page_viewed", `{"x": NaN, "email": "a@example.test"}`), "blocked_telemetry_payload"},
+		"non-finite inside a nested payload":   {event("page_viewed", `{"x": [NaN]}`), "invalid_events_json"},
+		"non-finite inside an object payload":  {event("page_viewed", `{"x": {"y": Infinity}}`), "invalid_events_json"},
+		"unknown event name":                   {event("nope", `{"x": NaN}`), "invalid_telemetry_event"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			before := nonFiniteCounterValue(t)
 			sink, err := handleEvents(t, tc.events)
+			if moved := nonFiniteCounterValue(t) - before; moved != 0 {
+				t.Fatalf("a refused entry moved the nulled-values counter by %d", moved)
+			}
 			var permanent *streamrunner.PermanentError
 			if !streamrunner.IsPermanent(err) {
 				t.Fatalf("err = %v, want a permanent %q", err, tc.reason)
@@ -201,7 +220,7 @@ func TestProductTelemetryCountsAndLogsNulledNonFiniteValues(t *testing.T) {
 		t.Fatalf("counter grew by %d, want 3 (NaN, Infinity, -Infinity)", got)
 	}
 	out := logged.String()
-	if !strings.Contains(out, "non-finite numbers stored as null") || !strings.Contains(out, "count=3") || !strings.Contains(out, "entry_id=1-0") {
+	if !strings.Contains(out, "non-finite numbers stored as null") || !strings.Contains(out, "count=3") || !strings.Contains(out, "entry_id=1-0") || !strings.Contains(out, "stream=product-telemetry:org-1:events") {
 		t.Fatalf("debug line missing or incomplete:\n%s", out)
 	}
 	if strings.Contains(out, "nonfinite") || strings.Contains(out, "sibling") || strings.Contains(out, `"z"`) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -220,5 +221,48 @@ func TestProductTelemetryCountsAndLogsNulledNonFiniteValues(t *testing.T) {
 	}
 	if strings.Contains(logged.String(), "non-finite") {
 		t.Fatalf("an ordinary entry logged a non-finite line:\n%s", logged.String())
+	}
+}
+
+// The counter and the log say "stored": they move only for an entry whose whole batch was
+// validated and sent (r1 review), never for one refused mid-way or whose write failed.
+func TestProductTelemetryCountsNulledValuesOnlyWhenTheEntryIsPersisted(t *testing.T) {
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(previous)
+
+	nan := `{"name":"page_viewed","schemaVersion":"1","eventId":"nan","ts":"2026-01-01T00:00:00Z","sessionId":"s","anonymousUserId":"a","payload":{"x":NaN}}`
+	invalid := `{"name":"not_a_telemetry_event","schemaVersion":"1","eventId":"bad","ts":"2026-01-01T00:00:00Z","sessionId":"s","anonymousUserId":"a","payload":{}}`
+	cases := map[string]struct {
+		events  string
+		sendErr error
+		wantErr func(error) bool
+		want    int64
+	}{
+		"refused after a non-finite event":     {"[" + nan + "," + invalid + "]", nil, streamrunner.IsPermanent, 0},
+		"write fails after the batch is built": {"[" + nan + "]", errors.New("clickhouse unavailable"), func(err error) bool { return err != nil && !streamrunner.IsPermanent(err) }, 0},
+		"persisted":                            {"[" + nan + "]", nil, func(err error) bool { return err == nil }, 1},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			logged.Reset()
+			before := nonFiniteCounterValue(t)
+			sink := &productSink{batch: &productBatch{sendErr: tc.sendErr}}
+			handler, err := NewProductTelemetryHandler(sink)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = handler.Handle(context.Background(), streamrunner.Message{Fields: map[string]string{"events": tc.events}})
+			if !tc.wantErr(err) {
+				t.Fatalf("err = %v", err)
+			}
+			if got := nonFiniteCounterValue(t) - before; got != tc.want {
+				t.Fatalf("counter moved by %d, want %d", got, tc.want)
+			}
+			if said := strings.Contains(logged.String(), "stored as null"); said != (tc.want > 0) {
+				t.Fatalf("log says stored=%v, want %v:\n%s", said, tc.want > 0, logged.String())
+			}
+		})
 	}
 }

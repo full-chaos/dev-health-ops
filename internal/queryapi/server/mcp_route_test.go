@@ -981,3 +981,46 @@ func TestMCPRefusesSelfDoublingFragmentsBeforeTheValidatorRunsOnThem(t *testing.
 		}
 	}
 }
+
+// Every stage that walks the document has a bound that runs before its work
+// (r2, r3 on #3425: the same class, unbounded work on fragment expansion, in
+// two different stages). The worst cell per stage under the body cap: each
+// must be answered in well under a second with zero ClickHouse calls unless
+// it is a legitimate served query.
+func TestMCPEveryStageOfTheDocumentPathIsBoundedUnderTheBodyCap(t *testing.T) {
+	doubling := func(n int) string {
+		q := "query { __type(name: \"Query\") { ...F0 } }\n"
+		for i := 0; i < n; i++ {
+			q += fmt.Sprintf("fragment F%d on __Type { ofType { ...F%d } ofType { ...F%d } }\n", i, i+1, i+1)
+		}
+		return q + fmt.Sprintf("fragment F%d on __Type { name }", n)
+	}
+	chain := "query X { ...F0 }\n"
+	for i := 0; i < 149; i++ {
+		chain += fmt.Sprintf("fragment F%d on Query { ...F%d }\n", i, i+1)
+	}
+	chain += "fragment F149 on Query { __typename }"
+	vars := mcpHotspotsVariables(mcpTestOrg)
+	cases := []struct {
+		stage, name, body string
+		status            int
+	}{
+		{"body read", "cap+1 bytes", strings.Repeat("x", 16*1024+1), http.StatusRequestEntityTooLarge},
+		{"json decode", "7000-deep variables", `{"query":"query X($input: HotspotsInput!){hotspots(input:$input){rows{filePath}}}","variables":{"input":` + strings.Repeat("[", 7000) + strings.Repeat("]", 7000) + `}}`, http.StatusBadRequest},
+		{"parse", "4000 directives", mcpBody(t, "query X { hotspots(input:{}) "+strings.Repeat("@a ", 4000)+" { rows { filePath } } }", nil), http.StatusBadRequest},
+		{"node counts", "150-fragment chain", mcpBody(t, chain, nil), http.StatusOK},
+		{"raw expansion", "149-deep doubling", mcpBody(t, doubling(149), nil), http.StatusBadRequest},
+		{"validate", "70 overlapping fields", mcpBody(t, "query X($input: HotspotsInput!) { hotspots(input:$input) { "+strings.Repeat("rows{filePath} ", 70)+"} }", vars), http.StatusOK},
+	}
+	l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
+	for _, c := range cases {
+		started := time.Now()
+		rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), c.body)
+		if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+			t.Errorf("%s / %s: took %s", c.stage, c.name, elapsed)
+		}
+		if rec.Code != c.status {
+			t.Errorf("%s / %s: status %d, want %d; body %.200s", c.stage, c.name, rec.Code, c.status, rec.Body.String())
+		}
+	}
+}

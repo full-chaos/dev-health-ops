@@ -72,14 +72,14 @@ func leafText(value *string) string {
 	return *value
 }
 
-// credentialArgsPythonBuild is the build whose argparse answered the frozen
+// serviceArgsPythonBuild is the build whose argparse answered the frozen
 // corpus: a build that still carried the Python CLI.
-const credentialArgsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+const serviceArgsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
 // TestCredentialArgsMatchTheFrozenPythonParser runs every command line of argsCorpus through the
 // REAL argparse (build_parser().parse_args) and through parseCredentialArgs and compares whether it parses,
 // whether it is help, and every value the handler reads. The parser's answers were executed once on
-// credentialArgsPythonBuild and are frozen in testdata/golden/credential_args.json (the recipe regenerates
+// serviceArgsPythonBuild and are frozen in testdata/golden/credential_args.json (the recipe regenerates
 // them by execution); the corpus and the program are part of the golden's key.
 func TestCredentialArgsMatchTheFrozenPythonParser(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -88,9 +88,9 @@ func TestCredentialArgsMatchTheFrozenPythonParser(t *testing.T) {
 	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/credential_args.json",
-		PythonBuild: credentialArgsPythonBuild,
+		PythonBuild: serviceArgsPythonBuild,
 		SHA256:      "16c39e1d8d90b8682256a5252829413471dc87082e1457ddec84feb485c97c92",
-		Recipe: "git worktree add --detach $DIR " + credentialArgsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+		Recipe: "git worktree add --detach $DIR " + serviceArgsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/adminops/ -test '^TestCredentialArgsMatchTheFrozenPythonParser$' -python-root $DIR",
 	})
 	root := golden.PythonRoot(t, repoRoot)

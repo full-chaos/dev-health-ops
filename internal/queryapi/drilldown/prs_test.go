@@ -63,16 +63,20 @@ func TestFetchPullRequestsQueryDedupsBothTables(t *testing.T) {
 // must sit at the SAME nesting depth (the same subquery statement), and
 // that depth must be greater than 0 -- confirming the org boundary is
 // genuinely inside a subquery bound to pr.repo_id, not the top-level
-// statement. Also pins that this route continues to avoid
-// git_pull_requests' own (possibly stale-backfilled) org_id column and
-// never gates the org scope behind a JOIN evaluated after the FINAL
-// merge -- see fetchPullRequestsQuery's own doc comment.
+// statement. Also pins that the org scope is never gated behind a JOIN
+// evaluated after the FINAL merge, and that git_pull_requests' OWN org_id
+// is bound at the top level too (CHAOS-7239): the repos subquery alone
+// admits another org's rows under a shared repo_id -- see
+// fetchPullRequestsQuery's own doc comment and crossorg_integration_test.go,
+// which proves it on a real ClickHouse.
 func TestFetchPullRequestsQueryOrgFilterInsidePRRead(t *testing.T) {
 	if strings.Contains(fetchPullRequestsQuery, "JOIN") {
 		t.Fatalf("fetchPullRequestsQuery must not join repos to gate org scope -- the org filter must sit inside git_pull_requests' own read, not behind a join whose org predicate is only evaluated after the FINAL merge:\n%s", fetchPullRequestsQuery)
 	}
-	if strings.Contains(fetchPullRequestsQuery, "pr.org_id") {
-		t.Fatalf("fetchPullRequestsQuery must not gate org scope via git_pull_requests.org_id directly (see this package's own doc comment):\n%s", fetchPullRequestsQuery)
+	const factOrgPredicate = "pr.org_id = {org_id:String}"
+	factOrgIdx := strings.Index(fetchPullRequestsQuery, factOrgPredicate)
+	if factOrgIdx == -1 || sqlshape.Depths(fetchPullRequestsQuery)[factOrgIdx] != 0 {
+		t.Fatalf("fetchPullRequestsQuery must bind %q on git_pull_requests' own top-level read (CHAOS-7239):\n%s", factOrgPredicate, fetchPullRequestsQuery)
 	}
 
 	const inMarker = "pr.repo_id IN "
@@ -88,7 +92,12 @@ func TestFetchPullRequestsQueryOrgFilterInsidePRRead(t *testing.T) {
 	if finalIdx == -1 {
 		t.Fatalf("fetchPullRequestsQuery missing %q:\n%s", finalMarker, fetchPullRequestsQuery)
 	}
-	orgIdx := strings.Index(fetchPullRequestsQuery, orgPredicate)
+	// The repos subquery's own predicate: the first org_id predicate AFTER
+	// the repos dedup source (the fact-side pr.org_id precedes it).
+	orgIdx := strings.Index(fetchPullRequestsQuery[finalIdx:], orgPredicate)
+	if orgIdx != -1 {
+		orgIdx += finalIdx
+	}
 	if orgIdx == -1 {
 		t.Fatalf("fetchPullRequestsQuery missing %q:\n%s", orgPredicate, fetchPullRequestsQuery)
 	}

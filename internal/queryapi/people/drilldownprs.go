@@ -17,13 +17,15 @@
 // two tables, the SAME fix). This port reads both FINAL, matching that
 // sibling reader's already-reviewed shape.
 //
-// ORG SCOPE sits INSIDE git_pull_requests' own read, not behind a join
-// evaluated after it, for the identical reason internal/drilldown/prs.go's
-// doc comment states: pr.repo_id is bound to `(SELECT id FROM repos FINAL
-// WHERE org_id = ...)`, an org-filtered-in-place subquery, rather than the
-// reference's own `INNER JOIN repos ON ... WHERE repos.org_id = ...` shape
-// (person_drilldown_prs.sql), which lets FINAL merge every org's rows on
-// the joined side before the WHERE prunes them.
+// ORG SCOPE sits INSIDE git_pull_requests' own read and binds BOTH sides,
+// for the identical reasons internal/queryapi/drilldown/prs.go's doc
+// comment states (CHAOS-7239): pr.org_id, AND pr.repo_id bound to `(SELECT
+// id FROM repos FINAL WHERE org_id = ...)`. The repos subquery alone is not
+// an org boundary -- two orgs that sync the same repository share one
+// repo_id. The reference's `INNER JOIN repos ... WHERE repos.org_id = ...`
+// shape (person_drilldown_prs.sql) binds the repos side only and leaks the
+// same way; this port does not reproduce that (recorded divergence, no
+// Python change).
 package people
 
 import (
@@ -125,6 +127,7 @@ FROM git_pull_requests AS pr FINAL
 WHERE pr.created_at >= {start_ts:DateTime64(3, 'UTC')}
   AND pr.created_at < {end_ts:DateTime64(3, 'UTC')}
   AND (pr.author_email IN {identities:Array(String)} OR pr.author_name IN {identities:Array(String)})
+  AND pr.org_id = {org_id:String}
   AND pr.repo_id IN (
       SELECT id FROM repos FINAL WHERE org_id = {org_id:String}
   )

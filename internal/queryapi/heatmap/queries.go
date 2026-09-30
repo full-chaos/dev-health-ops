@@ -3,6 +3,16 @@
 // comment declares (repos/git_pull_requests/git_commits read FINAL, org_id
 // inside the same statement as every FINAL source, never a separate
 // unfiltered subquery).
+//
+// ORG ON BOTH SIDES (CHAOS-7239). Every git_pull_requests/git_commits read
+// binds the FACT table's own org_id as well as repos.org_id in the join.
+// A repository id is minted from the repository's full name alone, so two
+// orgs that sync the same repository share one repo_id; binding org on the
+// repos side only joins org A's repos row to BOTH orgs' PR/commit rows and
+// returns org B's data to org A. Python's heatmap.py binds repos.org_id
+// only and leaks the same way; this port does not reproduce that (recorded
+// divergence, no Python change). file_metrics_daily reads already bound
+// both sides.
 package heatmap
 
 import (
@@ -46,7 +56,8 @@ func fetchReviewWaitDensity(ctx context.Context, client QueryClient, startTS, en
             toFloat64(sum(dateDiff('minute', created_at, first_review_at)) / 60.0) AS value
         FROM git_pull_requests FINAL
         INNER JOIN repos FINAL ON repos.id = git_pull_requests.repo_id AND repos.org_id = {org_id:String}
-        WHERE created_at >= {start_ts:DateTime64(3, 'UTC')}
+        WHERE git_pull_requests.org_id = {org_id:String}
+          AND created_at >= {start_ts:DateTime64(3, 'UTC')}
           AND created_at < {end_ts:DateTime64(3, 'UTC')}
           AND first_review_at IS NOT NULL
         %s
@@ -90,7 +101,8 @@ func fetchReviewWaitEvidence(ctx context.Context, client QueryClient, startTS, e
             git_pull_requests.first_review_at AS first_review_at
         FROM git_pull_requests FINAL
         INNER JOIN repos FINAL ON repos.id = git_pull_requests.repo_id AND repos.org_id = {org_id:String}
-        WHERE created_at >= {start_ts:DateTime64(3, 'UTC')}
+        WHERE git_pull_requests.org_id = {org_id:String}
+          AND created_at >= {start_ts:DateTime64(3, 'UTC')}
           AND created_at < {end_ts:DateTime64(3, 'UTC')}
           AND first_review_at IS NOT NULL
           AND toDayOfWeek(created_at) = {weekday:UInt8}
@@ -152,7 +164,8 @@ func fetchRepoTouchpoints(ctx context.Context, client QueryClient, startTS, endT
             count() AS total
         FROM git_commits FINAL
         INNER JOIN repos FINAL ON repos.id = git_commits.repo_id AND repos.org_id = {org_id:String}
-        WHERE author_when >= {start_ts:DateTime64(3, 'UTC')}
+        WHERE git_commits.org_id = {org_id:String}
+          AND author_when >= {start_ts:DateTime64(3, 'UTC')}
           AND author_when < {end_ts:DateTime64(3, 'UTC')}
         %s
         GROUP BY repos.repo
@@ -199,7 +212,8 @@ func fetchRepoTouchpoints(ctx context.Context, client QueryClient, startTS, endT
             toFloat64(count()) AS value
         FROM git_commits FINAL
         INNER JOIN repos FINAL ON repos.id = git_commits.repo_id AND repos.org_id = {org_id:String}
-        WHERE author_when >= {start_ts:DateTime64(3, 'UTC')}
+        WHERE git_commits.org_id = {org_id:String}
+          AND author_when >= {start_ts:DateTime64(3, 'UTC')}
           AND author_when < {end_ts:DateTime64(3, 'UTC')}
           AND repos.repo IN {repos:Array(String)}
         %s
@@ -428,7 +442,8 @@ func fetchIndividualActiveHours(ctx context.Context, client QueryClient, startTS
             toFloat64(count()) AS value
         FROM git_commits FINAL
         INNER JOIN repos FINAL ON repos.id = git_commits.repo_id AND repos.org_id = {org_id:String}
-        WHERE author_when >= {start_ts:DateTime64(3, 'UTC')}
+        WHERE git_commits.org_id = {org_id:String}
+          AND author_when >= {start_ts:DateTime64(3, 'UTC')}
           AND author_when < {end_ts:DateTime64(3, 'UTC')}
           AND (author_email IN {identities:Array(String)} OR author_name IN {identities:Array(String)})
         GROUP BY weekday, hour
@@ -479,7 +494,8 @@ func fetchIndividualActiveEvidence(ctx context.Context, client QueryClient, star
             git_commits.author_when AS author_when
         FROM git_commits FINAL
         INNER JOIN repos FINAL ON repos.id = git_commits.repo_id AND repos.org_id = {org_id:String}
-        WHERE author_when >= {start_ts:DateTime64(3, 'UTC')}
+        WHERE git_commits.org_id = {org_id:String}
+          AND author_when >= {start_ts:DateTime64(3, 'UTC')}
           AND author_when < {end_ts:DateTime64(3, 'UTC')}
           AND toDayOfWeek(author_when) = {weekday:UInt8}
           AND toHour(author_when) = {hour:UInt8}

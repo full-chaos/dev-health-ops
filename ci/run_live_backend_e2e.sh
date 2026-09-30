@@ -561,6 +561,13 @@ wait_for_redis
 # Python compute of any kind. For real executed-proof of the metrics
 # pipeline generally, see the `metrics-executed-proof` job in
 # .github/workflows/live-e2e.yml and ci/assert_metrics_executed_proof.py.
+# The Python `fixtures generate` below migrates an empty ClickHouse itself, to the
+# contract-1 schema, which dho then refuses to lift to the head (it applies the
+# head only to an empty database). Migrate with dho first so every later step
+# sees the head (ordering contract 2, production's).
+export OPERATIONAL_ORDERING_CONTRACT=2
+build_go_binaries
+CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}" "${BIN_DIR}/dho" migrate clickhouse upgrade
 echo "==> generating deterministic ClickHouse fixtures (raw git/PR/team data only)"
 (
   export ORG_ID="${E2E_ORG_ID}"

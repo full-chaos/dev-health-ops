@@ -54,6 +54,10 @@ build_go_binaries() {
 # to have run (BIN_DIR/dho).
 # ---------------------------------------------------------------------------
 migrate_and_assert_river() {
+  # dho applies only the head (ordering contract 2); the worker and reconciler
+  # started later by the caller must read the operational tables under the same
+  # contract or they refuse (ordering_contract_mismatch).
+  export OPERATIONAL_ORDERING_CONTRACT=2
   echo "==> applying Postgres (Alembic) migrations"
   # DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 is required here, not optional: a
   # plain `migrate postgres upgrade` targets ONLY the application_schema

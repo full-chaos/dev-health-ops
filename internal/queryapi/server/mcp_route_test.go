@@ -477,13 +477,17 @@ func TestMCPHandlerRefusesARequestOffTheMCPListener(t *testing.T) {
 // --- CHAOS-7091: the read budget is a typed refusal, never truncation ---
 
 func TestMCPBudgetExceptionIsATypedRefusal(t *testing.T) {
-	for name, ch := range map[string]*countingMCPClient{
-		"bytes_at_query":     {err: fmt.Errorf("ClickHouse query failed: %w", &clickhousedriver.Exception{Code: 307})},
-		"bytes_while_stream": {rowsErr: fmt.Errorf("ClickHouse row iteration failed: %w", &clickhousedriver.Exception{Code: 307})},
-		"rows":               {err: fmt.Errorf("wrapped: %w", &clickhousedriver.Exception{Code: 158})},
-		"time":               {err: fmt.Errorf("wrapped: %w", &clickhousedriver.Exception{Code: 159})},
-		"deadline":           {err: fmt.Errorf("ClickHouse query failed: %w", context.DeadlineExceeded)},
+	for name, tc := range map[string]struct {
+		ch   *countingMCPClient
+		want string
+	}{
+		"bytes_at_query":     {&countingMCPClient{err: fmt.Errorf("ClickHouse query failed: %w", &clickhousedriver.Exception{Code: 307})}, mcpReasonBytesCeiling},
+		"bytes_while_stream": {&countingMCPClient{rowsErr: fmt.Errorf("ClickHouse row iteration failed: %w", &clickhousedriver.Exception{Code: 307})}, mcpReasonBytesCeiling},
+		"rows":               {&countingMCPClient{err: fmt.Errorf("wrapped: %w", &clickhousedriver.Exception{Code: 158})}, mcpReasonRowsCeiling},
+		"time":               {&countingMCPClient{err: fmt.Errorf("wrapped: %w", &clickhousedriver.Exception{Code: 159})}, mcpReasonTimeCeiling},
+		"deadline":           {&countingMCPClient{err: fmt.Errorf("ClickHouse query failed: %w", context.DeadlineExceeded)}, mcpReasonTimeCeiling},
 	} {
+		ch, want := tc.ch, tc.want
 		t.Run(name, func(t *testing.T) {
 			l := newMCPTestListeners(t, ch, allMCPRootsEnabled(), mcpDefaultLimits())
 			rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, mcpHotspotsQuery, mcpHotspotsVariables(mcpTestOrg)))
@@ -491,8 +495,8 @@ func TestMCPBudgetExceptionIsATypedRefusal(t *testing.T) {
 				t.Fatalf("status %d, want 422; body %s", rec.Code, rec.Body.String())
 			}
 			reason, code := mcpReason(t, rec)
-			if code != "MCP_READ_BUDGET_EXCEEDED" || !strings.HasSuffix(reason, "_ceiling") {
-				t.Fatalf("code %q reason %q, want MCP_READ_BUDGET_EXCEEDED/*_ceiling; body %s", code, reason, rec.Body.String())
+			if code != "MCP_READ_BUDGET_EXCEEDED" || reason != want {
+				t.Fatalf("code %q reason %q, want MCP_READ_BUDGET_EXCEEDED/%s; body %s", code, reason, want, rec.Body.String())
 			}
 			if strings.Contains(rec.Body.String(), `"data"`) {
 				t.Fatalf("a budget refusal carried data: %s", rec.Body.String())
@@ -700,5 +704,121 @@ func TestMCPServesTheViewerRoleAcrSends(t *testing.T) {
 	}())
 	if reason != "" || status != 0 || claims.Role != "" || claims.IsSuperuser || claims.ImpersonationActive || claims.OrgID != mcpTestOrg {
 		t.Fatalf("viewer claims = %+v (status %d reason %q), want org only with role forced to \"\"", claims, status, reason)
+	}
+}
+
+// The header org must be a real org id: empty, and padded (a value that
+// would name a different org than the one it compares equal to after a
+// trim), are both refused as invalid_org before anything else runs. Each
+// clause is pinned by its own row. (Over the wire net/http trims header
+// values, so the padded row is reachable only in-process; the clause keeps
+// the guarantee independent of that.)
+func TestMCPRefusesAnInvalidHeaderOrg(t *testing.T) {
+	for name, org := range map[string]string{
+		"empty":  "",
+		"padded": " " + mcpTestOrg + " ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
+			rec := mcpDo(l.mcp, http.MethodPost, mcpHeaders(org, "viewer", "false", "false"), mcpBody(t, mcpHotspotsQuery, mcpHotspotsVariables(mcpTestOrg)))
+			assertMCPRefused(t, rec, l.ch, http.StatusUnauthorized, mcpReasonInvalidOrg)
+		})
+	}
+}
+
+// Every remaining refusal reason, one row per reason or per clause of a
+// compound check, each through the real MCP listener with zero ClickHouse.
+func TestMCPRefusesEveryOtherMalformedRequest(t *testing.T) {
+	good := mcpHotspotsVariables(mcpTestOrg)
+	headersWithout := func(drop string) func() http.Header {
+		return func() http.Header {
+			h := validMCPHeaders()
+			h.Del(drop)
+			return h
+		}
+	}
+	headersWith := func(key string, values ...string) func() http.Header {
+		return func() http.Header {
+			h := validMCPHeaders()
+			h[http.CanonicalHeaderKey(key)] = values
+			return h
+		}
+	}
+	literal := func(org string) string {
+		return mcpBody(t, fmt.Sprintf(`query L { hotspots(input: {orgId: %q, sinceUtc: "2026-09-01T00:00:00Z", untilUtc: "2026-09-08T00:00:00Z"}) { rows { filePath } } }`, org), nil)
+	}
+	cases := []struct {
+		name   string
+		header func() http.Header
+		body   string
+		status int
+		reason string
+	}{
+		{"no_content_type", headersWithout("Content-Type"), mcpBody(t, mcpHotspotsQuery, good), http.StatusUnsupportedMediaType, mcpReasonContentType},
+		// mime.ParseMediaType returns "application/json" WITH an error for a
+		// malformed parameter; the error alone must refuse it.
+		{"content_type_bad_parameter", headersWith("Content-Type", "application/json; charset"), mcpBody(t, mcpHotspotsQuery, good), http.StatusUnsupportedMediaType, mcpReasonContentType},
+		// json.Unmarshal fills query and still returns an error for variables
+		// of the wrong type; the error alone must refuse it.
+		{"variables_not_an_object", validMCPHeaders, `{"query":` + strconvQuote(mcpHotspotsQuery) + `,"variables":5}`, http.StatusBadRequest, mcpReasonBadBody},
+		{"body_too_large", validMCPHeaders, `{"query":"` + strings.Repeat(" ", defaultGraphQLMaxQueryBytes) + `"}`, http.StatusRequestEntityTooLarge, mcpReasonBodyTooLarge},
+		{"body_null", validMCPHeaders, `null`, http.StatusBadRequest, mcpReasonBadBody},
+		{"query_empty", validMCPHeaders, `{"query":""}`, http.StatusBadRequest, mcpReasonBadBody},
+		{"query_not_a_string", validMCPHeaders, `{"query":5}`, http.StatusBadRequest, mcpReasonBadBody},
+		{"missing_header", headersWithout(internalidentity.HeaderRole), mcpBody(t, mcpHotspotsQuery, good), http.StatusUnauthorized, internalidentity.ReasonMissing},
+		{"duplicate_header", headersWith(internalidentity.HeaderOrgID, mcpTestOrg, mcpTestOrg), mcpBody(t, mcpHotspotsQuery, good), http.StatusUnauthorized, internalidentity.ReasonDuplicate},
+		{"flag_not_a_boolean", headersWith(internalidentity.HeaderSuperuser, "yes"), mcpBody(t, mcpHotspotsQuery, good), http.StatusUnauthorized, internalidentity.ReasonBoolean},
+		{"document_syntax", validMCPHeaders, mcpBody(t, "query {", nil), http.StatusBadRequest, mcpReasonInvalidDocument},
+		{"operation_name_mismatch", validMCPHeaders, `{"query":` + strconvQuote(mcpHotspotsQuery) + `,"operationName":"Other","variables":{"input":{"orgId":"` + mcpTestOrg + `","sinceUtc":"2026-09-01T00:00:00Z","untilUtc":"2026-09-08T00:00:00Z"}}}`, http.StatusBadRequest, mcpReasonOperationName},
+		{"variables_missing", validMCPHeaders, mcpBody(t, mcpHotspotsQuery, nil), http.StatusBadRequest, mcpReasonInvalidVariables},
+		{"org_argument_empty", validMCPHeaders, literal(""), http.StatusForbidden, mcpReasonInvalidOrgArgument},
+		{"org_argument_padded", validMCPHeaders, literal(" " + mcpTestOrg + " "), http.StatusForbidden, mcpReasonInvalidOrgArgument},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
+			rec := mcpDo(l.mcp, http.MethodPost, tc.header(), tc.body)
+			assertMCPRefused(t, rec, l.ch, tc.status, tc.reason)
+		})
+	}
+}
+
+func strconvQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// __typename at the root is not introspection and not a root field needing
+// a class row: served beside an allowlisted field.
+func TestMCPServesTypenameAtTheRoot(t *testing.T) {
+	l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
+	query := `query T($input: HotspotsInput!) { __typename hotspots(input: $input) { rows { filePath } } }`
+	rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, query, mcpHotspotsVariables(mcpTestOrg)))
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"errors"`) {
+		t.Fatalf("status %d, want 200 with no errors; body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The org_id spelling (the Python plane's, and graph.OperationOrgGuard's) is
+// checked too. Today's SDL has no org_id argument or input field, so the
+// schema validator refuses one before this gate; this pins the gate itself
+// for the day one is added.
+func TestMCPOrgCheckReadsTheOrgIDSpellingToo(t *testing.T) {
+	field := &ast.Field{Name: "f", Alias: "f", Arguments: ast.ArgumentList{{
+		Name:  "org_id",
+		Value: &ast.Value{Kind: ast.StringValue, Raw: "other-org"},
+	}}}
+	if got := mcpCheckOrgArguments(ast.SelectionSet{field}, nil, nil, mcpTestOrg); got != mcpReasonOrgMismatch {
+		t.Fatalf("argument org_id: reason %q, want %q", got, mcpReasonOrgMismatch)
+	}
+	nested := &ast.Field{Name: "f", Alias: "f", Arguments: ast.ArgumentList{{
+		Name: "input",
+		Value: &ast.Value{Kind: ast.ObjectValue, Children: ast.ChildValueList{{
+			Name:  "org_id",
+			Value: &ast.Value{Kind: ast.StringValue, Raw: "other-org"},
+		}}},
+	}}}
+	if got := mcpCheckOrgArguments(ast.SelectionSet{nested}, nil, nil, mcpTestOrg); got != mcpReasonOrgMismatch {
+		t.Fatalf("input field org_id: reason %q, want %q", got, mcpReasonOrgMismatch)
 	}
 }

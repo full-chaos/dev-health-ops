@@ -399,8 +399,9 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(body, &raw); err != nil || raw == nil {
+	if err := json.Unmarshal(body, &raw); err != nil {
 		// A JSON array (a batch) lands here too: one operation per request.
+		// A JSON null decodes to a nil map and is refused below (no query).
 		refuse(http.StatusBadRequest, mcpReasonBadBody, "the request body must be one JSON object")
 		return
 	}
@@ -601,7 +602,8 @@ func mcpRootFields(set ast.SelectionSet, fragments ast.FragmentDefinitionList) (
 func mcpAliasCount(set ast.SelectionSet, fragments ast.FragmentDefinitionList) int {
 	count := 0
 	mcpWalkFields(set, fragments, func(field *ast.Field) {
-		if field.Alias != "" && field.Alias != field.Name {
+		// gqlparser sets Alias to Name when the document gives none.
+		if field.Alias != field.Name {
 			count++
 		}
 	})
@@ -646,8 +648,9 @@ func mcpCheckOrgArguments(set ast.SelectionSet, fragments ast.FragmentDefinition
 		if reason != "" {
 			return
 		}
-		s, ok := value.(string)
-		if !ok || s == "" || s != strings.TrimSpace(s) {
+		// A non-string value reads as "" and is refused with the empty one.
+		s, _ := value.(string)
+		if s == "" || s != strings.TrimSpace(s) {
 			reason = mcpReasonInvalidOrgArgument
 			return
 		}

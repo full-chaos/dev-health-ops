@@ -1000,19 +1000,18 @@ ingress:
   # -- CHAOS-7047: paths the Python api still answers when a host routes "/" to
   #    `service: go-api` (set `pythonAllowList: true` on that host). Everything
   #    else on such a host reaches the Go api, whose own 404 answers unknown
-  #    paths. Must cover /api/v1/internal (unauthenticated Go acr routes).
+  #    paths. CHAOS-7255: no longer has to carry /api/v1/internal (the Go public listener serves no /api/v1/internal/* route).
   #    Nothing renders unless a host opts in, so the default changes no route.
   #    CHAOS-7243: an entry may be ANCHORED, {path: "/docs$", pathType:
   #    ImplementationSpecific} (literal segments, `\.` for a dot): ingress-nginx
   #    renders Prefix/Exact as unanchored regexes on a regex-mode host, so only an
   #    anchored entry keeps /docsx off Python. The chart adds `use-regex: "true"`
-  #    to its Ingress when any anchored entry is in use. /api/v1/internal stays a
-  #    Prefix (fail-closed).
+  #    to an Ingress that carries only the hosts with an anchored entry. A Prefix
+  #    entry (e.g. /api/v1/internal, when a values file keeps it) stays an
+  #    unanchored regex in regex mode.
   pythonAllowList:
     - path: /graphql$
       pathType: ImplementationSpecific
-    - path: /api/v1/internal
-      pathType: Prefix
   tls: []
   #  - secretName: dev-health-tls
   #    hosts:

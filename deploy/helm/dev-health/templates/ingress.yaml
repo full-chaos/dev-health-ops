@@ -1,9 +1,10 @@
 {{- /*
 CHAOS-7047: a host can route its "/" catch-all to the Go api (service: go-api), so an unknown path is answered by Go's native 404 (x-dev-health-plane: go) and
 never by the Python api. The paths Python must still answer are ingress.pythonAllowList (each -> the Python api Service); a host opts in with
-`pythonAllowList: true`. Render guards: a "/" path to go-api requires the opt-in (no allow-list = Python-only paths silently 404), and the allow-list must
-cover /api/v1/internal, because the Go api serves /api/v1/internal/acr/* WITHOUT a credential check (the network boundary is the control, see
-internal_acr_boundary_test.go): the Go default backend must never receive them from the public host.
+`pythonAllowList: true`. Render guard: a "/" path to go-api requires the opt-in (no allow-list = Python-only paths silently 404). CHAOS-7255: the allow-list is no
+longer required to cover /api/v1/internal: the Go api's PUBLIC listener serves no /api/v1/internal/* route (ops #3429 removed the acr public-compat bridge; the routes
+live on the internal listener, port 8091, never behind this Ingress), which internal/apiservice TestPublicListenerNeverServesInternalRoutes pins; a request for them
+through the Go default backend is Go's native 404. Routing to the go-api-internal Service stays refused below.
 */}}
 {{- /*
 CHAOS-7243: an allow-list entry may be ANCHORED: {path: "/docs$", pathType: ImplementationSpecific} (literal segments, `\.` for a dot, exactly one trailing `$`).
@@ -119,7 +120,6 @@ spec:
           {{- else if not (kindIs "bool" $host.pythonAllowList) }}{{- fail (printf "ingress.hosts %q pythonAllowList must be true or a list of {path, pathType}, got %s" $host.host (kindOf $host.pythonAllowList)) }}
           {{- end }}
           {{- if not $.Values.api.enabled }}{{- fail (printf "ingress.hosts %q pythonAllowList routes to the Python api but api.enabled is false (the Service would not exist)" $host.host) }}{{- end }}
-          {{- $coversInternal := false }}
           {{- $seen := dict }}
           {{- $hostAnchored := false }}
           {{- range $allow }}{{- if and (kindIs "map" .) (eq (toString .pathType) "ImplementationSpecific") }}{{- $hostAnchored = true }}{{- end }}{{- end }}
@@ -143,7 +143,6 @@ spec:
           {{- $_ := set $seen $base true }}
           {{- /* CHAOS-7243 (r2 P1): on an anchored host regex mode is on for the WHOLE host, where a literal Exact rule renders as an UNANCHORED regex (`= /graphql` becomes `~* "^/graphql"`, so /graphqlish would reach Python). An Exact entry must therefore be written anchored on such a host. */}}
           {{- if and $hostAnchored (eq .pathType "Exact") }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q is Exact on a host that has an anchored entry: regex mode makes an Exact rule an unanchored regex there (lookalikes such as %sx would reach Python); write it anchored as {path: %q, pathType: ImplementationSpecific}" $host.host .path .path (printf "%s$" .path)) }}{{- end }}
-          {{- if and (eq .pathType "Prefix") (has (trimSuffix "/" .path) (list "/api" "/api/v1" "/api/v1/internal")) }}{{- $coversInternal = true }}{{- end }}
           - path: {{ .path }}
             pathType: {{ .pathType }}
             backend:
@@ -151,9 +150,6 @@ spec:
                 name: {{ include "dev-health.fullname" $ }}-api
                 port:
                   number: {{ $.Values.api.port }}
-          {{- end }}
-          {{- if not $coversInternal }}
-          {{- fail (printf "the Python allow-list (ingress.pythonAllowList, or the host's own pythonAllowList list) must cover /api/v1/internal (Prefix): the Go api serves /api/v1/internal/acr/* without a credential check; host %q" $host.host) }}
           {{- end }}
           {{- end }}
     {{- end }}

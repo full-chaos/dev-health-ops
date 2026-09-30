@@ -7,17 +7,14 @@ import (
 	"testing"
 )
 
-// TestInternalACRRoutesStayOffThePublicIngress pins the control that stands
-// in for a bearer check. The Go api serves GET /api/v1/internal/acr/health
-// and GET /api/v1/internal/acr/entitlements/{org_id} with no credential
-// check, by design: internal service-to-service calls carry none, and the
-// network boundary is the control (internal/apiservice/acr's package
-// comment). So no public path may resolve to the Go api for those URLs.
-//
-// CHAOS-7047: a host may now route "/" to go-api (the Go default backend), so
-// the check resolves the winning rule for the internal acr URLs the way
-// ingress-nginx does (Exact beats the longest Prefix) and requires that it is
-// not a go-api Service; ingress.pythonAllowList must carry /api/v1/internal.
+// TestInternalACRRoutesStayOffThePublicIngress pins what still holds after CHAOS-7255. The Go api serves
+// GET /api/v1/internal/acr/health and GET /api/v1/internal/acr/entitlements/{org_id} with no credential check, by
+// design (the network boundary is the control), but ONLY on its internal listener (port 8091): the public listener
+// serves no /api/v1/internal/* route (ops #3429), which internal/apiservice TestPublicListenerNeverServesInternalRoutes
+// pins at the HTTP level. So the chart's job is that no Ingress may reach the go-api pods' INTERNAL listener: no
+// Ingress backend may name the go-api-internal Service or a Service port other than the public one, every Service that
+// selects the go-api pods stays ClusterIP without nodePort/externalIPs, and the pods expose no hostPort. (The former
+// allow-list cover of /api/v1/internal, which existed because the public listener used to serve those routes, is retired.)
 func TestInternalACRRoutesStayOffThePublicIngress(t *testing.T) {
 	output, err := exec.Command("helm", "template", "b", ".",
 		"--set", "goApi.enabled=true",
@@ -95,14 +92,11 @@ func TestInternalACRRoutesStayOffThePublicIngress(t *testing.T) {
 			}
 			continue
 		}
-		for _, url := range []string{"/api/v1/internal/acr/health", "/api/v1/internal/acr/entitlements/o"} {
-			backend := winningBackend(document, url)
-			if backend == "" {
-				t.Errorf("no rule of the Ingress matches %s:\n%s", url, document)
-			}
-			for _, name := range reachGoAPI {
-				if backend == name {
-					t.Errorf("%s resolves to Service %s, which reaches the Go api; the Go api serves /api/v1/internal/acr/* with no credential check:\n%s", url, name, document)
+		// No backend of any Ingress may be the internal-listener Service or a non-public port of a Service that reaches the go-api pods.
+		for _, name := range reachGoAPI {
+			for _, m := range regexp.MustCompile(`(?m)^\s*name: `+regexp.QuoteMeta(name)+`\n\s*port:\n\s*number: (\d+)`).FindAllStringSubmatch(document, -1) {
+				if m[1] == "8091" || strings.HasSuffix(name, "go-api-internal") {
+					t.Errorf("an Ingress routes to the go-api internal listener (%s:%s):\n%s", name, m[1], document)
 				}
 			}
 		}
@@ -179,7 +173,7 @@ func winningBackend(document, url string) string {
 }
 
 // TestGoCatchAllRenderGuards pins the CHAOS-7047 render guards: a "/" to go-api
-// needs the allow-list opt-in, the allow-list must cover /api/v1/internal, and
+// needs the allow-list opt-in, and
 // no go-api path may cover /api/v1/internal.
 func TestGoCatchAllRenderGuards(t *testing.T) {
 	render := func(hosts, allow string) (string, error) {
@@ -216,17 +210,12 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 		t.Fatalf("default allow-list must render: %v\n%s", err, out)
 	}
 	for name, c := range map[string]struct{ hosts, allow, want string }{
-		"no opt-in":                 {`[{"host":"h","paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`, "", "without pythonAllowList"},
-		"allow-list drops internal": {catchAll, `[{"path":"/graphql","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
-		"string prefix only":        {catchAll, `[{"path":"/api/v1/int","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
-		"sibling -x":                {catchAll, `[{"path":"/api/v1/internal-x","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
-		"sibling s":                 {catchAll, `[{"path":"/api/v1/internals","pathType":"Prefix"}]`, "must cover /api/v1/internal"},
-		"exact internal only":       {catchAll, `[{"path":"/api/v1/internal","pathType":"Exact"}]`, "must cover /api/v1/internal"},
-		"regex path":                {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"^/api/v1/(internal|internal/acr/.*)","pathType":"ImplementationSpecific","service":"go-api"}]}]`, "", "only literal Prefix/Exact"},
-		"regex chars in prefix":     {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api/v1/(internal)","pathType":"Prefix","service":"go-api"}]}]`, "", "only literal Prefix/Exact"},
-		"implementation specific":   {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/x","pathType":"ImplementationSpecific","service":"go-api"}]}]`, "", "only literal Prefix/Exact"},
-		"go-api /api":               {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api","pathType":"Prefix","service":"go-api"}]}]`, "", "covers /api/v1/internal"},
-		"go-api internal":           {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api/v1/internal/acr","pathType":"Prefix","service":"go-api"}]}]`, "", "covers /api/v1/internal"},
+		"no opt-in":               {`[{"host":"h","paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`, "", "without pythonAllowList"},
+		"regex path":              {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"^/api/v1/(internal|internal/acr/.*)","pathType":"ImplementationSpecific","service":"go-api"}]}]`, "", "only literal Prefix/Exact"},
+		"regex chars in prefix":   {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api/v1/(internal)","pathType":"Prefix","service":"go-api"}]}]`, "", "only literal Prefix/Exact"},
+		"implementation specific": {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/x","pathType":"ImplementationSpecific","service":"go-api"}]}]`, "", "only literal Prefix/Exact"},
+		"go-api /api":             {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api","pathType":"Prefix","service":"go-api"}]}]`, "", "covers /api/v1/internal"},
+		"go-api internal":         {`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api/v1/internal/acr","pathType":"Prefix","service":"go-api"}]}]`, "", "covers /api/v1/internal"},
 	} {
 		out, err := render(c.hosts, c.allow)
 		if err == nil || !strings.Contains(out, c.want) {
@@ -274,8 +263,8 @@ func TestPerHostPythonAllowList(t *testing.T) {
 	if got := strings.Count(ownRules, "- path: "); got != 4 {
 		t.Errorf("own-list host must render exactly its 3 allow-list paths plus \"/\", got %d paths:\n%s", got, ownRules)
 	}
-	if got := strings.Count(shared, "- path: "); got != 3 {
-		t.Errorf("shared-list host must render exactly the 2 default paths plus \"/\", got %d paths:\n%s", got, shared)
+	if got := strings.Count(shared, "- path: "); got != 2 {
+		t.Errorf("shared-list host must render exactly the 1 default path plus \"/\", got %d paths:\n%s", got, shared)
 	}
 	// Every allow-listed path, on both hosts, backs onto the Python api Service and "/" onto the Go api (r2 P3:
 	// the security-relevant /api/v1/internal backend was not asserted).
@@ -291,7 +280,7 @@ func TestPerHostPythonAllowList(t *testing.T) {
 			t.Errorf("own-list host: %s must back onto the Python api Service:\n%s", path, ownRules)
 		}
 	}
-	for _, path := range []string{"/graphql$", "/api/v1/internal"} {
+	for _, path := range []string{"/graphql$"} {
 		if !strings.Contains(backendOf(shared, path), "name: b-dev-health-api\n") {
 			t.Errorf("shared-list host: %s must back onto the Python api Service:\n%s", path, shared)
 		}
@@ -302,7 +291,6 @@ func TestPerHostPythonAllowList(t *testing.T) {
 		}
 	}
 	for name, c := range map[string]struct{ list, want string }{
-		"list drops internal":     {`[{"path":"/metrics","pathType":"Exact"}]`, "must cover /api/v1/internal"},
 		"empty list":              {`[]`, "without pythonAllowList"},
 		"regex entry":             {`[{"path":"/api/v1/(internal)","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "literal /path"},
 		"implementation specific": {`[{"path":"/x","pathType":"ImplementationSpecific"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "Prefix|Exact"},
@@ -399,7 +387,6 @@ func TestAnchoredAllowListEntries(t *testing.T) {
 		"literal with dollar":   {`[{"path":"/docs$","pathType":"Exact"},` + internal + `]`, "must be {path"},
 		"duplicate of literal":  {`[` + docs + `,{"path":"/docs","pathType":"Exact"},` + internal + `]`, "duplicates another rule"},
 		"duplicate anchored":    {`[` + docs + `,` + docs + `,` + internal + `]`, "duplicates another rule"},
-		"anchored only":         {`[` + docs + `]`, "must cover /api/v1/internal"},
 		"exact beside anchored": {`[` + docs + `,{"path":"/graphql","pathType":"Exact"},` + internal + `]`, "is Exact on a host that has an anchored entry"},
 	} {
 		o, err := render(host(c.list))
@@ -467,5 +454,35 @@ func TestAnchoredHostsGetTheirOwnIngress(t *testing.T) {
 	// Only anchored hosts: a single -anchored Ingress and no empty main Ingress.
 	if only := render(`[` + anchoredHost + `]`); len(only) != 1 || !strings.Contains(only[0], "b-dev-health-anchored") {
 		t.Errorf("only anchored hosts: want exactly one -anchored Ingress, got %d", len(only))
+	}
+}
+
+// TestAllowListNeedsNoInternalCover pins CHAOS-7255: the public Go listener serves no /api/v1/internal/* route
+// (internal/apiservice TestPublicListenerNeverServesInternalRoutes), so an allow-list no longer has to carry it, while
+// routing anything to the go-api INTERNAL Service stays refused.
+func TestAllowListNeedsNoInternalCover(t *testing.T) {
+	render := func(hosts string) (string, error) {
+		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
+			"--set-json", "ingress.hosts="+hosts).CombinedOutput()
+		return string(out), err
+	}
+	for name, list := range map[string]string{
+		"shared default (no internal entry)": `true`,
+		"own list without internal":          `[{"path":"/graphql$","pathType":"ImplementationSpecific"},{"path":"/metrics$","pathType":"ImplementationSpecific"}]`,
+		"literal list without internal":      `[{"path":"/graphql","pathType":"Exact"}]`,
+		"list keeping internal":              `[{"path":"/graphql$","pathType":"ImplementationSpecific"},{"path":"/api/v1/internal","pathType":"Prefix"}]`,
+	} {
+		hosts := `[{"host":"h","pythonAllowList":` + list + `,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
+		if o, err := render(hosts); err != nil {
+			t.Errorf("%s must render: %v\n%s", name, err, o)
+		}
+	}
+	// The internal listener's Service is never routable from an Ingress.
+	if o, err := render(`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"},{"path":"/x","pathType":"Prefix","service":"go-api-internal"}]}]`); err == nil || !strings.Contains(o, "internal listener is unauthenticated") {
+		t.Errorf("a route to go-api-internal must be refused: err=%v\n%s", err, o)
+	}
+	// A go-api path may still not cover /api/v1/internal (kept as defence in depth).
+	if o, err := render(`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api/v1/internal","pathType":"Prefix","service":"go-api"}]}]`); err == nil || !strings.Contains(o, "covers /api/v1/internal") {
+		t.Errorf("a go-api path covering /api/v1/internal must stay refused: err=%v\n%s", err, o)
 	}
 }

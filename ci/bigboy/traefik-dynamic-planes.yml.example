@@ -16,7 +16,7 @@ http:
     # CHAOS-7047: the paths Python still answers (ops chart ingress.pythonAllowList + the
     # local-only docs/metrics paths), below the two plane routers, above the default backend.
     python-allowlist:
-      rule: "Host(`traefik`) && (Path(`/graphql`) || PathPrefix(`/graphql/`) || Path(`/api/v1/internal`) || PathPrefix(`/api/v1/internal/`) || Path(`/docs`) || PathPrefix(`/docs/`) || Path(`/redoc`) || Path(`/openapi.json`) || Path(`/metrics`))"
+      rule: "Host(`traefik`) && (Path(`/graphql`) || PathPrefix(`/graphql/`) || Path(`/docs`) || PathPrefix(`/docs/`) || Path(`/redoc`) || Path(`/openapi.json`) || Path(`/metrics`))"
       entryPoints: [web]
       priority: 500
       service: python-allowlist

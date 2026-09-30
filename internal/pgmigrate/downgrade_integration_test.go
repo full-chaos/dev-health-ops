@@ -446,7 +446,7 @@ func TestDowngradeVenueOracleMatchesPythonDowngrade(t *testing.T) {
 	// 0139-0141 stay applied and recorded (a re-run resumes at 0142).
 	pyUp, goUp := d.at(t, 0), d.at(t, 0)
 	for _, uri := range []string{pyUp, goUp} {
-		if _, err := connect(t, uri).Exec(context.Background(), "CREATE TABLE webhook_sync_requests (id integer)"); err != nil {
+		if _, err := connect(t, uri).Exec(context.Background(), "SELECT 1 AS conflict INTO webhook_sync_requests"); err != nil {
 			t.Fatal(err)
 		}
 	}

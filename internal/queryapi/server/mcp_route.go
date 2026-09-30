@@ -557,8 +557,8 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for key, values := range buffered.header {
 		w.Header()[key] = values
 	}
-	w.WriteHeader(buffered.status)
-	_, _ = w.Write(buffered.body.Bytes())
+	// gqlgen's body is already JSON: re-emit it through the one response path.
+	writeMCPJSON(w, buffered.status, json.RawMessage(buffered.body.Bytes()))
 }
 
 // mcpAuthenticate takes the identity from the internal identity headers
@@ -836,15 +836,23 @@ func writeMCPRefusal(w http.ResponseWriter, status int, reason, message string) 
 	case mcpReasonBytesCeiling, mcpReasonRowsCeiling, mcpReasonTimeCeiling:
 		code = "MCP_READ_BUDGET_EXCEEDED"
 	}
-	body, _ := json.Marshal(map[string]any{
+	writeMCPJSON(w, status, map[string]any{
 		"errors": []map[string]any{{
 			"message":    message,
 			"extensions": map[string]any{"code": code, "reason": reason},
 		}},
 	})
+}
+
+// writeMCPJSON is this listener's one JSON response path: an explicit
+// Content-Type and json.NewEncoder(w).Encode, never a raw w.Write of bytes
+// (the repo's JSON-response rule; semgrep no-direct-write-to-responsewriter).
+func writeMCPJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write(body)
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		log.Printf("query-api: mcp request: encode response failed: err=%v", err)
+	}
 }
 
 // emit writes the request's one log line and its counter and duration. No

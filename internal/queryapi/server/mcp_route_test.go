@@ -178,6 +178,9 @@ func assertMCPRefused(t *testing.T, rec *httptest.ResponseRecorder, ch *counting
 	if reason, _ := mcpReason(t, rec); reason != wantReason {
 		t.Fatalf("reason = %q, want %q; body %s", reason, wantReason, rec.Body.String())
 	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("refusal Content-Type = %q, want application/json", ct)
+	}
 	if n := ch.calls.Load(); n != 0 {
 		t.Fatalf("a refused request made %d ClickHouse calls, want 0", n)
 	}
@@ -224,6 +227,9 @@ func TestMCPServesAnAllowlistedQueryOnTheMCPListener(t *testing.T) {
 	}
 	if len(body.Errors) != 0 || body.Data["hotspots"] == nil {
 		t.Fatalf("want served data with no errors, got %s", rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("served Content-Type = %q, want application/json", ct)
 	}
 	if l.ch.calls.Load() == 0 {
 		t.Fatal("a served hotspots query made no ClickHouse call: the resolver never ran")

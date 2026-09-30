@@ -321,3 +321,81 @@ VALUES ('%s', 'team-org', 'Team', 'team', 'manual', true, now(), now())`, teamOr
 		}
 	}
 }
+
+// TestLLMSettingsDeleteClearsDerivedRows is CHAOS-6975 on the operator path:
+// `admin llm-settings delete` must remove the readiness record and the per-role
+// certification rows with the credentials, and leave every other row (the
+// platform role key, llm_budget, other categories, other orgs) alone. Go-only:
+// the Python verb left the derived rows behind, which is the defect.
+func TestLLMSettingsDeleteClearsDerivedRows(t *testing.T) {
+	db := startDatabase(t)
+	db.reset(t)
+	ctx := context.Background()
+	if _, err := db.conn.Exec(ctx, "TRUNCATE settings, feature_flags CASCADE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.Exec(ctx, fmt.Sprintf(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+VALUES ('%s', 'team-org', 'Team', 'team', 'manual', true, now(), now()), ('%s', 'other-org', 'Other', 'team', 'manual', true, now(), now())`, teamOrg, otherLLMOrg)); err != nil {
+		t.Fatal(err)
+	}
+	type cell struct {
+		category, key string
+		gone          bool
+	}
+	cells := []cell{
+		{"llm", "provider", true}, {"llm", "model", true}, {"llm", "api_key", true},
+		{"llm", "base_url", true}, {"llm", "concurrency", true},
+		{"llm", "ask_dev_agent_readiness", true},
+		{"llm", "ask_dev_role_certification_profile:legacy_agent", true},
+		{"llm", "ask_dev_role_certification_profile:intent_classification", true},
+		{"llm", "platform_ask_dev_role_certification_profile:legacy_agent", false},
+		{"llm", "ask_dev_role_certification_profile", false},
+		{"llm", "unrelated_key", false},
+		{"llm_budget", "limit_micro_usd", false},
+		{"general", "site_name", false},
+		{"ask_dev", "ask_dev_agent_readiness", false},
+	}
+	for _, org := range []string{teamOrg, otherLLMOrg} {
+		for _, c := range cells {
+			if _, err := db.conn.Exec(ctx, `INSERT INTO settings (id, org_id, category, key, value, is_encrypted, description, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, $2, $3, 'v', false, NULL, now(), now())`, org, c.category, c.key); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	exists := func(org, category, key string) bool {
+		var n int
+		if err := db.conn.QueryRow(ctx, `SELECT count(*) FROM settings WHERE org_id = $1 AND category = $2 AND key = $3`, org, category, key).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n > 0
+	}
+	code, stdout := goVerbEnv(t, db, llmEnv(false), []string{"llm-settings", "delete", "--org", teamOrg})
+	if code != 0 {
+		t.Fatalf("delete: exit %d, stdout %q", code, stdout)
+	}
+	for _, c := range cells {
+		if got := exists(teamOrg, c.category, c.key); got == c.gone {
+			t.Errorf("%s/%s: present=%v after delete, want present=%v", c.category, c.key, got, !c.gone)
+		}
+		if !exists(otherLLMOrg, c.category, c.key) {
+			t.Errorf("the other org lost %s/%s", c.category, c.key)
+		}
+	}
+	// Orphan derived rows with no credential: still a refusal, and cleared.
+	if code, _ := goVerbEnv(t, db, llmEnv(false), []string{"llm-settings", "delete", "--org", teamOrg}); code != 1 {
+		t.Errorf("second delete: exit %d, want 1 (LLM settings not found)", code)
+	}
+	if _, err := db.conn.Exec(ctx, `INSERT INTO settings (id, org_id, category, key, value, is_encrypted, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, 'llm', 'ask_dev_agent_readiness', 'v', false, now(), now())`, teamOrg); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := goVerbEnv(t, db, llmEnv(false), []string{"llm-settings", "delete", "--org", teamOrg}); code != 1 {
+		t.Errorf("orphan delete: exit %d, want 1", code)
+	}
+	if exists(teamOrg, "llm", "ask_dev_agent_readiness") {
+		t.Errorf("the orphan readiness row survived the delete")
+	}
+}
+
+const otherLLMOrg = "00000000-0000-4000-8000-0000000000aa"

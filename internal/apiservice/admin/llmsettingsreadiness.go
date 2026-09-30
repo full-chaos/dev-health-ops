@@ -36,8 +36,8 @@ import (
 // stays gated exactly as it is today under CHAOS-6252a -- unaffected,
 // because prod Ask Dev is off.
 //
-// NOT reproduced: CHAOS-6975 (Python's DELETE /llm-settings leaves this
-// record behind) -- a recorded Python defect, not this port's to fix.
+// NOT reproduced: CHAOS-6975 (Python's DELETE /llm-settings left this record
+// behind). Go's deleteLLMSettings clears it and the role certification rows.
 //
 // See llmreadinessprobe.go's file doc comment for the probe wire shape and
 // the PINNED fingerprint divergence.

@@ -105,26 +105,28 @@ func scopeClauseRepo(repoIDs []string) (filterSQL string, bindings []dhclickhous
 // performs a true merge, with no per-column NULL-skip footgun an
 // argMax(col, version) would carry.
 //
-// ORG SCOPE sits INSIDE git_pull_requests' own read, not behind a join
-// evaluated after it: pr.repo_id is bound to `(SELECT id FROM repos
-// FINAL WHERE org_id = ...)`, a properly deduped, org-filtered-in-place
-// subquery, so git_pull_requests is never merged or scanned across
-// tenants before the org boundary applies -- an INNER JOIN whose ON
-// clause carries no org predicate, with the org filter only in the
-// join's OUTER WHERE, does not give that guarantee: the FINAL merge on
-// the joined side runs over every org's rows before the WHERE prunes
-// them. NOT git_pull_requests' own org_id column, added by the same
-// migration 027: that column is backfilled `DEFAULT 'default'` for
-// every row written before the migration ran, and nothing read in this
-// port's source files confirms those historical rows also carry a real
-// org_id there (as opposed to the literal string "default") the way
-// repos.org_id was already correctly populated by migration 024. Taking
-// the git_pull_requests.org_id shortcut risks silently dropping or
-// misbucketing pre-migration PR rows for a real org; resolving through
-// repos.org_id carries no such risk. workgraph/pr.go's FetchPRCoreRow
-// DOES take the pr.org_id shortcut for a single-PR-by-id lookup -- a
-// different route, already shipped, out of this port's scope to
-// relitigate.
+// ORG SCOPE binds BOTH sides (CHAOS-7239): git_pull_requests' own
+// pr.org_id AND pr.repo_id IN `(SELECT id FROM repos FINAL WHERE org_id =
+// ...)`, both inside git_pull_requests' own read, so the table is never
+// merged or scanned across tenants before the org boundary applies.
+//
+// The repos subquery ALONE is not an org boundary. A repository id is
+// minted from the repository's full name only
+// (providersync/github_repository_route.go), so two orgs that sync the same
+// repository share one repo_id, and git_pull_requests keys its rows on
+// (org_id, repo_id, number) since migration 027 -- each org keeps its own
+// rows under that shared id. `repo_id IN (org A's repo ids)` alone admits
+// org B's rows too (reproduced on a real ClickHouse,
+// crossorg_integration_test.go). An earlier version of this comment chose
+// the repos subquery over pr.org_id because rows written before migration
+// 027 carry pr.org_id = 'default'; that choice is what leaked, and such
+// rows were never proven to belong to the reading org -- aianalytics,
+// workgraph and busfactor already bind pr.org_id and hide them the same
+// way. That concern is obsolete: a read-only count on 2026-09-30 found no
+// 'default' and no non-real org_id in git_pull_requests or git_commits on
+// prod or bigboy, so binding pr.org_id hides no real row. Python's drilldown.fetch_pull_requests binds repos.org_id only and
+// leaks the same way; this port does not reproduce that (recorded
+// divergence, no Python change).
 //
 // review_latency_hours is computed in SQL, not Go, deliberately: it is
 // the same `dateDiff('hour', created_at, first_review_at)` expression
@@ -145,6 +147,7 @@ SELECT
 FROM git_pull_requests AS pr FINAL
 WHERE pr.created_at >= {start_ts:DateTime64(3, 'UTC')}
   AND pr.created_at < {end_ts:DateTime64(3, 'UTC')}
+  AND pr.org_id = {org_id:String}
   AND pr.repo_id IN (
       SELECT id FROM repos FINAL WHERE org_id = {org_id:String}
   )

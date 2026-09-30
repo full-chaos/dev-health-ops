@@ -125,8 +125,10 @@ func TestFetchPersonPullRequestsQueryOrgFilterInsidePRRead(t *testing.T) {
 	if strings.Contains(fetchPersonPullRequestsQuery, "JOIN") {
 		t.Fatalf("fetchPersonPullRequestsQuery must not join repos to gate org scope:\n%s", fetchPersonPullRequestsQuery)
 	}
-	if strings.Contains(fetchPersonPullRequestsQuery, "pr.org_id") {
-		t.Fatalf("fetchPersonPullRequestsQuery must not gate org scope via git_pull_requests.org_id directly:\n%s", fetchPersonPullRequestsQuery)
+	const factOrgPredicate = "pr.org_id = {org_id:String}"
+	factOrgIdx := strings.Index(fetchPersonPullRequestsQuery, factOrgPredicate)
+	if factOrgIdx == -1 || sqlshape.Depths(fetchPersonPullRequestsQuery)[factOrgIdx] != 0 {
+		t.Fatalf("fetchPersonPullRequestsQuery must bind %q on git_pull_requests' own top-level read (CHAOS-7239):\n%s", factOrgPredicate, fetchPersonPullRequestsQuery)
 	}
 
 	const finalMarker = "FROM repos FINAL"
@@ -137,7 +139,12 @@ func TestFetchPersonPullRequestsQueryOrgFilterInsidePRRead(t *testing.T) {
 	if finalIdx == -1 {
 		t.Fatalf("fetchPersonPullRequestsQuery missing %q:\n%s", finalMarker, fetchPersonPullRequestsQuery)
 	}
-	orgIdx := strings.Index(fetchPersonPullRequestsQuery, orgPredicate)
+	// The repos subquery's own predicate: the first org_id predicate AFTER
+	// the repos dedup source (the fact-side pr.org_id precedes it).
+	orgIdx := strings.Index(fetchPersonPullRequestsQuery[finalIdx:], orgPredicate)
+	if orgIdx != -1 {
+		orgIdx += finalIdx
+	}
 	if orgIdx == -1 {
 		t.Fatalf("fetchPersonPullRequestsQuery missing %q:\n%s", orgPredicate, fetchPersonPullRequestsQuery)
 	}

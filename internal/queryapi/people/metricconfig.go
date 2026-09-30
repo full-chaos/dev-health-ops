@@ -36,6 +36,16 @@
 // the reference's static "INNER JOIN repos ON repos.id = ..." never reads
 // it FINAL either, a THIRD instance of the same defect class; this
 // config's own join_clause strings read `repos FINAL`.
+//
+// Those join_clause strings also bind repos.org_id in the ON clause
+// (CHAOS-7239). Two orgs that sync the same repository share one repo_id,
+// so `ON repos.id = user_metrics_daily.repo_id` alone joins every org's
+// repos row to each metric row: the sum doubles and the label can come
+// from another org. The fact side is already bound by the breakdown
+// query's own `org_id = {org_id:String}`. The reference
+// (services/people.py:141,194) has no repos-side org and leaks the same
+// way; this port does not reproduce that (recorded divergence, no Python
+// change).
 package people
 
 // personMetricDefinition ports MetricDefinition (api/models/schemas.py:
@@ -140,7 +150,7 @@ var personMetrics = []personMetric{
 			Aggregator:     "avg",
 			IdentityColumn: "identity_id",
 			GroupExpr:      "repos.repo",
-			JoinClause:     "INNER JOIN repos FINAL ON repos.id = user_metrics_daily.repo_id",
+			JoinClause:     "INNER JOIN repos FINAL ON repos.id = user_metrics_daily.repo_id AND repos.org_id = {org_id:String}",
 			ExtraWhere:     "AND pr_first_review_p50_hours IS NOT NULL",
 			Transform:      identityTransform,
 		},
@@ -189,7 +199,7 @@ var personMetrics = []personMetric{
 			Aggregator:     "sum",
 			IdentityColumn: "identity_id",
 			GroupExpr:      "repos.repo",
-			JoinClause:     "INNER JOIN repos FINAL ON repos.id = user_metrics_daily.repo_id",
+			JoinClause:     "INNER JOIN repos FINAL ON repos.id = user_metrics_daily.repo_id AND repos.org_id = {org_id:String}",
 			ExtraWhere:     "",
 			Transform:      identityTransform,
 		},

@@ -13,16 +13,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // TestOrgDeletionPurgesEveryDiscoveredClickHouseTable is CHAOS-6306
 // approval condition 1's OTHER half (ruling 26): ground truth for this
 // destructive port is the venue, not org_deletion.py's regex. It seeds a
-// real, migrated ClickHouse (chschema.Apply, the actual migration chain)
-// with rows for a target org and a control org in TWO independent tables
+// real, migrated ClickHouse (the venue's Go copy, built by chmigrate, the
+// migration chain `dho migrate clickhouse upgrade` applies) with rows for a target org and a control org in TWO independent tables
 // -- git_blame (org_id UUID, also exercises git_blame_dirty_paths_mv's own
 // MATERIALIZED VIEW trigger, the one case this route's live table
 // discovery treats specially) and backfill_log (org_id String, so the
@@ -43,13 +41,6 @@ func TestOrgDeletionPurgesEveryDiscoveredClickHouseTable(t *testing.T) {
 	t.Cleanup(cancel)
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-ch-flow-32-byte"
-
-	chInstance, err := containers.StartClickHouse(ctx)
-	if err != nil {
-		t.Fatalf("start clickhouse: %v", err)
-	}
-	t.Cleanup(func() { _ = chInstance.Close(context.Background()) })
-	chschema.Apply(ctx, t, chInstance)
 
 	targetOrgID := uuid.New()
 	controlOrgID := uuid.New()
@@ -79,7 +70,10 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 		},
 	})
 
-	chConn, err := clickhouse.Open(ctx, clickhouse.DefaultConfig(chInstance.URI))
+	// The venue's Go ClickHouse copy, over the admin login: the route deletes
+	// with the server's admin DSN, exactly as the seed writes.
+	chURI := venue.AdminClickHouseURI(t, venue.GoClickHouseDB)
+	chConn, err := clickhouse.Open(ctx, clickhouse.DefaultConfig(chURI))
 	if err != nil {
 		t.Fatalf("open clickhouse: %v", err)
 	}
@@ -142,7 +136,7 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 	}
 
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
-		deps.ClickHouseDSN = chInstance.URI
+		deps.ClickHouseDSN = chURI
 	})
 
 	request := venueoracle.Request{

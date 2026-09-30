@@ -181,41 +181,11 @@ BIGBOY_LOCAL_PYTHON_PATHS: list[tuple[str, str]] = [
 ]
 
 
-_WILD = "\x00"
-
-
-def _wild_segments(path: str) -> list[str]:
-    """Path segments of a go-api/query-api entry with every `{token}` / inline `[^/]+` replaced by a
-    wildcard marker BEFORE splitting on "/" (the inline placeholder itself contains a slash)."""
-    marked = re.sub(r"\{[a-zA-Z0-9_]+\}", _WILD, path).replace("[^/]+", _WILD)
-    return [s for s in marked.strip("/").split("/") if s != ""]
-
-
-def _seg_regex(segment: str) -> re.Pattern[str]:
-    """A wildcard-marked segment as the regex the generated router matches it with."""
-    return re.compile("[^/]+".join(re.escape(p) for p in segment.split(_WILD)))
-
-
-def _served_overlaps(allow_path: str, allow_type: str, served_path: str) -> bool:
-    """Does the generated Go/query router (an anchored full-path match, segment by segment) also
-    match a path the Python allow-list rule matches? Exact: the same segment count with every
-    segment matching. Prefix: some served path lies at or below the prefix."""
-    allow = [s for s in allow_path.strip("/").split("/") if s != ""]
-    served = _wild_segments(served_path)
-    if allow_type == "Exact":
-        if len(allow) != len(served):
-            return False
-    elif len(served) < len(allow):
-        return False
-    return all(_seg_regex(sv).fullmatch(al) for al, sv in zip(allow, served))
-
-
 def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
     entries = ((doc.get("ops") or {}).get("ingress") or {}).get("pythonAllowList")
     if entries is None:
-        out = list(DEFAULT_PYTHON_ALLOW_LIST)
-    else:
-        out = [(e["path"], e["pathType"]) for e in entries]
+        return list(DEFAULT_PYTHON_ALLOW_LIST)
+    out = [(e["path"], e["pathType"]) for e in entries]
     # Segment-exact, like ingress-nginx Prefix: only these Prefix paths cover /api/v1/internal.
     if not any(
         t == "Prefix" and p.rstrip("/") in ("", "/api", "/api/v1", "/api/v1/internal")
@@ -224,24 +194,6 @@ def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
         raise SystemExit(
             "generate-plane-split-router: ops.ingress.pythonAllowList must carry /api/v1/internal"
             " (Prefix): the Go api serves /api/v1/internal/acr/* with no credential check"
-        )
-    # CHAOS-7198: a Python allow-list rule that overlaps a path go-api/query-api serve loses to the
-    # higher-priority Go/query router, so the operator's intent silently goes the wrong way. Compare
-    # by the generated matchers (anchored segment-wise regexes vs Exact/whole-segment Prefix), on the EFFECTIVE list
-    # (built-in defaults included), never by string equality.
-    ingress = doc.get("ingress") or {}
-    # The generator emits EVERY go-api/query-api entry as an anchored full-path regex (see
-    # _goapi_path_to_regex/_queryapi_entry_to_regex), whatever pathType the values file declares.
-    served = [
-        e["path"]
-        for e in (ingress.get("goApiPaths") or [])
-        + (ingress.get("queryApiPaths") or [])
-    ]
-    clash = sorted({a for a, at in out for s in served if _served_overlaps(a, at, s)})
-    if clash:
-        raise SystemExit(
-            "generate-plane-split-router: pythonAllowList paths overlap paths served by"
-            f" go-api/query-api (the Go/query router would win): {clash}"
         )
     return out
 

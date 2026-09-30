@@ -135,3 +135,46 @@ func TestRefusedEntriesDoNotExhaustTheClickHousePool(t *testing.T) {
 		t.Fatalf("a valid entry after the refusals = %v: the pool is exhausted", err)
 	}
 }
+
+// Round 1 of the decoder fix: the same leak in internal ingest, which shares the ClickHouse
+// connection with product telemetry in the ingest profile. Refused commits must not exhaust
+// the pool and stall a valid telemetry entry.
+func TestRefusedInternalCommitsDoNotExhaustTheSharedPool(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse: %v", err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	chschema.Apply(ctx, t, instance)
+	cfg := chstorage.DefaultConfig(instance.URI)
+	conn, err := chstorage.Open(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	ingest, err := streamhandlers.NewInternalIngestHandler(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry, err := streamhandlers.NewProductTelemetryHandler(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := streamrunner.Message{Stream: "ingest:org:commits", Fields: map[string]string{"payload": `{"org_id":"org","repo_url":"https://example.test/r","items":[{"hash":""}]}`}}
+	for i := 0; i < cfg.MaxOpenConns+2; i++ {
+		attempt, stop := context.WithTimeout(ctx, 2*time.Second)
+		err := ingest.Handle(attempt, refused)
+		stop()
+		if !streamrunner.IsPermanent(err) {
+			t.Fatalf("refusal %d = %v, want a permanent refusal", i, err)
+		}
+	}
+	event := `[{"name":"page_viewed","schemaVersion":"1","eventId":"healthy","ts":"` + time.Now().UTC().Format(time.RFC3339) + `","sessionId":"s","anonymousUserId":"a","payload":{"x":1}}]`
+	attempt, stop := context.WithTimeout(ctx, 2*time.Second)
+	defer stop()
+	if err := telemetry.Handle(attempt, streamrunner.Message{Fields: map[string]string{"events": event}}); err != nil {
+		t.Fatalf("a valid telemetry entry after the refused commits = %v: the shared pool is exhausted", err)
+	}
+}

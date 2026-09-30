@@ -56,7 +56,7 @@ var worldFiles embed.FS
 // load silently. A file changes only by re-running TestFreezeGenerateWorlds against the live Python
 // producer, and then its digest here is updated in the same commit.
 var frozenWorldDigests = map[string]string{
-	"testdata/generate/synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz": "f97e2e36842a69783189a82d27549d0f873d6e0a4e95764dc042300bfc1d6029",
+	"testdata/generate/synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz": "b3449e8ce652c39219abeaa12c2dc0d3d413030ec3f4493dd8e9c8d30e96931a",
 }
 
 // GenerateParams are the parameters of one frozen `fixtures generate` run: the flags that change

@@ -439,6 +439,34 @@ func TestDowngradeVenueOracleMatchesPythonDowngrade(t *testing.T) {
 	if got, want := schemaShape(t, goURI), schemaShape(t, pythonURI); got != want {
 		t.Errorf("-1 on a single head: dho and Python disagree:\n%s", shapeDiff(want, got))
 	}
+	// The same transaction-boundary class on the UPGRADE side (existing behaviour, not
+	// changed here, named in the PR): 0142 fails on a pre-existing table. Python's
+	// upgrade walk is one transaction and rolls back to where it started; dho's upgrade
+	// applies the baseline in one transaction and each chain revision in its own, so
+	// 0139-0141 stay applied and recorded (a re-run resumes at 0142).
+	pyUp, goUp := d.at(t, 0), d.at(t, 0)
+	for _, uri := range []string{pyUp, goUp} {
+		if _, err := connect(t, uri).Exec(context.Background(), "CREATE TABLE webhook_sync_requests (id integer)"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	startVersions := alembicVersions(t, pyUp)
+	root, _ := filepath.Abs(filepath.Join("..", ".."))
+	upgrade := exec.Command(pyoracle.Resolve(t, root), "-c", upgradeProgram, pyUp, "head")
+	upgrade.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1")
+	if output, err := upgrade.CombinedOutput(); err == nil {
+		t.Fatalf("the Python upgrade over a conflicting 0142 table succeeded: %s", output)
+	}
+	baseline, _ := pgmigrate.LoadBaseline()
+	if _, err := pgmigrate.Upgrade(context.Background(), connect(t, goUp), baseline, chain); err == nil {
+		t.Fatal("dho's upgrade over a conflicting 0142 table succeeded")
+	}
+	if got := alembicVersions(t, pyUp); !reflect.DeepEqual(got, startVersions) {
+		t.Errorf("Python's failed upgrade left alembic_version %v, want the start %v (one transaction for the walk)", got, startVersions)
+	}
+	if got := alembicVersions(t, goUp); !reflect.DeepEqual(got, []string{"0066", "0141"}) {
+		t.Errorf("dho's failed upgrade left alembic_version %v, want 0066 and 0141 (one transaction per chain revision)", got)
+	}
 	venueoracle.WriteProof(t)
 }
 

@@ -69,6 +69,7 @@ var openers = map[string]struct {
 	"internal/synccli/dblookup.go":                         {kindDiscarded, "a connect or query error is swallowed into 'not found'"},
 	"internal/providersync/repository_postgres.go":         {kindDiscarded, "the lease renewal pool copies the running work pool's already-resolved config and dials lazily: the constructor's only failure is config validation, which carries no login, and a failed renewal is dropped into ErrLeaseLost, never printed (CHAOS-6889)"},
 	"internal/rivermigrate/roles.go":                       {kindDiscarded, "migrate roles' Authenticate closure: the connect error is inspected for SQLSTATE 28P01 only (a wrong password) and its text is never printed or logged; the message names a role label"},
+	"internal/queryapi/server/edge_verifier_config.go":     {kindServer, "the one lazy pool behind every edge-verified route's live users-row check (CHAOS-6290), built once in Build; errors reach its logs"},
 	"internal/queryapi/server/home_route.go":               {kindServer, "lazy pool of a running server; errors reach its logs"},
 	"internal/queryapi/server/investment_explain_route.go": {kindServer, "lazy pool of a running server; errors reach its logs"},
 	"internal/queryapi/server/query_route.go":              {kindServer, "lazy pool of a running server; errors reach its logs"},

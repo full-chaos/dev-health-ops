@@ -234,3 +234,102 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 		}
 	}
 }
+
+// TestPerHostPythonAllowList pins CHAOS-7221: a host's pythonAllowList may be a list (that host's
+// own allow-list, e.g. the in-cluster host keeps /metrics on Python) while `true` keeps using the
+// shared ingress.pythonAllowList; every guard runs on the EFFECTIVE list.
+func TestPerHostPythonAllowList(t *testing.T) {
+	render := func(hosts string) (string, error) {
+		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
+			"--set-json", "ingress.hosts="+hosts).CombinedOutput()
+		return string(out), err
+	}
+	hostRules := func(out, host string) string {
+		at := strings.Index(out, `- host: "`+host+`"`)
+		if at < 0 {
+			t.Fatalf("host %s not rendered:\n%s", host, out)
+		}
+		rest := out[at+1:]
+		if next := strings.Index(rest, "\n    - host:"); next >= 0 {
+			return out[at : at+1+next]
+		}
+		return out[at:]
+	}
+	own := `[{"path":"/graphql","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"},{"path":"/metrics","pathType":"Exact"}]`
+	both := `[{"host":"shared.test","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]},` +
+		`{"host":"own.test","pythonAllowList":` + own + `,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
+	out, err := render(both)
+	if err != nil {
+		t.Fatalf("per-host list must render: %v\n%s", err, out)
+	}
+	shared, ownRules := hostRules(out, "shared.test"), hostRules(out, "own.test")
+	if strings.Contains(shared, "path: /metrics") {
+		t.Errorf("a host with pythonAllowList: true must use the shared list (no /metrics):\n%s", shared)
+	}
+	if !strings.Contains(ownRules, "path: /metrics") || !strings.Contains(ownRules, "path: /graphql") || !strings.Contains(ownRules, "path: /api/v1/internal") {
+		t.Errorf("a host with its own list must render exactly that list:\n%s", ownRules)
+	}
+	// Exclusive, not merged: the own-list host renders exactly its 3 paths + "/", the shared-list host exactly the
+	// shared defaults + "/" (r1 P3: presence checks alone would pass a regression that appended the shared list).
+	if got := strings.Count(ownRules, "- path: "); got != 4 {
+		t.Errorf("own-list host must render exactly its 3 allow-list paths plus \"/\", got %d paths:\n%s", got, ownRules)
+	}
+	if got := strings.Count(shared, "- path: "); got != 3 {
+		t.Errorf("shared-list host must render exactly the 2 default paths plus \"/\", got %d paths:\n%s", got, shared)
+	}
+	// Every allow-listed path, on both hosts, backs onto the Python api Service and "/" onto the Go api (r2 P3:
+	// the security-relevant /api/v1/internal backend was not asserted).
+	backendOf := func(rules, path string) string {
+		parts := strings.SplitN(rules, "- path: "+path+"\n", 2)
+		if len(parts) < 2 {
+			t.Fatalf("path %s not rendered:\n%s", path, rules)
+		}
+		return strings.SplitN(parts[1], "- path:", 2)[0]
+	}
+	for _, path := range []string{"/graphql", "/api/v1/internal", "/metrics"} {
+		if !strings.Contains(backendOf(ownRules, path), "name: b-dev-health-api\n") {
+			t.Errorf("own-list host: %s must back onto the Python api Service:\n%s", path, ownRules)
+		}
+	}
+	for _, path := range []string{"/graphql", "/api/v1/internal"} {
+		if !strings.Contains(backendOf(shared, path), "name: b-dev-health-api\n") {
+			t.Errorf("shared-list host: %s must back onto the Python api Service:\n%s", path, shared)
+		}
+	}
+	for _, rules := range []string{ownRules, shared} {
+		if !strings.Contains(backendOf(rules, "/"), "name: b-dev-health-go-api\n") {
+			t.Errorf(`"/" must back onto the Go api Service:\n%s`, rules)
+		}
+	}
+	for name, c := range map[string]struct{ list, want string }{
+		"list drops internal":     {`[{"path":"/metrics","pathType":"Exact"}]`, "must cover /api/v1/internal"},
+		"empty list":              {`[]`, "without pythonAllowList"},
+		"regex entry":             {`[{"path":"/api/v1/(internal)","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "literal /path"},
+		"implementation specific": {`[{"path":"/x","pathType":"ImplementationSpecific"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "Prefix|Exact"},
+		"entry not a map":         {`["/graphql"]`, "literal /path"},
+		"string value":            {`"yes"`, "must be true or a list"},
+		"map value":               {`{"path":"/x"}`, "must be true or a list"},
+		"root entry":              {`[{"path":"/","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "whole host to the Python api"},
+		"double slash root":       {`[{"path":"//","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "literal /path"},
+		"double slash inside":     {`[{"path":"/api//v1","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "literal /path"},
+		"dot segment":             {`[{"path":"/api/../x","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "literal /path"},
+		"root entry only":         {`[{"path":"/","pathType":"Prefix"}]`, "whole host to the Python api"},
+		"duplicate entry":         {`[{"path":"/graphql","pathType":"Prefix"},{"path":"/graphql","pathType":"Exact"},{"path":"/api/v1/internal","pathType":"Prefix"}]`, "duplicates another rule"},
+		"entry repeats host path": {`[{"path":"/api/v1/internal","pathType":"Prefix"},{"path":"/","pathType":"Exact"}]`, "whole host to the Python api"},
+		"null value":              {`null`, "must be true or a list"},
+		"zero value":              {`0`, "must be true or a list"},
+		"empty string value":      {`""`, "must be true or a list"},
+	} {
+		hosts := `[{"host":"h","pythonAllowList":` + c.list + `,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
+		o, err := render(hosts)
+		if err == nil || !strings.Contains(o, c.want) {
+			t.Errorf("%s: want render failure containing %q, got err=%v\n%s", name, c.want, err, o)
+		}
+	}
+	// An allow-list path that repeats one of the host's own paths is refused (two rules on one path).
+	dup := `[{"host":"h","pythonAllowList":[{"path":"/graphql","pathType":"Prefix"},{"path":"/api/v1/internal","pathType":"Prefix"}],` +
+		`"paths":[{"path":"/","pathType":"Prefix","service":"go-api"},{"path":"/graphql","pathType":"Prefix","service":"web"}]}]`
+	if o, err := render(dup); err == nil || !strings.Contains(o, "duplicates another rule") {
+		t.Errorf("an allow-list path repeating a host path must fail the render: err=%v\n%s", err, o)
+	}
+}

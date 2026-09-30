@@ -25,6 +25,13 @@
 // header UNCHANGED does not meet the contract: no peer-based rule can tell its
 // client-written last hop from a real one, so do not list such a proxy.
 //
+// Every address in TRUSTED_PROXIES is believed to write a correct chain, and a
+// hop inside the list is skipped as "a proxy" whoever really sent it (r2 finding).
+// So list proxy addresses only, as narrowly as the network allows: an untrusted
+// client whose own address falls inside a listed CIDR appears to the walk as a
+// proxy hop, and the entries left of it -- which it wrote -- then win. A whole
+// pod CIDR therefore trusts every pod in it as a proxy.
+//
 // Addresses come back canonical (IPv4-mapped IPv6 unmapped, zone, port and
 // brackets dropped) so one client cannot split across several bucket keys.
 package clientip

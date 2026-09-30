@@ -63,6 +63,9 @@ func TestFromRequest(t *testing.T) {
 		// client's header unchanged is believed. This documents the limit; it is not
 		// a behaviour to rely on.
 		{"trust contract: pass-through proxy's last hop is believed", "10.0.0.5", "10.0.0.5:4000", []string{"6.6.6.6"}, "", "6.6.6.6"},
+		// Trust-contract pin (r2): a client whose own address is inside a listed CIDR
+		// is skipped as a proxy hop, so what it wrote further left is believed.
+		{"trust contract: client inside the trusted CIDR is skipped as a proxy", "10.42.0.0/16", "10.42.0.5:4000", []string{"198.51.100.77, 10.42.7.9"}, "", "198.51.100.77"},
 		{"cidr boundary: just outside is untrusted", "10.0.0.0/30", "10.0.0.5:4000", []string{"198.51.100.7"}, "", "10.0.0.5"},
 		{"no peer -> empty", "10.0.0.5", "", []string{"198.51.100.7"}, "", ""},
 		{"non-ip peer keyed on raw text, headers ignored", "10.0.0.5", "@:0", []string{"198.51.100.7"}, "", "@"},

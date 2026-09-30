@@ -3,6 +3,7 @@ internal/apiservice/admin	TestCredentialDeleteVenueOracle	61
 internal/apiservice/admin	TestGovernanceRoutesVenueOracle	80
 internal/apiservice/admin	TestImpersonationStartStopMatchesThePythonAPI	63
 internal/apiservice/admin	TestImpersonationTTLConfigMatchesThePythonAPI	120
+internal/apiservice/admin	TestLLMSettingsDeleteClearsDerivedRows	60
 internal/apiservice/admin	TestLLMSettingsReadinessRouteSuccessPath	82
 internal/apiservice/admin	TestLLMSettingsRoutesVenueOracle	91
 internal/apiservice/admin	TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle	69

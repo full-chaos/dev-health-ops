@@ -1009,7 +1009,7 @@ func TestMCPEveryStageOfTheDocumentPathIsBoundedUnderTheBodyCap(t *testing.T) {
 		{"body read", "cap+1 bytes", strings.Repeat("x", 16*1024+1), http.StatusRequestEntityTooLarge, mcpReasonBodyTooLarge},
 		{"json decode", "7000-deep variables", `{"query":"query X($input: HotspotsInput!){hotspots(input:$input){rows{filePath}}}","variables":{"input":` + strings.Repeat("[", 7000) + strings.Repeat("]", 7000) + `}}`, http.StatusBadRequest, mcpReasonInvalidVariables},
 		{"parse", "4000 directives", mcpBody(t, "query X { hotspots(input:{}) "+strings.Repeat("@a ", 4000)+" { rows { filePath } } }", nil), http.StatusBadRequest, mcpReasonInvalidDocument},
-		{"node counts", "150-fragment chain", mcpBody(t, chain, nil), http.StatusOK, ""},
+		{"node counts", "150-fragment chain", mcpBody(t, chain, nil), http.StatusBadRequest, mcpReasonComplexity},
 		{"raw expansion", "149-deep doubling", mcpBody(t, doubling(149), nil), http.StatusBadRequest, mcpReasonComplexity},
 		{"validate", "70 overlapping fields", mcpBody(t, "query X($input: HotspotsInput!) { hotspots(input:$input) { "+strings.Repeat("rows{filePath} ", 70)+"} }", vars), http.StatusOK, ""},
 	}
@@ -1029,6 +1029,76 @@ func TestMCPEveryStageOfTheDocumentPathIsBoundedUnderTheBodyCap(t *testing.T) {
 		}
 		if rec.Code != c.status {
 			t.Errorf("%s / %s: status %d, want %d; body %.200s", c.stage, c.name, rec.Code, c.status, rec.Body.String())
+		}
+	}
+}
+
+// Delta 5 (D3610): the fragment graph is sized exactly, by memoised DP over
+// every node kind, before any stage that walks spreads. One cell per shape
+// that amplifies or could hide amplification; each asserts the work bound's
+// refusal reason, wall time is only a 5 s backstop.
+func TestMCPFragmentGraphIsSizedExactlyBeforeAnyStageWalksIt(t *testing.T) {
+	spreadDoubling := func(n int, leaf string) string {
+		q := "query { ...F0 }\n"
+		for i := 0; i < n; i++ {
+			q += fmt.Sprintf("fragment F%d on Query { ...F%d ...F%d }\n", i, i+1, i+1)
+		}
+		return q + fmt.Sprintf("fragment F%d on Query { %s }", n, leaf)
+	}
+	mixedDoubling := func(n int) string {
+		q := "query { ...F0 }\n"
+		for i := 0; i < n; i++ {
+			q += fmt.Sprintf("fragment F%d on Query { __typename ... on Query { ...F%d } ...F%d }\n", i, i+1, i+1)
+		}
+		return q + fmt.Sprintf("fragment F%d on Query { __typename }", n)
+	}
+	fieldsDoubling := func(n int) string {
+		q := "query { __type(name: \"Query\") { ...F0 } }\n"
+		for i := 0; i < n; i++ {
+			q += fmt.Sprintf("fragment F%d on __Type { ofType { ...F%d } ofType { ...F%d } }\n", i, i+1, i+1)
+		}
+		return q + fmt.Sprintf("fragment F%d on __Type { name }", n)
+	}
+	inlineChain := "query { " + strings.Repeat("... on Query { ", 60) + "__typename" + strings.Repeat(" }", 60) + " }"
+	deepChain := "query { ...F0 }\n"
+	for i := 0; i < 60; i++ {
+		deepChain += fmt.Sprintf("fragment F%d on Query { ...F%d }\n", i, i+1)
+	}
+	deepChain += "fragment F60 on Query { __typename }"
+	vars := mcpHotspotsVariables(mcpTestOrg)
+	cases := []struct {
+		name, query string
+		vars        map[string]any
+		status      int
+		reason      string
+	}{
+		{"spread-only doubling, unknown leaf (n=22)", spreadDoubling(22, "...Missing"), nil, http.StatusBadRequest, mcpReasonInvalidDocument},
+		{"spread-only doubling, unknown leaf (n=60)", spreadDoubling(60, "...Missing"), nil, http.StatusBadRequest, mcpReasonInvalidDocument},
+		{"spread-only doubling, field leaf (n=60)", spreadDoubling(60, "__typename"), nil, http.StatusBadRequest, mcpReasonComplexity},
+		{"mixed doubling (n=40)", mixedDoubling(40), nil, http.StatusBadRequest, mcpReasonComplexity},
+		{"fields-only doubling (n=60)", fieldsDoubling(60), nil, http.StatusBadRequest, mcpReasonComplexity},
+		{"inline-only chain deeper than the level cap", inlineChain, nil, http.StatusBadRequest, mcpReasonComplexity},
+		{"deep fragment chain deeper than the level cap", deepChain, nil, http.StatusBadRequest, mcpReasonComplexity},
+		{"direct cycle", "query { ...F } fragment F on Query { ...F }", nil, http.StatusBadRequest, mcpReasonInvalidDocument},
+		{"indirect cycle", "query { ...A } fragment A on Query { ...B } fragment B on Query { ...A }", nil, http.StatusBadRequest, mcpReasonInvalidDocument},
+		{"unknown target", "query { ...Nope }", nil, http.StatusBadRequest, mcpReasonInvalidDocument},
+		{"wide but legal: 70 fields", "query X($input: HotspotsInput!) { hotspots(input:$input) { " + strings.Repeat("rows{filePath} ", 70) + "} }", vars, http.StatusOK, ""},
+		{"legal: one fragment used twice", "query X($input: HotspotsInput!) { a: hotspots(input:$input) { ...R } b: hotspots(input:$input) { ...R } } fragment R on HotspotsResult { rows { filePath } }", vars, http.StatusOK, ""},
+	}
+	l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
+	for _, c := range cases {
+		started := time.Now()
+		rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, c.query, c.vars))
+		if elapsed := time.Since(started); elapsed > 5*time.Second {
+			t.Errorf("%s: took %s", c.name, elapsed)
+		}
+		if rec.Code != c.status {
+			t.Errorf("%s: status %d, want %d; body %.200s", c.name, rec.Code, c.status, rec.Body.String())
+		}
+		if c.reason != "" {
+			if reason, _ := mcpReason(t, rec); reason != c.reason {
+				t.Errorf("%s: reason %q, want %q; body %.200s", c.name, reason, c.reason, rec.Body.String())
+			}
 		}
 	}
 }

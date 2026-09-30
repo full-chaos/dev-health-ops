@@ -115,6 +115,15 @@ const (
 
 // mcpCallerClass is the caller_class telemetry value. The class comes from
 // WHERE the request arrived (internalidentity.MCP), never from a header.
+// The expanded-document bounds of mcpFragmentGraphCheck, as multiples of the
+// complexity and depth caps: every node kind counts (a spread and an inline
+// fragment are nodes, not only fields), and a legitimate field sits under at
+// most a spread or an inline fragment.
+const (
+	mcpExpandedNodeFactor  = 4
+	mcpExpandedDepthFactor = 4
+)
+
 const mcpCallerClass = "mcp"
 
 // mcpRootFieldAllowlist is the ceiling of what the MCP class may ever call:
@@ -450,17 +459,16 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if raw, parseErr := parser.ParseQuery(&ast.Source{Input: payload.Query}); parseErr != nil {
 		refuse(http.StatusBadRequest, mcpReasonInvalidDocument, "the document does not parse")
 		return
-		// The validator's cost is super-linear in the EXPANDED document (its
-		// overlapping-fields rule compares the fields of every fragment use:
-		// 1,683 bytes of self-doubling fragments on __Type took 15.4 s with the
-		// unexpanded counts above all within 150, r3 on #3425). So bound the
-		// expansion of every operation and every fragment definition on the raw,
-		// unvalidated tree first: each stops at the first field past the cap.
 	} else if !mcpDocumentNodesWithin(raw, h.limits.complexity) {
 		refuse(http.StatusBadRequest, mcpReasonComplexity, fmt.Sprintf("the document holds more than %d fields, fragment spreads, inline fragments or fragment definitions, which exceeds the complexity limit of %d", h.limits.complexity, h.limits.complexity))
 		return
-	} else if !mcpRawExpansionWithin(raw, h.limits.complexity) {
-		refuse(http.StatusBadRequest, mcpReasonComplexity, fmt.Sprintf("the document expands to more than %d fields, which exceeds the complexity limit of %d", h.limits.complexity, h.limits.complexity))
+	} else if reason, message := mcpFragmentGraphCheck(raw, h.limits); reason != "" {
+		// Before ANY stage that walks spreads, the validator included: its
+		// cost is super-linear in the EXPANDED document (r3 on #3425: 1.7 KB
+		// of self-doubling fragments took 15 s to validate; 0.9 KB of
+		// field-less spread-only doubling took 4.5 s). The check is exact and
+		// O(document), so no doubling shape passes it.
+		refuse(http.StatusBadRequest, reason, message)
 		return
 	}
 	schema := h.es.Schema()
@@ -693,20 +701,96 @@ func mcpDocumentNodesWithin(doc *ast.QueryDocument, limit int) bool {
 	return true
 }
 
-// mcpRawExpansionWithin applies mcpExpandedFieldsWithin to every operation and
-// every fragment definition of a parsed, not yet validated document.
-func mcpRawExpansionWithin(doc *ast.QueryDocument, limit int) bool {
+// mcpFragmentGraphCheck computes, exactly and in time linear in the
+// document, the fully expanded size and depth of every operation and every
+// fragment definition of a parsed, not yet validated document, by memoised
+// dynamic programming over the fragment graph:
+//
+//	size(set)  = sum over nodes of 1 + size(children)        (field, inline fragment)
+//	           + 1 + size(target fragment)                   (fragment spread)
+//	depth(set) = 1 + max over nodes of depth(children / target fragment)
+//
+// Every node kind counts, so a fragment graph that expands without reaching a
+// field is bounded too. Sizes saturate at the cap + 1, so nothing overflows
+// and nothing is computed past the cap. A cycle or an unknown spread target is
+// refused as an invalid document (the validator would refuse both, but only
+// after walking them). It returns the refusal reason and message, or "".
+func mcpFragmentGraphCheck(doc *ast.QueryDocument, limits mcpLimits) (reason, message string) {
+	maxNodes, maxDepth := limits.complexity*mcpExpandedNodeFactor, limits.depth*mcpExpandedDepthFactor
+	type result struct{ size, depth int }
+	const inProgress = -1
+	memo := map[string]result{}
+	state := map[string]int{} // fragment name -> inProgress / done
+	var bad string
+	var walk func(set ast.SelectionSet) result
+	walkFragment := func(name string) result {
+		if state[name] == inProgress {
+			bad = fmt.Sprintf("fragment %q spreads itself, directly or through other fragments", name)
+			return result{}
+		}
+		if r, ok := memo[name]; ok {
+			return r
+		}
+		fragment := doc.Fragments.ForName(name)
+		if fragment == nil {
+			bad = fmt.Sprintf("fragment %q is spread but not defined", name)
+			return result{}
+		}
+		state[name] = inProgress
+		r := walk(fragment.SelectionSet)
+		delete(state, name)
+		memo[name] = r
+		return r
+	}
+	walk = func(set ast.SelectionSet) result {
+		total, deepest := 0, 0
+		for _, selection := range set {
+			var child result
+			switch node := selection.(type) {
+			case *ast.Field:
+				child = walk(node.SelectionSet)
+			case *ast.InlineFragment:
+				child = walk(node.SelectionSet)
+			case *ast.FragmentSpread:
+				child = walkFragment(node.Name)
+			}
+			if bad != "" {
+				return result{}
+			}
+			total += 1 + child.size
+			if total > maxNodes {
+				total = maxNodes + 1
+			}
+			if child.depth > deepest {
+				deepest = child.depth
+			}
+		}
+		return result{size: total, depth: deepest + 1}
+	}
+	over := false
+	check := func(set ast.SelectionSet) {
+		if r := walk(set); bad == "" && (r.size > maxNodes || r.depth > maxDepth) {
+			over = true
+		}
+	}
 	for _, op := range doc.Operations {
-		if !mcpExpandedFieldsWithin(op.SelectionSet, doc.Fragments, limit) {
-			return false
+		if check(op.SelectionSet); bad != "" || over {
+			break
 		}
 	}
 	for _, fragment := range doc.Fragments {
-		if !mcpExpandedFieldsWithin(fragment.SelectionSet, doc.Fragments, limit) {
-			return false
+		if bad != "" || over {
+			break
 		}
+		check(fragment.SelectionSet)
 	}
-	return true
+	if bad != "" {
+		return mcpReasonInvalidDocument, bad
+	}
+	if over {
+		return mcpReasonComplexity, fmt.Sprintf("the document expands to more than %d nodes or %d levels, which exceeds the limit", maxNodes, maxDepth)
+	}
+	return "", ""
 }
 
 // mcpExpandedFieldsWithin reports whether the selection set, expanded

@@ -347,7 +347,7 @@ func TestNewInvestmentSunburstGetHandlerInvalidLimitIs422(t *testing.T) {
 // are unset.
 func TestBuildInvestmentRouteStaysUnmountedWithoutConfig(t *testing.T) {
 	t.Setenv("CLICKHOUSE_URI", "")
-	handler, cleanup, ok, err := buildInvestmentRoute(os.Getenv)
+	handler, cleanup, ok, err := buildInvestmentRoute(os.Getenv, nil)
 	if err != nil {
 		t.Fatalf("buildInvestmentRoute: %v", err)
 	}

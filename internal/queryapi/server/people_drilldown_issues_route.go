@@ -62,7 +62,7 @@ func loadPeopleDrilldownIssuesRouteConfig(getenv getenvFunc) (clickHouseURI, jwk
 // routeswitch Mux, and a cleanup function -- same "stay unmounted, don't
 // fail to build/start" contract every other optionally-configured route in
 // this binary follows.
-func buildPeopleDrilldownIssuesRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
+func buildPeopleDrilldownIssuesRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
 	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadPeopleDrilldownIssuesRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
@@ -78,7 +78,7 @@ func buildPeopleDrilldownIssuesRoute(getenv getenvFunc) (handler http.HandlerFun
 	// falls back to its pre-existing envelope-only behaviour. See
 	// buildEdgeVerifierFromEnv's own doc comment for the pod env
 	// contract this reads.
-	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv)
+	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv, edgeUsers)
 	if err != nil {
 		return nil, nil, false, err
 	}

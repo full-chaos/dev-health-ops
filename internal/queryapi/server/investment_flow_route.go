@@ -83,7 +83,7 @@ func loadInvestmentFlowRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, 
 // routeswitch Mux, and one cleanup function -- same "stay unmounted,
 // don't fail to build/start" contract every other route file in this
 // package follows.
-func buildInvestmentFlowRoute(getenv getenvFunc) (flowHandler, repoTeamHandler http.HandlerFunc, cleanup func(), ok bool, err error) {
+func buildInvestmentFlowRoute(getenv getenvFunc, edgeUsers edgeUserStore) (flowHandler, repoTeamHandler http.HandlerFunc, cleanup func(), ok bool, err error) {
 	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadInvestmentFlowRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, nil, false, nil
@@ -99,7 +99,7 @@ func buildInvestmentFlowRoute(getenv getenvFunc) (flowHandler, repoTeamHandler h
 	// falls back to its pre-existing envelope-only behaviour. See
 	// buildEdgeVerifierFromEnv's own doc comment for the pod env
 	// contract this reads.
-	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv)
+	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv, edgeUsers)
 	if err != nil {
 		return nil, nil, nil, false, err
 	}

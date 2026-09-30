@@ -237,6 +237,16 @@ func Build(get func(string) string) (*Plane, error) {
 		return nil, err
 	}
 
+	// The ONE live users-row store (and its one Postgres pool) behind every
+	// edge-verified REST route below (CHAOS-6290): built here, once, and passed
+	// to each route builder; never one pool per route.
+	edgeUsers, closeEdgeUsers, err := newEdgeUserStore(getenv)
+	if err != nil {
+		log.Printf("query-api: build edge users store: %v", err)
+		return fail(err)
+	}
+	cleanups = append(cleanups, closeEdgeUsers)
+
 	// Constructed to prove the schema/resolver pair builds and links
 	// correctly (see newExecutableSchemaHandler's doc comment); not
 	// mounted on any mux route in this Wave.
@@ -336,7 +346,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// -- see investment_explain_route.go's package doc comment for the
 	// reachability story (5b: a separate Python-side REST forwarder,
 	// not this file's job) and this route's documented scope gaps.
-	if explainHandler, explainCleanup, explainOK, explainErr := buildInvestmentExplainRoute(getenv); explainErr != nil {
+	if explainHandler, explainCleanup, explainOK, explainErr := buildInvestmentExplainRoute(getenv, edgeUsers); explainErr != nil {
 		log.Printf("query-api: build /api/v1/investment/explain route: %v", explainErr)
 		return fail(explainErr)
 	} else if explainOK {
@@ -360,7 +370,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// (default OFF via GO_API_QUADRANT_ENABLED) -- see quadrant_route.go's
 	// package doc comment for the reachability story and internal/quadrant
 	// for the ported resolver and its documented developer/person scope gap.
-	if quadrantHandler, quadrantCleanup, quadrantOK, quadrantErr := buildQuadrantRoute(getenv); quadrantErr != nil {
+	if quadrantHandler, quadrantCleanup, quadrantOK, quadrantErr := buildQuadrantRoute(getenv, edgeUsers); quadrantErr != nil {
 		log.Printf("query-api: build /api/v1/quadrant route: %v", quadrantErr)
 		return fail(quadrantErr)
 	} else if quadrantOK {
@@ -377,7 +387,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// (default OFF via GO_API_HEATMAP_ENABLED) -- see heatmap_route.go's
 	// package doc comment for the reachability story and internal/heatmap
 	// for the ported resolver.
-	if heatmapHandler, heatmapCleanup, heatmapOK, heatmapErr := buildHeatmapRoute(getenv); heatmapErr != nil {
+	if heatmapHandler, heatmapCleanup, heatmapOK, heatmapErr := buildHeatmapRoute(getenv, edgeUsers); heatmapErr != nil {
 		log.Printf("query-api: build /api/v1/heatmap route: %v", heatmapErr)
 		return fail(heatmapErr)
 	} else if heatmapOK {
@@ -395,7 +405,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// package doc comment for the reachability story and internal/sankey
 	// for the ported resolver and its declared ReplacingMergeTree-dedup
 	// notes.
-	if sankeyHandler, sankeyCleanup, sankeyOK, sankeyErr := buildSankeyRoute(getenv); sankeyErr != nil {
+	if sankeyHandler, sankeyCleanup, sankeyOK, sankeyErr := buildSankeyRoute(getenv, edgeUsers); sankeyErr != nil {
 		log.Printf("query-api: build /api/v1/sankey route: %v", sankeyErr)
 		return fail(sankeyErr)
 	} else if sankeyOK {
@@ -413,7 +423,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// package doc comment for the reachability story and internal/home
 	// for the ported resolver and its declared ReplacingMergeTree-dedup
 	// notes.
-	if homeHandler, homeCleanup, homeOK, homeErr := buildHomeRoute(getenv); homeErr != nil {
+	if homeHandler, homeCleanup, homeOK, homeErr := buildHomeRoute(getenv, edgeUsers); homeErr != nil {
 		log.Printf("query-api: build /api/v1/home route: %v", homeErr)
 		return fail(homeErr)
 	} else if homeOK {
@@ -432,7 +442,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// story and internal/opportunities for the ported card-building
 	// logic, which composes internal/home's own exported builder rather
 	// than reading any table of its own.
-	if opportunitiesHandler, opportunitiesCleanup, opportunitiesOK, opportunitiesErr := buildOpportunitiesRoute(getenv); opportunitiesErr != nil {
+	if opportunitiesHandler, opportunitiesCleanup, opportunitiesOK, opportunitiesErr := buildOpportunitiesRoute(getenv, edgeUsers); opportunitiesErr != nil {
 		log.Printf("query-api: build /api/v1/opportunities route: %v", opportunitiesErr)
 		return fail(opportunitiesErr)
 	} else if opportunitiesOK {
@@ -452,7 +462,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// internal/investmentflow for the ported builders, their dynamic
 	// coverage-driven mode decision, and the declared ReplacingMergeTree
 	// dedup notes.
-	if flowHandler, flowRepoTeamHandler, flowCleanup, flowOK, flowErr := buildInvestmentFlowRoute(getenv); flowErr != nil {
+	if flowHandler, flowRepoTeamHandler, flowCleanup, flowOK, flowErr := buildInvestmentFlowRoute(getenv, edgeUsers); flowErr != nil {
 		log.Printf("query-api: build /api/v1/investment/flow routes: %v", flowErr)
 		return fail(flowErr)
 	} else if flowOK {
@@ -472,7 +482,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// filter_options_route.go's package doc comment for the reachability
 	// story and internal/filteroptions for the ported reader and its
 	// declared ReplacingMergeTree dedup fixes.
-	if filterOptionsHandler, filterOptionsCleanup, filterOptionsOK, filterOptionsErr := buildFilterOptionsRoute(getenv); filterOptionsErr != nil {
+	if filterOptionsHandler, filterOptionsCleanup, filterOptionsOK, filterOptionsErr := buildFilterOptionsRoute(getenv, edgeUsers); filterOptionsErr != nil {
 		log.Printf("query-api: build /api/v1/filters/options route: %v", filterOptionsErr)
 		return fail(filterOptionsErr)
 	} else if filterOptionsOK {
@@ -490,7 +500,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// investment_route.go's package doc comment for the reachability
 	// story and internal/investment for the ported builders and their
 	// declared ReplacingMergeTree-dedup/membership-scope notes.
-	if investmentHandler, investmentCleanup, investmentOK, investmentErr := buildInvestmentRoute(getenv); investmentErr != nil {
+	if investmentHandler, investmentCleanup, investmentOK, investmentErr := buildInvestmentRoute(getenv, edgeUsers); investmentErr != nil {
 		log.Printf("query-api: build /api/v1/investment route: %v", investmentErr)
 		return fail(investmentErr)
 	} else if investmentOK {
@@ -507,7 +517,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// (default OFF via GO_API_INVESTMENT_SUNBURST_ENABLED) -- see
 	// investment_route.go's package doc comment and internal/investment
 	// for the ported resolver.
-	if investmentSunburstHandler, investmentSunburstCleanup, investmentSunburstOK, investmentSunburstErr := buildInvestmentSunburstRoute(getenv); investmentSunburstErr != nil {
+	if investmentSunburstHandler, investmentSunburstCleanup, investmentSunburstOK, investmentSunburstErr := buildInvestmentSunburstRoute(getenv, edgeUsers); investmentSunburstErr != nil {
 		log.Printf("query-api: build /api/v1/investment/sunburst route: %v", investmentSunburstErr)
 		return fail(investmentSunburstErr)
 	} else if investmentSunburstOK {
@@ -525,7 +535,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// -- see drilldown_prs_route.go's package doc comment for the
 	// reachability story and internal/drilldown for the ported resolver
 	// and its documented ReplacingMergeTree-dedup/org-scope notes.
-	if drilldownPRsHandler, drilldownPRsCleanup, drilldownPRsOK, drilldownPRsErr := buildDrilldownPRsRoute(getenv); drilldownPRsErr != nil {
+	if drilldownPRsHandler, drilldownPRsCleanup, drilldownPRsOK, drilldownPRsErr := buildDrilldownPRsRoute(getenv, edgeUsers); drilldownPRsErr != nil {
 		log.Printf("query-api: build /api/v1/drilldown/prs route: %v", drilldownPRsErr)
 		return fail(drilldownPRsErr)
 	} else if drilldownPRsOK {
@@ -543,7 +553,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// workunits_route.go's package doc comment for the reachability story;
 	// business logic is internal/investmentexplain's own
 	// BuildWorkUnitInvestments, shared with POST /api/v1/investment/explain.
-	if workUnitsHandler, workUnitsCleanup, workUnitsOK, workUnitsErr := buildWorkUnitsRoute(getenv); workUnitsErr != nil {
+	if workUnitsHandler, workUnitsCleanup, workUnitsOK, workUnitsErr := buildWorkUnitsRoute(getenv, edgeUsers); workUnitsErr != nil {
 		log.Printf("query-api: build /api/v1/work-units route: %v", workUnitsErr)
 		return fail(workUnitsErr)
 	} else if workUnitsOK {
@@ -564,7 +574,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// than a keep-alive stream, and the rate-limiting gap it shares with
 	// every other ported route. The path pattern carries its
 	// {work_unit_id} wildcard, the same mechanism the people routes use.
-	if workUnitExplainHandler, workUnitExplainCleanup, workUnitExplainOK, workUnitExplainErr := buildWorkUnitExplainRoute(getenv); workUnitExplainErr != nil {
+	if workUnitExplainHandler, workUnitExplainCleanup, workUnitExplainOK, workUnitExplainErr := buildWorkUnitExplainRoute(getenv, edgeUsers); workUnitExplainErr != nil {
 		log.Printf("query-api: build /api/v1/work-units/{work_unit_id}/explain route: %v", workUnitExplainErr)
 		return fail(workUnitExplainErr)
 	} else if workUnitExplainOK {
@@ -582,7 +592,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// -- see drilldown_issues_route.go's package doc comment for the
 	// reachability story and internal/drilldown/issues.go for the ported
 	// resolver and its documented ReplacingMergeTree-dedup/org-scope notes.
-	if drilldownIssuesHandler, drilldownIssuesCleanup, drilldownIssuesOK, drilldownIssuesErr := buildDrilldownIssuesRoute(getenv); drilldownIssuesErr != nil {
+	if drilldownIssuesHandler, drilldownIssuesCleanup, drilldownIssuesOK, drilldownIssuesErr := buildDrilldownIssuesRoute(getenv, edgeUsers); drilldownIssuesErr != nil {
 		log.Printf("query-api: build /api/v1/drilldown/issues route: %v", drilldownIssuesErr)
 		return fail(drilldownIssuesErr)
 	} else if drilldownIssuesOK {
@@ -599,7 +609,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// via GO_API_PEOPLE_SEARCH_ENABLED) -- see people_route.go's package
 	// doc comment for the reachability story and internal/people for the
 	// ported resolver and its documented ReplacingMergeTree-dedup notes.
-	if peopleSearchHandler, peopleSearchCleanup, peopleSearchOK, peopleSearchErr := buildPeopleSearchRoute(getenv); peopleSearchErr != nil {
+	if peopleSearchHandler, peopleSearchCleanup, peopleSearchOK, peopleSearchErr := buildPeopleSearchRoute(getenv, edgeUsers); peopleSearchErr != nil {
 		log.Printf("query-api: build /api/v1/people route: %v", peopleSearchErr)
 		return fail(peopleSearchErr)
 	} else if peopleSearchOK {
@@ -617,7 +627,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// people_summary_route.go's package doc comment for the reachability
 	// story, the path-parameter mechanism and internal/people for the
 	// ported resolver.
-	if peopleSummaryHandler, peopleSummaryCleanup, peopleSummaryOK, peopleSummaryErr := buildPeopleSummaryRoute(getenv); peopleSummaryErr != nil {
+	if peopleSummaryHandler, peopleSummaryCleanup, peopleSummaryOK, peopleSummaryErr := buildPeopleSummaryRoute(getenv, edgeUsers); peopleSummaryErr != nil {
 		log.Printf("query-api: build %s route: %v", peopleSummaryPath, peopleSummaryErr)
 		return fail(peopleSummaryErr)
 	} else if peopleSummaryOK {
@@ -634,7 +644,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// entry (default OFF via GO_API_PEOPLE_METRIC_ENABLED) -- see
 	// people_metric_route.go's package doc comment for the reachability
 	// story and internal/people for the ported resolver.
-	if peopleMetricHandler, peopleMetricCleanup, peopleMetricOK, peopleMetricErr := buildPeopleMetricRoute(getenv); peopleMetricErr != nil {
+	if peopleMetricHandler, peopleMetricCleanup, peopleMetricOK, peopleMetricErr := buildPeopleMetricRoute(getenv, edgeUsers); peopleMetricErr != nil {
 		log.Printf("query-api: build %s route: %v", peopleMetricPath, peopleMetricErr)
 		return fail(peopleMetricErr)
 	} else if peopleMetricOK {
@@ -652,7 +662,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// -- see people_drilldown_prs_route.go's package doc comment for the
 	// reachability story and internal/people/drilldownprs.go for the ported
 	// resolver.
-	if peopleDrilldownPRsHandler, peopleDrilldownPRsCleanup, peopleDrilldownPRsOK, peopleDrilldownPRsErr := buildPeopleDrilldownPRsRoute(getenv); peopleDrilldownPRsErr != nil {
+	if peopleDrilldownPRsHandler, peopleDrilldownPRsCleanup, peopleDrilldownPRsOK, peopleDrilldownPRsErr := buildPeopleDrilldownPRsRoute(getenv, edgeUsers); peopleDrilldownPRsErr != nil {
 		log.Printf("query-api: build %s route: %v", peopleDrilldownPRsPath, peopleDrilldownPRsErr)
 		return fail(peopleDrilldownPRsErr)
 	} else if peopleDrilldownPRsOK {
@@ -671,7 +681,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// people_drilldown_issues_route.go's package doc comment for the
 	// reachability story and internal/people/drilldownissues.go for the
 	// ported resolver.
-	if peopleDrilldownIssuesHandler, peopleDrilldownIssuesCleanup, peopleDrilldownIssuesOK, peopleDrilldownIssuesErr := buildPeopleDrilldownIssuesRoute(getenv); peopleDrilldownIssuesErr != nil {
+	if peopleDrilldownIssuesHandler, peopleDrilldownIssuesCleanup, peopleDrilldownIssuesOK, peopleDrilldownIssuesErr := buildPeopleDrilldownIssuesRoute(getenv, edgeUsers); peopleDrilldownIssuesErr != nil {
 		log.Printf("query-api: build %s route: %v", peopleDrilldownIssuesPath, peopleDrilldownIssuesErr)
 		return fail(peopleDrilldownIssuesErr)
 	} else if peopleDrilldownIssuesOK {
@@ -709,7 +719,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// package doc comment for the reachability story and
 	// internal/explain for the ported resolver and its documented
 	// ReplacingMergeTree-dedup/org-scope notes.
-	if explainRESTHandler, explainRESTCleanup, explainRESTOK, explainRESTErr := buildExplainRoute(getenv); explainRESTErr != nil {
+	if explainRESTHandler, explainRESTCleanup, explainRESTOK, explainRESTErr := buildExplainRoute(getenv, edgeUsers); explainRESTErr != nil {
 		log.Printf("query-api: build /api/v1/explain route: %v", explainRESTErr)
 		return fail(explainRESTErr)
 	} else if explainRESTOK {
@@ -727,7 +737,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// package doc comment for the reachability story and internal/flame
 	// for the ported resolver and its documented ReplacingMergeTree-dedup
 	// notes.
-	if flameHandler, flameCleanup, flameOK, flameErr := buildFlameRoute(getenv); flameErr != nil {
+	if flameHandler, flameCleanup, flameOK, flameErr := buildFlameRoute(getenv, edgeUsers); flameErr != nil {
 		log.Printf("query-api: build /api/v1/flame route: %v", flameErr)
 		return fail(flameErr)
 	} else if flameOK {
@@ -745,7 +755,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// flame_aggregated_route.go's package doc comment for the
 	// reachability story and internal/aggflame for the ported resolver
 	// and its documented ReplacingMergeTree-dedup notes.
-	if flameAggHandler, flameAggCleanup, flameAggOK, flameAggErr := buildFlameAggregatedRoute(getenv); flameAggErr != nil {
+	if flameAggHandler, flameAggCleanup, flameAggOK, flameAggErr := buildFlameAggregatedRoute(getenv, edgeUsers); flameAggErr != nil {
 		log.Printf("query-api: build /api/v1/flame/aggregated route: %v", flameAggErr)
 		return fail(flameAggErr)
 	} else if flameAggOK {

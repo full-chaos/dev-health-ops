@@ -126,7 +126,7 @@ func loadInvestmentExplainRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPat
 // route's dependencies are not configured (same "stay unmounted, don't
 // fail to build/start" contract loadQueryRouteConfig's own doc comment
 // describes) -- main() only calls mux.HandleFunc when ok is true.
-func buildInvestmentExplainRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
+func buildInvestmentExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
 	clickHouseURI, jwksPath, issuer, audience, registryPostgresURI, cfgOK := loadInvestmentExplainRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
@@ -142,7 +142,7 @@ func buildInvestmentExplainRoute(getenv getenvFunc) (handler http.HandlerFunc, c
 	// falls back to its pre-existing envelope-only behaviour. See
 	// buildEdgeVerifierFromEnv's own doc comment for the pod env
 	// contract this reads.
-	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv)
+	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv, edgeUsers)
 	if err != nil {
 		return nil, nil, false, err
 	}

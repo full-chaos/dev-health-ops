@@ -106,7 +106,7 @@ func TestBuildInvestmentExplainRouteStaysUnmountedWithoutConfig(t *testing.T) {
 		t.Setenv(name, "")
 	}
 
-	handler, cleanup, ok, err := buildInvestmentExplainRoute(os.Getenv)
+	handler, cleanup, ok, err := buildInvestmentExplainRoute(os.Getenv, nil)
 	if err != nil {
 		t.Fatalf("buildInvestmentExplainRoute: %v", err)
 	}

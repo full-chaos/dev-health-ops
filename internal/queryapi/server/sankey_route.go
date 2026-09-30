@@ -77,7 +77,7 @@ func loadSankeyRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, 
 	return clickHouseURI, jwksPath, issuer, audience, true
 }
 
-func buildSankeyRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
+func buildSankeyRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
 	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadSankeyRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
@@ -93,7 +93,7 @@ func buildSankeyRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func
 	// falls back to its pre-existing envelope-only behaviour. See
 	// buildEdgeVerifierFromEnv's own doc comment for the pod env
 	// contract this reads.
-	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv)
+	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv, edgeUsers)
 	if err != nil {
 		return nil, nil, false, err
 	}

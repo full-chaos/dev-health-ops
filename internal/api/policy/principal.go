@@ -107,6 +107,17 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string) (*User, 
 		a.logger.DebugContext(ctx, "api access token refused", slog.String("reason", edgetoken.ReasonOf(err)))
 		return nil, errRejected
 	}
+	return a.CheckClaims(ctx, claims)
+}
+
+// CheckClaims is Authenticate's second half: the live users-row checks on
+// claims a caller has already verified with the SAME edgetoken.Verifier
+// (found, is_active, token_version). A caller that verifies the token itself,
+// to keep its own per-reason telemetry, calls this instead of Authenticate so
+// the decision stays one implementation across planes. It returns (nil,
+// errRejected) for every refusal and a wrapped store error (ErrUnavailable or
+// other) when the lookup fails; it never treats a failed lookup as a pass.
+func (a *Authenticator) CheckClaims(ctx context.Context, claims jwt.MapClaims) (*User, error) {
 	user, err := userFromClaims(claims)
 	if err != nil {
 		return nil, err
@@ -255,6 +266,13 @@ var bearerChallenge = http.Header{"Www-Authenticate": []string{"Bearer"}}
 // authFailure writes get_current_user's response for err: 401 for a
 // refusal, 503 for ErrUnavailable, 500 for anything else.
 func authFailure(w http.ResponseWriter, message string, err error) {
+	WriteAuthFailure(w, message, err)
+}
+
+// WriteAuthFailure is authFailure for a caller outside this package that
+// authenticates with CheckClaims: the same 401/503/500 split, so a store
+// failure answers identically on every plane.
+func WriteAuthFailure(w http.ResponseWriter, message string, err error) {
 	switch {
 	case err == nil, errors.Is(err, errRejected):
 		WriteDetail(w, http.StatusUnauthorized, ErrorDetail(message), bearerChallenge)

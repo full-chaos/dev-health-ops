@@ -17,6 +17,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
@@ -223,7 +224,7 @@ func validTestEdgeClaims(orgID string) jwt.MapClaims {
 // ends up in authctx.Claims -- get_current_user derives org_id the same
 // way, from the validated claims alone, never a second lookup.
 func TestAuthenticateRESTRequestEdgeTokenAccepted(t *testing.T) {
-	edgeVerifier, err := principal.NewEdgeVerifier(edgeTestSecret, "dev-health-ops", "dev-health-api")
+	edgeVerifier, err := principal.NewEdgeVerifier(edgeTestSecret, "dev-health-ops", "dev-health-api", &fakeEdgeUsers{state: policy.UserState{IsActive: true}, found: true})
 	if err != nil {
 		t.Fatalf("NewEdgeVerifier: %v", err)
 	}
@@ -250,7 +251,7 @@ func TestAuthenticateRESTRequestEdgeTokenAccepted(t *testing.T) {
 // envelope rejection produces -- get_current_user never distinguishes
 // WHY a token was rejected in its response, only THAT it was.
 func TestAuthenticateRESTRequestEdgeTokenRejected(t *testing.T) {
-	edgeVerifier, err := principal.NewEdgeVerifier(edgeTestSecret, "dev-health-ops", "dev-health-api")
+	edgeVerifier, err := principal.NewEdgeVerifier(edgeTestSecret, "dev-health-ops", "dev-health-api", &fakeEdgeUsers{state: policy.UserState{IsActive: true}, found: true})
 	if err != nil {
 		t.Fatalf("NewEdgeVerifier: %v", err)
 	}

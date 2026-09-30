@@ -25,10 +25,13 @@ package server
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
@@ -201,6 +204,18 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 			edgeVerifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
 			claims, err := edgeVerifier.Verify(edgeVerifyCtx, token)
 			if err != nil {
+				// A failed users-row lookup is not a credential refusal
+				// (CHAOS-6290): it answers as the Go api's guard does for the
+				// same store failure (policy.WriteAuthFailure: 503 for
+				// ErrUnavailable, 500 otherwise, guard.go currentUser), never
+				// as a pass, and the cause is logged before the response.
+				var rejection *edgetoken.Rejection
+				if !errors.As(err, &rejection) && !policy.IsRefusal(err) {
+					log.Printf("query-api: %s: edge token users lookup failed: request_id=%s unavailable=%t",
+						component, envelopeRequestID(r), errors.Is(err, policy.ErrUnavailable))
+					policy.WriteAuthFailure(w, "", err)
+					return authctx.Claims{}, false
+				}
 				writeRESTUnauthorized(w, r, component, "Invalid or expired token")
 				return authctx.Claims{}, false
 			}

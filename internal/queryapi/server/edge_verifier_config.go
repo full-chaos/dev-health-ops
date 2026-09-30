@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -64,16 +65,50 @@ const (
 // hard error: unlike "not configured at all", that is an operator typo
 // this binary can catch at start, the same fail-fast NewVerifier already
 // applies to the envelope's own issuer/audience.
-func buildEdgeVerifierFromEnv(getenv getenvFunc) (*principal.EdgeVerifier, error) {
+func buildEdgeVerifierFromEnv(getenv getenvFunc, users edgeUserStore) (*principal.EdgeVerifier, error) {
 	secret, issuer, audience := edgeJWTConfigFromEnv(getenv)
 	if secret == "" {
 		return nil, nil
 	}
-	edgeVerifier, err := principal.NewEdgeVerifier(secret, issuer, audience)
+	// CHAOS-6290: an edge verifier that cannot read the live users row would
+	// accept the token of a deactivated user, so the secret without a store is
+	// a build error (newEdgeUserStore builds the store, and refuses first when
+	// GO_API_REGISTRY_POSTGRES_URI is absent), never a silent JWT-only verifier.
+	edgeVerifier, err := principal.NewEdgeVerifier(secret, issuer, audience, users)
 	if err != nil {
 		return nil, fmt.Errorf("build edge access-token verifier: %w", err)
 	}
 	return edgeVerifier, nil
+}
+
+// edgeUserStore is the live users-row source every edge-verified REST route
+// shares: policy.Store, the same interface (and PGStore implementation) the Go
+// api authenticates with.
+type edgeUserStore = policy.Store
+
+// newEdgeUserStore builds the ONE Postgres pool behind every edge-verified
+// REST route's live users-row check (CHAOS-6290), once per Build, and hands the
+// resulting store to each route builder. It returns (nil, no-op, nil) when
+// GO_API_EDGE_JWT_SECRET is absent (no edge verifier is built, so nothing reads
+// users). With the secret set and GO_API_REGISTRY_POSTGRES_URI empty it returns
+// an error: fail closed, never a verifier that skips the check. The pool is
+// lazy (pgxpool.New does not dial) and reads through policy.PGStore, whose
+// UserState selects is_active, is_superuser and token_version only -- never a
+// credential column.
+func newEdgeUserStore(getenv getenvFunc) (edgeUserStore, func(), error) {
+	noop := func() {}
+	if secret, _, _ := edgeJWTConfigFromEnv(getenv); secret == "" {
+		return nil, noop, nil
+	}
+	uri := getenv("GO_API_REGISTRY_POSTGRES_URI")
+	if uri == "" {
+		return nil, noop, fmt.Errorf("build edge users store: %s is set but GO_API_REGISTRY_POSTGRES_URI is empty; the edge token cannot be accepted without a live users check", edgeJWTSecretEnvVar)
+	}
+	pool, err := pgxpool.New(context.Background(), uri)
+	if err != nil {
+		return nil, noop, fmt.Errorf("build edge users store: %w", err)
+	}
+	return policy.PGStore{Pool: pool}, pool.Close, nil
 }
 
 // edgeJWTConfigFromEnv resolves the shared GO_API_EDGE_JWT_* trio, applying

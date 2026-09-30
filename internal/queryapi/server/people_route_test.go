@@ -272,7 +272,7 @@ func TestBuildPeopleSearchRouteEntryHandlerRejectsNonGET(t *testing.T) {
 	t.Setenv("GO_API_ENVELOPE_ISSUER", "test-issuer")
 	t.Setenv("GO_API_ENVELOPE_AUDIENCE", "test-audience")
 
-	handler, cleanup, ok, err := buildPeopleSearchRoute(os.Getenv)
+	handler, cleanup, ok, err := buildPeopleSearchRoute(os.Getenv, nil)
 	if err != nil {
 		t.Fatalf("buildPeopleSearchRoute: %v", err)
 	}

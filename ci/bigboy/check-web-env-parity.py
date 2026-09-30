@@ -33,6 +33,8 @@ import yaml
 CLASSIFIED: dict[str, str] = {
     "BACKEND_URL": "overlay",
     "AUTH_URL": "overlay",
+    "TRUST_PROXY": "overlay",
+    "TRUSTED_PROXY_HOPS": "overlay",
     "ACR_API_ORIGIN": "base: compose.yml sets venue-local ACR wiring; ACR is not a bigboy parity target",
     "ACR_WEB_ASSERTION_ISSUER": "base: venue-local ACR wiring (compose.yml)",
     "ACR_WEB_ASSERTION_AUDIENCE": "base: venue-local ACR wiring (compose.yml)",
@@ -44,6 +46,11 @@ CLASSIFIED: dict[str, str] = {
 EXPECTED_OVERLAY_VALUES: dict[str, str] = {
     "BACKEND_URL": "http://traefik:3000",
     "AUTH_URL": "https://www.commanderkeen.dev",
+    # CHAOS-7205 (deploy #318): web derives the rate-limit client IP from the
+    # TRUSTED_PROXY_HOPS-th X-Forwarded-For entry from the right. Bigboy's one trusted proxy
+    # is traefik, which appends the peer it saw, so the same literals prod uses hold here.
+    "TRUST_PROXY": "true",
+    "TRUSTED_PROXY_HOPS": "1",
 }
 
 

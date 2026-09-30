@@ -29,3 +29,10 @@ services:
       # every session response -- so a real user's logout redirected to that literal bind address
       # instead of signing them out anywhere useful.
       AUTH_URL: https://www.commanderkeen.dev
+      # CHAOS-7205 / deploy #318 (CHAOS-7230): prod web sets both, so bigboy must too, or the
+      # web-path client IP (rate-limit key) is taken from the wrong X-Forwarded-For entry and
+      # the check-web-env-parity.py STEP fails. Web reads the TRUSTED_PROXY_HOPS-th entry from
+      # the RIGHT (src/lib/client-ip.ts), never the client-writable leftmost one; traefik is the
+      # one trusted proxy here and appends the peer it saw, exactly one hop like prod's ingress.
+      TRUST_PROXY: "true"
+      TRUSTED_PROXY_HOPS: "1"

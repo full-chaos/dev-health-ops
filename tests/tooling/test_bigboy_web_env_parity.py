@@ -21,6 +21,8 @@ PROD: dict[str, Any] = {
             "env": {"BACKEND_URL": "http://ingress"},
             "extraEnv": [
                 {"name": "AUTH_URL", "value": "https://prod.example"},
+                {"name": "TRUST_PROXY", "value": "true"},
+                {"name": "TRUSTED_PROXY_HOPS", "value": "1"},
                 {"name": "ACR_API_ORIGIN", "value": "x"},
                 {"name": "ACR_WEB_ASSERTION_ISSUER", "value": "x"},
                 {"name": "ACR_WEB_ASSERTION_AUDIENCE", "value": "x"},
@@ -106,3 +108,35 @@ def test_empty_prod_web_env_is_not_a_pass(tmp_path: Path) -> None:
         _mod().check(
             _write(tmp_path, "v.yaml", {"ops": {"web": {}}}), str(OVERLAY), None
         )
+
+
+@pytest.mark.parametrize("name", ["TRUST_PROXY", "TRUSTED_PROXY_HOPS"])
+def test_missing_overlay_trust_proxy_name_fails(tmp_path: Path, name: str) -> None:
+    overlay = _mod().load_compose_yaml(OVERLAY.read_text(encoding="utf-8"))
+    del overlay["services"]["web"]["environment"][name]
+    findings = _mod().check(
+        _write(tmp_path, "v.yaml", PROD), _write(tmp_path, "o.yml", overlay), None
+    )
+    assert any(name in f and "missing" in f for f in findings)
+
+
+@pytest.mark.parametrize(
+    ("name", "wrong"), [("TRUST_PROXY", "false"), ("TRUSTED_PROXY_HOPS", "2")]
+)
+def test_wrong_overlay_trust_proxy_value_fails(
+    tmp_path: Path, name: str, wrong: str
+) -> None:
+    overlay = _mod().load_compose_yaml(OVERLAY.read_text(encoding="utf-8"))
+    overlay["services"]["web"]["environment"][name] = wrong
+    findings = _mod().check(
+        _write(tmp_path, "v.yaml", PROD), _write(tmp_path, "o.yml", overlay), None
+    )
+    assert any(name in f and "expected" in f for f in findings)
+
+
+def test_unclassified_trust_proxy_name_is_the_drift_cut_e_saw(tmp_path: Path) -> None:
+    """Prod carrying the two names while the checker did not classify them was rc=1."""
+    prod = copy.deepcopy(PROD)
+    prod["ops"]["web"]["extraEnv"].append({"name": "TRUST_PROXY_NEW", "value": "1"})
+    findings = _mod().check(_write(tmp_path, "v.yaml", prod), str(OVERLAY), None)
+    assert any("TRUST_PROXY_NEW" in f and "not classified" in f for f in findings)

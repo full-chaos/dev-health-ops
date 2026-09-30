@@ -5,15 +5,6 @@ permissions:
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Image tag to deploy (matches what docker-images.yml pushed)"
-        required: false
-        default: "latest"
-      image_registry:
-        description: "Container registry hosting the artifacts"
-        required: false
-        default: "ghcr.io/chrisgeo/dev-health-ops"
 
 env:
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -25,7 +16,6 @@ jobs:
   deploy:
     name: Deploy front-end
     runs-on: ubuntu-latest
-    env:
     steps:
       - name: Publish Cloudflare Pages
         if: ${{ env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_PAGES_PROJECT_NAME }}

@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -100,18 +99,14 @@ func goVerb(t *testing.T, ch clickHouse, verb func(context.Context, cli.Env) int
 }
 
 // pythonVerb runs the real `dev-hops ai allowlist ...` against ch.
-func pythonVerb(t *testing.T, ch clickHouse, org string, args ...string) (int, string, string) {
+func pythonVerb(t *testing.T, ch clickHouse, root, org string, args ...string) (int, string, string) {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	python := pyoracle.Resolve(t, root)
 	command := exec.Command(python, append([]string{"-m", "dev_health_ops.cli", "ai", "allowlist"}, args...)...)
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "CLICKHOUSE_URI="+ch.httpDSN, "ORG_ID="+org, "OTEL_ENABLED=false")
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err = command.Run()
+	err := command.Run()
 	code := 0
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
@@ -202,43 +197,112 @@ func TestAllowlistSetAndListAgainstClickHouse(t *testing.T) {
 	}
 }
 
-// The differential oracle, against the REAL producer while it exists: the same
-// command sequence through `dev-hops ai allowlist` on one ClickHouse and
-// through `dho ai allowlist` on another leaves the same rows (timestamps
-// masked) and `list` prints byte-identical text, for every org of the sequence
-// and for an org with no entries. It needs the full project Python
-// environment; CI runs it in the venue-oracles job.
-func TestAllowlistVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
+// allowlistPythonBuild is the build whose `dev-hops ai allowlist` answered the
+// frozen sequence: a build that still carried the Python CLI.
+const allowlistPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// cliRequest is one `dev-hops ai allowlist` run as a golden request: its argv
+// and the org it runs for.
+func cliRequest(name, org string, args ...string) venueoracle.Request {
+	return venueoracle.Request{Name: name, Method: "CLI", Path: "dev-hops ai allowlist " + fmt.Sprintf("%q", args), Headers: map[string]string{"ORG_ID": org}}
+}
+
+// TestAllowlistMatchesTheFrozenPythonProducer is the differential oracle of
+// `dho ai allowlist` against the real producer: the same command sequence
+// through `dev-hops ai allowlist` on one ClickHouse and through `dho ai
+// allowlist` on another leaves the same rows (timestamps masked) and `list`
+// prints byte-identical text, for every org of the sequence and for an org
+// with no entries; a blank tool is refused by both, writing nothing. The
+// producer's exit codes, output and rows were executed once on
+// allowlistPythonBuild and are frozen in testdata/golden/allowlist.json (the
+// recipe regenerates them by execution).
+func TestAllowlistMatchesTheFrozenPythonProducer(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
 	}
-	python, golang := startClickHouse(t), startClickHouse(t)
-	runSequence(t, python, func(org string, args ...string) (int, string, string) { return pythonVerb(t, python, org, args...) })
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/allowlist.json",
+		PythonBuild: allowlistPythonBuild,
+		SHA256:      "7e6752d7ff3fec21636738563f3b5c4a3f5b7d0e91bbfbb53a69fdc05370d04f",
+		Recipe: "git worktree add --detach $DIR " + allowlistPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/aicli/ -test '^TestAllowlistMatchesTheFrozenPythonProducer$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+	// The producer's own ClickHouse exists only while recording.
+	var python clickHouse
+	if golden.Recording() {
+		python = startClickHouse(t)
+	}
+	produce := func(root string, requests []venueoracle.Request) []venueoracle.Response {
+		answers := make([]venueoracle.Response, len(requests))
+		for index, request := range requests {
+			code, stdout, _ := pythonVerb(t, python, root, request.Headers["ORG_ID"], argsOf(t, request)...)
+			answers[index] = venueoracle.Response{Status: code, Body: stdout}
+			time.Sleep(15 * time.Millisecond) // computed_at is the row version, at millisecond precision
+		}
+		return answers
+	}
+
+	golang := startClickHouse(t)
+	var sequenceRequests []venueoracle.Request
+	for index, step := range sequence {
+		sequenceRequests = append(sequenceRequests, cliRequest(fmt.Sprintf("sequence %d", index), step.org, step.args...))
+	}
+	for index, answer := range golden.Produce(t, root, sequenceRequests, produce) {
+		golden.Consumed(t, answer)
+		if answer.Status != 0 {
+			t.Fatalf("the producer refused %v: exit %d", sequence[index].args, answer.Status)
+		}
+	}
 	runSequence(t, golang, func(org string, args ...string) (int, string, string) {
 		return goVerb(t, golang, runSet, org, args[1:]...)
 	})
-	if !reflect.DeepEqual(python.storedRows(t), golang.storedRows(t)) {
-		t.Fatalf("stored rows differ:\n python %v\n go     %v", python.storedRows(t), golang.storedRows(t))
+	pythonRows := golden.CompareRows(t, "stored rows", func() string { return strings.Join(python.storedRows(t), "\n") },
+		strings.Join(golang.storedRows(t), "\n"))
+	if got := len(strings.Split(pythonRows, "\n")); pythonRows == "" || got != distinctEntries {
+		t.Fatalf("the producer stored %q, want %d entries: the comparison would measure nothing", pythonRows, distinctEntries)
 	}
-	if len(python.storedRows(t)) != distinctEntries {
-		t.Fatalf("the producer stored %d entr(ies), want %d: the comparison would measure nothing", len(python.storedRows(t)), distinctEntries)
+	orgs := []string{testOrg, "22222222-2222-4333-8444-555555555555", "33333333-3333-4333-8444-555555555555"}
+	var listRequests []venueoracle.Request
+	for _, org := range orgs {
+		listRequests = append(listRequests, cliRequest("list "+org, org, "list"))
 	}
-	for _, org := range []string{testOrg, "22222222-2222-4333-8444-555555555555", "33333333-3333-4333-8444-555555555555"} {
-		pyCode, pyOut, _ := pythonVerb(t, python, org, "list")
+	listRequests = append(listRequests, cliRequest("blank tool", testOrg, "set", "--tool", " ", "--status", "allowed"))
+	answers := golden.Produce(t, root, listRequests, produce)
+	golden.Consumed(t, answers...)
+	for index, org := range orgs {
 		goCode, goOut, _ := goVerb(t, golang, runList, org)
-		if pyCode != goCode || pyOut != goOut {
-			t.Fatalf("list for %s differs (exit python %d go %d):\n python %q\n go     %q", org, pyCode, goCode, pyOut, goOut)
+		if answers[index].Status != goCode || answers[index].Body != goOut {
+			t.Fatalf("list for %s differs (exit python %d go %d):\n python %q\n go     %q", org, answers[index].Status, goCode, answers[index].Body, goOut)
 		}
-		if org == testOrg && !strings.Contains(pyOut, "claude-code / *: disallowed") {
-			t.Fatalf("the producer's list is not the expected one: %q", pyOut)
+		if org == testOrg && !strings.Contains(answers[index].Body, "claude-code / *: disallowed") {
+			t.Fatalf("the producer's list is not the expected one: %q", answers[index].Body)
 		}
 	}
 	// A blank tool is refused by both, writing nothing.
 	before := len(golang.storedRows(t))
-	pyCode, _, _ := pythonVerb(t, python, testOrg, "set", "--tool", " ", "--status", "allowed")
 	goCode, _, _ := goVerb(t, golang, runSet, testOrg, "--tool", " ", "--status", "allowed")
-	if pyCode == 0 || goCode == 0 || len(golang.storedRows(t)) != before {
+	if pyCode := answers[len(orgs)].Status; pyCode == 0 || goCode == 0 || len(golang.storedRows(t)) != before {
 		t.Fatalf("a blank tool: python exit %d, go exit %d, rows %d -> %d", pyCode, goCode, before, len(golang.storedRows(t)))
 	}
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	golden.Finish(t)
+}
+
+// argsOf is the argv a cliRequest was built from.
+func argsOf(t *testing.T, request venueoracle.Request) []string {
+	t.Helper()
+	for _, step := range sequence {
+		if cliRequest("", step.org, step.args...).Path == request.Path {
+			return step.args
+		}
+	}
+	for _, args := range [][]string{{"list"}, {"set", "--tool", " ", "--status", "allowed"}} {
+		if cliRequest("", "", args...).Path == request.Path {
+			return args
+		}
+	}
+	t.Fatalf("no argv for %s", request.Path)
+	return nil
 }

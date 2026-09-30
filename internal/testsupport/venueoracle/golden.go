@@ -1,11 +1,14 @@
 package venueoracle
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -511,16 +514,114 @@ func (g *Golden) PythonWithEnv(t *testing.T, v *Venue, extra []string, requests 
 
 func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, requests []Request) []Response {
 	t.Helper()
+	return g.answer(t, call, requests,
+		func() error { return g.recordingRootErr(v) },
+		func() []Response {
+			if extra == nil {
+				return v.ServePython(t, requests)
+			}
+			return v.ServePythonWithEnv(t, extra, requests)
+		},
+		func() error { return g.frozenVenueErr(v) })
+}
+
+// Produce returns a Python producer's answers to requests, for an oracle whose
+// Python side is not the api's HTTP plane: a program run over a corpus, a CLI
+// verb, a function. While recording, live runs the requests from root, which
+// must be the checkout PythonRoot verified, and the answers are recorded;
+// frozen, they are read from the file and live is never called. A request
+// names what was asked (ProgramRequest builds one for a Python program) and a
+// response what came back: Status the exit code, Body the stdout, Headers any
+// other stream. The lifecycle and the accounting are Python's: every answer
+// must then be compared by Diff or declared inspected (Consumed).
+func (g *Golden) Produce(t *testing.T, root string, requests []Request, live func(root string, requests []Request) []Response) []Response {
+	t.Helper()
+	return g.answer(t, "Produce", requests,
+		func() error { return g.producerRootErr(root) },
+		func() []Response { return live(root, requests) },
+		nil)
+}
+
+// producerRootErr is an error unless root is the checkout PythonRoot verified.
+func (g *Golden) producerRootErr(root string) error {
+	if g.verifiedRoot == "" {
+		return fmt.Errorf("recording: run the Python producer only from the root golden.PythonRoot returned (it verifies the checkout is clean and at the pinned build); it was never called")
+	}
+	if !sameDirectory(root, g.verifiedRoot) {
+		return fmt.Errorf("recording: the Python producer runs from %s, not from the verified checkout %s: pass the root golden.PythonRoot returned", root, g.verifiedRoot)
+	}
+	return nil
+}
+
+// ProgramRequest is the request of one run of a Python program: its name, the
+// program text's digest (a changed program cannot replay the answers of
+// another), its stdin, and the environment entries that shape its answers.
+func ProgramRequest(name, program string, stdin []byte, env map[string]string) Request {
+	sum := sha256.Sum256([]byte(program))
+	body := base64.StdEncoding.EncodeToString(stdin)
+	return Request{Name: name, Method: "PYTHON", Path: "program sha256 " + hex.EncodeToString(sum[:]), Headers: env, Body: &body}
+}
+
+// packedPrefix marks a response body stored compressed (PackBody).
+const packedPrefix = "gzip+base64:"
+
+// PackBody is raw as a golden stores a large producer output: gzip (no name,
+// no time, so the same output packs to the same text), then base64, behind
+// packedPrefix. A frozen answer holds exactly the recorded bytes: UnpackBody
+// returns them unchanged, and nothing is decoded on the way.
+func PackBody(raw []byte) string {
+	var packed bytes.Buffer
+	writer, _ := gzip.NewWriterLevel(&packed, gzip.BestCompression)
+	_, _ = writer.Write(raw)
+	_ = writer.Close()
+	return packedPrefix + base64.StdEncoding.EncodeToString(packed.Bytes())
+}
+
+// UnpackBody returns the bytes PackBody packed; a body that is not packed, or
+// does not unpack, fails the test.
+func UnpackBody(t *testing.T, body string) string {
+	t.Helper()
+	raw, err := unpackBody(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func unpackBody(body string) (string, error) {
+	encoded, ok := strings.CutPrefix(body, packedPrefix)
+	if !ok {
+		return "", fmt.Errorf("venueoracle: the body is not packed (no %q prefix)", packedPrefix)
+	}
+	packed, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", fmt.Errorf("venueoracle: packed body: %w", err)
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(packed))
+	if err != nil {
+		return "", fmt.Errorf("venueoracle: packed body: %w", err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		return "", fmt.Errorf("venueoracle: packed body: %w", err)
+	}
+	return string(raw), nil
+}
+
+// answer is the one path every Python answer takes: recorded from live while
+// recording (after rootErr), read from the frozen file otherwise (after
+// frozenErr, when there is one), then bound to its request.
+func (g *Golden) answer(t *testing.T, call string, requests []Request, rootErr func() error, live func() []Response, frozenErr func() error) []Response {
+	t.Helper()
 	g.step(t, call, stateOpen, statePython, stateDiffed)
 	var answers []Response
 	if g.recording {
-		if err := g.recordingRootErr(v); err != nil {
+		if err := rootErr(); err != nil {
 			t.Fatal(err)
 		}
-		if extra == nil {
-			answers = v.ServePython(t, requests)
-		} else {
-			answers = v.ServePythonWithEnv(t, extra, requests)
+		answers = live()
+		if len(answers) != len(requests) {
+			t.Fatalf("golden %s: the Python producer answered %d of %d requests", g.spec.Path, len(answers), len(requests))
 		}
 		for index, request := range requests {
 			entry := requestKey(request)
@@ -528,8 +629,10 @@ func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, req
 			g.recorded.Requests = append(g.recorded.Requests, entry)
 		}
 	} else {
-		if err := g.frozenVenueErr(v); err != nil {
-			t.Fatal(err)
+		if frozenErr != nil {
+			if err := frozenErr(); err != nil {
+				t.Fatal(err)
+			}
 		}
 		var err error
 		if answers, err = g.frozenAnswers(requests); err != nil {

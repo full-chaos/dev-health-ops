@@ -5,14 +5,18 @@ package pgmigrate_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -310,8 +314,8 @@ func TestDowngradeFailureMidWalkRollsBackTheWholeWalk(t *testing.T) {
 	insertSetupRevocation(t, uri)
 	before := schemaShape(t, uri)
 	code, _, stderr := goDowngrade(t, uri, "0140")
-	if code != cli.ExitFailure || !strings.Contains(stderr, "downgrade_failed") || !strings.Contains(stderr, "down 0141") || !strings.Contains(stderr, "rolled back") {
-		t.Fatalf("exit %d stderr %s, want downgrade_failed naming 0141 and the rollback", code, stderr)
+	if code != cli.ExitFailure || !strings.Contains(stderr, "downgrade_failed") || !strings.Contains(stderr, "down 0141") || !strings.Contains(stderr, "verified by re-read: alembic_version still holds [0066 0145]") {
+		t.Fatalf("exit %d stderr %s, want downgrade_failed naming 0141 and the verified unchanged state", code, stderr)
 	}
 	if got := schemaShape(t, uri); got != before {
 		t.Fatalf("the failed walk changed the database:\n%s", shapeDiff(before, got))
@@ -319,6 +323,145 @@ func TestDowngradeFailureMidWalkRollsBackTheWholeWalk(t *testing.T) {
 	if got := alembicVersions(t, uri); !reflect.DeepEqual(got, []string{"0066", "0145"}) {
 		t.Fatalf("alembic_version %v after the failed walk, want 0066 and 0145", got)
 	}
+}
+
+// ackLossProxy is a PostgreSQL wire proxy that forwards the first simple-query COMMIT
+// to the server, then drops the server's response and closes the client's connection:
+// the server commits, the client never learns. With refuseAfter the listener is closed
+// at that point too, so a reconnect to read the state back fails.
+type ackLossProxy struct {
+	uri         string
+	dropped     atomic.Bool
+	refuseAfter bool
+	listener    net.Listener
+}
+
+func newAckLossProxy(t *testing.T, serverURI string, refuseAfter bool) *ackLossProxy {
+	t.Helper()
+	parsed, err := url.Parse(serverURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &ackLossProxy{refuseAfter: refuseAfter, listener: listener}
+	clientURL := *parsed
+	clientURL.Host = listener.Addr().String()
+	query := clientURL.Query()
+	query.Set("sslmode", "disable")
+	clientURL.RawQuery = query.Encode()
+	proxy.uri = clientURL.String()
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			client, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go proxy.serve(client, parsed.Host)
+		}
+	}()
+	return proxy
+}
+
+func (p *ackLossProxy) serve(client net.Conn, serverAddr string) {
+	server, err := net.Dial("tcp", serverAddr)
+	if err != nil {
+		_ = client.Close()
+		return
+	}
+	var armed atomic.Bool
+	go func() {
+		buffer := make([]byte, 64<<10)
+		for {
+			n, err := server.Read(buffer)
+			if n > 0 {
+				if armed.Load() {
+					// the server has the COMMIT and answered; the client never hears it.
+					_ = client.Close()
+					_ = server.Close()
+					if p.refuseAfter {
+						_ = p.listener.Close()
+					}
+					return
+				}
+				if _, werr := client.Write(buffer[:n]); werr != nil {
+					return
+				}
+			}
+			if err != nil {
+				_ = client.Close()
+				return
+			}
+		}
+	}()
+	// startup message: length-prefixed, no type byte; then typed messages.
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(client, header); err != nil {
+		return
+	}
+	startup := make([]byte, binary.BigEndian.Uint32(header)-4)
+	if _, err := io.ReadFull(client, startup); err != nil {
+		return
+	}
+	_, _ = server.Write(append(header, startup...))
+	for {
+		kind := make([]byte, 1)
+		if _, err := io.ReadFull(client, kind); err != nil {
+			_ = server.Close()
+			return
+		}
+		if _, err := io.ReadFull(client, header); err != nil {
+			return
+		}
+		body := make([]byte, binary.BigEndian.Uint32(header)-4)
+		if _, err := io.ReadFull(client, body); err != nil {
+			return
+		}
+		if kind[0] == 'Q' && strings.EqualFold(strings.TrimRight(string(body), "\x00"), "commit") && p.dropped.CompareAndSwap(false, true) {
+			armed.Store(true)
+		}
+		if _, err := server.Write(append(append(kind, header...), body...)); err != nil {
+			return
+		}
+	}
+}
+
+// A COMMIT whose acknowledgement is lost may have committed. The verb must report only
+// what it reads back: here the server committed the whole downgrade, so the message
+// says the database CHANGED and names the revision it now holds, never "rolled back";
+// and when the read-back connection is refused, it says the outcome is unknown.
+func TestDowngradeReportsOnlyVerifiedStateAfterALostCommitAcknowledgement(t *testing.T) {
+	d := newDownInstance(t)
+	chain, _ := pgmigrate.LoadChain()
+	t.Run("read-back succeeds", func(t *testing.T) {
+		uri := d.at(t, len(chain))
+		proxy := newAckLossProxy(t, uri, false)
+		code, stdout, stderr := goDowngrade(t, proxy.uri, "0138")
+		if !proxy.dropped.Load() {
+			t.Fatal("the proxy never saw the COMMIT: the fault was not injected")
+		}
+		if got := alembicVersions(t, uri); !reflect.DeepEqual(got, []string{"0066", "0138"}) {
+			t.Fatalf("the server holds %v, want the committed 0066 0138", got)
+		}
+		if code != cli.ExitFailure || stdout != "" || strings.Contains(stderr, "rolled back") ||
+			!strings.Contains(stderr, "verified by re-read: the database CHANGED") || !strings.Contains(stderr, "[0066 0138]") {
+			t.Fatalf("exit %d stdout %q stderr %q, want a failure that reports the verified committed state", code, stdout, stderr)
+		}
+	})
+	t.Run("read-back refused", func(t *testing.T) {
+		uri := d.at(t, len(chain))
+		proxy := newAckLossProxy(t, uri, true)
+		code, _, stderr := goDowngrade(t, proxy.uri, "0138")
+		if !proxy.dropped.Load() {
+			t.Fatal("the proxy never saw the COMMIT: the fault was not injected")
+		}
+		if code != cli.ExitFailure || strings.Contains(stderr, "rolled back") || !strings.Contains(stderr, "outcome unknown") {
+			t.Fatalf("exit %d stderr %q, want a failure that says the outcome is unknown", code, stderr)
+		}
+	})
 }
 
 // insertSetupRevocation adds a row only 0141's reverse cannot keep.

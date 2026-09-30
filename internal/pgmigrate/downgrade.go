@@ -255,7 +255,7 @@ type DowngradeResult struct {
 // context.begin_transaction() and PostgreSQL DDL is transactional, so a step that
 // fails rolls back every step before it and the database is exactly as it was.
 // logger gets one line per step (Python logs one INFO line per migration).
-func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, down []DownFile, target DowngradeTarget, logger *slog.Logger) (DowngradeResult, error) {
+func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, down []DownFile, target DowngradeTarget, logger *slog.Logger, reconnect func(context.Context) (*pgx.Conn, error)) (DowngradeResult, error) {
 	known, err := embeddedKnown(baseline, chain)
 	if err != nil {
 		return DowngradeResult{}, err
@@ -294,7 +294,7 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 		return nil
 	})
 	if err != nil {
-		return DowngradeResult{Action: "rolled_back", Recorded: recorded}, fmt.Errorf("%w (the whole downgrade was rolled back: alembic_version still holds %v)", err, recorded)
+		return verifyFailedDowngrade(ctx, reconnect, recorded, err)
 	}
 	for _, step := range steps {
 		result.Reverted = append(result.Reverted, step.Revision)
@@ -304,6 +304,38 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 		return result, err
 	}
 	return result, nil
+}
+
+// verifyFailedDowngrade reports the outcome of a downgrade whose transaction returned
+// an error using ONLY state read back from the database on a fresh connection: a
+// COMMIT whose acknowledgement was lost may have committed, so the error alone proves
+// nothing about what the database holds. When the read-back itself fails the outcome
+// is reported as unknown, never as rolled back.
+func verifyFailedDowngrade(ctx context.Context, reconnect func(context.Context) (*pgx.Conn, error), before []string, cause error) (DowngradeResult, error) {
+	observed, readErr := readRecordedFresh(ctx, reconnect)
+	switch {
+	case readErr != nil:
+		return DowngradeResult{Action: "outcome_unknown", Recorded: before},
+			fmt.Errorf("%w (outcome unknown: alembic_version could not be re-read: %v; it held %v before the downgrade: run `dho migrate postgres current` before anything else)", cause, readErr, before)
+	case sameSet(observed, before):
+		return DowngradeResult{Action: "unchanged", Recorded: observed},
+			fmt.Errorf("%w (verified by re-read: alembic_version still holds %v)", cause, observed)
+	default:
+		return DowngradeResult{Action: "changed", Recorded: observed},
+			fmt.Errorf("%w (verified by re-read: the database CHANGED although the command failed: alembic_version held %v and now holds %v)", cause, before, observed)
+	}
+}
+
+func readRecordedFresh(ctx context.Context, reconnect func(context.Context) (*pgx.Conn, error)) ([]string, error) {
+	if reconnect == nil {
+		return nil, errors.New("no connection to read it back on")
+	}
+	conn, err := reconnect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close(context.Background())
+	return Recorded(ctx, conn)
 }
 
 // downgrade is `dho migrate postgres downgrade TARGET`.
@@ -359,7 +391,8 @@ func downgrade(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 		return writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
 	}
 	defer conn.Close(context.Background())
-	result, err := Downgrade(ctx, conn, baseline, chain, down, target, logging.NewJSON(env.Stderr, slog.LevelInfo))
+	result, err := Downgrade(ctx, conn, baseline, chain, down, target, logging.NewJSON(env.Stderr, slog.LevelInfo),
+		func(ctx context.Context) (*pgx.Conn, error) { return pgx.Connect(ctx, dsn.Reveal()) })
 	if err != nil {
 		var state DowngradeRefusal
 		if errors.As(err, &state) {

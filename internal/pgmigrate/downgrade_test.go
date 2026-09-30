@@ -3,6 +3,8 @@ package pgmigrate
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"regexp"
@@ -168,7 +170,7 @@ func TestDowngradeVerbRefusesBeforeAnyDatabase(t *testing.T) {
 		var body struct {
 			Error struct{ Code, Detail string }
 		}
-		if err := json.Unmarshal([]byte(stderr), &body); err != nil || body.Error.Code != code {
+		if err := json.Unmarshal([]byte(lastLine(stderr)), &body); err != nil || body.Error.Code != code {
 			t.Errorf("downgrade %s: stderr %q, want code %s", arg, stderr, code)
 		}
 	}
@@ -177,4 +179,60 @@ func TestDowngradeVerbRefusesBeforeAnyDatabase(t *testing.T) {
 			t.Errorf("downgrade %v: exit %d, want 2", args, code)
 		}
 	}
+}
+
+// Every combination of facts has exactly one label, and the labels are the claims the
+// read-back supports: no label says more than the facts do.
+func TestOutcomeLabelOverEveryExitPath(t *testing.T) {
+	boom := errors.New("boom")
+	for name, tc := range map[string]struct {
+		facts runFacts
+		want  string
+	}{
+		"read-back failed, no error":        {runFacts{ReadFailed: true}, OutcomeUnknown},
+		"read-back failed beats a refusal":  {runFacts{ReadFailed: true, Refused: true, Err: boom}, OutcomeUnknown},
+		"read-back failed after an error":   {runFacts{ReadFailed: true, Err: boom, Changed: true}, OutcomeUnknown},
+		"refused":                           {runFacts{Refused: true, Err: boom}, OutcomeRefused},
+		"succeeded, nothing to do":          {runFacts{}, OutcomeNoop},
+		"succeeded, state moved":            {runFacts{Changed: true}, OutcomeCommitted},
+		"failed, state unchanged":           {runFacts{Err: boom}, OutcomeRolledBack},
+		"failed, state moved (chain steps)": {runFacts{Err: boom, Changed: true}, OutcomePartial},
+	} {
+		if got := outcomeOf(tc.facts); got != tc.want {
+			t.Errorf("%s: %q, want %q", name, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{BelowHeadError{}, true}, {AheadOfBuildError{}, true}, {ForeignDatabaseError{}, true}, {SchemaMismatchError{}, true},
+		{DowngradeRefusal{Code: "x"}, true}, {fmt.Errorf("wrapped: %w", BelowHeadError{}), true}, {boom, false}, {nil, false},
+	} {
+		if got := isRefusal(tc.err); got != tc.want {
+			t.Errorf("isRefusal(%v) = %v, want %v", tc.err, got, tc.want)
+		}
+	}
+	// the verb's pre-database refusal logs its outcome line without a database.
+	_, _, stderr := runHistoryVerb(t, downgradeChildForTest(t), "base")
+	if !strings.Contains(stderr, `"msg":"migrate outcome","direction":"down","from":null,"requested":"base","observed":null,"outcome":"refused"`) {
+		t.Errorf("the pre-database refusal logged %q", stderr)
+	}
+}
+
+func downgradeChildForTest(t *testing.T) func(context.Context, cli.Env) int {
+	t.Helper()
+	for _, child := range Command(nil).Children {
+		if child.Name == "downgrade" {
+			return child.Run
+		}
+	}
+	t.Fatal("no downgrade verb")
+	return nil
+}
+
+// lastLine is the error document: stderr is log lines, then the error.
+func lastLine(text string) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	return lines[len(lines)-1]
 }

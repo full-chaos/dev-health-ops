@@ -261,7 +261,7 @@ func TestDowngradeRefusalsLeaveTheDatabaseAlone(t *testing.T) {
 	}
 	for _, cell := range cells {
 		code, stdout, stderr := goDowngrade(t, head, cell.args...)
-		if code != cell.code || stdout != "" || !strings.Contains(stderr, `"code":"`+cell.name+`"`) {
+		if code != cell.code || stdout != "" || !strings.Contains(stderr, `"code":"`+cell.name+`"`) || !strings.Contains(stderr, `"outcome":"refused"`) {
 			t.Errorf("downgrade %v: exit %d stdout %q stderr %q, want exit %d and %s", cell.args, code, stdout, stderr, cell.code, cell.name)
 		}
 		if got := schemaShape(t, head); got != shape {
@@ -271,7 +271,7 @@ func TestDowngradeRefusalsLeaveTheDatabaseAlone(t *testing.T) {
 	// at the target already: a no-op success.
 	top := chain[len(chain)-1].Revision
 	code, stdout, stderr := goDowngrade(t, head, top)
-	if code != cli.ExitOK || !strings.Contains(stdout, `"action":"at_target"`) || schemaShape(t, head) != shape {
+	if code != cli.ExitOK || !strings.Contains(stdout, `"action":"at_target"`) || !strings.Contains(stderr, `"outcome":"noop"`) || schemaShape(t, head) != shape {
 		t.Errorf("downgrade %s (the current revision): exit %d stdout %q stderr %q", top, code, stdout, stderr)
 	}
 	// above current: Go refuses, database untouched.
@@ -314,7 +314,7 @@ func TestDowngradeFailureMidWalkRollsBackTheWholeWalk(t *testing.T) {
 	insertSetupRevocation(t, uri)
 	before := schemaShape(t, uri)
 	code, _, stderr := goDowngrade(t, uri, "0140")
-	if code != cli.ExitFailure || !strings.Contains(stderr, "downgrade_failed") || !strings.Contains(stderr, "down 0141") || !strings.Contains(stderr, "verified by re-read: alembic_version still holds [0066 0145]") {
+	if code != cli.ExitFailure || !strings.Contains(stderr, "downgrade_failed") || !strings.Contains(stderr, "down 0141") || !strings.Contains(stderr, "verified by re-read: alembic_version still holds [0066 0145]") || !strings.Contains(stderr, `"observed":["0066","0145"],"outcome":"rolled_back"`) {
 		t.Fatalf("exit %d stderr %s, want downgrade_failed naming 0141 and the verified unchanged state", code, stderr)
 	}
 	if got := schemaShape(t, uri); got != before {

@@ -271,10 +271,12 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 	}
 	steps, refusal := PlanDowngrade(recorded, target, r, known)
 	if refusal != nil {
+		logOutcome(logger, target, recorded, DowngradeResult{Recorded: recorded}, true)
 		return DowngradeResult{Recorded: recorded}, *refusal
 	}
 	result := DowngradeResult{Action: "at_target", Recorded: recorded}
 	if len(steps) == 0 {
+		logOutcome(logger, target, recorded, result, false)
 		return result, nil
 	}
 	err = inTransaction(ctx, conn, func(tx pgx.Tx) error {
@@ -295,7 +297,7 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 	})
 	if err != nil {
 		result, err := verifyFailedDowngrade(ctx, reconnect, recorded, err)
-		logOutcome(logger, target, recorded, result)
+		logOutcome(logger, target, recorded, result, false)
 		return result, err
 	}
 	for _, step := range steps {
@@ -304,10 +306,10 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 	result.Action = "downgraded"
 	if result.Recorded, err = Recorded(ctx, conn); err != nil {
 		result.Action = "outcome_unknown"
-		logOutcome(logger, target, recorded, result)
+		logOutcome(logger, target, recorded, result, false)
 		return result, fmt.Errorf("%w (outcome unknown: the downgrade returned success but alembic_version could not be re-read)", err)
 	}
-	logOutcome(logger, target, recorded, result)
+	logOutcome(logger, target, recorded, result, false)
 	return result, nil
 }
 
@@ -321,11 +323,16 @@ func (t DowngradeTarget) String() string {
 
 // logOutcome is the one final line of a downgrade run: direction, the revisions it
 // started from and was asked to reach, the revision set OBSERVED afterwards (read back,
-// never inferred) and the outcome: committed, unchanged, partial or unknown. The per-step lines
-// fire BEFORE their SQL runs, so only this line says what the database holds.
-func logOutcome(logger *slog.Logger, target DowngradeTarget, from []string, result DowngradeResult) {
-	outcome := map[string]string{"downgraded": "committed", "changed": "committed", "unchanged": "unchanged", "outcome_unknown": "unknown"}[result.Action]
-	logger.Info("migrate outcome", "direction", "down", "from", from, "requested", target.String(), "observed", result.Recorded, "outcome", outcome)
+// never inferred) and the outcome. The per-step lines fire BEFORE their SQL runs, so
+// only this line says what the database holds. A failed walk whose read-back shows the
+// whole walk committed (a lost COMMIT acknowledgement) is "committed": the walk is one
+// transaction, so it cannot be partial.
+func logOutcome(logger *slog.Logger, target DowngradeTarget, from []string, result DowngradeResult, refusal bool) {
+	facts := runFacts{Refused: refusal, ReadFailed: result.Action == "outcome_unknown", Changed: !sameSet(result.Recorded, from)}
+	if result.Action == "unchanged" && !facts.Changed {
+		facts.Err = errors.New("the walk failed")
+	}
+	logRunOutcome(logger, "down", from, target.String(), result.Recorded, outcomeOf(facts))
 }
 
 // verifyFailedDowngrade reports the outcome of a downgrade whose transaction returned
@@ -401,7 +408,7 @@ func downgrade(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 		refusal = NewDownRange(baseline, chain, down).CheckTarget(target)
 	}
 	if refusal != nil {
-		return writeRefusal(env, refusal)
+		return writeRefusal(env, targets[0], refusal)
 	}
 	dsn, _, ok := resolve(env.Lookup, env.Stderr)
 	if !ok {
@@ -418,7 +425,7 @@ func downgrade(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 	if err != nil {
 		var state DowngradeRefusal
 		if errors.As(err, &state) {
-			return writeRefusal(env, &state)
+			return writeRefusal(env, targets[0], &state)
 		}
 		return writeError(env.Stderr, "downgrade_failed", boundary.Redact(err).Error())
 	}
@@ -427,7 +434,12 @@ func downgrade(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 
 // writeRefusal prints the refusal: exit 3 when it was decided before the database was
 // read, exit 1 (Python's failure code) when the database state refused it.
-func writeRefusal(env cli.Env, refusal *DowngradeRefusal) int {
+func writeRefusal(env cli.Env, target string, refusal *DowngradeRefusal) int {
+	if refusal.PreDatabase {
+		// decided from the target alone: no database was read, so there is no "from"
+		// or "observed" set to report, only that nothing was attempted.
+		logRunOutcome(logging.NewJSON(env.Stderr, slog.LevelInfo), "down", nil, target, nil, OutcomeRefused)
+	}
 	code := writeError(env.Stderr, refusal.Code, refusal.Detail)
 	if refusal.PreDatabase {
 		return cli.ExitRefused

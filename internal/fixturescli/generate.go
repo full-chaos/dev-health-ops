@@ -56,7 +56,7 @@ var worldFiles embed.FS
 // load silently. A file changes only by re-running TestFreezeGenerateWorlds against the live Python
 // producer, and then its digest here is updated in the same commit.
 var frozenWorldDigests = map[string]string{
-	"testdata/generate/synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz": "b3449e8ce652c39219abeaa12c2dc0d3d413030ec3f4493dd8e9c8d30e96931a",
+	"testdata/generate/synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz": "adbe9087c45014c8a95e9c016459a372f751272c9501ee4458e4668438c3a750",
 }
 
 // GenerateParams are the parameters of one frozen `fixtures generate` run: the flags that change
@@ -313,6 +313,7 @@ func LoadWorld(ctx context.Context, conn driver.Conn, world FrozenWorld, org str
 		if table.Derived {
 			continue
 		}
+		table.FrozenTable = table.FrozenTable.WithoutServerStamped()
 		rows, err := table.Transform(days, world.OrgID, org)
 		if err != nil {
 			return counts, err

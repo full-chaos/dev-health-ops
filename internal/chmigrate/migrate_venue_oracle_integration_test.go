@@ -78,7 +78,7 @@ type migrateFact struct {
 
 const (
 	migrateGolden       = "testdata/migrate_golden.json"
-	migrateGoldenSHA256 = "09738aa01060c2f894925d5f0bcf8092cab63afe88088c1a06024f446a379635"
+	migrateGoldenSHA256 = "9419e4b564d07ba6b9c802f2b94df7cb3cb209b21247602a7d061563748c5073"
 )
 
 var (

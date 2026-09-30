@@ -358,7 +358,7 @@
   "exit": 0,
   "applied": 0,
   "pending": 0,
-  "schema": "3ba29330a817d0607d84bfa5dee3ef9126e01e4086e5f49d3742bb6845b8b10d"
+  "schema": "fdbf336cfdf8b379cdae158c599573771f775ddebeec709a4f8326ca67da424a"
  },
  {
   "name": "status head --check",
@@ -719,7 +719,7 @@
   "exit": 0,
   "applied": 0,
   "pending": 0,
-  "schema": "3ba29330a817d0607d84bfa5dee3ef9126e01e4086e5f49d3742bb6845b8b10d=3ba29330a817d0607d84bfa5dee3ef9126e01e4086e5f49d3742bb6845b8b10d"
+  "schema": "fdbf336cfdf8b379cdae158c599573771f775ddebeec709a4f8326ca67da424a=fdbf336cfdf8b379cdae158c599573771f775ddebeec709a4f8326ca67da424a"
  },
  {
   "name": "status below head --check",
@@ -966,7 +966,7 @@
   "exit": 0,
   "applied": 0,
   "pending": 0,
-  "schema": "3ba29330a817d0607d84bfa5dee3ef9126e01e4086e5f49d3742bb6845b8b10d"
+  "schema": "fdbf336cfdf8b379cdae158c599573771f775ddebeec709a4f8326ca67da424a"
  },
  {
   "name": "status schema mismatch --check",

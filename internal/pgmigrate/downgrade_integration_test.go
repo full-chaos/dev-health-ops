@@ -447,7 +447,7 @@ func TestDowngradeReportsOnlyVerifiedStateAfterALostCommitAcknowledgement(t *tes
 			t.Fatalf("the server holds %v, want the committed 0066 0138", got)
 		}
 		if code != cli.ExitFailure || stdout != "" || strings.Contains(stderr, "rolled back") ||
-			!strings.Contains(stderr, "verified by re-read: the database CHANGED") || !strings.Contains(stderr, "[0066 0138]") {
+			!strings.Contains(stderr, "verified by re-read: the database CHANGED") || !strings.Contains(stderr, "[0066 0138]") || !strings.Contains(stderr, `"msg":"migrate downgrade outcome","outcome":"changed"`) {
 			t.Fatalf("exit %d stdout %q stderr %q, want a failure that reports the verified committed state", code, stdout, stderr)
 		}
 	})

@@ -294,7 +294,9 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 		return nil
 	})
 	if err != nil {
-		return verifyFailedDowngrade(ctx, reconnect, recorded, err)
+		result, err := verifyFailedDowngrade(ctx, reconnect, recorded, err)
+		logger.Info("migrate downgrade outcome", "outcome", result.Action, "recorded", result.Recorded)
+		return result, err
 	}
 	for _, step := range steps {
 		result.Reverted = append(result.Reverted, step.Revision)
@@ -303,6 +305,7 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 	if result.Recorded, err = Recorded(ctx, conn); err != nil {
 		return result, err
 	}
+	logger.Info("migrate downgrade outcome", "outcome", result.Action, "recorded", result.Recorded)
 	return result, nil
 }
 

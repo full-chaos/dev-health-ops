@@ -446,6 +446,7 @@ func internalRoutesFor(store acr.EntitlementStore, logger *slog.Logger) []httpap
 func NewInternalServer(cfg config.Config, logger *slog.Logger, routes []httpapi.Route) (*httpapi.Server, error) {
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:                "internal-http",
+		Listener:            "internal",
 		Address:             cfg.APIInternalAddress,
 		Logger:              logger,
 		Routes:              routes,
@@ -522,6 +523,7 @@ func NewServer(
 	middleware = append(middleware, NewOriginValidation(cfg.CORSAllowedOrigins).Wrap, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",
+		Listener:       "public",
 		Address:        cfg.APIAddress,
 		Logger:         logger,
 		Routes:         routes,
@@ -560,6 +562,7 @@ func NewServer(
 func NewEdgeServer(cfg config.Config, logger *slog.Logger, routes []httpapi.Route) (*httpapi.Server, error) {
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:                "billing-edge-http",
+		Listener:            "billing-edge",
 		Address:             cfg.APIBillingEdgeAddress,
 		Logger:              logger,
 		Routes:              routes,

@@ -450,8 +450,17 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if raw, parseErr := parser.ParseQuery(&ast.Source{Input: payload.Query}); parseErr != nil {
 		refuse(http.StatusBadRequest, mcpReasonInvalidDocument, "the document does not parse")
 		return
+		// The validator's cost is super-linear in the EXPANDED document (its
+		// overlapping-fields rule compares the fields of every fragment use:
+		// 1,683 bytes of self-doubling fragments on __Type took 15.4 s with the
+		// unexpanded counts above all within 150, r3 on #3425). So bound the
+		// expansion of every operation and every fragment definition on the raw,
+		// unvalidated tree first: each stops at the first field past the cap.
 	} else if !mcpDocumentNodesWithin(raw, h.limits.complexity) {
 		refuse(http.StatusBadRequest, mcpReasonComplexity, fmt.Sprintf("the document holds more than %d fields, fragment spreads, inline fragments or fragment definitions, which exceeds the complexity limit of %d", h.limits.complexity, h.limits.complexity))
+		return
+	} else if !mcpRawExpansionWithin(raw, h.limits.complexity) {
+		refuse(http.StatusBadRequest, mcpReasonComplexity, fmt.Sprintf("the document expands to more than %d fields, which exceeds the complexity limit of %d", h.limits.complexity, h.limits.complexity))
 		return
 	}
 	schema := h.es.Schema()
@@ -678,6 +687,22 @@ func mcpDocumentNodesWithin(doc *ast.QueryDocument, limit int) bool {
 	}
 	for _, fragment := range doc.Fragments {
 		if !count(fragment.SelectionSet) {
+			return false
+		}
+	}
+	return true
+}
+
+// mcpRawExpansionWithin applies mcpExpandedFieldsWithin to every operation and
+// every fragment definition of a parsed, not yet validated document.
+func mcpRawExpansionWithin(doc *ast.QueryDocument, limit int) bool {
+	for _, op := range doc.Operations {
+		if !mcpExpandedFieldsWithin(op.SelectionSet, doc.Fragments, limit) {
+			return false
+		}
+	}
+	for _, fragment := range doc.Fragments {
+		if !mcpExpandedFieldsWithin(fragment.SelectionSet, doc.Fragments, limit) {
 			return false
 		}
 	}

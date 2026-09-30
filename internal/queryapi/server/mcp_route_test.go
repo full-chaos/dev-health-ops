@@ -959,3 +959,25 @@ func TestMCPDocumentNodeCountBoundary(t *testing.T) {
 		}
 	}
 }
+
+// r3 P1 on #3425: the validator itself is super-linear in the expanded
+// document. 1.4 KB of self-doubling fragments on __Type (every unexpanded
+// count within the cap) took ~1 s to validate at n=22 and 15 s at n=26; it
+// must be refused before validation, in bounded time, for any depth.
+func TestMCPRefusesSelfDoublingFragmentsBeforeTheValidatorRunsOnThem(t *testing.T) {
+	l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
+	for _, n := range []int{22, 26, 60} {
+		query := "query { __type(name: \"Query\") { ...F0 } }\n"
+		for i := 0; i < n; i++ {
+			query += fmt.Sprintf("fragment F%d on __Type { ofType { ...F%d } ofType { ...F%d } }\n", i, i+1, i+1)
+		}
+		query += fmt.Sprintf("fragment F%d on __Type { name }", n)
+		started := time.Now()
+		rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, query, nil))
+		elapsed := time.Since(started)
+		assertMCPRefused(t, rec, l.ch, http.StatusBadRequest, mcpReasonComplexity)
+		if elapsed > 250*time.Millisecond {
+			t.Fatalf("n=%d (%d bytes): refusal took %s: the validator ran on the expanded document", n, len(query), elapsed)
+		}
+	}
+}

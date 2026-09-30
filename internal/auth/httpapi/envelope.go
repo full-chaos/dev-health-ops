@@ -139,6 +139,6 @@ func logAttrs(r *http.Request, pattern string) []slog.Attr {
 	return []slog.Attr{
 		slog.String("method", r.Method),
 		slog.String("route", pattern),
-		slog.String("request_id", RequestIDFrom(r.Context())),
+		slog.String("request_id", LoggableRequestID(r.Context())),
 	}
 }

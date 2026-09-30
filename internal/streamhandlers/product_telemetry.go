@@ -84,22 +84,37 @@ func (h *ProductTelemetryHandler) Handle(ctx context.Context, message streamrunn
 		return &streamrunner.PermanentError{Reason: "invalid_telemetry_source"}
 	}
 
-	batch, err := h.conn.PrepareBatch(ctx, "INSERT INTO product_telemetry_events (org_id_hash,event_id,name,schema_version,session_id,anonymous_user_id,route_pattern,payload_json,occurred_at,ingested_at,source)")
-	if err != nil {
-		return fmt.Errorf("prepare product telemetry sink: %w", err)
-	}
-	for _, event := range events {
+	// Validate the whole entry before a batch is opened: a refused entry must not hold a
+	// ClickHouse connection (an open, never-sent batch keeps one until it is aborted).
+	payloads := make([]string, len(events))
+	for index, event := range events {
 		payload, err := validateProductEvent(event)
 		if err != nil {
 			return err
 		}
-		if err := batch.Append(event.OrgIDHash, event.EventID, event.Name, event.SchemaVersion, event.SessionID, event.AnonymousUserID, event.RoutePattern, payload, event.Timestamp.UTC(), time.Now().UTC(), source); err != nil {
+		payloads[index] = payload
+	}
+
+	batch, err := h.conn.PrepareBatch(ctx, "INSERT INTO product_telemetry_events (org_id_hash,event_id,name,schema_version,session_id,anonymous_user_id,route_pattern,payload_json,occurred_at,ingested_at,source)")
+	if err != nil {
+		return fmt.Errorf("prepare product telemetry sink: %w", err)
+	}
+	// Every exit after PrepareBatch that does not send must release the batch's connection.
+	sent := false
+	defer func() {
+		if !sent {
+			_ = batch.Abort()
+		}
+	}()
+	for index, event := range events {
+		if err := batch.Append(event.OrgIDHash, event.EventID, event.Name, event.SchemaVersion, event.SessionID, event.AnonymousUserID, event.RoutePattern, payloads[index], event.Timestamp.UTC(), time.Now().UTC(), source); err != nil {
 			return fmt.Errorf("append product telemetry: %w", err)
 		}
 	}
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("persist product telemetry: %w", err)
 	}
+	sent = true
 	// Only now, with the whole entry validated and durably written, are the nulled numbers
 	// "stored": counting earlier overstated storage for an entry refused or retried.
 	recordNonFiniteNulled(ctx, message, nonFinite)

@@ -72,6 +72,7 @@ import (
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
+	"github.com/vektah/gqlparser/v2/parser"
 	"github.com/vektah/gqlparser/v2/validator"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -438,6 +439,21 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	req.documentDigest = digestHex(payload.Query)
 
+	// Before validation: gqlparser's validator is super-linear in the
+	// document's raw size (measured on this schema: ~0.2-0.6 s for 17-31 KB
+	// of repeated fields, fragment spreads or a fragment chain). A linear
+	// parse, then a linear count of the UNEXPANDED nodes: in a valid document
+	// every fragment is used and contains a field, so each of these counts
+	// is at most the expanded field count -- and gqlgen charges every field
+	// at least 1. A document over the complexity cap on any of them cannot
+	// be under it once valid.
+	if raw, parseErr := parser.ParseQuery(&ast.Source{Input: payload.Query}); parseErr != nil {
+		refuse(http.StatusBadRequest, mcpReasonInvalidDocument, "the document does not parse")
+		return
+	} else if !mcpDocumentNodesWithin(raw, h.limits.complexity) {
+		refuse(http.StatusBadRequest, mcpReasonComplexity, fmt.Sprintf("the document holds more than %d fields, fragment spreads, inline fragments or fragment definitions, which exceeds the complexity limit of %d", h.limits.complexity, h.limits.complexity))
+		return
+	}
 	schema := h.es.Schema()
 	doc, parseErrs := gqlparser.LoadQuery(schema, payload.Query)
 	if len(parseErrs) > 0 {
@@ -455,6 +471,19 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if op.Operation != ast.Query {
 		refuse(http.StatusMethodNotAllowed, mcpReasonNotAQuery, "the MCP caller class serves query operations only")
+		return
+	}
+	// FIRST, before any walk that expands fragments per use (roots,
+	// introspection, depth, aliases, org arguments, complexity): a bounded
+	// count of the expanded field occurrences. A few hundred bytes of
+	// self-doubling fragments expand to millions of fields (r2 on #3425:
+	// 969 bytes, 4,194,304 alias visits, 4.5 s of CPU before the refusal),
+	// so every later walk is safe only once this has passed. gqlgen charges
+	// every field at least 1 (complexity.Calculate), so a document that
+	// expands past the complexity cap can never be under it: refused as
+	// complexity_limit, having visited at most cap+1 fields.
+	if !mcpExpandedFieldsWithin(op.SelectionSet, doc.Fragments, h.limits.complexity) {
+		refuse(http.StatusBadRequest, mcpReasonComplexity, fmt.Sprintf("operation expands to more than %d fields, which exceeds the complexity limit of %d", h.limits.complexity, h.limits.complexity))
 		return
 	}
 	roots, introspection := mcpRootFields(op.SelectionSet, doc.Fragments)
@@ -608,6 +637,92 @@ func mcpRootFields(set ast.SelectionSet, fragments ast.FragmentDefinitionList) (
 		}
 	})
 	return roots, introspection
+}
+
+// mcpDocumentNodesWithin counts, without expanding anything, the field
+// nodes, fragment-spread nodes and inline-fragment nodes of every operation
+// and fragment definition, and the fragment definitions themselves. It
+// reports false as soon as any one count exceeds limit.
+func mcpDocumentNodesWithin(doc *ast.QueryDocument, limit int) bool {
+	if len(doc.Fragments) > limit {
+		return false
+	}
+	fields, spreads, inlines := 0, 0, 0
+	var count func(set ast.SelectionSet) bool
+	count = func(set ast.SelectionSet) bool {
+		for _, selection := range set {
+			switch node := selection.(type) {
+			case *ast.Field:
+				fields++
+				if fields > limit || !count(node.SelectionSet) {
+					return false
+				}
+			case *ast.FragmentSpread:
+				spreads++
+				if spreads > limit {
+					return false
+				}
+			case *ast.InlineFragment:
+				inlines++
+				if inlines > limit || !count(node.SelectionSet) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	for _, op := range doc.Operations {
+		if !count(op.SelectionSet) {
+			return false
+		}
+	}
+	for _, fragment := range doc.Fragments {
+		if !count(fragment.SelectionSet) {
+			return false
+		}
+	}
+	return true
+}
+
+// mcpExpandedFieldsWithin reports whether the selection set, expanded
+// through every fragment use, holds at most budget field occurrences. It
+// stops at the first field over budget, so its own cost is bounded by the
+// budget (times the fragment chain length), never by the expanded size.
+func mcpExpandedFieldsWithin(set ast.SelectionSet, fragments ast.FragmentDefinitionList, budget int) bool {
+	count := 0
+	var walk func(set ast.SelectionSet, visiting map[string]bool) bool
+	walk = func(set ast.SelectionSet, visiting map[string]bool) bool {
+		for _, selection := range set {
+			switch node := selection.(type) {
+			case *ast.Field:
+				count++
+				if count > budget {
+					return false
+				}
+				if !walk(node.SelectionSet, visiting) {
+					return false
+				}
+			case *ast.InlineFragment:
+				if !walk(node.SelectionSet, visiting) {
+					return false
+				}
+			case *ast.FragmentSpread:
+				if visiting[node.Name] {
+					continue
+				}
+				if fragment := fragments.ForName(node.Name); fragment != nil {
+					visiting[node.Name] = true
+					within := walk(fragment.SelectionSet, visiting)
+					delete(visiting, node.Name)
+					if !within {
+						return false
+					}
+				}
+			}
+		}
+		return true
+	}
+	return walk(set, map[string]bool{})
 }
 
 // mcpAliasCount counts every field, at every depth and through every

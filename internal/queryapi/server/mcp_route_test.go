@@ -20,11 +20,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/parser"
 
 	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
@@ -293,8 +295,17 @@ func TestMCPServesExactlyFifteenAliases(t *testing.T) {
 	}
 	query := "query A($input: HotspotsInput!) { " + strings.Join(fields, " ") + " }"
 	rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, query, mcpHotspotsVariables(mcpTestOrg)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("15 aliases: status %d, want 200; body %s", rec.Code, rec.Body.String())
+	var body struct {
+		Data   map[string]any `json:"data"`
+		Errors []any          `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	// Served means data for every alias and no errors -- a 200 carrying
+	// GraphQL errors is not served (r2 P3 on #3425).
+	if rec.Code != http.StatusOK || len(body.Errors) != 0 || len(body.Data) != mcpAliasLimit {
+		t.Fatalf("15 aliases: status %d, %d errors, %d data keys; want 200, 0, %d; body %s", rec.Code, len(body.Errors), len(body.Data), mcpAliasLimit, rec.Body.String())
 	}
 }
 
@@ -821,5 +832,124 @@ func TestMCPOrgCheckReadsTheOrgIDSpellingToo(t *testing.T) {
 	}}}
 	if got := mcpCheckOrgArguments(ast.SelectionSet{nested}, nil, nil, mcpTestOrg); got != mcpReasonOrgMismatch {
 		t.Fatalf("input field org_id: reason %q, want %q", got, mcpReasonOrgMismatch)
+	}
+}
+
+// selfDoublingFragments is a small valid document whose fragments double at
+// each level: n levels expand to 2^n aliased hotspots fields.
+func selfDoublingFragments(n int) string {
+	query := "query X($input: HotspotsInput!) { ...F0 }\n"
+	for i := 0; i < n; i++ {
+		query += fmt.Sprintf("fragment F%d on Query { ...F%d ...F%d }\n", i, i+1, i+1)
+	}
+	return query + fmt.Sprintf("fragment F%d on Query { a: hotspots(input: $input) { rows { filePath } } }\n", n)
+}
+
+// r2 P1 on #3425: a ~1 KB document of self-doubling fragments must be
+// refused before any per-use walk expands it -- as complexity_limit, with
+// zero ClickHouse, in bounded time.
+func TestMCPRefusesSelfDoublingFragmentsBeforeExpandingThem(t *testing.T) {
+	l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
+	query := selfDoublingFragments(22)
+	started := time.Now()
+	rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, query, mcpHotspotsVariables(mcpTestOrg)))
+	elapsed := time.Since(started)
+	assertMCPRefused(t, rec, l.ch, http.StatusBadRequest, mcpReasonComplexity)
+	if elapsed > time.Second {
+		t.Fatalf("refusing a %d-byte self-doubling document took %s: something expanded it before the bounded count", len(query), elapsed)
+	}
+}
+
+// The bound itself, independent of the clock: 2^60 expanded fields would
+// never finish if the count were not bounded by the budget.
+func TestMCPExpandedFieldCountStopsAtTheBudget(t *testing.T) {
+	es := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{}})
+	doc, errs := gqlparser.LoadQuery(es.Schema(), selfDoublingFragments(60))
+	if len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	if mcpExpandedFieldsWithin(doc.Operations[0].SelectionSet, doc.Fragments, mcpComplexityLimit) {
+		t.Fatal("a 2^60-field document reported within the budget")
+	}
+	small, errs := gqlparser.LoadQuery(es.Schema(), selfDoublingFragments(3)) // 8 x 3 fields = 24
+	if len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	if !mcpExpandedFieldsWithin(small.Operations[0].SelectionSet, small.Fragments, 24) || mcpExpandedFieldsWithin(small.Operations[0].SelectionSet, small.Fragments, 23) {
+		t.Fatal("the count is not exact at the boundary: 24 expanded fields must be within 24 and over 23")
+	}
+}
+
+// largeDocuments are documents that each exceed the complexity cap on ONE
+// unexpanded node class, with the smallest shape that does.
+func largeDocuments(limit int) map[string]string {
+	var fields, spreads, chain, inlines strings.Builder
+	fields.WriteString("query X($input: HotspotsInput!) { hotspots(input: $input) { rows { ")
+	for i := 0; i < limit; i++ {
+		fields.WriteString("filePath ")
+	}
+	fields.WriteString("} } }") // limit+2 field nodes
+	spreads.WriteString("query X($input: HotspotsInput!) { hotspots(input: $input) { ")
+	for i := 0; i <= limit; i++ {
+		spreads.WriteString("...R ")
+	}
+	spreads.WriteString("} }\nfragment R on HotspotsResult { rows { filePath } }\n")
+	chain.WriteString("query X($input: HotspotsInput!) { ...F0 }\n")
+	for i := 0; i < limit; i++ {
+		fmt.Fprintf(&chain, "fragment F%d on Query { ...F%d }\n", i, i+1)
+	}
+	fmt.Fprintf(&chain, "fragment F%d on Query { hotspots(input: $input) { rows { filePath } } }\n", limit)
+	inlines.WriteString("query X($input: HotspotsInput!) { hotspots(input: $input) { ")
+	for i := 0; i <= limit; i++ {
+		inlines.WriteString("... on HotspotsResult { rows { filePath } } ")
+	}
+	inlines.WriteString("} }")
+	var inFragment strings.Builder
+	inFragment.WriteString("query X($input: HotspotsInput!) { hotspots(input: $input) { ...R } }\nfragment R on HotspotsResult { rows { ")
+	for i := 0; i < limit; i++ {
+		inFragment.WriteString("filePath ")
+	}
+	inFragment.WriteString("} }\n")
+	return map[string]string{"fields": fields.String(), "spreads": spreads.String(), "fragment_chain": chain.String(), "inline_fragments": inlines.String(), "fields_in_a_fragment": inFragment.String()}
+}
+
+// Refused BEFORE gqlparser validation (super-linear in document size), by
+// the linear node count -- the message names the unexpanded count, not the
+// later expansion count, which would refuse with the same reason.
+func TestMCPRefusesLargeDocumentsBeforeValidation(t *testing.T) {
+	for name, query := range largeDocuments(mcpComplexityLimit) {
+		t.Run(name, func(t *testing.T) {
+			l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
+			rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, query, mcpHotspotsVariables(mcpTestOrg)))
+			assertMCPRefused(t, rec, l.ch, http.StatusBadRequest, mcpReasonComplexity)
+			if !strings.Contains(rec.Body.String(), "the document holds more than") {
+				t.Fatalf("%s was refused after validation, not before it: %s", name, rec.Body.String())
+			}
+		})
+	}
+}
+
+// The count is exact per node class: each document holds exactly 3 nodes of
+// the class under test and at most 2 of every other class, so it is within a
+// limit of 3 and over a limit of 2 only because of that one class.
+func TestMCPDocumentNodeCountBoundary(t *testing.T) {
+	for name, q := range map[string]string{
+		"fields":    "{ a b c }",
+		"spreads":   "{ a ...A ...A ...A } fragment A on Q { b }",
+		"inlines":   "{ ... on Q { a } ... on Q { ...A } ... on Q { ...A } } fragment A on Q { b }",
+		"fragments": "{ a } fragment A on Q { b } fragment B on Q { ...A } fragment C on Q { ...B }",
+		// The excess sits only inside a fragment body: fragment bodies count.
+		"fragment_body": "{ ...A } fragment A on Q { a b c }",
+	} {
+		doc, err := parser.ParseQuery(&ast.Source{Input: q})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !mcpDocumentNodesWithin(doc, 3) {
+			t.Fatalf("%s: 3 nodes refused at limit 3", name)
+		}
+		if mcpDocumentNodesWithin(doc, 2) {
+			t.Fatalf("%s: 3 nodes within limit 2", name)
+		}
 	}
 }

@@ -114,7 +114,7 @@ func TestOrderingStampMatchesThePythonProducer(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/ordering.json",
 		PythonBuild: orderingPythonBuild,
-		SHA256:      "1055fc08cef5ffc90e1d2218629a8055458ef7f6e18de0f19dd772d6b652fea4",
+		SHA256:      "207ff06cff165cf14ae0aec6f6b33d496e9c0b3f9289b083738dd79e9720a793",
 		Recipe: "git worktree add --detach $DIR " + orderingPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/fixturescli/ -test '^TestOrderingStampMatchesThePythonProducer$' -python-root $DIR",
 	})

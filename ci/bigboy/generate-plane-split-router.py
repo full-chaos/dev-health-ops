@@ -169,7 +169,6 @@ def emit_labels(go_regex: str, query_regex: str) -> str:
 # (path, pathType).
 DEFAULT_PYTHON_ALLOW_LIST: list[tuple[str, str]] = [
     ("/graphql$", "ImplementationSpecific"),
-    ("/api/v1/internal", "Prefix"),
 ]
 # Kept on Python on bigboy/local ONLY (D2983: prod blocks these at the ingress; local keeps
 # them). Never part of the ops chart's allow-list.
@@ -186,15 +185,6 @@ def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
     if entries is None:
         return list(DEFAULT_PYTHON_ALLOW_LIST)
     out = [(e["path"], e["pathType"]) for e in entries]
-    # Segment-exact, like ingress-nginx Prefix: only these Prefix paths cover /api/v1/internal.
-    if not any(
-        t == "Prefix" and p.rstrip("/") in ("", "/api", "/api/v1", "/api/v1/internal")
-        for p, t in out
-    ):
-        raise SystemExit(
-            "generate-plane-split-router: ops.ingress.pythonAllowList must carry /api/v1/internal"
-            " (Prefix): the Go api serves /api/v1/internal/acr/* with no credential check"
-        )
     return out
 
 

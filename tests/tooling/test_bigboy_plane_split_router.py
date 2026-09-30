@@ -202,11 +202,14 @@ def test_default_backend_is_go_and_allow_list_stays_python(
     assert _route(doc, "/health") == "http://go-api:8000"
     for py in (
         "/graphql",
-        "/api/v1/internal/acr/health",
         "/docs",
         "/openapi.json",
     ):
         assert _route(doc, py) == "http://api:8000", py
+    # CHAOS-7255: the Go public listener serves no /api/v1/internal/* route, so the default list no longer
+    # carries it; the request lands on the default backend (Go's native 404).
+    assert _route(doc, "/api/v1/internal/acr/health") == "http://go-api:8000"
+    assert ("/api/v1/internal", "Prefix") not in gen.DEFAULT_PYTHON_ALLOW_LIST
     # CHAOS-7198: llm-settings/readiness is Go-served, no longer on the Python allow-list.
     assert _route(doc, "/api/v1/admin/llm-settings/readiness") == "http://go-api:8000"
     assert (
@@ -215,33 +218,20 @@ def test_default_backend_is_go_and_allow_list_stays_python(
     ) not in gen.DEFAULT_PYTHON_ALLOW_LIST
 
 
-def test_allow_list_override_must_cover_internal(gen: ModuleType) -> None:
-    doc = {
-        "ops": {
-            "ingress": {"pythonAllowList": [{"path": "/graphql", "pathType": "Prefix"}]}
-        }
-    }
-    with pytest.raises(SystemExit):
-        gen.python_allow_list_from_doc(doc)
-
-
-@pytest.mark.parametrize(
-    ("path", "path_type"),
-    [
-        ("/api/v1/int", "Prefix"),
-        ("/api/v1/internal-x", "Prefix"),
-        ("/api/v1/internals", "Prefix"),
-        ("/api/v1/internal", "Exact"),
-    ],
-)
-def test_allow_list_cover_is_segment_exact(
-    gen: ModuleType, path: str, path_type: str
-) -> None:
-    doc = {
-        "ops": {"ingress": {"pythonAllowList": [{"path": path, "pathType": path_type}]}}
-    }
-    with pytest.raises(SystemExit):
-        gen.python_allow_list_from_doc(doc)
+def test_allow_list_override_needs_no_internal_cover(gen: ModuleType) -> None:
+    """CHAOS-7255: an override no longer has to carry /api/v1/internal (and may still list it)."""
+    for entries in (
+        [{"path": "/graphql", "pathType": "Prefix"}],
+        [{"path": "/graphql$", "pathType": "ImplementationSpecific"}],
+        [
+            {"path": "/graphql$", "pathType": "ImplementationSpecific"},
+            {"path": "/api/v1/internal", "pathType": "Prefix"},
+        ],
+    ):
+        doc = {"ops": {"ingress": {"pythonAllowList": entries}}}
+        assert gen.python_allow_list_from_doc(doc) == [
+            (e["path"], e["pathType"]) for e in entries
+        ]
 
 
 def test_anchored_allow_list_entry_emits_one_exact_path_term(gen: ModuleType) -> None:

@@ -33,6 +33,12 @@ spec:
   {{- end }}
   rules:
     {{- range $host := .Values.ingress.hosts }}
+    {{- /* CHAOS-7221 (r1 P1): validate the TYPE whenever the key is present, so null/0/"" cannot skip it by being falsy. */}}
+    {{- if hasKey $host "pythonAllowList" }}
+    {{- if not (or (kindIs "bool" $host.pythonAllowList) (kindIs "slice" $host.pythonAllowList)) }}
+    {{- fail (printf "ingress.hosts %q pythonAllowList must be true or a list of {path, pathType}, got %s" $host.host (kindOf $host.pythonAllowList)) }}
+    {{- end }}
+    {{- end }}
     - host: {{ $host.host | quote }}
       http:
         paths:

@@ -269,6 +269,14 @@ func TestPerHostPythonAllowList(t *testing.T) {
 	if !strings.Contains(ownRules, "path: /metrics") || !strings.Contains(ownRules, "path: /graphql") || !strings.Contains(ownRules, "path: /api/v1/internal") {
 		t.Errorf("a host with its own list must render exactly that list:\n%s", ownRules)
 	}
+	// Exclusive, not merged: the own-list host renders exactly its 3 paths + "/", the shared-list host exactly the
+	// shared defaults + "/" (r1 P3: presence checks alone would pass a regression that appended the shared list).
+	if got := strings.Count(ownRules, "- path: "); got != 4 {
+		t.Errorf("own-list host must render exactly its 3 allow-list paths plus \"/\", got %d paths:\n%s", got, ownRules)
+	}
+	if got := strings.Count(shared, "- path: "); got != 3 {
+		t.Errorf("shared-list host must render exactly the 2 default paths plus \"/\", got %d paths:\n%s", got, shared)
+	}
 	if !strings.Contains(strings.SplitN(strings.SplitN(ownRules, "path: /metrics", 2)[1], "path:", 2)[0], "b-dev-health-api") {
 		t.Errorf("/metrics must back onto the Python api Service:\n%s", ownRules)
 	}
@@ -280,6 +288,9 @@ func TestPerHostPythonAllowList(t *testing.T) {
 		"entry not a map":         {`["/graphql"]`, "literal /path"},
 		"string value":            {`"yes"`, "must be true or a list"},
 		"map value":               {`{"path":"/x"}`, "must be true or a list"},
+		"null value":              {`null`, "must be true or a list"},
+		"zero value":              {`0`, "must be true or a list"},
+		"empty string value":      {`""`, "must be true or a list"},
 	} {
 		hosts := `[{"host":"h","pythonAllowList":` + c.list + `,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
 		o, err := render(hosts)

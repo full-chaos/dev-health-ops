@@ -1004,20 +1004,28 @@ func TestMCPEveryStageOfTheDocumentPathIsBoundedUnderTheBodyCap(t *testing.T) {
 	cases := []struct {
 		stage, name, body string
 		status            int
+		reason            string // the refusal that proves WHICH pre-check bounded the stage; "" = served
 	}{
-		{"body read", "cap+1 bytes", strings.Repeat("x", 16*1024+1), http.StatusRequestEntityTooLarge},
-		{"json decode", "7000-deep variables", `{"query":"query X($input: HotspotsInput!){hotspots(input:$input){rows{filePath}}}","variables":{"input":` + strings.Repeat("[", 7000) + strings.Repeat("]", 7000) + `}}`, http.StatusBadRequest},
-		{"parse", "4000 directives", mcpBody(t, "query X { hotspots(input:{}) "+strings.Repeat("@a ", 4000)+" { rows { filePath } } }", nil), http.StatusBadRequest},
-		{"node counts", "150-fragment chain", mcpBody(t, chain, nil), http.StatusOK},
-		{"raw expansion", "149-deep doubling", mcpBody(t, doubling(149), nil), http.StatusBadRequest},
-		{"validate", "70 overlapping fields", mcpBody(t, "query X($input: HotspotsInput!) { hotspots(input:$input) { "+strings.Repeat("rows{filePath} ", 70)+"} }", vars), http.StatusOK},
+		{"body read", "cap+1 bytes", strings.Repeat("x", 16*1024+1), http.StatusRequestEntityTooLarge, mcpReasonBodyTooLarge},
+		{"json decode", "7000-deep variables", `{"query":"query X($input: HotspotsInput!){hotspots(input:$input){rows{filePath}}}","variables":{"input":` + strings.Repeat("[", 7000) + strings.Repeat("]", 7000) + `}}`, http.StatusBadRequest, mcpReasonInvalidVariables},
+		{"parse", "4000 directives", mcpBody(t, "query X { hotspots(input:{}) "+strings.Repeat("@a ", 4000)+" { rows { filePath } } }", nil), http.StatusBadRequest, mcpReasonInvalidDocument},
+		{"node counts", "150-fragment chain", mcpBody(t, chain, nil), http.StatusOK, ""},
+		{"raw expansion", "149-deep doubling", mcpBody(t, doubling(149), nil), http.StatusBadRequest, mcpReasonComplexity},
+		{"validate", "70 overlapping fields", mcpBody(t, "query X($input: HotspotsInput!) { hotspots(input:$input) { "+strings.Repeat("rows{filePath} ", 70)+"} }", vars), http.StatusOK, ""},
 	}
 	l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
 	for _, c := range cases {
 		started := time.Now()
 		rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), c.body)
-		if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		// Wall time is only a generous backstop (the regressions this class
+		// produced cost 1-15 s); the proof is the refusal code below.
+		if elapsed := time.Since(started); elapsed > 5*time.Second {
 			t.Errorf("%s / %s: took %s", c.stage, c.name, elapsed)
+		}
+		if c.reason != "" {
+			if reason, _ := mcpReason(t, rec); reason != c.reason {
+				t.Errorf("%s / %s: reason %q, want %q (the stage's pre-check did not bound it); body %.200s", c.stage, c.name, reason, c.reason, rec.Body.String())
+			}
 		}
 		if rec.Code != c.status {
 			t.Errorf("%s / %s: status %d, want %d; body %.200s", c.stage, c.name, rec.Code, c.status, rec.Body.String())

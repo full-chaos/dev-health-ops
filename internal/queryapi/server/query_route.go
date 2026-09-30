@@ -3333,65 +3333,115 @@ func withMutationLocation(ctx context.Context, presented *gqlerror.Error) *gqler
 // run" must never read as "the check passed."
 func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, requireKind string, orgAllowed func(context.Context, string) bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
+		// /graphql (graphql_edge_route.go) runs this same pipeline. Its
+		// differences are keyed on a context value only that route sets:
+		// GET is a request for a registered query, the identity is checked
+		// before the body is parsed, and the refusals the Python edge
+		// answered itself keep its status and body.
+		edge := isGraphQLEdge(r.Context())
+		viaGET := edge && r.Method == http.MethodGet
+		if r.Method != http.MethodPost && !viaGET {
+			if edge {
+				refuseGraphQLEdgeMethod(w)
+				return
+			}
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		// Same body-size contract the Python edge's
-		// GraphQLQuerySizeLimitMiddleware enforces for /graphql
-		// (security.py's GRAPHQL_MAX_QUERY_BYTES, default 16 KiB) --
-		// codex review, 2026-08-28: reading up to 1 MiB unconditionally
-		// let a body between the configured limit and 1 MiB through
-		// silently, bypassing that existing request-size contract for
-		// this canaried operation. LimitReader+1 lets a body of EXACTLY
-		// the limit succeed while still detecting one byte over it,
-		// without buffering the oversized remainder.
-		limit := graphQLMaxQueryBytes(getenv)
-		bodyBytes, readErr := io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
-		_ = r.Body.Close()
-		if readErr != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		if len(bodyBytes) > limit {
-			http.Error(w, "GraphQL request body exceeds size limit", http.StatusRequestEntityTooLarge)
-			return
-		}
-
-		// The Python edge reads this body with json.loads, which refuses an
-		// integer literal past 4300 digits with a ValueError -- an unhandled
-		// exception, the generic 500 -- wherever the literal sits (the
-		// variables included, which this decode into {query} would not see).
-		var intLimit *pyjson.IntLimitError
-		if _, decodeErr := pyjson.Decode(bodyBytes); errors.As(decodeErr, &intLimit) {
-			policy.WriteDetail(w, http.StatusInternalServerError, "Internal Server Error", nil)
-			return
+		var bodyBytes []byte
+		if !viaGET {
+			// Same body-size contract the Python edge's
+			// GraphQLQuerySizeLimitMiddleware enforces for /graphql
+			// (security.py's GRAPHQL_MAX_QUERY_BYTES, default 16 KiB) --
+			// codex review, 2026-08-28: reading up to 1 MiB unconditionally
+			// let a body between the configured limit and 1 MiB through
+			// silently, bypassing that existing request-size contract for
+			// this canaried operation. LimitReader+1 lets a body of EXACTLY
+			// the limit succeed while still detecting one byte over it,
+			// without buffering the oversized remainder.
+			limit := graphQLMaxQueryBytes(getenv)
+			read, readErr := io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
+			_ = r.Body.Close()
+			if readErr != nil {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			if len(read) > limit {
+				// /graphql's own size refusal ran before this, in
+				// graphQLEdgeLimits, outside the security headers.
+				http.Error(w, "GraphQL request body exceeds size limit", http.StatusRequestEntityTooLarge)
+				return
+			}
+			bodyBytes = read
 		}
 
-		var parsed struct {
-			Query string `json:"query"`
-		}
-		if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-
-		// Authenticate BEFORE the document lookup, so every carrier outcome
-		// (ambiguous, none, malformed, invalid, accepted) is decided before the
-		// unregistered-document 404 can answer (CHAOS-6757 r1: an ambiguous or
-		// unauthenticated request for an unregistered document got 404).
-		// Python parity: the edge's GraphQLRouter resolves get_context (401
-		// "Authentication required") before it picks an operation. The body
-		// refusals above stay where they were: the size 413 and the 4300-digit
-		// 500 are documented above as Python-edge behaviour that precedes this
-		// route; the malformed-JSON 400 keeps its old position and is NOT
-		// verified against Python's order.
-		claims, ok := authenticateInternalRequest(w, r, verifier, edgeAuth, edgeStore)
-		if !ok {
-			return
+		// /graphql checks the identity before it parses the body (the Python
+		// app resolved its GraphQL context first); /query keeps its order,
+		// below.
+		var claims authctx.Claims
+		if edge {
+			authenticated, ok := authenticateGraphQLEdge(w, r, edgeAuth, edgeStore)
+			if !ok {
+				return
+			}
+			claims = authenticated
 		}
 
-		operation, ok := operationForDocument(parsed.Query, operationByDigest)
+		var query string
+		switch {
+		case viaGET:
+			text, body, refusal := graphQLEdgeGETDocument(r)
+			if refusal != nil {
+				refusal(w)
+				return
+			}
+			bodyBytes, query = body, text
+		case edge:
+			text, refusal := graphQLEdgePOSTDocument(r, bodyBytes)
+			if refusal != nil {
+				refusal(w)
+				return
+			}
+			query = text
+		default:
+			// The Python edge reads this body with json.loads, which refuses an
+			// integer literal past 4300 digits with a ValueError -- an unhandled
+			// exception, the generic 500 -- wherever the literal sits (the
+			// variables included, which this decode into {query} would not see).
+			var intLimit *pyjson.IntLimitError
+			if _, decodeErr := pyjson.Decode(bodyBytes); errors.As(decodeErr, &intLimit) {
+				policy.WriteDetail(w, http.StatusInternalServerError, "Internal Server Error", nil)
+				return
+			}
+
+			var parsed struct {
+				Query string `json:"query"`
+			}
+			if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			query = parsed.Query
+
+			// Authenticate BEFORE the document lookup, so every carrier outcome
+			// (ambiguous, none, malformed, invalid, accepted) is decided before the
+			// unregistered-document 404 can answer (CHAOS-6757 r1: an ambiguous or
+			// unauthenticated request for an unregistered document got 404).
+			// Python parity: the edge's GraphQLRouter resolves get_context (401
+			// "Authentication required") before it picks an operation. The body
+			// refusals above stay where they were: the size 413 and the 4300-digit
+			// 500 are documented above as Python-edge behaviour that precedes this
+			// route; the malformed-JSON 400 keeps its old position and is NOT
+			// verified against Python's order. (/graphql authenticated earlier,
+			// before any parse.)
+			authenticated, ok := authenticateInternalRequest(w, r, verifier, edgeAuth, edgeStore)
+			if !ok {
+				return
+			}
+			claims = authenticated
+		}
+
+		operation, ok := operationForDocument(query, operationByDigest)
 		if !ok {
 			// Unregistered document: plan §5's safe default ("unregistered
 			// documents ... stay on Python") applied at this router --
@@ -3411,14 +3461,25 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			// logging it rather than trusting its length.
 			log.Printf(
 				"query-api: unregistered document digest-miss: digest=%s query=%s",
-				digestHex(parsed.Query), truncateForLog(parsed.Query, maxUnwrapChainLogBytes),
+				digestHex(query), truncateForLog(query, maxUnwrapChainLogBytes),
 			)
 			http.NotFound(w, r)
 			return
 		}
 
+		if viaGET {
+			// GraphQL forbids a mutation over GET, and the Python edge never
+			// forwarded one (go_api_dispatcher.py "mutation_over_get"):
+			// refused here, before any switch or resolver can run it.
+			if kind, _ := digest.DocumentKind(query); kind != digest.KindQuery {
+				log.Printf("query-api: /graphql refused a GET for a non-query document: operation=%s kind=%q", operation, kind)
+				refuseMutationOverGET(w)
+				return
+			}
+		}
+
 		if requireKind != "" {
-			kind, kindErr := digest.DocumentKind(parsed.Query)
+			kind, kindErr := digest.DocumentKind(query)
 			if kind != requireKind {
 				// DocumentKind answers "" for a document whose kind cannot be
 				// stated, so that case is refused here too: only a document
@@ -3445,6 +3506,14 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 		// order the client wrote its keys (see graph.WithRequestBody).
 		r = r.WithContext(graph.WithRequestBody(authctx.WithClaims(r.Context(), claims), bodyBytes))
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		if edge {
+			// What the Python edge forwarded: a POST of this JSON body, with
+			// Content-Type application/json whatever the client sent.
+			r.Method = http.MethodPost
+			r.ContentLength = int64(len(bodyBytes))
+			r.Header = r.Header.Clone()
+			r.Header.Set("Content-Type", "application/json")
+		}
 
 		routeMux.Dispatch(operation, w, r)
 	}

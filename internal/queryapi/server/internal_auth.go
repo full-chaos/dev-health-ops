@@ -116,6 +116,7 @@ func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *p
 	}
 
 	orgID := user.OrgID
+	role := user.Role
 	impersonationActive := false
 	if user.IsSuperuser {
 		session, sessionErr := edgeStore.ActiveImpersonation(ctx, user.ID)
@@ -135,7 +136,11 @@ func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *p
 			return authctx.Claims{}, false
 		}
 		if session != nil {
+			// The effective principal while impersonating is the TARGET's:
+			// org and role both, as the Python edge stated it to /query
+			// (principal_envelope.py effective_principal_identity).
 			orgID = session.TargetOrgID.String()
+			role = session.TargetRole
 			impersonationActive = true
 		}
 	}
@@ -161,7 +166,46 @@ func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *p
 	}
 
 	internalidentity.RecordOutcome("edge", "accepted")
-	return authctx.Claims{OrgID: orgID, Role: user.Role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive}, true
+	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive}, true
+}
+
+// authenticateEdgeTokenOnly authenticates /graphql, the product path an
+// Ingress reaches. Its ONE carrier is the user's own edge access token, the
+// only credential the Python edge accepted there (graphql/app.py get_context,
+// services/auth.py authenticate_access_token): the internal identity headers
+// and the principal envelope are server-to-server carriers for /query, and
+// neither may become usable from outside the cluster by riding the product
+// path. So a request carrying the internal headers, a second Authorization
+// value, no bearer, or a bearer that is not an edge token (any other JWT
+// alg, the envelope's EdDSA included) is refused, and so is every request
+// when this pod has no edge secret configured. The token itself is checked
+// exactly as /query's edge carrier checks it (authenticateEdgeCarrier).
+func authenticateEdgeTokenOnly(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store) (authctx.Claims, bool) {
+	if len(r.Header.Values("Authorization")) > 1 {
+		refuseInternal(w, r, "ambiguous_carrier", "authorization")
+		return authctx.Claims{}, false
+	}
+	// The public listener deletes these headers before any handler runs, so
+	// this refuses only on the internal listener, whose callers have no
+	// business on the product path.
+	if internalidentity.Present(r.Header) {
+		refuseInternal(w, r, "internal_headers_on_edge_path", "headers")
+		return authctx.Claims{}, false
+	}
+	token, ok := bearerToken(r.Header.Get("Authorization"))
+	if !ok {
+		refuseInternal(w, r, "no_carrier", "none")
+		return authctx.Claims{}, false
+	}
+	if edgeAuth == nil {
+		refuseInternal(w, r, "edge_not_configured", "edge")
+		return authctx.Claims{}, false
+	}
+	if alg, ok := jwtHeaderAlg(token); !ok || alg != principal.EdgeAlgorithm {
+		refuseInternal(w, r, "not_an_edge_token", "edge")
+		return authctx.Claims{}, false
+	}
+	return authenticateEdgeCarrier(w, r, edgeAuth, edgeStore, token)
 }
 
 // refuseAmbiguousCarrier answers 401 and reports true when the request

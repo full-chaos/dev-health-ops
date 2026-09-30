@@ -261,7 +261,7 @@ func TestEdgeCarrier_ImpersonatingSuperuserSetsImpersonationActive(t *testing.T)
 	store := &fakeEdgeStore{
 		states:   map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
 		found:    map[uuid.UUID]bool{ecUser: true},
-		sessions: map[uuid.UUID]*policy.Impersonation{ecUser: {TargetUserID: ecTarget, TargetOrgID: ecOrg}},
+		sessions: map[uuid.UUID]*policy.Impersonation{ecUser: {TargetUserID: ecTarget, TargetOrgID: ecOrg, TargetRole: "viewer"}},
 	}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
@@ -280,6 +280,9 @@ func TestEdgeCarrier_ImpersonatingSuperuserSetsImpersonationActive(t *testing.T)
 	}
 	if got.OrgID != ecOrg.String() {
 		t.Fatalf("OrgID = %q, want the impersonation session's target org %q (never the token's own org_id claim while impersonating)", got.OrgID, ecOrg.String())
+	}
+	if got.Role != "viewer" {
+		t.Fatalf("Role = %q, want the impersonation session's target role %q (the effective principal is the target's, as the Python edge stated it)", got.Role, "viewer")
 	}
 }
 

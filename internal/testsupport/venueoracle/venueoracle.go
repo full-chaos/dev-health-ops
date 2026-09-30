@@ -346,8 +346,19 @@ elif mode == "serve":
                 _traceback.print_exc(file=sys.stderr)
                 raise
     client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)
+    # VENUE_RESET_ATTRS_PER_REQUEST="module:attribute,..." sets each named
+    # module global back to None before every request. TestClient runs each
+    # request on its own event loop, and a module-cached httpx.AsyncClient
+    # (graphql/go_api_dispatcher.py's _http_client, _internal_http_client)
+    # keeps pooled connections bound to the loop that opened them: the next
+    # request that reuses one fails before anything is sent. A server runs
+    # one loop, so this is the harness's artefact, not the app's.
+    import importlib as _reset_importlib
+    _reset_attrs = [item.partition(":") for item in os.environ.get("VENUE_RESET_ATTRS_PER_REQUEST", "").split(",") if item]
     out = []
     for req in json.loads(sys.stdin.read()):
+        for _module_name, _, _attribute in _reset_attrs:
+            setattr(_reset_importlib.import_module(_module_name), _attribute, None)
         body = base64.b64decode(req["body"]) if req.get("body") is not None else None
         r = client.request(req["method"], req["path"], headers=req.get("headers") or {}, content=body)
         out.append({"status": r.status_code, "headers": {k.lower(): v for k, v in r.headers.items()},

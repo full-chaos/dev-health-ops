@@ -1,11 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -203,5 +205,21 @@ func TestEdgeUserStoreIsBuiltOnceAndPassedToEveryEdgeRoute(t *testing.T) {
 	}
 	if verifierCallsWithStore != verifierCalls {
 		t.Fatalf("%d of %d buildEdgeVerifierFromEnv calls pass the shared edgeUsers store", verifierCallsWithStore, verifierCalls)
+	}
+}
+
+// P3 of the r1 review: a users-store failure logs its cause, so a missing grant on `users` is
+// told apart from any other internal error.
+func TestAuthenticateRESTRequestLogsTheUsersLookupCause(t *testing.T) {
+	var logged bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logged)
+	defer log.SetOutput(previous)
+	ok, rec := authWithEdgeUsers(t, &fakeEdgeUsers{err: errors.New("permission denied for table users")})
+	if ok || rec.Code != http.StatusInternalServerError {
+		t.Fatalf("ok=%v status=%d, want a 500 refusal", ok, rec.Code)
+	}
+	if !strings.Contains(logged.String(), "permission denied for table users") {
+		t.Fatalf("the users lookup failure was logged without its cause:\n%s", logged.String())
 	}
 }

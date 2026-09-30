@@ -1,8 +1,11 @@
 package principal
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -39,6 +42,18 @@ func (f *fakeUsers) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Imp
 // active, token_version 0.
 func activeUserStore() *fakeUsers {
 	return &fakeUsers{state: policy.UserState{IsActive: true}, found: true}
+}
+
+// edgeTestSubject is validEdgeClaims' sub.
+const edgeTestSubject = "11111111-1111-1111-1111-111111111111"
+
+func mustEdgeVerifierFor(t *testing.T, users policy.Store) *EdgeVerifier {
+	t.Helper()
+	v, err := NewEdgeVerifier(edgeTestSecret, edgeTestIssuer, edgeTestAudience, users)
+	if err != nil {
+		t.Fatalf("NewEdgeVerifier: %v", err)
+	}
+	return v
 }
 
 func verifyWithUsers(t *testing.T, users policy.Store, mutate func(map[string]any)) (*EdgeClaims, error) {
@@ -137,5 +152,36 @@ func TestEdgeVerifier_StoreErrorFailsClosed(t *testing.T) {
 func TestEdgeVerifier_RequiresUsersStore(t *testing.T) {
 	if _, err := NewEdgeVerifier(edgeTestSecret, edgeTestIssuer, edgeTestAudience, nil); err == nil {
 		t.Fatal("NewEdgeVerifier accepted a nil users store; the token of a deactivated user would be served")
+	}
+}
+
+// P1 of the r1 review: the users-row refusals log which refusal it was, never the subject.
+func TestEdgeVerifier_UsersRowRefusalsLogTheReasonNotTheSubject(t *testing.T) {
+	cases := map[string]struct {
+		users *fakeUsers
+		want  string
+	}{
+		"inactive":   {&fakeUsers{state: policy.UserState{IsActive: false}, found: true}, "user is deactivated"},
+		"not found":  {&fakeUsers{found: false}, "user not found"},
+		"stale":      {&fakeUsers{state: policy.UserState{IsActive: true, TokenVersion: 9}, found: true}, "stale session"},
+		"store fail": {&fakeUsers{err: errors.New("permission denied for table users")}, "user lookup failed"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var logBuf bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+			defer slog.SetDefault(previous)
+			if _, err := verifyWithUsers(t, tc.users, nil); err == nil {
+				t.Fatal("Verify: expected a refusal")
+			}
+			out := logBuf.String()
+			if !strings.Contains(out, tc.want) {
+				t.Fatalf("log output lacks the refusal %q (an operator could not tell which check refused):\n%s", tc.want, out)
+			}
+			if strings.Contains(out, edgeTestSubject) || strings.Contains(out, "user_id") {
+				t.Fatalf("log output carries the token subject:\n%s", out)
+			}
+		})
 	}
 }

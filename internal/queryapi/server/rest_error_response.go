@@ -211,8 +211,8 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 				// as a pass, and the cause is logged before the response.
 				var rejection *edgetoken.Rejection
 				if !errors.As(err, &rejection) && !policy.IsRefusal(err) {
-					log.Printf("query-api: %s: edge token users lookup failed: request_id=%s unavailable=%t",
-						component, envelopeRequestID(r), errors.Is(err, policy.ErrUnavailable))
+					log.Printf("query-api: %s: edge token users lookup failed: request_id=%s unavailable=%t err=%v",
+						component, envelopeRequestID(r), errors.Is(err, policy.ErrUnavailable), err)
 					policy.WriteAuthFailure(w, "", err)
 					return authctx.Claims{}, false
 				}

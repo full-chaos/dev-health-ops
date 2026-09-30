@@ -3,12 +3,15 @@ package principal
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
 
 // TestEdgeVerify_RejectionsAreLoggedAndCountedByReason is the edge access
@@ -37,6 +40,9 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 		wantIss    string
 		wantAud    string
 		token      func() string
+		// users, when set, is the users-row source of a verifier built for this case
+		// (the live users-row refusals of CHAOS-6290); nil uses the active-user verifier.
+		users policy.Store
 	}{
 		{
 			name:       "bad_signature",
@@ -133,6 +139,26 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 				return signEdgeToken(t, edgeTestSecret, claims)
 			},
 		},
+		{
+			name:       "user_refused",
+			wantReason: ReasonUserRefused,
+			wantIss:    edgeTestIssuer,
+			wantAud:    edgeTestAudience,
+			users:      &fakeUsers{state: policy.UserState{IsActive: false}, found: true},
+			token: func() string {
+				return signEdgeToken(t, edgeTestSecret, validEdgeClaims("org-1"))
+			},
+		},
+		{
+			name:       "user_lookup_failed",
+			wantReason: ReasonUserLookupFailed,
+			wantIss:    edgeTestIssuer,
+			wantAud:    edgeTestAudience,
+			users:      &fakeUsers{err: errors.New("permission denied for table users")},
+			token: func() string {
+				return signEdgeToken(t, edgeTestSecret, validEdgeClaims("org-1"))
+			},
+		},
 	}
 
 	// Uses sharedTestMetricReader (metrics_reader_test.go), never a
@@ -148,7 +174,11 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 
 			ctx := WithRequestMeta(context.Background(), remoteAddr, requestID)
 			token := tc.token()
-			if _, err := v.Verify(ctx, token); err == nil {
+			verifier := v
+			if tc.users != nil {
+				verifier = mustEdgeVerifierFor(t, tc.users)
+			}
+			if _, err := verifier.Verify(ctx, token); err == nil {
 				t.Fatalf("Verify: expected a rejection for %s, got nil error", tc.name)
 			}
 
@@ -181,6 +211,11 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			if strings.Contains(logBuf.String(), edgeTestSecret) {
 				t.Fatal("rejection log output contains the signing secret -- must never log key material")
 			}
+			// The subject is never logged (edge_telemetry.go), including by the users-row
+			// check's own refusal lines.
+			if strings.Contains(logBuf.String(), edgeTestSubject) {
+				t.Fatalf("rejection log output contains the token subject -- must never log sub:\n%s", logBuf.String())
+			}
 		})
 	}
 
@@ -202,7 +237,7 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 		}
 	})
 
-	// Collected once, after all 10 calls above (9 rejections + 1
+	// Collected once, after all 10 calls above (11 rejections + 1
 	// success) -- see TestVerify_RejectionsAreLoggedAndCountedByReason's
 	// own doc comment for why this cannot be done per-subtest.
 	var rm metricdata.ResourceMetrics

@@ -150,8 +150,10 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 	switch {
 	case readErr != nil:
 		outcome = "unknown"
+	case err == nil && sameSet(observed, before):
+		outcome = "unchanged" // already at the head: nothing to commit
 	case err != nil && sameSet(observed, before):
-		outcome = "rolled_back"
+		outcome = "unchanged" // refused or rolled back: the database holds what it held
 	case err != nil:
 		outcome = "partial"
 	}

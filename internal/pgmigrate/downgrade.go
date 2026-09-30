@@ -303,7 +303,9 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 	}
 	result.Action = "downgraded"
 	if result.Recorded, err = Recorded(ctx, conn); err != nil {
-		return result, err
+		result.Action = "outcome_unknown"
+		logOutcome(logger, target, recorded, result)
+		return result, fmt.Errorf("%w (outcome unknown: the downgrade returned success but alembic_version could not be re-read)", err)
 	}
 	logOutcome(logger, target, recorded, result)
 	return result, nil
@@ -319,10 +321,10 @@ func (t DowngradeTarget) String() string {
 
 // logOutcome is the one final line of a downgrade run: direction, the revisions it
 // started from and was asked to reach, the revision set OBSERVED afterwards (read back,
-// never inferred) and the outcome: committed, rolled_back or unknown. The per-step lines
+// never inferred) and the outcome: committed, unchanged, partial or unknown. The per-step lines
 // fire BEFORE their SQL runs, so only this line says what the database holds.
 func logOutcome(logger *slog.Logger, target DowngradeTarget, from []string, result DowngradeResult) {
-	outcome := map[string]string{"downgraded": "committed", "changed": "committed", "unchanged": "rolled_back", "outcome_unknown": "unknown"}[result.Action]
+	outcome := map[string]string{"downgraded": "committed", "changed": "committed", "unchanged": "unchanged", "outcome_unknown": "unknown"}[result.Action]
 	logger.Info("migrate outcome", "direction", "down", "from", from, "requested", target.String(), "observed", result.Recorded, "outcome", outcome)
 }
 

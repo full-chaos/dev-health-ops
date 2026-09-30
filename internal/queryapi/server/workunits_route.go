@@ -109,7 +109,7 @@ func loadWorkUnitsRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issue
 // not configured -- main() only calls mux.HandleFunc when ok is true,
 // same "stay unmounted, don't fail to build/start" contract every other
 // optionally-configured route in this binary follows.
-func buildWorkUnitsRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
+func buildWorkUnitsRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
 	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadWorkUnitsRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
@@ -123,7 +123,7 @@ func buildWorkUnitsRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup f
 	// Optional -- nil whenever the pod has not been given the edge
 	// credential's key material, in which case authenticateRESTRequest
 	// falls back to its pre-existing envelope-only behaviour.
-	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv)
+	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv, edgeUsers)
 	if err != nil {
 		return nil, nil, false, err
 	}

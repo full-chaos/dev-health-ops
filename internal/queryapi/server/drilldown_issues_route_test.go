@@ -269,7 +269,7 @@ func TestBuildDrilldownIssuesRouteEntryHandlerRejectsUnknownMethod(t *testing.T)
 	t.Setenv("GO_API_ENVELOPE_ISSUER", "test-issuer")
 	t.Setenv("GO_API_ENVELOPE_AUDIENCE", "test-audience")
 
-	handler, cleanup, ok, err := buildDrilldownIssuesRoute(os.Getenv)
+	handler, cleanup, ok, err := buildDrilldownIssuesRoute(os.Getenv, nil)
 	if err != nil {
 		t.Fatalf("buildDrilldownIssuesRoute: %v", err)
 	}

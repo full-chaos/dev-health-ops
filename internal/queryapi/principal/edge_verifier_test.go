@@ -24,7 +24,7 @@ const (
 // on an unexpected construction error.
 func mustEdgeVerifier(t *testing.T, secret, issuer, audience string) *EdgeVerifier {
 	t.Helper()
-	v, err := NewEdgeVerifier(secret, issuer, audience)
+	v, err := NewEdgeVerifier(secret, issuer, audience, activeUserStore())
 	if err != nil {
 		t.Fatalf("NewEdgeVerifier: unexpected error: %v", err)
 	}
@@ -214,19 +214,19 @@ func TestEdgeVerifier_RejectsMalformedToken(t *testing.T) {
 }
 
 func TestNewEdgeVerifier_RejectsShortSecret(t *testing.T) {
-	if _, err := NewEdgeVerifier("too-short", edgeTestIssuer, edgeTestAudience); err == nil {
+	if _, err := NewEdgeVerifier("too-short", edgeTestIssuer, edgeTestAudience, activeUserStore()); err == nil {
 		t.Fatal("NewEdgeVerifier: want error for a secret under 32 characters")
 	}
 }
 
 func TestNewEdgeVerifier_RejectsEmptyIssuer(t *testing.T) {
-	if _, err := NewEdgeVerifier(edgeTestSecret, "", edgeTestAudience); err == nil {
+	if _, err := NewEdgeVerifier(edgeTestSecret, "", edgeTestAudience, activeUserStore()); err == nil {
 		t.Fatal("NewEdgeVerifier: want error for an empty issuer")
 	}
 }
 
 func TestNewEdgeVerifier_RejectsEmptyAudience(t *testing.T) {
-	if _, err := NewEdgeVerifier(edgeTestSecret, edgeTestIssuer, ""); err == nil {
+	if _, err := NewEdgeVerifier(edgeTestSecret, edgeTestIssuer, "", activeUserStore()); err == nil {
 		t.Fatal("NewEdgeVerifier: want error for an empty audience")
 	}
 }

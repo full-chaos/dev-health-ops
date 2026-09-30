@@ -75,7 +75,7 @@ func loadDrilldownIssuesRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath,
 // are not configured -- main() only calls mux.HandleFunc when ok is true,
 // same "stay unmounted, don't fail to build/start" contract every other
 // optionally-configured route in this binary follows.
-func buildDrilldownIssuesRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
+func buildDrilldownIssuesRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
 	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadDrilldownIssuesRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
@@ -91,7 +91,7 @@ func buildDrilldownIssuesRoute(getenv getenvFunc) (handler http.HandlerFunc, cle
 	// falls back to its pre-existing envelope-only behaviour. See
 	// buildEdgeVerifierFromEnv's own doc comment for the pod env
 	// contract this reads.
-	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv)
+	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv, edgeUsers)
 	if err != nil {
 		return nil, nil, false, err
 	}

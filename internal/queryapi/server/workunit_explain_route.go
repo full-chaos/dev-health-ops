@@ -77,7 +77,7 @@ func workUnitExplainSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitch 
 // (dev-health-go's query Client rejects non-SELECT statements, which is why
 // the write goes through internal/storage/clickhouse instead), and a
 // registry-Postgres pool for org-BYO LLM settings.
-func buildWorkUnitExplainRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
+func buildWorkUnitExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
 	cfg, cfgOK := loadQueryRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
@@ -88,7 +88,7 @@ func buildWorkUnitExplainRoute(getenv getenvFunc) (handler http.HandlerFunc, cle
 		return nil, nil, false, fmt.Errorf("work-unit explain: build envelope verifier: %w", err)
 	}
 
-	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv)
+	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv, edgeUsers)
 	if err != nil {
 		return nil, nil, false, err
 	}

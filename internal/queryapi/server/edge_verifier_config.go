@@ -64,16 +64,44 @@ const (
 // hard error: unlike "not configured at all", that is an operator typo
 // this binary can catch at start, the same fail-fast NewVerifier already
 // applies to the envelope's own issuer/audience.
-func buildEdgeVerifierFromEnv(getenv getenvFunc) (*principal.EdgeVerifier, error) {
+func buildEdgeVerifierFromEnv(getenv getenvFunc, users edgeUserStore) (*principal.EdgeVerifier, error) {
 	secret, issuer, audience := edgeJWTConfigFromEnv(getenv)
 	if secret == "" {
 		return nil, nil
 	}
-	edgeVerifier, err := principal.NewEdgeVerifier(secret, issuer, audience)
+	// CHAOS-6290: an edge verifier that cannot read the live users row would
+	// accept the token of a deactivated user, so the secret without a store is
+	// a build error (newEdgeUserStore refuses first when there is no registry pool), never a silent JWT-only verifier.
+	edgeVerifier, err := principal.NewEdgeVerifier(secret, issuer, audience, users)
 	if err != nil {
 		return nil, fmt.Errorf("build edge access-token verifier: %w", err)
 	}
 	return edgeVerifier, nil
+}
+
+// edgeUserStore is the live users-row source every edge-verified REST route
+// shares: policy.Store, the same interface (and PGStore implementation) the Go
+// api authenticates with.
+type edgeUserStore = policy.Store
+
+// newEdgeUserStore is the live users-row source behind every edge-verified
+// REST route's check (CHAOS-6290): policy.PGStore, the Go api's own reader, over
+// registryPool -- the process's ONE registry Postgres pool that /query already
+// opens (queryRouteHandlers.RegistryPool). It opens no pool of its own. It
+// returns (nil, nil) when GO_API_EDGE_JWT_SECRET is absent (no edge verifier is
+// built, so nothing reads users). With the secret set and no registryPool -- the
+// /query route is not configured, so there is no pool to read users through --
+// it returns an error: fail closed, never a verifier that skips the check.
+// PGStore.UserState selects is_active, is_superuser and token_version only,
+// never a credential column.
+func newEdgeUserStore(getenv getenvFunc, registryPool *pgxpool.Pool) (edgeUserStore, error) {
+	if secret, _, _ := edgeJWTConfigFromEnv(getenv); secret == "" {
+		return nil, nil
+	}
+	if registryPool == nil {
+		return nil, fmt.Errorf("build edge users store: %s is set but the /query route (which owns the registry Postgres pool, GO_API_REGISTRY_POSTGRES_URI) is not configured; the edge token cannot be accepted without a live users check", edgeJWTSecretEnvVar)
+	}
+	return policy.PGStore{Pool: registryPool}, nil
 }
 
 // edgeJWTConfigFromEnv resolves the shared GO_API_EDGE_JWT_* trio, applying

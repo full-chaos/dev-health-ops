@@ -103,7 +103,7 @@ func loadInvestmentRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issu
 // mux.HandleFunc when ok is true, same "stay unmounted, don't fail to
 // build/start" contract every other optionally-configured route in this
 // binary follows.
-func buildInvestmentRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
+func buildInvestmentRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
 	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadInvestmentRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
@@ -119,7 +119,7 @@ func buildInvestmentRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup 
 	// falls back to its pre-existing envelope-only behaviour. See
 	// buildEdgeVerifierFromEnv's own doc comment for the pod env
 	// contract this reads.
-	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv)
+	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv, edgeUsers)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -171,7 +171,7 @@ func buildInvestmentRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup 
 // routeswitch Mux from /api/v1/investment's own, matching the
 // one-client-per-route-file convention every other route in this binary
 // follows (quadrant_route.go, explain_route.go, drilldown_prs_route.go).
-func buildInvestmentSunburstRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
+func buildInvestmentSunburstRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
 	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadInvestmentRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
@@ -187,7 +187,7 @@ func buildInvestmentSunburstRoute(getenv getenvFunc) (handler http.HandlerFunc, 
 	// falls back to its pre-existing envelope-only behaviour. See
 	// buildEdgeVerifierFromEnv's own doc comment for the pod env
 	// contract this reads.
-	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv)
+	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv, edgeUsers)
 	if err != nil {
 		return nil, nil, false, err
 	}

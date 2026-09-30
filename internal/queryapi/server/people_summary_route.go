@@ -85,7 +85,7 @@ func loadPeopleSummaryRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, i
 // are not configured -- main() only calls mux.HandleFunc when ok is
 // true, same "stay unmounted, don't fail to build/start" contract every
 // other optionally-configured route in this binary follows.
-func buildPeopleSummaryRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
+func buildPeopleSummaryRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
 	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadPeopleSummaryRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
@@ -101,7 +101,7 @@ func buildPeopleSummaryRoute(getenv getenvFunc) (handler http.HandlerFunc, clean
 	// falls back to its pre-existing envelope-only behaviour. See
 	// buildEdgeVerifierFromEnv's own doc comment for the pod env
 	// contract this reads.
-	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv)
+	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv, edgeUsers)
 	if err != nil {
 		return nil, nil, false, err
 	}

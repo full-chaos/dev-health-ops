@@ -57,7 +57,7 @@ func homeSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitch {
 	return sw
 }
 
-func buildHomeRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
+func buildHomeRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
 	cfg, cfgOK := loadQueryRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
@@ -67,7 +67,7 @@ func buildHomeRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func()
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("home: build envelope verifier: %w", err)
 	}
-	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv)
+	edgeVerifier, err := buildEdgeVerifierFromEnv(getenv, edgeUsers)
 	if err != nil {
 		return nil, nil, false, err
 	}

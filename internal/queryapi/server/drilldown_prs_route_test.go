@@ -261,7 +261,7 @@ func TestBuildDrilldownPRsRouteEntryHandlerRejectsUnknownMethod(t *testing.T) {
 	t.Setenv("GO_API_ENVELOPE_ISSUER", "test-issuer")
 	t.Setenv("GO_API_ENVELOPE_AUDIENCE", "test-audience")
 
-	handler, cleanup, ok, err := buildDrilldownPRsRoute(os.Getenv)
+	handler, cleanup, ok, err := buildDrilldownPRsRoute(os.Getenv, nil)
 	if err != nil {
 		t.Fatalf("buildDrilldownPRsRoute: %v", err)
 	}

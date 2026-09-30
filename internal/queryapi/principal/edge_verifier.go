@@ -2,16 +2,27 @@ package principal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 // EdgeAlgorithm is the one signing method the edge access token verifier
 // accepts (edgetoken.Algorithm).
 const EdgeAlgorithm = edgetoken.Algorithm
+
+// The rejection reasons Verify adds to edgetoken's own, for the live users-row
+// check (CHAOS-6290): the row is missing, inactive, at another token_version
+// or the token's sub/tv is unreadable (policy logs which); or the lookup itself
+// failed.
+const (
+	ReasonUserRefused      = "user_refused"
+	ReasonUserLookupFailed = "user_lookup_failed"
+)
 
 // EdgeClaims is the narrow set of claims this verifier's caller needs --
 // today, only the org id an authenticated REST request is scoped to,
@@ -30,16 +41,18 @@ type EdgeClaims struct {
 // env-var contract), read once at process start, never logged and never
 // read from any file this binary opens itself.
 //
-// This verifier reproduces validate_token's JWT-level decision ONLY: same
+// This verifier reproduces validate_token's JWT-level decision (same
 // algorithm, same conditional issuer/audience checks, the same required
-// exp/sub/type claims, and the same `type == "access"` gate. It does NOT
-// reproduce authenticate_access_token's Postgres-backed is_active/
-// token_version check -- that is a database round trip query-api's REST
-// routes have never made for the envelope credential either, and adding
-// one is out of this verifier's own scope (see this repo's PR history
-// for the reasoning).
+// exp/sub/type claims, the same `type == "access"` gate) AND
+// authenticate_access_token's live users-row check (CHAOS-6290): after the
+// JWT verifies, the users row must exist, be active and carry the token's
+// token_version, exactly as policy.Authenticator decides it for the Go api
+// (one implementation: policy.Authenticator.CheckClaims). A failed lookup is
+// never a pass. The lookup reads no credential column (policy.PGStore
+// selects is_active, is_superuser and token_version only).
 type EdgeVerifier struct {
 	verifier *edgetoken.Verifier
+	auth     *policy.Authenticator
 }
 
 // NewEdgeVerifier builds an EdgeVerifier bound to secret (the pod's own
@@ -47,13 +60,22 @@ type EdgeVerifier struct {
 // JWT_ISSUER/JWT_AUDIENCE, "dev-health-ops"/"dev-health-api" by default).
 // The checks on them are edgetoken.New's: a secret under 32 characters and
 // an empty issuer or audience are refused at construction, not on the
-// first live 401 an operator cannot explain.
-func NewEdgeVerifier(secret, issuer, audience string) (*EdgeVerifier, error) {
+// first live 401 an operator cannot explain. users is the live users-row
+// source and is required: an edge verifier without one would accept the token
+// of a deactivated user (CHAOS-6290), so nil is refused here, not tolerated.
+func NewEdgeVerifier(secret, issuer, audience string, users policy.Store) (*EdgeVerifier, error) {
+	if users == nil {
+		return nil, errors.New("principal: edge access-token verifier needs a users store")
+	}
 	verifier, err := edgetoken.New(secret, issuer, audience)
 	if err != nil {
 		return nil, fmt.Errorf("principal: edge access-token verifier: %w", err)
 	}
-	return &EdgeVerifier{verifier: verifier}, nil
+	auth, err := policy.NewAuthenticator(verifier, users, edgeLogger())
+	if err != nil {
+		return nil, fmt.Errorf("principal: edge access-token verifier: %w", err)
+	}
+	return &EdgeVerifier{verifier: verifier, auth: auth}, nil
 }
 
 // Verify verifies tokenString with edgetoken.Verifier.Verify (the one Go
@@ -63,13 +85,25 @@ func NewEdgeVerifier(secret, issuer, audience string) (*EdgeVerifier, error) {
 //
 // On success, returns the validated claims' org_id (empty string when
 // the claim is absent, matching AuthenticatedUser.org_id's own default).
-// Never reproduces authenticate_access_token's Postgres lookup -- see
-// EdgeVerifier's own doc comment.
+//
+// A token whose JWT verifies but whose users row is missing, inactive or at a
+// different token_version returns an error wrapping policy's refusal
+// (policy.IsRefusal); a failed lookup returns the store error itself
+// (errors.Is(err, policy.ErrUnavailable) for an outage). Neither yields
+// claims.
 func (v *EdgeVerifier) Verify(ctx context.Context, tokenString string) (*EdgeClaims, error) {
 	meta := requestMetaFrom(ctx)
 	claims, err := v.verifier.Verify(tokenString)
 	if err != nil {
 		v.reject(ctx, edgetoken.ReasonOf(err), claims, meta)
+		return nil, fmt.Errorf("principal: edge: %w", err)
+	}
+	if _, err := v.auth.CheckClaims(ctx, claims); err != nil {
+		reason := ReasonUserRefused
+		if !policy.IsRefusal(err) {
+			reason = ReasonUserLookupFailed
+		}
+		v.reject(ctx, reason, claims, meta)
 		return nil, fmt.Errorf("principal: edge: %w", err)
 	}
 	recordEdgeVerifyOutcome("verified")

@@ -213,7 +213,7 @@ func TestBuildFlameRouteEntryHandlerRejectsNonGET(t *testing.T) {
 	t.Setenv("GO_API_ENVELOPE_ISSUER", "test-issuer")
 	t.Setenv("GO_API_ENVELOPE_AUDIENCE", "test-audience")
 
-	handler, cleanup, ok, err := buildFlameRoute(os.Getenv)
+	handler, cleanup, ok, err := buildFlameRoute(os.Getenv, nil)
 	if err != nil {
 		t.Fatalf("buildFlameRoute: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestBuildFlameRouteEntryHandlerRejectsNonGET(t *testing.T) {
 // unmounted, don't fail to build/start" contract for a missing dependency
 // env var.
 func TestBuildFlameRouteMissingConfigStaysUnmounted(t *testing.T) {
-	handler, cleanup, ok, err := buildFlameRoute(os.Getenv)
+	handler, cleanup, ok, err := buildFlameRoute(os.Getenv, nil)
 	if err != nil {
 		t.Fatalf("buildFlameRoute: %v", err)
 	}

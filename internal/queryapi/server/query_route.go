@@ -2617,6 +2617,11 @@ func newQueryRouteClickHouseClient(dsn string) (*dhclickhouse.Client, error) {
 // catch it -- /query and /query/proof differ ONLY in reachability, so a
 // swap would silently make shadow operations reachable to real traffic.
 type queryRouteHandlers struct {
+	// RegistryPool is the process's ONE registry Postgres pool (the query-api
+	// role's own login), owned and closed by buildQueryRoute's cleanup. Build
+	// hands it to the edge-token users check (CHAOS-6290) rather than opening a
+	// second pool; a caller must not close it.
+	RegistryPool *pgxpool.Pool
 	// Query is /query: production reachability, canary|primary only.
 	Query http.HandlerFunc
 	// Proof is the same pipeline over a measurement-only Switch that also
@@ -2725,6 +2730,9 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		BuildInfo:  newBuildInfoHandler(verifier),
 		Probes:     readinessProbes(chClient, pgPool, verifier, posture),
 	}
+	// The one registry pool, for Build's edge users check (CHAOS-6290). Set outside the
+	// literal above so that literal keeps the shape posture_readiness_test pins.
+	handlers.RegistryPool = pgPool
 	cleanup := func() { pgPool.Close() }
 	// CHAOS-6803/CHAOS-6804: a deployment that names query-api's role
 	// (QUERY_API_DATABASE_ROLE) is not ready until the pool logs in AS that role

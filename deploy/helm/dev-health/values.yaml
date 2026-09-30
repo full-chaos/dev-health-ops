@@ -288,6 +288,21 @@ queryApi:
     #    `--set-json 'queryApi.internal.allowedFrom=[{"matchLabels":{"run":"dev-health-go-api-tools-oneoff"}}]'`
     #    (the `run` label `kubectl run` gives the one-off tools pod), then remove it again.
     allowedFrom: []
+  # -- The MCP caller-class listener (CHAOS-7085, QUERY_API_MCP_ADDR): POST /query only,
+  #    queries only, the internal identity headers only, allowlisted root fields, its own
+  #    ClickHouse read ceiling. When on, this chart adds the env var, a named `mcp`
+  #    containerPort, a ClusterIP Service `<fullname>-query-api-mcp` and a NetworkPolicy
+  #    admitting `mcp.allowedFrom` ONLY (not the api pods). Refused together with
+  #    networkPolicy.enabled (that policy opens every port to every in-namespace pod).
+  #    Prod renders its own Service and NetworkPolicy from the umbrella deploy chart.
+  mcp:
+    enabled: false
+    port: 8092
+    # -- Pod selectors (each `{matchLabels: {...}}`) allowed to reach the MCP port: the
+    #    acr-api pods, e.g.
+    #    `{"matchLabels":{"app.kubernetes.io/name":"acr","app.kubernetes.io/instance":"dev-health-acr","app.kubernetes.io/component":"api"}}`.
+    #    Empty denies the port. An empty selector entry fails the render.
+    allowedFrom: []
   image:
     # -- The dho image (docker/go-worker.Dockerfile target `dho`); the
     #    Deployment runs `dho query-api`. Non-local profiles (prod/kiac) pin

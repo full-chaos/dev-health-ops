@@ -217,6 +217,22 @@ This page is declared under the existing explicit `Reference:` nav block in
 `mkdocs.yml` (nav is explicit here, not `awesome-pages`) — see the `Auth:`
 entry alongside `API`, `GraphQL`, `CLI`, etc.
 
+## query-api: the MCP caller-class listener (CHAOS-7085)
+
+query-api serves the hosted MCP's validated free-form GraphQL query on a
+separate listener (`--mcp-addr` / `QUERY_API_MCP_ADDR`, chart
+`queryApi.mcp.port`, default 8092) with **no token**: the caller states the
+org in the four `X-DH-Internal-*` identity headers, and the network is the
+control. Any `Authorization` header is refused there, and so is a header set
+that claims superuser, impersonation or an operator role. Only query
+operations over an allowlist of root fields are served, with depth, alias,
+complexity and ClickHouse read limits. No Ingress may route to the MCP
+Service (`<release>-query-api-mcp`; the chart refuses an Ingress path to it),
+and the chart's NetworkPolicy admits only the pod selectors in
+`queryApi.mcp.allowedFrom` (acr's api pods); an empty list denies the port.
+A pod that can reach the port can read any org through the allowlisted
+fields; it cannot write.
+
 ## Go api: the internal listener (CHAOS-7181)
 
 The Go api serves `/api/v1/internal/acr/*` with **no credential check**: the

@@ -17,6 +17,34 @@ exits 2 on the `query-api` argument, so the render refuses it by name.
 {{- if and .Values.queryApi.internal.enabled (eq (int .Values.queryApi.internal.port) (int .Values.queryApi.port)) }}
 {{- fail "queryApi.internal.port must differ from queryApi.port (the public listener)" }}
 {{- end }}
+{{- /*
+CHAOS-7085: the MCP caller-class listener (QUERY_API_MCP_ADDR). It trusts the
+X-DH-Internal-* identity headers from whoever can connect, so the NetworkPolicy
+below (queryApi.mcp.allowedFrom only) IS its authentication boundary. Every guard
+here keeps that boundary from being bypassed by configuration.
+*/}}
+{{- if .Values.queryApi.mcp.enabled }}
+{{- $mcpPort := int .Values.queryApi.mcp.port }}
+{{- if eq $mcpPort (int .Values.queryApi.port) }}
+{{- fail "queryApi.mcp.port must differ from queryApi.port (the public listener)" }}
+{{- end }}
+{{- if and .Values.queryApi.internal.enabled (eq $mcpPort (int .Values.queryApi.internal.port)) }}
+{{- fail "queryApi.mcp.port must differ from queryApi.internal.port (the internal listener)" }}
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+{{- fail "queryApi.mcp.enabled with networkPolicy.enabled: the release-wide NetworkPolicy also selects the query-api pods and admits every pod in the namespace on every port; NetworkPolicies are additive, so it would open the MCP port to every pod. Disable one of them" }}
+{{- end }}
+{{- range .Values.queryApi.extraEnv }}
+{{- if eq .name "QUERY_API_MCP_ADDR" }}
+{{- fail "queryApi.extraEnv must not set QUERY_API_MCP_ADDR: the chart owns the MCP listener (queryApi.mcp.port); a second value moves it onto a port the MCP Service and NetworkPolicy do not gate" }}
+{{- end }}
+{{- end }}
+{{- range .Values.queryApi.mcp.allowedFrom }}
+{{- if not (or .matchLabels .matchExpressions) }}
+{{- fail "queryApi.mcp.allowedFrom entries must select pods by non-empty matchLabels or matchExpressions: an empty selector admits every pod in the namespace to the MCP listener" }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- $queryApiImage := include "dev-health.queryApiImage" . }}
 {{- if regexMatch "(^|/)dev-health-query-api([:@]|$)" $queryApiImage }}
 {{- fail (printf "queryApi.image %q is the retired dev-health-query-api image, which has no dho entrypoint and exits 2 on `query-api`; use the dev-health-go-dho image." $queryApiImage) }}
@@ -71,6 +99,11 @@ spec:
               containerPort: {{ .Values.queryApi.internal.port }}
               protocol: TCP
             {{- end }}
+            {{- if .Values.queryApi.mcp.enabled }}
+            - name: mcp
+              containerPort: {{ .Values.queryApi.mcp.port }}
+              protocol: TCP
+            {{- end }}
             {{- /*
             /metrics is NOT served on the query listener (`http`): a scrape
             endpoint is operational detail, so it lives on the internal
@@ -107,6 +140,16 @@ spec:
             */}}
             - name: QUERY_API_INTERNAL_ADDR
               value: {{ printf ":%v" .Values.queryApi.internal.port | quote }}
+            {{- end }}
+            {{- if .Values.queryApi.mcp.enabled }}
+            {{- /*
+            The MCP caller-class listener (CHAOS-7085): POST /query only, queries only,
+            internal identity headers only, allowlisted root fields. Reachable only
+            through the MCP Service below, whose NetworkPolicy admits
+            queryApi.mcp.allowedFrom only (the acr-api pods). No Ingress may route to it.
+            */}}
+            - name: QUERY_API_MCP_ADDR
+              value: {{ printf ":%v" .Values.queryApi.mcp.port | quote }}
             {{- end }}
             {{- /*
             Native ClickHouse wire protocol (9000), not the HTTP 8123 port the
@@ -253,5 +296,60 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.queryApi.internal.port }}
+{{- end }}
+{{- if .Values.queryApi.mcp.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dev-health.fullname" . }}-query-api-mcp
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "query-api-mcp" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dev-health.componentSelectorLabels" (dict "component" "query-api" "context" $) | nindent 4 }}
+  ports:
+    - name: mcp
+      port: {{ .Values.queryApi.mcp.port }}
+      targetPort: mcp
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" . }}-query-api-mcp
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "query-api-mcp" "context" $) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "query-api" "context" $) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # The public listener: open to every source, exactly as before this policy existed
+    # (a policy selecting these pods would otherwise deny it).
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.queryApi.port }}
+    {{- /*
+    The MCP listener trusts X-DH-Internal-* identity headers from whoever can reach it, so
+    this list IS its authentication boundary: only queryApi.mcp.allowedFrom (the acr-api
+    pods). NOT this release's api pods, NOT every pod. An empty list renders no rule, which
+    denies the port: a rule with no `from` would admit every source.
+    */}}
+    {{- if .Values.queryApi.mcp.allowedFrom }}
+    - from:
+        {{- range .Values.queryApi.mcp.allowedFrom }}
+        - podSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.queryApi.mcp.port }}
+    {{- end }}
 {{- end }}
 {{- end }}

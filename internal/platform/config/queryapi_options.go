@@ -32,6 +32,16 @@ var queryAPIOptions = func() []Option {
 			Usage: "comma-separated CIDR list (IPv4/IPv6) the internal listener accepts a peer connection from; unset accepts every peer (D2953) -- checked at accept time, never from a header",
 		},
 		{
+			Flag: "mcp-addr", Env: "QUERY_API_MCP_ADDR", Kind: KindString,
+			Services: q, Group: GroupRuntime,
+			Usage: "host:port of the MCP caller-class listener (CHAOS-7085): POST /query only, queries only, internal identity headers only, allowlisted root fields (off when unset; no Ingress may route to it)",
+		},
+		{
+			Flag: "mcp-allowed-cidrs", Env: "QUERY_API_MCP_ALLOWED_CIDRS", Kind: KindString,
+			Services: q, Group: GroupRuntime,
+			Usage: "comma-separated CIDR list (IPv4/IPv6) the MCP listener accepts a peer connection from; unset accepts every peer -- checked at accept time, never from a header",
+		},
+		{
 			Flag: "database-role", Env: "QUERY_API_DATABASE_ROLE", Kind: KindString,
 			Services: q, Group: GroupDatabase,
 			Usage: "PostgreSQL role the readiness write-grant check expects the registry pool to hold",

@@ -358,6 +358,12 @@ type Config struct {
 	// zero value) means QUERY_API_INTERNAL_ALLOWED_CIDRS was unset -- no
 	// restriction beyond whatever network segmentation already exists.
 	QueryAPIInternalAllowedCIDRs []*net.IPNet
+	// QueryAPIMCPAddress is the host:port of the MCP caller-class listener
+	// (CHAOS-7085; empty means no MCP listener) and QueryAPIMCPAllowedCIDRs its
+	// accept-time peer allowlist (nil = unset, no restriction beyond the
+	// network's own segmentation).
+	QueryAPIMCPAddress      string
+	QueryAPIMCPAllowedCIDRs []*net.IPNet
 	// Setting resolves one declared setting of the service (flag > environment),
 	// for code that reads settings by name (dho query-api's route builders). It
 	// answers only for a name declared for this service or for every service, so
@@ -1009,17 +1015,36 @@ func Load(spec Spec) (Config, error) {
 			return Config{}, fmt.Errorf("%s: %w", settingLabel("QUERY_API_INTERNAL_ALLOWED_CIDRS"), cidrErr)
 		}
 		cfg.QueryAPIInternalAllowedCIDRs = allowedCIDRs
-		// The three listeners are separate: an identical pair would fail the
+		cfg.QueryAPIMCPAddress = strings.TrimSpace(envOrDefault(lookup, "QUERY_API_MCP_ADDR", ""))
+		if cfg.QueryAPIMCPAddress != "" {
+			if _, _, splitErr := net.SplitHostPort(cfg.QueryAPIMCPAddress); splitErr != nil {
+				return Config{}, fmt.Errorf("%s must be a host:port address", settingLabel("QUERY_API_MCP_ADDR"))
+			}
+		}
+		mcpCIDRs, mcpCIDRErr := parseAllowedCIDRs(envOrDefault(lookup, "QUERY_API_MCP_ALLOWED_CIDRS", ""))
+		if mcpCIDRErr != nil {
+			return Config{}, fmt.Errorf("%s: %w", settingLabel("QUERY_API_MCP_ALLOWED_CIDRS"), mcpCIDRErr)
+		}
+		cfg.QueryAPIMCPAllowedCIDRs = mcpCIDRs
+		// The four listeners are separate: an identical pair would fail the
 		// second bind (port 0 asks the kernel for a free port each time).
+		addresses := map[string]string{
+			"DEV_HEALTH_HTTP_ADDR":    cfg.HTTPAddress,
+			"QUERY_API_ADDR":          cfg.QueryAPIAddress,
+			"QUERY_API_INTERNAL_ADDR": cfg.QueryAPIInternalAddress,
+			"QUERY_API_MCP_ADDR":      cfg.QueryAPIMCPAddress,
+		}
 		for _, pair := range [][2]string{
 			{"QUERY_API_ADDR", "DEV_HEALTH_HTTP_ADDR"},
 			{"QUERY_API_INTERNAL_ADDR", "DEV_HEALTH_HTTP_ADDR"},
 			{"QUERY_API_INTERNAL_ADDR", "QUERY_API_ADDR"},
+			{"QUERY_API_MCP_ADDR", "DEV_HEALTH_HTTP_ADDR"},
+			{"QUERY_API_MCP_ADDR", "QUERY_API_ADDR"},
+			{"QUERY_API_MCP_ADDR", "QUERY_API_INTERNAL_ADDR"},
 		} {
-			left := map[string]string{"QUERY_API_ADDR": cfg.QueryAPIAddress, "QUERY_API_INTERNAL_ADDR": cfg.QueryAPIInternalAddress}[pair[0]]
-			right := map[string]string{"DEV_HEALTH_HTTP_ADDR": cfg.HTTPAddress, "QUERY_API_ADDR": cfg.QueryAPIAddress}[pair[1]]
+			left, right := addresses[pair[0]], addresses[pair[1]]
 			if left != "" && left == right && !strings.HasSuffix(left, ":0") {
-				return Config{}, fmt.Errorf("%s must differ from %s: the query, internal and operator listeners are separate",
+				return Config{}, fmt.Errorf("%s must differ from %s: the query, internal, MCP and operator listeners are separate",
 					settingLabel(pair[0]), settingLabel(pair[1]))
 			}
 		}

@@ -106,15 +106,18 @@ migrate_and_assert_river() {
 # provision_river -- applies the ClickHouse migration, the three River
 # runtime roles, the pinned River schema, and the sync-orchestration
 # transport flip a fresh CI database needs before the Go worker can process
-# anything. Call AFTER migrate_and_assert_river. Reads: CLICKHOUSE_URI_NATIVE,
+# anything. Call AFTER migrate_and_assert_river. Reads: CLICKHOUSE_URI_HTTP,
 # POSTGRES_HOST/PORT/SUPERUSER/SUPERUSER_PASSWORD/DB, RIVER_DOMAIN_ROLE/
 # QUEUE_ROLE/COORDINATOR_ROLE (+ their _PASSWORD counterparts), BIN_DIR,
-# ROOT_DIR. Requires build_go_binaries to have run (BIN_DIR/dho) and CLICKHOUSE_URI_NATIVE.
+# ROOT_DIR. Requires run_dev_hops() to already be defined by the caller and build_go_binaries to have run.
 # ---------------------------------------------------------------------------
 provision_river() {
   echo "==> applying ClickHouse migrations"
-  CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}" OPERATIONAL_ORDERING_CONTRACT=2 \
-    "${BIN_DIR}/dho" migrate clickhouse upgrade
+  # Stays on the Python chain (contract-1 schema) until CHAOS-7301 freezes the
+  # generate worlds: the Python `fixtures generate` writes contract-0 rows, which
+  # the head (contract 2) schema rejects, and dho refuses a contract-1 database.
+  CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" OTEL_ENABLED=false \
+    run_dev_hops migrate clickhouse upgrade
 
   echo "==> provisioning the three River runtime roles (scripts/worker/provision_river_roles.sql)"
   PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \

@@ -122,7 +122,9 @@ func scopeClauseRepo(repoIDs []string) (filterSQL string, bindings []dhclickhous
 // 027 carry pr.org_id = 'default'; that choice is what leaked, and such
 // rows were never proven to belong to the reading org -- aianalytics,
 // workgraph and busfactor already bind pr.org_id and hide them the same
-// way. Python's drilldown.fetch_pull_requests binds repos.org_id only and
+// way. That concern is obsolete: a read-only count on 2026-09-30 found no
+// 'default' and no non-real org_id in git_pull_requests or git_commits on
+// prod or bigboy, so binding pr.org_id hides no real row. Python's drilldown.fetch_pull_requests binds repos.org_id only and
 // leaks the same way; this port does not reproduce that (recorded
 // divergence, no Python change).
 //

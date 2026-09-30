@@ -163,6 +163,10 @@ type ServerOptions struct {
 	// Name is the lifecycle component name and the label in this server's
 	// own error messages. Empty means "auth-api-http".
 	Name string
+	// Listener is the label the access log line and the per-route request
+	// metrics carry for this server ("public", "internal", ...). Empty means
+	// Name.
+	Listener string
 	// ErrorWriter renders every error this server emits. Nil means WriteError
 	// (the ACP envelope).
 	ErrorWriter ErrorWriter
@@ -340,7 +344,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		if explicit, ok := allowByPattern[pattern]; ok {
 			allow = explicit
 		}
-		notAllowed := &methodNotAllowed{allow: allow, write: write}
+		notAllowed := &methodNotAllowed{allow: allow, write: write, pattern: pattern}
 		notAllowedByPattern[pattern] = notAllowed
 		pathMux.Handle(pattern, notAllowed)
 	}
@@ -434,7 +438,15 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	if accept == nil {
 		accept = acceptableRequestID
 	}
-	return RequestIDWith(accept)(RecoverWith(logger, "<unrouted>", write)(handler)), nil
+	listener := options.Listener
+	if listener == "" {
+		listener = options.Name
+	}
+	if listener == "" {
+		listener = "auth-api-http"
+	}
+	observer := newAccessObserver(logger, listener)
+	return RequestIDWith(accept)(observer.wrap(RecoverWith(logger, "<unrouted>", write)(handler))), nil
 }
 
 // routeChain wraps one route's handler. Order is deliberate: rate limiting is
@@ -460,7 +472,14 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 	handler = Deadline(options.RequestTimeout)(handler)
 	handler = MaxBodyWith(maxBody, write)(handler)
 	handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)
-	return handler
+	// Outermost, so a request the route's own rate limit or body bound
+	// refuses is still counted against the route it addressed.
+	pattern := route.Pattern
+	inner := handler
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recordRoute(r, pattern)
+		inner.ServeHTTP(w, r)
+	})
 }
 
 // methodNotAllowed is a route path's 405: the path matched, the method
@@ -468,9 +487,15 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 type methodNotAllowed struct {
 	allow string
 	write ErrorWriter
+	// pattern is the registered pattern the 405 answers for; empty for the
+	// catch-all's 405, which belongs to no route.
+	pattern string
 }
 
 func (m *methodNotAllowed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if m.pattern != "" {
+		recordRoute(r, m.pattern)
+	}
 	w.Header().Set("Allow", m.allow)
 	m.write(w, r, CodeMethodNotAllowed)
 }

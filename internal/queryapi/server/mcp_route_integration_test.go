@@ -130,6 +130,32 @@ func TestMCPClickHouseCeilingAgainstARealClickHouse(t *testing.T) {
 		return n, obs
 	}
 
+	// max_result_rows: a real server answers code 396 (not 158) -- r1 on
+	// #3425. The production cap is queryRouteMaxResultRows; lowered here to
+	// trip it on the 400-row probe.
+	t.Run("over_the_result_row_ceiling_is_a_typed_rows_refusal", func(t *testing.T) {
+		opts := newMCPClickHouseOptions(ch.URI)
+		oneRow := uint(1)
+		opts.MaxResultRows = &oneRow
+		client, err := clickhouse.NewClickHouseQueryClientWithOptions(opts)
+		if err != nil {
+			t.Fatalf("construct ClickHouse client: %v", err)
+		}
+		defer func() { _ = client.Close() }()
+		obs := &mcpObservation{}
+		observed := mcpObservedClient{next: client}
+		rows, err := observed.Query(context.WithValue(ctx, mcpObservationKey{}, obs), "SELECT id FROM byte_budget_probe", nil)
+		if err == nil {
+			for rows.Next() {
+			}
+			err = rows.Err() // swallowed below, as a resolver could
+			_ = rows.Close()
+		}
+		if got := obs.budgetReason(); got != mcpReasonRowsCeiling {
+			t.Fatalf("budget reason %q (error: %v), want %q", got, err, mcpReasonRowsCeiling)
+		}
+	})
+
 	t.Run("over_the_ceiling_is_a_typed_bytes_refusal", func(t *testing.T) {
 		n, obs := readProbe(t, 8<<20) // 8 MiB < ~40 MiB
 		if got := obs.budgetReason(); got != mcpReasonBytesCeiling {

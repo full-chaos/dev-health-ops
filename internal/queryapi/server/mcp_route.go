@@ -211,9 +211,23 @@ const (
 	mcpOutcomeRefused = "refused"
 )
 
-// ClickHouse server exception code for max_execution_time. The bytes and
-// rows codes come from dhclickhouse.QueryBudgetExceededCode.
-const clickHouseTimeoutExceededCode = 159
+// ClickHouse server exception codes for the limits this class's client sets
+// (newMCPClickHouseOptions), one per setting, each mapped to a refusal
+// reason by mcpBudgetReason:
+//
+//	307 TOO_MANY_BYTES          max_bytes_to_read      -> bytes_ceiling
+//	396 TOO_MANY_ROWS_OR_BYTES  max_result_rows        -> rows_ceiling
+//	158 TOO_MANY_ROWS           max_rows_to_read (library default path) -> rows_ceiling
+//	159 TIMEOUT_EXCEEDED        max_execution_time     -> time_ceiling
+//
+// 396 is what a real server returns for max_result_rows (r1 on #3425,
+// executed; see also workgraph/membership.go's CHAOS-4655 note), not 158.
+const (
+	clickHouseTooManyBytesCode       = 307
+	clickHouseTooManyRowsOrBytesCode = 396
+	clickHouseTooManyRowsCode        = 158
+	clickHouseTimeoutExceededCode    = 159
+)
 
 // newMCPClickHouseClient is the MCP class's own ClickHouse client
 // (CHAOS-7091): the shared read options, then this class's ceilings. It
@@ -826,15 +840,16 @@ func (o *mcpObservation) budgetReason() string {
 // mcpBudgetReason classifies a ClickHouse error as one of the class's
 // budget refusals, or "".
 func mcpBudgetReason(err error) string {
-	if code, ok := dhclickhouse.QueryBudgetExceededCode(err); ok {
-		if code == 307 {
-			return mcpReasonBytesCeiling
-		}
-		return mcpReasonRowsCeiling
-	}
 	var exception *clickhousedriver.Exception
-	if errors.As(err, &exception) && exception.Code == clickHouseTimeoutExceededCode {
-		return mcpReasonTimeCeiling
+	if errors.As(err, &exception) {
+		switch exception.Code {
+		case clickHouseTooManyBytesCode:
+			return mcpReasonBytesCeiling
+		case clickHouseTooManyRowsOrBytesCode, clickHouseTooManyRowsCode:
+			return mcpReasonRowsCeiling
+		case clickHouseTimeoutExceededCode:
+			return mcpReasonTimeCeiling
+		}
 	}
 	// dev-health-go bounds every query with a context deadline of
 	// MaxExecutionTime, and clickhouse-go then sends the server a

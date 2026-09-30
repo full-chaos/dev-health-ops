@@ -484,6 +484,7 @@ func TestMCPBudgetExceptionIsATypedRefusal(t *testing.T) {
 		"bytes_at_query":     {&countingMCPClient{err: fmt.Errorf("ClickHouse query failed: %w", &clickhousedriver.Exception{Code: 307})}, mcpReasonBytesCeiling},
 		"bytes_while_stream": {&countingMCPClient{rowsErr: fmt.Errorf("ClickHouse row iteration failed: %w", &clickhousedriver.Exception{Code: 307})}, mcpReasonBytesCeiling},
 		"rows":               {&countingMCPClient{err: fmt.Errorf("wrapped: %w", &clickhousedriver.Exception{Code: 158})}, mcpReasonRowsCeiling},
+		"result_rows":        {&countingMCPClient{rowsErr: fmt.Errorf("ClickHouse row iteration failed: %w", &clickhousedriver.Exception{Code: 396})}, mcpReasonRowsCeiling},
 		"time":               {&countingMCPClient{err: fmt.Errorf("wrapped: %w", &clickhousedriver.Exception{Code: 159})}, mcpReasonTimeCeiling},
 		"deadline":           {&countingMCPClient{err: fmt.Errorf("ClickHouse query failed: %w", context.DeadlineExceeded)}, mcpReasonTimeCeiling},
 	} {

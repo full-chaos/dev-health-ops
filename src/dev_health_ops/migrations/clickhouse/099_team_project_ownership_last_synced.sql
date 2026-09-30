@@ -4,10 +4,13 @@
 -- syncs: a row whose provider time is old can land after a consumer's cursor
 -- has already passed that time, and a cursor keyed on updated_at never sees it.
 --
--- last_synced is the UTC time the row was written to ClickHouse. Every Go
--- writer sets it explicitly. The DEFAULT covers a writer that names its
--- columns without it (the Python sinks). updated_at keeps its meaning and its
--- role as the version column, and last_synced is not part of the sorting key.
+-- last_synced is the UTC time the ClickHouse server processed the INSERT. No
+-- writer sends a value: every writer names its columns and omits last_synced,
+-- so the server stamps the row when the insert runs. A client-side stamp would
+-- be taken before the lease check and the batch send, and a delayed write would
+-- then land behind a consumer cursor that had already moved past its stamp.
+-- updated_at keeps its meaning and its role as the version column, and
+-- last_synced is not part of the sorting key.
 --
 -- ADD COLUMN ... DEFAULT now64(3) alone would make every row that existed
 -- before this migration read the DEFAULT at QUERY time, so each read would

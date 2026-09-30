@@ -385,21 +385,22 @@ func TestAnchoredAllowListEntries(t *testing.T) {
 	}
 	docs := `{"path":"/docs$","pathType":"ImplementationSpecific"}`
 	for name, c := range map[string]struct{ list, want string }{
-		"no trailing dollar":   {`[{"path":"/docs","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"double dollar":        {`[{"path":"/docs$$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"dollar mid path":      {`[{"path":"/do$cs$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"unescaped dot":        {`[{"path":"/openapi.json$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"group":                {`[{"path":"/(docs)$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"wildcard":             {`[{"path":"/docs.*$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"alternation":          {`[{"path":"/docs|x$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"caret":                {`[{"path":"^/docs$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"lone dollar":          {`[{"path":"$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"root dollar":          {`[{"path":"/$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"double slash":         {`[{"path":"//docs$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
-		"literal with dollar":  {`[{"path":"/docs$","pathType":"Exact"},` + internal + `]`, "must be {path"},
-		"duplicate of literal": {`[` + docs + `,{"path":"/docs","pathType":"Exact"},` + internal + `]`, "duplicates another rule"},
-		"duplicate anchored":   {`[` + docs + `,` + docs + `,` + internal + `]`, "duplicates another rule"},
-		"anchored only":        {`[` + docs + `]`, "must cover /api/v1/internal"},
+		"no trailing dollar":    {`[{"path":"/docs","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"double dollar":         {`[{"path":"/docs$$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"dollar mid path":       {`[{"path":"/do$cs$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"unescaped dot":         {`[{"path":"/openapi.json$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"group":                 {`[{"path":"/(docs)$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"wildcard":              {`[{"path":"/docs.*$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"alternation":           {`[{"path":"/docs|x$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"caret":                 {`[{"path":"^/docs$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"lone dollar":           {`[{"path":"$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"root dollar":           {`[{"path":"/$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"double slash":          {`[{"path":"//docs$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"literal with dollar":   {`[{"path":"/docs$","pathType":"Exact"},` + internal + `]`, "must be {path"},
+		"duplicate of literal":  {`[` + docs + `,{"path":"/docs","pathType":"Exact"},` + internal + `]`, "duplicates another rule"},
+		"duplicate anchored":    {`[` + docs + `,` + docs + `,` + internal + `]`, "duplicates another rule"},
+		"anchored only":         {`[` + docs + `]`, "must cover /api/v1/internal"},
+		"exact beside anchored": {`[` + docs + `,{"path":"/graphql","pathType":"Exact"},` + internal + `]`, "is Exact on a host that has an anchored entry"},
 	} {
 		o, err := render(host(c.list))
 		if err == nil || !strings.Contains(o, c.want) {

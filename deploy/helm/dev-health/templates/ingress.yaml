@@ -121,6 +121,8 @@ spec:
           {{- if not $.Values.api.enabled }}{{- fail (printf "ingress.hosts %q pythonAllowList routes to the Python api but api.enabled is false (the Service would not exist)" $host.host) }}{{- end }}
           {{- $coversInternal := false }}
           {{- $seen := dict }}
+          {{- $hostAnchored := false }}
+          {{- range $allow }}{{- if and (kindIs "map" .) (eq (toString .pathType) "ImplementationSpecific") }}{{- $hostAnchored = true }}{{- end }}{{- end }}
           {{- $hostPaths := list }}
           {{- range $host.paths }}{{- $hostPaths = append $hostPaths .path }}{{- end }}
           {{- range $allow }}
@@ -139,6 +141,8 @@ spec:
           {{- if eq (trimSuffix "/" $base) "" }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q would route the whole host to the Python api, which is what the Go default backend replaces" $host.host .path) }}{{- end }}
           {{- if or (hasKey $seen $base) (has $base $hostPaths) }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q duplicates another rule on the same path (an allow-list path must be unique and not one of the host's own paths)" $host.host .path) }}{{- end }}
           {{- $_ := set $seen $base true }}
+          {{- /* CHAOS-7243 (r2 P1): on an anchored host regex mode is on for the WHOLE host, where a literal Exact rule renders as an UNANCHORED regex (`= /graphql` becomes `~* "^/graphql"`, so /graphqlish would reach Python). An Exact entry must therefore be written anchored on such a host. */}}
+          {{- if and $hostAnchored (eq .pathType "Exact") }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q is Exact on a host that has an anchored entry: regex mode makes an Exact rule an unanchored regex there (lookalikes such as %sx would reach Python); write it anchored as {path: %q, pathType: ImplementationSpecific}" $host.host .path .path (printf "%s$" .path)) }}{{- end }}
           {{- if and (eq .pathType "Prefix") (has (trimSuffix "/" .path) (list "/api" "/api/v1" "/api/v1/internal")) }}{{- $coversInternal = true }}{{- end }}
           - path: {{ .path }}
             pathType: {{ .pathType }}

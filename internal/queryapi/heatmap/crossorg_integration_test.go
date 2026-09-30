@@ -7,6 +7,7 @@ package heatmap
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -88,9 +89,58 @@ func TestHeatmapReadersReturnOnlyTheCallingOrgsRowsForASharedRepoID(t *testing.T
 		}
 	})
 
+	// The touchpoints TOP-N query picks which repos the series covers. With
+	// one repo, a leak there only changes a total nobody returns, so it
+	// needs its own orgs and more repos than the limit (20): org C owns 20
+	// repos at 2 commits each plus the shared repo at 1; org D adds 3
+	// commits under the shared id. Org C's true top 20 excludes the shared
+	// repo; a leaked count (4) would pull it in.
+	t.Run("repo_touchpoints top-N", func(t *testing.T) {
+		g := crossorg.Fixture{
+			OrgA: "org-c-chaos-7239", OrgB: "org-d-chaos-7239",
+			RepoID: "72390000-0000-4000-8000-000000000002", RepoName: "acme/topn-shared", RepoNameB: "Acme/TopN-Shared",
+			Identity: f.Identity,
+		}
+		crossorg.SeedRepos(ctx, t, admin, g)
+		commit := func(org, repoID, hash string) {
+			crossorg.Exec(ctx, t, admin, `
+                INSERT INTO git_commits (org_id, repo_id, hash, author_name, author_email, author_when, committer_when, last_synced)
+                VALUES (?, ?, ?, 'Dev', ?, ?, ?, now64(3))`,
+				org, repoID, hash, g.Identity, at, at)
+		}
+		commit(g.OrgA, g.RepoID, "c-shared-0")
+		for i := 0; i < 3; i++ {
+			commit(g.OrgB, g.RepoID, "d-shared-"+strconv.Itoa(i))
+		}
+		for r := 0; r < 20; r++ {
+			repoID := fmt.Sprintf("72390000-0000-4000-8000-1000000000%02d", r)
+			crossorg.Exec(ctx, t, admin, `
+                INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced)
+                VALUES (?, ?, 'github', ?, now64(3), now64(3))`,
+				repoID, fmt.Sprintf("acme/c-only-%02d", r), g.OrgA)
+			commit(g.OrgA, repoID, fmt.Sprintf("c-%02d-0", r))
+			commit(g.OrgA, repoID, fmt.Sprintf("c-%02d-1", r))
+		}
+
+		resp, err := BuildResponse(ctx, client, g.OrgA, Params{
+			Type: "context_switch", Metric: "repo_touchpoints", StartDate: &start, EndDate: &end,
+		})
+		if err != nil {
+			t.Fatalf("BuildResponse: %v", err)
+		}
+		for _, c := range resp.Cells {
+			if c.Y == g.RepoName {
+				t.Fatalf("org C cells include %s; want it outside the top 20 (it has 1 org C commit, every other repo 2)", g.RepoName)
+			}
+		}
+		if got := sum(resp); got != 40 {
+			t.Fatalf("org C commits = %v; want 40", got)
+		}
+	})
+
 	t.Run("active_hours", func(t *testing.T) {
 		resp, err := BuildResponse(ctx, client, f.OrgA, Params{
-			Type: "individual", Metric: "active_hours", ScopeType: "developer", ScopeID: f.PersonID(),
+			Type: "individual", Metric: "active_hours", ScopeType: "developer", ScopeID: f.PersonID(ctx, t, admin),
 			StartDate: &start, EndDate: &end, X: "9", Y: weekdayLabels[1], Limit: 50,
 		})
 		if err != nil {

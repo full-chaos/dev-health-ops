@@ -15,7 +15,7 @@ import (
 
 var crossOrgNow = time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 
-func seedCrossOrgPeople(ctx context.Context, t *testing.T) (*Reader, crossorg.Fixture) {
+func seedCrossOrgPeople(ctx context.Context, t *testing.T) (*Reader, crossorg.Fixture, string) {
 	t.Helper()
 	admin, client := crossorg.Start(ctx, t)
 	f := crossorg.Default()
@@ -47,16 +47,16 @@ func seedCrossOrgPeople(ctx context.Context, t *testing.T) (*Reader, crossorg.Fi
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	return reader, f
+	return reader, f, f.PersonID(ctx, t, admin)
 }
 
 func TestPeopleReadersReturnOnlyTheCallingOrgsRowsForASharedRepoID(t *testing.T) {
 	ctx := context.Background()
-	reader, f := seedCrossOrgPeople(ctx, t)
+	reader, f, personID := seedCrossOrgPeople(ctx, t)
 
 	t.Run("drilldown prs", func(t *testing.T) {
 		resp, err := BuildDrilldownPRsResponse(ctx, reader, f.OrgA, DrilldownPRsParams{
-			PersonID: f.PersonID(), RangeDays: 30, Limit: 50, Now: crossOrgNow,
+			PersonID: personID, RangeDays: 30, Limit: 50, Now: crossOrgNow,
 		})
 		if err != nil {
 			t.Fatalf("BuildDrilldownPRsResponse: %v", err)
@@ -78,7 +78,7 @@ func TestPeopleReadersReturnOnlyTheCallingOrgsRowsForASharedRepoID(t *testing.T)
 	for metric, want := range map[string]float64{"churn": 10, "review_latency": 4} {
 		t.Run("metric by_repo breakdown "+metric, func(t *testing.T) {
 			resp, err := BuildMetricResponse(ctx, reader, f.OrgA, MetricParams{
-				PersonID: f.PersonID(), Metric: metric, RangeDays: 30, CompareDays: 30, Now: crossOrgNow,
+				PersonID: personID, Metric: metric, RangeDays: 30, CompareDays: 30, Now: crossOrgNow,
 			})
 			if err != nil {
 				t.Fatalf("BuildMetricResponse: %v", err)

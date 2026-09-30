@@ -25,7 +25,6 @@ import (
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -60,10 +59,16 @@ func Default() Fixture {
 	}
 }
 
-// PersonID is the people/heatmap API's person id for f.Identity, derived by
-// the production helper rather than a second copy of its hash.
-func (f Fixture) PersonID() string {
-	return quadrant.PersonIDForIdentity(f.Identity)
+// PersonID is the people/heatmap API's person id for f.Identity, computed by
+// ClickHouse with the exact expression resolvePersonIdentity matches on
+// (lower(hex(MD5(identity)))), so the test cannot drift from the resolver.
+func (f Fixture) PersonID(ctx context.Context, t *testing.T, admin stdclickhouse.Conn) string {
+	t.Helper()
+	var id string
+	if err := admin.QueryRow(ctx, "SELECT lower(hex(MD5(?)))", f.Identity).Scan(&id); err != nil {
+		t.Fatalf("crossorg: person id: %v", err)
+	}
+	return id
 }
 
 // Start runs a real ClickHouse, migrates it to the chain's head, and returns

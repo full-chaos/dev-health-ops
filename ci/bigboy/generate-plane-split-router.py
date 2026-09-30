@@ -168,7 +168,7 @@ def emit_labels(go_regex: str, query_regex: str) -> str:
 # a deploy values file may override it at ops.ingress.pythonAllowList. Each entry is
 # (path, pathType).
 DEFAULT_PYTHON_ALLOW_LIST: list[tuple[str, str]] = [
-    ("/graphql", "Prefix"),
+    ("/graphql$", "ImplementationSpecific"),
     ("/api/v1/internal", "Prefix"),
 ]
 # Kept on Python on bigboy/local ONLY (D2983: prod blocks these at the ingress; local keeps
@@ -199,9 +199,16 @@ def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
 
 
 def _traefik_path_rule(entries: list[tuple[str, str]]) -> str:
-    # Prefix = the path itself OR anything under it (whole segment), like ingress-nginx.
+    # Prefix = the path itself OR anything under it (whole segment), like ingress-nginx's own Prefix.
+    # CHAOS-7243: an ANCHORED entry (ImplementationSpecific, "<literal>$", `\\.` for a dot) matches exactly
+    # that path, so it emits a single Path() term.
     terms: list[str] = []
     for path, path_type in entries:
+        if path_type == "ImplementationSpecific":
+            terms.append(
+                f"Path(`{path.removesuffix('$').replace(chr(92) + '.', '.')}`)"
+            )
+            continue
         terms.append(f"Path(`{path}`)")
         if path_type == "Prefix":
             terms.append(f"PathPrefix(`{path.rstrip('/')}/`)")

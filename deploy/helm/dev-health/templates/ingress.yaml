@@ -5,25 +5,55 @@ never by the Python api. The paths Python must still answer are ingress.pythonAl
 cover /api/v1/internal, because the Go api serves /api/v1/internal/acr/* WITHOUT a credential check (the network boundary is the control, see
 internal_acr_boundary_test.go): the Go default backend must never receive them from the public host.
 */}}
+{{- /*
+CHAOS-7243: an allow-list entry may be ANCHORED: {path: "/docs$", pathType: ImplementationSpecific} (literal segments, `\.` for a dot, exactly one trailing `$`).
+Why: in ingress-nginx regex mode (any Ingress on the host with use-regex, which the deploy chart's go-api/query-api split Ingresses always are) EVERY Prefix and
+Exact rule renders as an UNANCHORED regex (`location ~* "^/docs"`), so /docsx would still reach Python; an ImplementationSpecific path renders verbatim
+(`location ~* "^/docs$"`). Without regex mode the `$` would be literal and the entry would never match, so this template ADDS
+`nginx.ingress.kubernetes.io/use-regex: "true"` to an Ingress that carries ONLY the hosts whose effective allow-list has an anchored entry (name suffix -anchored):
+the annotation applies to every host of the Ingress object, so other hosts stay in the main, unannotated Ingress and render exactly as before.
+*/}}
 {{- if .Values.ingress.enabled }}
+{{- /* CHAOS-7243 (r1 P1): use-regex is applied per INGRESS OBJECT to every host it lists, so hosts with an anchored entry get their OWN Ingress
+(suffix -anchored, carrying use-regex) and every other host stays in the main Ingress, byte-identical to before. */}}
+{{- $plainHosts := list }}
+{{- $anchoredHosts := list }}
+{{- range $h := .Values.ingress.hosts }}
+{{- $list := list }}
+{{- if kindIs "slice" $h.pythonAllowList }}{{- $list = $h.pythonAllowList }}{{- else if kindIs "bool" $h.pythonAllowList }}{{- if $h.pythonAllowList }}{{- $list = $.Values.ingress.pythonAllowList }}{{- end }}{{- end }}
+{{- $isAnchored := false }}
+{{- range $list }}{{- if and (kindIs "map" .) (eq (toString .pathType) "ImplementationSpecific") }}{{- $isAnchored = true }}{{- end }}{{- end }}
+{{- if $isAnchored }}{{- $anchoredHosts = append $anchoredHosts $h }}{{- else }}{{- $plainHosts = append $plainHosts $h }}{{- end }}
+{{- end }}
+{{- $emitted := false }}
+{{- range $group := list "plain" "anchored" }}
+{{- $hosts := $plainHosts }}
+{{- if eq $group "anchored" }}{{- $hosts = $anchoredHosts }}{{- end }}
+{{- if $hosts }}
+{{- if $emitted }}
+---
+{{- end }}
+{{- $emitted = true }}
+{{- $annotations := deepCopy (default (dict) $.Values.ingress.annotations) }}
+{{- if eq $group "anchored" }}{{- $_ := set $annotations "nginx.ingress.kubernetes.io/use-regex" "true" }}{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "dev-health.fullname" . }}
-  namespace: {{ include "dev-health.namespace" . }}
+  name: {{ include "dev-health.fullname" $ }}{{ if eq $group "anchored" }}-anchored{{ end }}
+  namespace: {{ include "dev-health.namespace" $ }}
   labels:
-    {{- include "dev-health.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+    {{- include "dev-health.labels" $ | nindent 4 }}
+  {{- with $annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  {{- if .Values.ingress.className }}
-  ingressClassName: {{ .Values.ingress.className }}
+  {{- if $.Values.ingress.className }}
+  ingressClassName: {{ $.Values.ingress.className }}
   {{- end }}
-  {{- if .Values.ingress.tls }}
+  {{- if $.Values.ingress.tls }}
   tls:
-    {{- range .Values.ingress.tls }}
+    {{- range $.Values.ingress.tls }}
     - hosts:
         {{- range .hosts }}
         - {{ . | quote }}
@@ -32,7 +62,7 @@ spec:
     {{- end }}
   {{- end }}
   rules:
-    {{- range $host := .Values.ingress.hosts }}
+    {{- range $host := $hosts }}
     {{- /* CHAOS-7221 (r1 P1): validate the TYPE whenever the key is present, so null/0/"" cannot skip it by being falsy. */}}
     {{- if hasKey $host "pythonAllowList" }}
     {{- if not (or (kindIs "bool" $host.pythonAllowList) (kindIs "slice" $host.pythonAllowList)) }}
@@ -91,16 +121,28 @@ spec:
           {{- if not $.Values.api.enabled }}{{- fail (printf "ingress.hosts %q pythonAllowList routes to the Python api but api.enabled is false (the Service would not exist)" $host.host) }}{{- end }}
           {{- $coversInternal := false }}
           {{- $seen := dict }}
+          {{- $hostAnchored := false }}
+          {{- range $allow }}{{- if and (kindIs "map" .) (eq (toString .pathType) "ImplementationSpecific") }}{{- $hostAnchored = true }}{{- end }}{{- end }}
           {{- $hostPaths := list }}
           {{- range $host.paths }}{{- $hostPaths = append $hostPaths .path }}{{- end }}
           {{- range $allow }}
-          {{- if not (and (kindIs "map" .) (kindIs "string" .path) (regexMatch "^(/[A-Za-z0-9_.-]+)*/?$" .path) (not (regexMatch "(^|/)[.]{1,2}(/|$)" .path)) (has .pathType (list "Prefix" "Exact"))) }}
-          {{- fail (printf "ingress.hosts %q pythonAllowList entry %v must be {path: literal /path, pathType: Prefix|Exact}" $host.host .) }}
+          {{- $shapeOK := false }}
+          {{- if and (kindIs "map" .) (kindIs "string" .path) (kindIs "string" .pathType) }}
+          {{- if and (has .pathType (list "Prefix" "Exact")) (regexMatch "^(/[A-Za-z0-9_.-]+)*/?$" .path) (not (regexMatch "(^|/)[.]{1,2}(/|$)" .path)) }}{{- $shapeOK = true }}{{- end }}
+          {{- if and (eq .pathType "ImplementationSpecific") (regexMatch `^(/([A-Za-z0-9_-]|\\\.)+)+[$]$` .path) }}{{- $shapeOK = true }}{{- end }}
           {{- end }}
-          {{- /* CHAOS-7221 (r1 P1): an allow-list entry may not be "/" (it would negate the default backend), repeat another entry, or repeat one of the host's own paths (two rules on one path: which backend wins is the controller's tie-break). */}}
-          {{- if eq (trimSuffix "/" .path) "" }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q would route the whole host to the Python api, which is what the Go default backend replaces" $host.host .path) }}{{- end }}
-          {{- if or (hasKey $seen .path) (has .path $hostPaths) }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q duplicates another rule on the same path (an allow-list path must be unique and not one of the host's own paths)" $host.host .path) }}{{- end }}
-          {{- $_ := set $seen .path true }}
+          {{- if not $shapeOK }}
+          {{- fail (printf "ingress.hosts %q pythonAllowList entry %v must be {path: literal /path, pathType: Prefix|Exact} or an anchored {path: \"/literal$\" (\\. for a dot), pathType: ImplementationSpecific}" $host.host .) }}
+          {{- end }}
+          {{- /* CHAOS-7221 (r1 P1): an allow-list entry may not be "/" (it would negate the default backend), repeat another entry, or repeat one of the host's own paths (two rules on one path: which backend wins is the controller's tie-break). CHAOS-7243: compared on the BASE path, so `/docs$` and `/docs` collide. */}}
+          {{- $base := .path }}
+          {{- if eq .pathType "ImplementationSpecific" }}{{- $base = replace `\.` "." (trimSuffix "$" .path) }}{{- end }}
+          {{- if regexMatch "(^|/)[.]{1,2}(/|$)" $base }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q has a . or .. path segment" $host.host .path) }}{{- end }}
+          {{- if eq (trimSuffix "/" $base) "" }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q would route the whole host to the Python api, which is what the Go default backend replaces" $host.host .path) }}{{- end }}
+          {{- if or (hasKey $seen $base) (has $base $hostPaths) }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q duplicates another rule on the same path (an allow-list path must be unique and not one of the host's own paths)" $host.host .path) }}{{- end }}
+          {{- $_ := set $seen $base true }}
+          {{- /* CHAOS-7243 (r2 P1): on an anchored host regex mode is on for the WHOLE host, where a literal Exact rule renders as an UNANCHORED regex (`= /graphql` becomes `~* "^/graphql"`, so /graphqlish would reach Python). An Exact entry must therefore be written anchored on such a host. */}}
+          {{- if and $hostAnchored (eq .pathType "Exact") }}{{- fail (printf "ingress.hosts %q pythonAllowList entry %q is Exact on a host that has an anchored entry: regex mode makes an Exact rule an unanchored regex there (lookalikes such as %sx would reach Python); write it anchored as {path: %q, pathType: ImplementationSpecific}" $host.host .path .path (printf "%s$" .path)) }}{{- end }}
           {{- if and (eq .pathType "Prefix") (has (trimSuffix "/" .path) (list "/api" "/api/v1" "/api/v1/internal")) }}{{- $coversInternal = true }}{{- end }}
           - path: {{ .path }}
             pathType: {{ .pathType }}
@@ -115,4 +157,6 @@ spec:
           {{- end }}
           {{- end }}
     {{- end }}
+{{- end }}
+{{- end }}
 {{- end }}

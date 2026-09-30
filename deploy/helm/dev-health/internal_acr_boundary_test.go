@@ -291,7 +291,7 @@ func TestPerHostPythonAllowList(t *testing.T) {
 			t.Errorf("own-list host: %s must back onto the Python api Service:\n%s", path, ownRules)
 		}
 	}
-	for _, path := range []string{"/graphql", "/api/v1/internal"} {
+	for _, path := range []string{"/graphql$", "/api/v1/internal"} {
 		if !strings.Contains(backendOf(shared, path), "name: b-dev-health-api\n") {
 			t.Errorf("shared-list host: %s must back onto the Python api Service:\n%s", path, shared)
 		}
@@ -331,5 +331,141 @@ func TestPerHostPythonAllowList(t *testing.T) {
 		`"paths":[{"path":"/","pathType":"Prefix","service":"go-api"},{"path":"/graphql","pathType":"Prefix","service":"web"}]}]`
 	if o, err := render(dup); err == nil || !strings.Contains(o, "duplicates another rule") {
 		t.Errorf("an allow-list path repeating a host path must fail the render: err=%v\n%s", err, o)
+	}
+}
+
+// TestAnchoredAllowListEntries pins CHAOS-7243: an anchored entry ({path: "/docs$", pathType: ImplementationSpecific})
+// renders verbatim (ingress-nginx then emits `location ~* "^/docs$"`, proven live on v1.14.5), the chart adds
+// use-regex to its Ingress exactly when an anchored entry is in use, and malformed anchored entries are refused.
+func TestAnchoredAllowListEntries(t *testing.T) {
+	render := func(hosts string, extra ...string) (string, error) {
+		args := append([]string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts=" + hosts}, extra...)
+		out, err := exec.Command("helm", args...).CombinedOutput()
+		return string(out), err
+	}
+	host := func(list string) string {
+		return `[{"host":"h","pythonAllowList":` + list + `,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
+	}
+	internal := `{"path":"/api/v1/internal","pathType":"Prefix"}`
+	ingressDoc := func(out string) string {
+		for _, d := range strings.Split(out, "\n---") {
+			if documentKind(d) == "Ingress" {
+				return d
+			}
+		}
+		t.Fatalf("no Ingress in render:\n%s", out)
+		return ""
+	}
+	anchored := `[{"path":"/docs$","pathType":"ImplementationSpecific"},{"path":"/docs/oauth2-redirect$","pathType":"ImplementationSpecific"},` +
+		`{"path":"/openapi\\.json$","pathType":"ImplementationSpecific"},` + internal + `]`
+	out, err := render(host(anchored))
+	if err != nil {
+		t.Fatalf("anchored list must render: %v\n%s", err, out)
+	}
+	doc := ingressDoc(out)
+	for _, want := range []string{`nginx.ingress.kubernetes.io/use-regex: "true"`, "- path: /docs$\n", "- path: /docs/oauth2-redirect$\n", `- path: /openapi\.json$` + "\n"} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("anchored render must contain %q:\n%s", want, doc)
+		}
+	}
+	if got := strings.Count(doc, "pathType: ImplementationSpecific"); got != 3 {
+		t.Errorf("want 3 ImplementationSpecific rules, got %d:\n%s", got, doc)
+	}
+	// The shared default list is anchored too (host `true`), so it also turns regex mode on.
+	if o, err := render(host("true")); err != nil || !strings.Contains(ingressDoc(o), `use-regex: "true"`) || !strings.Contains(ingressDoc(o), "- path: /graphql$\n") {
+		t.Errorf("a `true` host uses the anchored shared default and must enable use-regex: err=%v\n%s", err, o)
+	}
+	// No anchored entry anywhere -> no annotation (literal-only lists render as before).
+	if o, err := render(host(`[{"path":"/graphql","pathType":"Exact"},` + internal + `]`)); err != nil || strings.Contains(ingressDoc(o), "use-regex") {
+		t.Errorf("a literal-only list must not add use-regex: err=%v\n%s", err, o)
+	}
+	// An operator-set use-regex on an Ingress routing to go-api is still refused.
+	if o, err := render(host(anchored), "--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/use-regex=true`); err == nil || !strings.Contains(o, "use-regex on an Ingress that routes to go-api") {
+		t.Errorf("operator-set use-regex must still be refused: err=%v\n%s", err, o)
+	}
+	docs := `{"path":"/docs$","pathType":"ImplementationSpecific"}`
+	for name, c := range map[string]struct{ list, want string }{
+		"no trailing dollar":    {`[{"path":"/docs","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"double dollar":         {`[{"path":"/docs$$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"dollar mid path":       {`[{"path":"/do$cs$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"unescaped dot":         {`[{"path":"/openapi.json$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"group":                 {`[{"path":"/(docs)$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"wildcard":              {`[{"path":"/docs.*$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"alternation":           {`[{"path":"/docs|x$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"caret":                 {`[{"path":"^/docs$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"lone dollar":           {`[{"path":"$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"root dollar":           {`[{"path":"/$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"double slash":          {`[{"path":"//docs$","pathType":"ImplementationSpecific"},` + internal + `]`, "anchored"},
+		"literal with dollar":   {`[{"path":"/docs$","pathType":"Exact"},` + internal + `]`, "must be {path"},
+		"duplicate of literal":  {`[` + docs + `,{"path":"/docs","pathType":"Exact"},` + internal + `]`, "duplicates another rule"},
+		"duplicate anchored":    {`[` + docs + `,` + docs + `,` + internal + `]`, "duplicates another rule"},
+		"anchored only":         {`[` + docs + `]`, "must cover /api/v1/internal"},
+		"exact beside anchored": {`[` + docs + `,{"path":"/graphql","pathType":"Exact"},` + internal + `]`, "is Exact on a host that has an anchored entry"},
+	} {
+		o, err := render(host(c.list))
+		if err == nil || !strings.Contains(o, c.want) {
+			t.Errorf("%s: want render failure containing %q, got err=%v\n%s", name, c.want, err, o)
+		}
+	}
+	// An anchored entry whose base path repeats one of the host's own paths is refused.
+	dup := `[{"host":"h","pythonAllowList":[{"path":"/graphql$","pathType":"ImplementationSpecific"},` + internal + `],` +
+		`"paths":[{"path":"/","pathType":"Prefix","service":"go-api"},{"path":"/graphql","pathType":"Prefix","service":"web"}]}]`
+	if o, err := render(dup); err == nil || !strings.Contains(o, "duplicates another rule") {
+		t.Errorf("an anchored entry repeating a host path must be refused: err=%v\n%s", err, o)
+	}
+	// r1 P2: an escaped dot segment ("/docs/\\.\\.$") is a . or .. segment after unescaping.
+	if o, err := render(host(`[{"path":"/docs/\\.\\.$","pathType":"ImplementationSpecific"},` + internal + `]`)); err == nil || !strings.Contains(o, "path segment") {
+		t.Errorf("an anchored dot-dot segment must be refused: err=%v\n%s", err, o)
+	}
+}
+
+// TestAnchoredHostsGetTheirOwnIngress pins CHAOS-7243 r1 P1: use-regex applies to every host of the Ingress object
+// that carries it, so a host with an anchored entry lives in its own Ingress (suffix -anchored, annotated) and every
+// other host stays in the unannotated main Ingress, rendered exactly as before.
+func TestAnchoredHostsGetTheirOwnIngress(t *testing.T) {
+	anchoredHost := `{"host":"anchored.test","pythonAllowList":[{"path":"/docs$","pathType":"ImplementationSpecific"},{"path":"/api/v1/internal","pathType":"Prefix"}],"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}`
+	literalHost := `{"host":"literal.test","pythonAllowList":[{"path":"/graphql","pathType":"Exact"},{"path":"/api/v1/internal","pathType":"Prefix"}],"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}`
+	plainHost := `{"host":"plain.test","paths":[{"path":"/","pathType":"Prefix","service":"web"}]}`
+	render := func(hosts string) []string {
+		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts="+hosts).CombinedOutput()
+		if err != nil {
+			t.Fatalf("render failed: %v\n%s", err, out)
+		}
+		var ingresses []string
+		for _, d := range strings.Split(string(out), "\n---") {
+			if documentKind(d) == "Ingress" {
+				ingresses = append(ingresses, d)
+			}
+		}
+		return ingresses
+	}
+	docs := render(`[` + literalHost + `,` + anchoredHost + `,` + plainHost + `]`)
+	if len(docs) != 2 {
+		t.Fatalf("want a main and an -anchored Ingress, got %d", len(docs))
+	}
+	var main, anchored string
+	for _, d := range docs {
+		if strings.Contains(d, "name: b-dev-health-anchored\n") {
+			anchored = d
+		} else {
+			main = d
+		}
+	}
+	if anchored == "" || main == "" {
+		t.Fatalf("Ingress objects not found:\n%v", docs)
+	}
+	if !strings.Contains(anchored, `use-regex: "true"`) || !strings.Contains(anchored, "anchored.test") || strings.Contains(anchored, "literal.test") || strings.Contains(anchored, "plain.test") {
+		t.Errorf("the -anchored Ingress must carry use-regex and ONLY the anchored host:\n%s", anchored)
+	}
+	if strings.Contains(main, "use-regex") || !strings.Contains(main, "literal.test") || !strings.Contains(main, "plain.test") || strings.Contains(main, "anchored.test") {
+		t.Errorf("the main Ingress must stay unannotated and carry the other hosts:\n%s", main)
+	}
+	// Literal-only and mixed-without-anchored renders keep ONE Ingress, unannotated.
+	if one := render(`[` + literalHost + `,` + plainHost + `]`); len(one) != 1 || strings.Contains(one[0], "use-regex") {
+		t.Errorf("no anchored entry: want one unannotated Ingress, got %d", len(one))
+	}
+	// Only anchored hosts: a single -anchored Ingress and no empty main Ingress.
+	if only := render(`[` + anchoredHost + `]`); len(only) != 1 || !strings.Contains(only[0], "b-dev-health-anchored") {
+		t.Errorf("only anchored hosts: want exactly one -anchored Ingress, got %d", len(only))
 	}
 }

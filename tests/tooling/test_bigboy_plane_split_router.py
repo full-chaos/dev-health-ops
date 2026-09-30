@@ -242,3 +242,23 @@ def test_allow_list_cover_is_segment_exact(
     }
     with pytest.raises(SystemExit):
         gen.python_allow_list_from_doc(doc)
+
+
+def test_anchored_allow_list_entry_emits_one_exact_path_term(gen: ModuleType) -> None:
+    """CHAOS-7243: an ImplementationSpecific `<literal>$` entry matches exactly that path in traefik too."""
+    rule = gen._traefik_path_rule(
+        [
+            ("/graphql$", "ImplementationSpecific"),
+            ("/openapi\\.json$", "ImplementationSpecific"),
+            ("/api/v1/internal", "Prefix"),
+        ]
+    )
+    assert "Path(`/graphql`)" in rule
+    assert "PathPrefix(`/graphql/`)" not in rule
+    assert "Path(`/openapi.json`)" in rule
+    assert "$" not in rule and "\\" not in rule
+    assert "PathPrefix(`/api/v1/internal/`)" in rule
+
+
+def test_default_allow_list_is_anchored_for_graphql(gen: ModuleType) -> None:
+    assert ("/graphql$", "ImplementationSpecific") in gen.DEFAULT_PYTHON_ALLOW_LIST

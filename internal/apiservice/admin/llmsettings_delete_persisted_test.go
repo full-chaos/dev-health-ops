@@ -119,6 +119,25 @@ VALUES ($1, $2, $3, $4, 'v', false, NULL, now(), now())`, uuid.New(), org.String
 		}
 	})
 
+	t.Run("the generic settings delete cannot reach llm rows", func(t *testing.T) {
+		for _, path := range []string{
+			"/api/v1/admin/settings/llm/ask_dev_agent_readiness",
+			"/api/v1/admin/settings/llm/ask_dev_role_certification_profile:legacy_agent",
+			"/api/v1/admin/settings/llm/api_key",
+			"/api/v1/admin/settings/llm_budget/limit_micro_usd",
+		} {
+			resp := doRouteRequest(t, base, "DELETE", path, auth("b"))
+			if resp.status < 400 {
+				t.Errorf("DELETE %s: status=%d body=%s, want a refusal", path, resp.status, resp.body)
+			}
+		}
+		for _, c := range cells {
+			if !exists(orgB, c.category, c.key) {
+				t.Errorf("org B lost %s/%s to a generic settings delete", c.category, c.key)
+			}
+		}
+	})
+
 	t.Run("orphan derived rows with no credentials: 404 and cleared", func(t *testing.T) {
 		resp := doRouteRequest(t, base, "DELETE", "/api/v1/admin/llm-settings", auth("orphan"))
 		if resp.status != 404 {

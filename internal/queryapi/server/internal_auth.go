@@ -101,6 +101,28 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 // get_authenticated_user does the same (services/auth.py:350), never
 // re-verified against a live row on either plane today.
 func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store, token string) (authctx.Claims, bool) {
+	claims, outcome := checkEdgeCarrier(r, edgeAuth, edgeStore, token)
+	if outcome != edgeAccepted {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return authctx.Claims{}, false
+	}
+	return claims, true
+}
+
+// edgeOutcome is how checkEdgeCarrier decided a token. /query answers every
+// failure with the same bare 401; /graphql answers a store it could not read
+// as the Python app did (its unhandled 500), never as a bad credential.
+type edgeOutcome int
+
+const (
+	edgeAccepted    edgeOutcome = iota
+	edgeRefused                 // the credential is not good
+	edgeUnavailable             // a live check could not be read: nothing was decided
+)
+
+// checkEdgeCarrier is the decision of authenticateEdgeCarrier, logged and
+// counted, without an answer written.
+func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store, token string) (authctx.Claims, edgeOutcome) {
 	ctx := r.Context()
 	user, err := edgeAuth.Authenticate(ctx, token)
 	if err != nil {
@@ -108,11 +130,10 @@ func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *p
 		if errors.Is(err, policy.ErrUnavailable) {
 			log.Printf("query-api: internal request refused: reason=edge_store_unavailable carrier=edge path=%s request_id=%s",
 				r.URL.Path, envelopeRequestID(r))
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return authctx.Claims{}, false
+			return authctx.Claims{}, edgeUnavailable
 		}
-		refuseInternal(w, r, "edge_rejected", "edge")
-		return authctx.Claims{}, false
+		noteRefusal(r, "edge_rejected", "edge")
+		return authctx.Claims{}, edgeRefused
 	}
 
 	orgID := user.OrgID
@@ -132,8 +153,7 @@ func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *p
 			// this same lookup failure too.
 			log.Printf("query-api: internal request refused: reason=edge_impersonation_lookup_failed carrier=edge path=%s request_id=%s",
 				r.URL.Path, envelopeRequestID(r))
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return authctx.Claims{}, false
+			return authctx.Claims{}, edgeUnavailable
 		}
 		if session != nil {
 			// The effective principal while impersonating is the TARGET's:
@@ -156,17 +176,16 @@ func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *p
 		if memberErr != nil {
 			log.Printf("query-api: internal request refused: reason=edge_membership_lookup_failed carrier=edge path=%s request_id=%s",
 				r.URL.Path, envelopeRequestID(r))
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return authctx.Claims{}, false
+			return authctx.Claims{}, edgeUnavailable
 		}
 		if !member {
-			refuseInternal(w, r, "edge_not_a_member", "edge")
-			return authctx.Claims{}, false
+			noteRefusal(r, "edge_not_a_member", "edge")
+			return authctx.Claims{}, edgeRefused
 		}
 	}
 
 	internalidentity.RecordOutcome("edge", "accepted")
-	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive}, true
+	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive}, edgeAccepted
 }
 
 // authenticateEdgeTokenOnly authenticates /graphql, the product path an
@@ -180,32 +199,32 @@ func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *p
 // alg, the envelope's EdDSA included) is refused, and so is every request
 // when this pod has no edge secret configured. The token itself is checked
 // exactly as /query's edge carrier checks it (authenticateEdgeCarrier).
-func authenticateEdgeTokenOnly(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store) (authctx.Claims, bool) {
+func authenticateEdgeTokenOnly(r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store) (authctx.Claims, edgeOutcome) {
 	if len(r.Header.Values("Authorization")) > 1 {
-		refuseInternal(w, r, "ambiguous_carrier", "authorization")
-		return authctx.Claims{}, false
+		noteRefusal(r, "ambiguous_carrier", "authorization")
+		return authctx.Claims{}, edgeRefused
 	}
 	// The public listener deletes these headers before any handler runs, so
 	// this refuses only on the internal listener, whose callers have no
 	// business on the product path.
 	if internalidentity.Present(r.Header) {
-		refuseInternal(w, r, "internal_headers_on_edge_path", "headers")
-		return authctx.Claims{}, false
+		noteRefusal(r, "internal_headers_on_edge_path", "headers")
+		return authctx.Claims{}, edgeRefused
 	}
 	token, ok := bearerToken(r.Header.Get("Authorization"))
 	if !ok {
-		refuseInternal(w, r, "no_carrier", "none")
-		return authctx.Claims{}, false
+		noteRefusal(r, "no_carrier", "none")
+		return authctx.Claims{}, edgeRefused
 	}
 	if edgeAuth == nil {
-		refuseInternal(w, r, "edge_not_configured", "edge")
-		return authctx.Claims{}, false
+		noteRefusal(r, "edge_not_configured", "edge")
+		return authctx.Claims{}, edgeRefused
 	}
 	if alg, ok := jwtHeaderAlg(token); !ok || alg != principal.EdgeAlgorithm {
-		refuseInternal(w, r, "not_an_edge_token", "edge")
-		return authctx.Claims{}, false
+		noteRefusal(r, "not_an_edge_token", "edge")
+		return authctx.Claims{}, edgeRefused
 	}
-	return authenticateEdgeCarrier(w, r, edgeAuth, edgeStore, token)
+	return checkEdgeCarrier(r, edgeAuth, edgeStore, token)
 }
 
 // refuseAmbiguousCarrier answers 401 and reports true when the request
@@ -232,8 +251,13 @@ func refuseAmbiguousCarrier(w http.ResponseWriter, r *http.Request) bool {
 // refuseInternal answers the bare 401 and leaves a line naming why. The line
 // carries the reason and the path, never a header value.
 func refuseInternal(w http.ResponseWriter, r *http.Request, reason, carrier string) {
+	noteRefusal(r, reason, carrier)
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+}
+
+// noteRefusal counts a refused carrier and leaves the line naming why.
+func noteRefusal(r *http.Request, reason, carrier string) {
 	internalidentity.RecordOutcome(carrier, reason)
 	log.Printf("query-api: internal request refused: reason=%s carrier=%s path=%s request_id=%s",
 		reason, carrier, r.URL.Path, envelopeRequestID(r))
-	http.Error(w, "unauthorized", http.StatusUnauthorized)
 }

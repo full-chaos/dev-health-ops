@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -225,27 +226,23 @@ func graphQLEdgeLimits(limit int, next http.Handler) http.Handler {
 }
 
 // authenticateGraphQLEdge is authenticateEdgeTokenOnly with the Python
-// edge's refusal: the GraphQL context dependency answered every missing,
-// malformed or rejected credential with FastAPI's 401 {"detail":
-// "Authentication required"} (graphql/app.py get_context), where /query
-// answers a bare 401.
+// app's answers: a missing, malformed or rejected credential is FastAPI's 401
+// {"detail": "Authentication required"} (graphql/app.py get_context); a
+// store the check could not read is the unhandled 500 its database error
+// raised there -- never a 401, which would tell the client its credential is
+// bad when nothing was decided.
 func authenticateGraphQLEdge(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store) (authctx.Claims, bool) {
-	refusal := &discardResponse{header: http.Header{}}
-	claims, ok := authenticateEdgeTokenOnly(refusal, r, edgeAuth, edgeStore)
-	if ok {
+	claims, outcome := authenticateEdgeTokenOnly(r, edgeAuth, edgeStore)
+	switch outcome {
+	case edgeAccepted:
 		return claims, true
+	case edgeUnavailable:
+		policy.WriteInternal(w)
+	default:
+		policy.WriteDetail(w, http.StatusUnauthorized, "Authentication required", nil)
 	}
-	policy.WriteDetail(w, http.StatusUnauthorized, "Authentication required", nil)
 	return authctx.Claims{}, false
 }
-
-// discardResponse takes a refusal authenticateInternalRequest writes, so the
-// edge can answer its own. The refusal is already logged and counted by then.
-type discardResponse struct{ header http.Header }
-
-func (d *discardResponse) Header() http.Header         { return d.header }
-func (d *discardResponse) Write(p []byte) (int, error) { return len(p), nil }
-func (d *discardResponse) WriteHeader(int)             {}
 
 // acceptsHTML is the Python edge's browser check (graphql/security.py
 // _accepts_html): the LAST Accept header (Starlette builds a dict from the
@@ -371,6 +368,52 @@ func unhex(c byte) byte {
 		return c - 'a' + 10
 	default:
 		return c - 'A' + 10
+	}
+}
+
+// graphQLErrorBody is a GraphQL response carrying one error, in gqlgen's own
+// key order, so every /graphql answer query-api decides itself reads like the
+// answers its executor gives.
+func graphQLErrorBody(message, code string) string {
+	encoded, err := json.Marshal(struct {
+		Errors []graphQLError `json:"errors"`
+		Data   any            `json:"data"`
+	}{Errors: []graphQLError{{Message: message, Extensions: map[string]string{"code": code}}}})
+	if err != nil {
+		return `{"errors":[{"message":"internal error"}],"data":null}`
+	}
+	return string(encoded)
+}
+
+type graphQLError struct {
+	Message    string            `json:"message"`
+	Extensions map[string]string `json:"extensions"`
+}
+
+func writeGraphQLError(w http.ResponseWriter, status int, message, code string) {
+	body := graphQLErrorBody(message, code)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(status)
+	_, _ = io.WriteString(w, body)
+}
+
+// refuseGraphQLEdgeUnregistered answers a document query-api does not
+// register: 404, as a GraphQL response. query-api serves registered
+// documents only; the Python edge let Strawberry answer these.
+func refuseGraphQLEdgeUnregistered(w http.ResponseWriter) {
+	writeGraphQLError(w, http.StatusNotFound, "This GraphQL document is not registered.", "UNREGISTERED_DOCUMENT")
+}
+
+// graphQLEdgeNotEnabled answers a registered operation whose routing row is
+// off, or unreadable (the switch fails closed): a GraphQL error with status
+// 200, as the Python edge's Strawberry fallback answered a query in that
+// state -- a store failure is an error in the response, never a bare 404.
+// Nothing runs.
+func graphQLEdgeNotEnabled(operation string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("query-api: /graphql refused an operation that is not enabled: operation=%s", operation)
+		writeGraphQLError(w, http.StatusOK, "This operation is not enabled on this deployment.", "OPERATION_NOT_ENABLED")
 	}
 }
 

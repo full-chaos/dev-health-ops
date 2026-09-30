@@ -3463,6 +3463,10 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 				"query-api: unregistered document digest-miss: digest=%s query=%s",
 				digestHex(query), truncateForLog(query, maxUnwrapChainLogBytes),
 			)
+			if edge {
+				refuseGraphQLEdgeUnregistered(w)
+				return
+			}
 			http.NotFound(w, r)
 			return
 		}
@@ -3515,6 +3519,10 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			r.Header.Set("Content-Type", "application/json")
 		}
 
+		if edge {
+			routeMux.DispatchOr(operation, w, r, graphQLEdgeNotEnabled(operation))
+			return
+		}
 		routeMux.Dispatch(operation, w, r)
 	}
 }

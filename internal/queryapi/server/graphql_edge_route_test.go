@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -68,14 +69,19 @@ func edgeExpect(c edgeCell) (int, bool) {
 // refuse.
 func edgeHarness(t *testing.T) (http.HandlerFunc, *[]string, string, string, string) {
 	t.Helper()
-	store := &fakeEdgeStore{
+	return edgeHarnessWith(t, &fakeEdgeStore{
 		states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}},
 		found:   map[uuid.UUID]bool{ecUser: true},
 		members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
-	}
+	}, routeswitch.StaticSwitch{"probe": true, "probeWrite": true})
+}
+
+// edgeHarnessWith is edgeHarness over a given store and routing switch.
+func edgeHarnessWith(t *testing.T, store *fakeEdgeStore, sw routeswitch.Switch) (http.HandlerFunc, *[]string, string, string, string) {
+	t.Helper()
 	verifier, priv := iaVerifier(t)
 	ran := &[]string{}
-	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": true, "probeWrite": true})
+	mux := routeswitch.NewMux(sw)
 	for _, op := range []string{"probe", "probeWrite"} {
 		op := op
 		mux.Register(op, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -209,6 +215,7 @@ func TestGraphQLEdgeRefusalsCarryThePythonBodies(t *testing.T) {
 		{edgeCell{method: http.MethodPost, carrier: "member", document: "empty"}, "text/plain; charset=utf-8", "No GraphQL query found in the request", ""},
 		{edgeCell{method: http.MethodGet, carrier: "member", document: "mutation"}, "text/plain; charset=utf-8", "mutations are not allowed when using GET", ""},
 		{edgeCell{method: http.MethodGet, carrier: "member", document: "empty"}, "text/plain; charset=utf-8", "No GraphQL query found in the request", ""},
+		{edgeCell{method: http.MethodPost, carrier: "member", document: "unregistered"}, "application/json", `{"errors":[{"message":"This GraphQL document is not registered.","extensions":{"code":"UNREGISTERED_DOCUMENT"}}],"data":null}`, ""},
 	} {
 		recorder := serveEdge(handler, tc.cell, edgeRequest(t, tc.cell, member, "", ""))
 		if got := recorder.Header().Get("Content-Type"); got != tc.contentType {
@@ -619,6 +626,101 @@ func TestGraphQLEdgeLogsWhyItRefused(t *testing.T) {
 		recorder := serveEdge(handler, c, edgeRequest(t, c, member, nonmember, envelope))
 		if recorder.Code != http.StatusUnauthorized || !strings.Contains(logged.String(), reason) {
 			t.Errorf("%s: %d, logged %q, want 401 and %q", carrier, recorder.Code, logged.String(), reason)
+		}
+	}
+}
+
+// TestGraphQLEdgeAnswersAnOperationThatIsNotEnabledAsAGraphQLError: a
+// registered operation whose routing row is off (or unreadable: the switch
+// fails closed) is a GraphQL error with status 200 on /graphql, and nothing
+// runs; /query keeps its 404.
+func TestGraphQLEdgeAnswersAnOperationThatIsNotEnabledAsAGraphQLError(t *testing.T) {
+	store := &fakeEdgeStore{
+		states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}},
+		found:   map[uuid.UUID]bool{ecUser: true},
+		members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
+	}
+	handler, ran, member, _, _ := edgeHarnessWith(t, store, routeswitch.StaticSwitch{"probe": false, "probeWrite": false})
+	for _, document := range []string{"query", "mutation"} {
+		c := edgeCell{method: http.MethodPost, carrier: "member", document: document}
+		recorder := serveEdge(handler, c, edgeRequest(t, c, member, "", ""))
+		want := `{"errors":[{"message":"This operation is not enabled on this deployment.","extensions":{"code":"OPERATION_NOT_ENABLED"}}],"data":null}`
+		if recorder.Code != http.StatusOK || recorder.Body.String() != want || len(*ran) != 0 {
+			t.Errorf("%s: %d %q ran=%v, want 200 %q and nothing run", document, recorder.Code, recorder.Body.String(), *ran, want)
+		}
+	}
+	queryMux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": false})
+	queryMux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	queryHandler := newDocumentDispatchHandler(os.Getenv, queryMux, map[string]string{digestHex(iaDocument): "probe"}, nil, ecEdgeAuth(t, store), store, "", nil)
+	request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`{"query": `+jsonQuote(t, iaDocument)+`}`))
+	request.Header.Set("Authorization", "Bearer "+member)
+	recorder := httptest.NewRecorder()
+	queryHandler(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Errorf("/query with the row off: %d, want the unchanged 404", recorder.Code)
+	}
+}
+
+// TestGraphQLEdgeAnswersAStoreItCannotReadAsTheUnhandled500: a live check
+// that could not be read decided nothing, so /graphql answers the Python
+// app's unhandled 500 (content headers only), never the 401 that would tell
+// the client its credential is bad; /query keeps its bare 401.
+func TestGraphQLEdgeAnswersAStoreItCannotReadAsTheUnhandled500(t *testing.T) {
+	for name, store := range map[string]*fakeEdgeStore{
+		"membership lookup fails": {
+			states: map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}},
+			found:  map[uuid.UUID]bool{ecUser: true}, errIsMember: errors.New("membership read failed"),
+		},
+	} {
+		handler, ran, member, _, _ := edgeHarnessWith(t, store, routeswitch.StaticSwitch{"probe": true})
+		c := edgeCell{method: http.MethodPost, carrier: "member", document: "query"}
+		recorder := serveEdge(handler, c, edgeRequest(t, c, member, "", ""))
+		if recorder.Code != http.StatusInternalServerError || recorder.Body.String() != `{"detail":"Internal Server Error"}` ||
+			recorder.Header().Get("X-Frame-Options") != "" || len(*ran) != 0 {
+			t.Errorf("%s: %d %q headers=%v ran=%v, want the bare unhandled 500", name, recorder.Code, recorder.Body.String(), recorder.Header(), *ran)
+		}
+		query, seen := iaDispatchWithEdge(t, nil, ecEdgeAuth(t, store), store)
+		request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`{"query": `+jsonQuote(t, iaDocument)+`}`))
+		request.Header.Set("Authorization", "Bearer "+member)
+		queryRecorder := httptest.NewRecorder()
+		query(queryRecorder, request)
+		if queryRecorder.Code != http.StatusUnauthorized || len(*seen) != 0 {
+			t.Errorf("%s on /query: %d, want the unchanged 401", name, queryRecorder.Code)
+		}
+	}
+	// A user-state read that fails: the org-scope middleware reads the caller
+	// first and refuses with the same 500, before the pipeline is reached.
+	store := &fakeEdgeStore{errUserState: policy.ErrUnavailable}
+	handler, ran, member, _, _ := edgeHarnessWith(t, store, routeswitch.StaticSwitch{"probe": true})
+	c := edgeCell{method: http.MethodPost, carrier: "member", document: "query"}
+	recorder := serveEdge(handler, c, edgeRequest(t, c, member, "", ""))
+	if recorder.Code != http.StatusInternalServerError || len(*ran) != 0 {
+		t.Errorf("user state unavailable: %d ran=%v, want 500", recorder.Code, *ran)
+	}
+}
+
+// TestGraphQLEdgeAuthenticatorReportsAStoreItCannotReadAsUnavailable pins the
+// pipeline's own decision, beneath the org-scope middleware: every live read
+// the edge carrier makes that fails is "unavailable", never "refused".
+func TestGraphQLEdgeAuthenticatorReportsAStoreItCannotReadAsUnavailable(t *testing.T) {
+	member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
+	super := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
+	for name, tc := range map[string]struct {
+		store *fakeEdgeStore
+		token string
+	}{
+		"user state":    {&fakeEdgeStore{errUserState: policy.ErrUnavailable}, member},
+		"membership":    {&fakeEdgeStore{states: map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}}, found: map[uuid.UUID]bool{ecUser: true}, errIsMember: errors.New("down")}, member},
+		"impersonation": {&fakeEdgeStore{states: map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}}, found: map[uuid.UUID]bool{ecUser: true}, errSession: errors.New("down")}, super},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/graphql", nil)
+		request.Header.Set("Authorization", "Bearer "+tc.token)
+		if _, outcome := authenticateEdgeTokenOnly(request, ecEdgeAuth(t, tc.store), tc.store); outcome != edgeUnavailable {
+			t.Errorf("%s: outcome %d, want unavailable", name, outcome)
+		}
+		recorder := httptest.NewRecorder()
+		if _, ok := authenticateGraphQLEdge(recorder, request, ecEdgeAuth(t, tc.store), tc.store); ok || recorder.Code != http.StatusInternalServerError {
+			t.Errorf("%s: answered %d, want 500", name, recorder.Code)
 		}
 	}
 }

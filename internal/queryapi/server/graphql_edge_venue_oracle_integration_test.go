@@ -534,6 +534,31 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 		return clock.ReplaceAllString(body, "<clock>")
 	})
 
+	// A registered operation whose routing row is off: the Python edge fell
+	// back to Strawberry (a query's resolver raises "served by query-api"; a
+	// mutation ran its Python body); query-api answers a GraphQL error and
+	// runs nothing. Both planes' rows are turned off, as an operator would.
+	for _, database := range []string{venue.SourceDB, venue.GoDB} {
+		pool, err := pgxpool.New(ctx, venue.AdminURI(t, database))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE go_api_routing_state SET mode = 'disabled' WHERE selected_operation = ANY($1)`,
+			[]string{query.Operation, mutation.Operation}); err != nil {
+			t.Fatal(err)
+		}
+		pool.Close()
+	}
+	mutationSpec, _ := goapiproof.SpecFor(mutation.Operation)
+	run([]edgeCase{
+		{request: edgePost("row off: "+query.Operation, member, queryBody, nil),
+			declared: "routing row off: Python's Strawberry fallback raised for the query; query-api answers a GraphQL error",
+			pyWant:   edgeAnswer{status: 200, body: `"errors"`}, goWant: edgeAnswer{status: 200, body: "OPERATION_NOT_ENABLED"}},
+		{request: edgePost("row off: "+mutation.Operation, member, urqlBody(t, documentOperationName(mutation.Document), mutation.Document, mutationSpec.Variables(edgeOrgA, goapiproof.DefaultWindow())), nil),
+			declared: "routing row off: Python ran its own mutation body; query-api answers a GraphQL error and runs nothing",
+			pyWant:   edgeAnswer{status: 200, body: `"deleteSavedReport"`}, goWant: edgeAnswer{status: 200, body: "OPERATION_NOT_ENABLED"}},
+	}, nil)
+
 	// A write last, on each plane in turn: createSavedReport mints an id and
 	// a timestamp per call, so those are blanked; nothing else is.
 	uuidPattern := regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
@@ -541,4 +566,26 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 	run(writes, func(_ venueoracle.Request, body string) string {
 		return timePattern.ReplaceAllString(uuidPattern.ReplaceAllString(body, "<uuid>"), "<time>")
 	})
+
+	// Postgres unreachable on both planes: the caller cannot be read, and
+	// both answer the unhandled 500. A second query-api over a dead DSN.
+	deadSettings := map[string]string{}
+	for key, value := range settings {
+		deadSettings[key] = value
+	}
+	deadSettings["GO_API_REGISTRY_POSTGRES_URI"] = "postgres://nobody:nothing@127.0.0.1:1/none?connect_timeout=2"
+	deadPlane, err := Build(func(key string) string { return deadSettings[key] })
+	if err != nil {
+		t.Fatalf("build query-api over a dead Postgres: %v", err)
+	}
+	t.Cleanup(deadPlane.Close)
+	deadPublic, _ := Listeners("127.0.0.1:0", "", deadPlane, nil, nil)
+	if err := deadPublic.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = deadPublic.Shutdown(context.Background()) })
+	deadRequests := []venueoracle.Request{edgePost("Postgres unreachable", member, queryBody, nil)}
+	deadPython := venue.ServePythonWithEnv(t, append(append([]string(nil), pythonEnv...),
+		"POSTGRES_URI=postgresql+asyncpg://nobody:nothing@127.0.0.1:1/none"), deadRequests)
+	t.Log("\n" + venueoracle.Diff(t, "http://"+deadPublic.Address(), deadRequests, deadPython, venueoracle.DiffOptions{}))
 }

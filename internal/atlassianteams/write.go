@@ -19,7 +19,10 @@ import (
 const (
 	teamsInsert       = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`
 	membershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
-	ownershipInsert   = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
+	// ownershipInsert names its columns and omits last_synced on purpose: the server stamps it at insert time.
+	// last_synced = server insert time, not commit order across concurrent inserts. A reader must re-read a
+	// window of at least 300 seconds behind its cursor and dedup by key with FINAL (migration 099).
+	ownershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 
 	existingProjectKeysQuery = "SELECT id, project_keys FROM teams FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND id IN {team_ids:Array(String)}"
 )

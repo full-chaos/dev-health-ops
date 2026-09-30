@@ -306,7 +306,7 @@ func TestSectionQueries_PinnedShape(t *testing.T) {
 			{"daily", dailySQL(org), []string{"GROUP BY day", "ORDER BY day"}},
 			{"routes", routesSQL(org), []string{"name = 'page_viewed'", "GROUP BY route_pattern", "ORDER BY events DESC", "LIMIT 25"}},
 			{"features", featureViewsSQL(org), []string{"name = 'feature_viewed'", "GROUP BY feature, surface", "ORDER BY views DESC"}},
-			{"filters", filterChangesSQL(org), []string{"name = 'filter_changed'", "GROUP BY view, filter_key", "ORDER BY changes DESC", "avg(JSONExtractInt(payload_json, 'valueCount'))"}},
+			{"filters", filterChangesSQL(org), []string{"name = 'filter_changed'", "GROUP BY view, filter_key", "ORDER BY changes DESC", "avgIf(JSONExtractInt(payload_json, 'valueCount'), JSONType(payload_json, 'valueCount') != 'Null')"}},
 			{"charts", chartInteractionsSQL(org), []string{"name = 'chart_interacted'", "GROUP BY chart, action, surface", "ORDER BY interactions DESC"}},
 			{"errors", clientErrorsSQL(org), []string{"name = 'client_error'", "GROUP BY route_pattern, boundary, error_class", "ORDER BY errors DESC"}},
 			{"summary", sessionSummarySQL(org), []string{"name = 'session_ended'", "quantile(0.5)(", "quantile(0.75)(", "quantile(0.9)(", "quantile(0.95)(", "'pagesViewed'", "'interactions'"}},

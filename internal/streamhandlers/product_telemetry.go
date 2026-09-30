@@ -69,10 +69,11 @@ func (h *ProductTelemetryHandler) Handle(ctx context.Context, message streamrunn
 	if !ok {
 		return &streamrunner.PermanentError{Reason: "missing_events"}
 	}
-	var events []productEvent
-	if err := json.Unmarshal([]byte(raw), &events); err != nil {
+	events, nonFinite, err := decodeProductEvents(raw)
+	if err != nil {
 		return &streamrunner.PermanentError{Reason: "invalid_events_json"}
 	}
+	recordNonFiniteNulled(ctx, message, nonFinite)
 	if len(events) == 0 || len(events) > 500 {
 		return &streamrunner.PermanentError{Reason: "invalid_event_count"}
 	}

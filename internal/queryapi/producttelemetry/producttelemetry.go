@@ -114,7 +114,7 @@ func filterChangesSQL(org bool) string {
     JSONExtractString(payload_json, 'view') AS view,
     JSONExtractString(payload_json, 'filterKey') AS filter_key,
     count() AS changes,
-    avg(JSONExtractInt(payload_json, 'valueCount')) AS avg_value_count
+    avgIf(JSONExtractInt(payload_json, 'valueCount'), JSONType(payload_json, 'valueCount') != 'Null') AS avg_value_count
 FROM product_telemetry_events
 ` + scoped(org, "filter_changed") + `
 GROUP BY view, filter_key

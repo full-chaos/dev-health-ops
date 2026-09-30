@@ -156,11 +156,29 @@ type edgeCase struct {
 	// plane's answer (status, and a substring of the body).
 	declared       string
 	pyWant, goWant edgeAnswer
+	// header, when set, declares a divergence in that one header only: its
+	// value on each plane is pyWant.header / goWant.header ("" = absent), and
+	// every other part of the two answers must be the same.
+	header string
 }
 
 type edgeAnswer struct {
 	status int
 	body   string
+	header string
+}
+
+// nosniffOnly is the declared divergence of the size middleware's own
+// refusals: they run outside the security headers, as in the Python app, and
+// the Python answer carries none; query-api's writer states nosniff itself.
+func nosniffOnly(request venueoracle.Request) edgeCase {
+	return edgeCase{
+		request:  request,
+		declared: "size-middleware refusal: query-api's writer adds X-Content-Type-Options: nosniff, which the Python answer (outside its security headers) lacked",
+		header:   "x-content-type-options",
+		pyWant:   edgeAnswer{header: ""},
+		goWant:   edgeAnswer{header: "nosniff"},
+	}
 }
 
 func edgePost(name, token string, body string, headers map[string]string) venueoracle.Request {
@@ -417,7 +435,7 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 	cases = append(cases,
 		edgeCase{request: venueoracle.Request{Name: "OPTIONS without a preflight", Method: "OPTIONS", Path: "/graphql"}},
 		edgeCase{request: venueoracle.Request{Name: "HEAD", Method: "HEAD", Path: "/graphql", Headers: map[string]string{"Authorization": "Bearer " + member}}},
-		edgeCase{request: venueoracle.Request{Name: "PATCH oversize", Method: "PATCH", Path: "/graphql", Body: venueoracle.B64(strings.Repeat("x", defaultGraphQLMaxQueryBytes+1))}},
+		nosniffOnly(venueoracle.Request{Name: "PATCH oversize", Method: "PATCH", Path: "/graphql", Body: venueoracle.B64(strings.Repeat("x", defaultGraphQLMaxQueryBytes+1))}),
 		edgeCase{request: edgePost("X-Request-ID given", member, queryBody, map[string]string{"X-Request-ID": "edge-oracle-request"})},
 		// Strawberry's refusals for a body the edge did not forward.
 		edgeCase{request: edgePost("POST unusable, text/plain", member, `{}`, map[string]string{"Content-Type": "text/plain"})},
@@ -463,13 +481,13 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 		edgeCase{request: edgePost("POST not JSON", member, `query { x }`, nil)},
 		edgeCase{request: edgePost("POST empty body", member, ``, nil)},
 		edgeCase{request: edgePost("POST not JSON, no credential", "", `query { x }`, nil)},
-		edgeCase{request: edgePost("POST oversize", member, oversize, nil)},
-		edgeCase{request: edgePost("POST oversize, no credential", "", oversize, nil)},
+		nosniffOnly(edgePost("POST oversize", member, oversize, nil)),
+		nosniffOnly(edgePost("POST oversize, no credential", "", oversize, nil)),
 		edgeCase{request: edgeGet("GET no query", member, "/graphql?org_id="+edgeOrgA, nil)},
 		edgeCase{request: edgeGet("GET no query, no credential", "", "/graphql", nil)},
 		edgeCase{request: edgeGet("GET variables not JSON", member, "/graphql?query="+url.QueryEscape(query.Document)+"&variables=%7Bnot", nil)},
-		edgeCase{request: edgeGet("GET browser accept", member, urqlGETPath(t, edgeOrgA, "CatalogValues", query.Document, map[string]any{"orgId": edgeOrgA}), map[string]string{"Accept": "text/html,application/xhtml+xml"})},
-		edgeCase{request: edgeGet("GET browser accept, no credential", "", "/graphql", map[string]string{"Accept": "text/html"})},
+		nosniffOnly(edgeGet("GET browser accept", member, urqlGETPath(t, edgeOrgA, "CatalogValues", query.Document, map[string]any{"orgId": edgeOrgA}), map[string]string{"Accept": "text/html,application/xhtml+xml"})),
+		nosniffOnly(edgeGet("GET browser accept, no credential", "", "/graphql", map[string]string{"Accept": "text/html"})),
 		edgeCase{request: edgeGet("GET repeated query, last wins", member,
 			"/graphql?query=garbage&"+strings.TrimPrefix(urqlGETPath(t, "", "", query.Document, queryVariables), "/graphql?"), nil)},
 		edgeCase{request: venueoracle.Request{Name: "PUT", Method: "PUT", Path: "/graphql", Headers: map[string]string{"Authorization": "Bearer " + member}, Body: venueoracle.B64(`{}`)}},
@@ -510,8 +528,16 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 				continue
 			}
 			goResponse := venueoracle.Do(t, goBase, c.request)
-			holds := python[i].Status == c.pyWant.status && strings.Contains(python[i].Body, c.pyWant.body) &&
-				goResponse.Status == c.goWant.status && strings.Contains(goResponse.Body, c.goWant.body)
+			var holds bool
+			if c.header != "" {
+				// One header differs, as declared; the rest must be SAME.
+				pyRest, goRest := withoutHeader(python[i], c.header), withoutHeader(goResponse, c.header)
+				same, _, _, _ := venueoracle.Compare(c.request, pyRest, goRest, venueoracle.DiffOptions{})
+				holds = same && python[i].Headers[c.header] == c.pyWant.header && goResponse.Headers[c.header] == c.goWant.header
+			} else {
+				holds = python[i].Status == c.pyWant.status && strings.Contains(python[i].Body, c.pyWant.body) &&
+					goResponse.Status == c.goWant.status && strings.Contains(goResponse.Body, c.goWant.body)
+			}
 			fmt.Fprintf(&receipt, "%-58s python=%d go=%d DECLARED holds=%v\n", c.request.Name, python[i].Status, goResponse.Status, holds)
 			if !holds {
 				t.Errorf("%s: declared divergence (%s) does not hold\n python %d %s\n go     %d %s", c.request.Name, c.declared,
@@ -588,4 +614,16 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 	deadPython := venue.ServePythonWithEnv(t, append(append([]string(nil), pythonEnv...),
 		"POSTGRES_URI=postgresql+asyncpg://nobody:nothing@127.0.0.1:1/none"), deadRequests)
 	t.Log("\n" + venueoracle.Diff(t, "http://"+deadPublic.Address(), deadRequests, deadPython, venueoracle.DiffOptions{}))
+}
+
+// withoutHeader is response with one header removed.
+func withoutHeader(response venueoracle.Response, name string) venueoracle.Response {
+	headers := make(map[string]string, len(response.Headers))
+	for key, value := range response.Headers {
+		if key != name {
+			headers[key] = value
+		}
+	}
+	response.Headers = headers
+	return response
 }

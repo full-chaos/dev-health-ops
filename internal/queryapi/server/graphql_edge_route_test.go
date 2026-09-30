@@ -885,3 +885,41 @@ func TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead(t *testing.T) {
 		t.Fatalf("%d %q ran=%v, want the unhandled 500 and nothing run", recorder.Code, recorder.Body.String(), *seen)
 	}
 }
+
+// TestGraphQLEdgeSinksStateANonHTMLTypeAndNosniff: each writer of this route's
+// own bodies states a non-HTML type and forbids sniffing another, by itself,
+// with no middleware in front; and through the chain, the two size-middleware
+// refusals (outside the security headers, as in the Python app) carry it too.
+func TestGraphQLEdgeSinksStateANonHTMLTypeAndNosniff(t *testing.T) {
+	for name, tc := range map[string]struct {
+		write func(http.ResponseWriter)
+		want  string
+	}{
+		"writeDumped (the 413)":             {func(w http.ResponseWriter) { refuseGraphQLEdgeOversize(w, 16) }, "application/json"},
+		"writePlain (a Strawberry refusal)": {func(w http.ResponseWriter) { refuseNoQuery(w) }, "text/plain; charset=utf-8"},
+		"writeGraphQLError (unregistered)":  {func(w http.ResponseWriter) { refuseGraphQLEdgeUnregistered(w) }, "application/json"},
+	} {
+		recorder := httptest.NewRecorder()
+		tc.write(recorder)
+		if got := recorder.Header().Get("Content-Type"); got != tc.want {
+			t.Errorf("%s: Content-Type %q, want %q", name, got, tc.want)
+		}
+		if got := recorder.Header().Values("X-Content-Type-Options"); len(got) != 1 || got[0] != "nosniff" {
+			t.Errorf("%s: X-Content-Type-Options %q, want exactly nosniff", name, got)
+		}
+	}
+
+	handler, _, member, _, _ := edgeHarness(t)
+	oversize := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(strings.Repeat("x", defaultGraphQLMaxQueryBytes+1)))
+	oversize.Header.Set("Content-Type", "application/json")
+	browse := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+	browse.Header.Set("Accept", "text/html")
+	browse.Header.Set("Authorization", "Bearer "+member)
+	for name, request := range map[string]*http.Request{"413": oversize, "browser 404": browse} {
+		recorder := httptest.NewRecorder()
+		internalidentity.Public(handler).ServeHTTP(recorder, request)
+		if recorder.Header().Get("X-Content-Type-Options") != "nosniff" || recorder.Header().Get("X-Frame-Options") != "" {
+			t.Errorf("%s through the chain: %d headers %v, want nosniff and still no security headers", name, recorder.Code, recorder.Header())
+		}
+	}
+}

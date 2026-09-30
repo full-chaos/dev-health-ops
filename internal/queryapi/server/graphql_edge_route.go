@@ -301,25 +301,35 @@ func writeDumped(w http.ResponseWriter, status int, body pyjson.Value) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
-	w.WriteHeader(status)
-	writeBody(w, encoded)
+	writeBody(w, status, jsonBody, encoded)
 }
 
-// writeBody sends a body this file built (a fixed refusal text, or the JSON
-// encoding of one), never request input echoed back, under the non-HTML
-// content type its caller set. Copied as bytes, like every fixed body the
-// shared middleware writes.
-func writeBody(w http.ResponseWriter, body string) {
+// bodyType is the media type of a body this file writes: JSON or plain text,
+// never a type a browser renders as a page.
+type bodyType string
+
+const (
+	jsonBody  bodyType = "application/json"
+	plainBody bodyType = "text/plain; charset=utf-8"
+)
+
+// writeBody is the one writer of the bodies this file builds (a fixed refusal
+// text, or the JSON encoding of one). It states the body's non-HTML type and
+// forbids a browser to sniff another one itself, whatever middleware is or is
+// not in front of it, so no answer of this route can be rendered as a page.
+// The two size-middleware refusals run outside the security headers, as in
+// the Python app, so on those this header is the only defence.
+func writeBody(w http.ResponseWriter, status int, kind bodyType, body string) {
+	header := w.Header()
+	header.Set("Content-Type", string(kind))
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(status)
 	_, _ = io.Copy(w, bytes.NewReader([]byte(body)))
 }
 
 func writePlain(w http.ResponseWriter, status int, text string) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Length", strconv.Itoa(len(text)))
-	w.WriteHeader(status)
-	writeBody(w, text)
+	writeBody(w, status, plainBody, text)
 }
 
 // queryParam is one name=value pair of a query string, decoded.
@@ -411,11 +421,7 @@ type graphQLError struct {
 }
 
 func writeGraphQLError(w http.ResponseWriter, status int, message, code string) {
-	body := graphQLErrorBody(message, code)
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-	w.WriteHeader(status)
-	writeBody(w, body)
+	writeBody(w, status, jsonBody, graphQLErrorBody(message, code))
 }
 
 // refuseGraphQLEdgeUnregistered answers a document query-api does not

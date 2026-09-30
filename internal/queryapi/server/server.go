@@ -31,6 +31,7 @@ import (
 	"time"
 
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
@@ -237,16 +238,6 @@ func Build(get func(string) string) (*Plane, error) {
 		return nil, err
 	}
 
-	// The ONE live users-row store (and its one Postgres pool) behind every
-	// edge-verified REST route below (CHAOS-6290): built here, once, and passed
-	// to each route builder; never one pool per route.
-	edgeUsers, closeEdgeUsers, err := newEdgeUserStore(getenv)
-	if err != nil {
-		log.Printf("query-api: build edge users store: %v", err)
-		return fail(err)
-	}
-	cleanups = append(cleanups, closeEdgeUsers)
-
 	// Constructed to prove the schema/resolver pair builds and links
 	// correctly (see newExecutableSchemaHandler's doc comment); not
 	// mounted on any mux route in this Wave.
@@ -274,6 +265,7 @@ func Build(get func(string) string) (*Plane, error) {
 	// configured, nothing to check" contract for that state.
 	var ready func(context.Context) error
 	var probes []ReadinessProbe
+	var registryPool *pgxpool.Pool
 	if routeCfg, ok := loadQueryRouteConfig(getenv); ok {
 		handlers, readyFn, cleanup, buildErr := buildQueryRoute(getenv, routeCfg)
 		if buildErr != nil {
@@ -319,6 +311,7 @@ func Build(get func(string) string) (*Plane, error) {
 		mountProofWriteRoute(getenv, internalMux, handlers.ProofWrite)
 		ready = readyFn
 		probes = handlers.Probes
+		registryPool = handlers.RegistryPool
 		// CHAOS-4710 deliverable 3: the mount-confirmation log line used to
 		// live here as a hand-typed, six-of-twelve literal (stale since
 		// Wave 3 -- the real registration is all twelve of
@@ -339,6 +332,15 @@ func Build(get func(string) string) (*Plane, error) {
 		// registered/not-registered lines exist to prevent (codex r1 F8).
 		mountProofRoute(getenv, mux, nil)
 		mountProofWriteRoute(getenv, internalMux, nil)
+	}
+
+	// The live users-row store behind every edge-verified REST route below
+	// (CHAOS-6290): PGStore over the /query route's ONE registry pool, not a
+	// pool of its own; an error (edge secret set, no pool) refuses to start.
+	edgeUsers, err := newEdgeUserStore(getenv, registryPool)
+	if err != nil {
+		log.Printf("query-api: build edge users store: %v", err)
+		return fail(err)
 	}
 
 	// CHAOS-4977 step 5a: POST /api/v1/investment/explain, gated by its

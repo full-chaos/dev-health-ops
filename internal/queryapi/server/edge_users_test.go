@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
@@ -99,12 +100,12 @@ func edgeSettings(kv map[string]string) getenvFunc {
 }
 
 // The edge secret without a users store is a build error, never a JWT-only
-// verifier (CHAOS-6290 fail closed).
-func TestNewEdgeUserStoreFailsClosedWithoutPostgres(t *testing.T) {
-	store, closeStore, err := newEdgeUserStore(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}))
+// verifier (CHAOS-6290 fail closed): there is no registry pool when the /query
+// route is not configured.
+func TestNewEdgeUserStoreFailsClosedWithoutPool(t *testing.T) {
+	store, err := newEdgeUserStore(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}), nil)
 	if err == nil {
-		closeStore()
-		t.Fatalf("newEdgeUserStore = (%v, nil), want an error when GO_API_REGISTRY_POSTGRES_URI is empty", store)
+		t.Fatalf("newEdgeUserStore = (%v, nil), want an error when there is no registry pool", store)
 	}
 	if _, err := buildEdgeVerifierFromEnv(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}), nil); err == nil {
 		t.Fatal("buildEdgeVerifierFromEnv built a verifier with a nil users store")
@@ -112,34 +113,37 @@ func TestNewEdgeUserStoreFailsClosedWithoutPostgres(t *testing.T) {
 }
 
 func TestNewEdgeUserStoreOffWithoutEdgeSecret(t *testing.T) {
-	store, closeStore, err := newEdgeUserStore(edgeSettings(nil))
+	store, err := newEdgeUserStore(edgeSettings(nil), nil)
 	if err != nil || store != nil {
 		t.Fatalf("newEdgeUserStore = (%v, %v), want (nil, nil) when the edge secret is unset", store, err)
 	}
-	closeStore()
 	if v, err := buildEdgeVerifierFromEnv(edgeSettings(nil), nil); v != nil || err != nil {
 		t.Fatalf("buildEdgeVerifierFromEnv = (%v, %v), want (nil, nil) without the edge secret", v, err)
 	}
 }
 
-func TestNewEdgeUserStoreBuildsOneLazyPool(t *testing.T) {
+// The store reads through the SAME pool it was given (the /query route's), not
+// a pool of its own.
+func TestNewEdgeUserStoreReusesTheGivenPool(t *testing.T) {
 	// pgxpool.New does not dial; the DSN points nowhere on purpose.
-	store, closeStore, err := newEdgeUserStore(edgeSettings(map[string]string{
-		edgeJWTSecretEnvVar:            edgeTestSecret,
-		"GO_API_REGISTRY_POSTGRES_URI": "postgres://nobody:none@127.0.0.1:1/none?connect_timeout=1",
-	}))
+	pool, err := pgxpool.New(context.Background(), "postgres://nobody:none@127.0.0.1:1/none?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store, err := newEdgeUserStore(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}), pool)
 	if err != nil {
 		t.Fatalf("newEdgeUserStore: %v", err)
 	}
-	defer closeStore()
-	if _, ok := store.(policy.PGStore); !ok {
-		t.Fatalf("store = %T, want policy.PGStore (the Go api's own users-row reader)", store)
+	pg, ok := store.(policy.PGStore)
+	if !ok || pg.Pool != pool {
+		t.Fatalf("store = %#v, want policy.PGStore over the given pool", store)
 	}
 }
 
 // ONE pool for every edge-verified route: newEdgeUserStore is called exactly
-// once in the package (Build) and every route builder receives its result;
-// none builds a pool for the edge users check. Reads the package source and
+// once in the package (Build), over the /query route's pool (registryPool),
+// and every route builder receives its result. Reads the package source and
 // FAILS when it finds no call, so a moved or renamed call cannot pass silently.
 func TestEdgeUserStoreIsBuiltOnceAndPassedToEveryEdgeRoute(t *testing.T) {
 	files, err := filepath.Glob("*.go")
@@ -147,7 +151,7 @@ func TestEdgeUserStoreIsBuiltOnceAndPassedToEveryEdgeRoute(t *testing.T) {
 		t.Fatalf("glob package sources: %v (%d files)", err, len(files))
 	}
 	fset := token.NewFileSet()
-	storeCalls, verifierCalls, verifierCallsWithStore := 0, 0, 0
+	storeCalls, storeCallsOverQueryPool, verifierCalls, verifierCallsWithStore := 0, 0, 0, 0
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
@@ -172,6 +176,11 @@ func TestEdgeUserStoreIsBuiltOnceAndPassedToEveryEdgeRoute(t *testing.T) {
 			switch ident.Name {
 			case "newEdgeUserStore":
 				storeCalls++
+				if len(call.Args) == 2 {
+					if arg, ok := call.Args[1].(*ast.Ident); ok && arg.Name == "registryPool" {
+						storeCallsOverQueryPool++
+					}
+				}
 			case "buildEdgeVerifierFromEnv":
 				verifierCalls++
 				if len(call.Args) == 2 {
@@ -185,6 +194,9 @@ func TestEdgeUserStoreIsBuiltOnceAndPassedToEveryEdgeRoute(t *testing.T) {
 	}
 	if storeCalls != 1 {
 		t.Fatalf("newEdgeUserStore is called %d times in non-test sources, want exactly 1 (Build)", storeCalls)
+	}
+	if storeCallsOverQueryPool != 1 {
+		t.Fatalf("newEdgeUserStore is called over registryPool (the /query route's pool) %d times, want 1", storeCallsOverQueryPool)
 	}
 	if verifierCalls == 0 {
 		t.Fatal("found no buildEdgeVerifierFromEnv call; the scan measured nothing")

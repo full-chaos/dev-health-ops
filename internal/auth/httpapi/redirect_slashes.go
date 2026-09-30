@@ -37,8 +37,8 @@ type routeMatch struct{}
 
 func (routeMatch) ServeHTTP(http.ResponseWriter, *http.Request) {}
 
-// matches reports whether the decoded path matches a route pattern for some
-// method, as Starlette matches scope["path"] literally. For its own
+// matches returns the registered pattern the decoded path matches for some
+// method (and true), as Starlette matches scope["path"] literally. For its own
 // trailing-slash redirect, net/http's mux returns the target's pattern with a
 // redirect handler, so only a routeMatch handler counts.
 //
@@ -47,7 +47,7 @@ func (routeMatch) ServeHTTP(http.ResponseWriter, *http.Request) {}
 // redirected. The probe's escaped path carries such segments percent-encoded:
 // the mux leaves them in place and unescapes them for a wildcard, which is
 // what Starlette's "[^/]+" does with the decoded segment.
-func (s *slashRedirector) matches(r *http.Request, path string) bool {
+func (s *slashRedirector) matches(r *http.Request, path string) (string, bool) {
 	probe := r.Clone(r.Context())
 	url := *r.URL
 	url.Path, url.RawPath = path, ""
@@ -55,7 +55,10 @@ func (s *slashRedirector) matches(r *http.Request, path string) bool {
 	probe.URL = &url
 	handler, pattern := s.matcher.Handler(probe)
 	_, isMatch := handler.(routeMatch)
-	return isMatch && s.patterns[pattern]
+	if !isMatch || !s.patterns[pattern] {
+		return "", false
+	}
+	return pattern, true
 }
 
 // wrap answers every request whose path matches no route before net/http's
@@ -63,7 +66,7 @@ func (s *slashRedirector) matches(r *http.Request, path string) bool {
 // Starlette 307 when the toggled path matches, else notFound.
 func (s *slashRedirector) wrap(mux http.Handler, notFound http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.matches(r, r.URL.Path) {
+		if _, ok := s.matches(r, r.URL.Path); !ok {
 			notFound(w, r)
 			return
 		}
@@ -82,9 +85,15 @@ func (s *slashRedirector) redirect(w http.ResponseWriter, r *http.Request) bool 
 	if strings.HasSuffix(current, "/") {
 		target = strings.TrimRight(current, "/")
 	}
-	if target == "" || !s.matches(r, target) {
+	if target == "" {
 		return false
 	}
+	pattern, ok := s.matches(r, target)
+	if !ok {
+		return false
+	}
+	// The 307 addresses a registered route: count it there, not as unmatched.
+	recordRoute(r, pattern)
 	// uvicorn builds scope["path"] with urllib.parse.unquote, which decodes
 	// the percent-escapes as UTF-8 with errors="replace"; Starlette quotes
 	// that str back, so an invalid sequence reaches Location as %EF%BF%BD.

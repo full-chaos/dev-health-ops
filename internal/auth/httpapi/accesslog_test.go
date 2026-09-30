@@ -123,7 +123,7 @@ func TestAccessLineAndMetricsForAKnownRouteCarryThePatternNeverThePath(t *testin
 	response := h.do(http.MethodGet, "/v1/items/item-7731?api_key="+canary, map[string]string{
 		"Authorization": "Bearer " + canary,
 		"Cookie":        "session=" + canary,
-		RequestIDHeader: "req-abc-1",
+		RequestIDHeader: "0b1b2c3d-0000-4000-8000-000000000000",
 	})
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", response.Code)
@@ -135,7 +135,7 @@ func TestAccessLineAndMetricsForAKnownRouteCarryThePatternNeverThePath(t *testin
 	line := lines[0]
 	want := map[string]any{
 		"method": "GET", "route": "/v1/items/{id}", "status": float64(204),
-		"listener": "public", "request_id": "req-abc-1", "level": "INFO",
+		"listener": "public", "request_id": "0b1b2c3d-0000-4000-8000-000000000000", "level": "INFO",
 	}
 	for key, value := range want {
 		if line[key] != value {
@@ -272,17 +272,26 @@ func TestListenerLabelDefaultsToTheServerName(t *testing.T) {
 	}
 }
 
-func TestOnlyAnIdInsideTheCorrelationCharsetIsLogged(t *testing.T) {
+func TestOnlyACanonicalUUIDOr32HexIdIsLogged(t *testing.T) {
+	uuid := "0b1b2c3d-0000-4000-8000-000000000000"
+	hex32 := "0b1b2c3d000040008000000000000000"
 	cases := []struct{ name, id, want string }{
-		{"plain", "req-abc_1.2:3", "req-abc_1.2:3"},
-		{"uuid", "0b1b2c3d-0000-4000-8000-000000000000", "0b1b2c3d-0000-4000-8000-000000000000"},
+		{"uuid", uuid, uuid},
+		{"uuid upper", strings.ToUpper(uuid), strings.ToUpper(uuid)},
+		{"32 hex", hex32, hex32},
+		{"31 hex", hex32[:31], invalidRequestID},
+		{"33 hex", hex32 + "0", invalidRequestID},
+		{"35 uuid-ish", uuid[:35], invalidRequestID},
+		{"37 uuid-ish", uuid + "0", invalidRequestID},
+		{"uuid wrong dash", "0b1b2c3d_0000-4000-8000-000000000000", invalidRequestID},
+		{"uuid non hex", "0b1b2c3d-0000-4000-8000-00000000000g", invalidRequestID},
+		{"32 non hex", hex32[:31] + "g", invalidRequestID},
+		{"credential canary", "credential_canary.jwt.segment", invalidRequestID},
+		{"dotted jwt shaped", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl", invalidRequestID},
+		{"plain word", "req-abc-1", invalidRequestID},
 		{"bearer shaped", "Bearer review-only-" + canary, invalidRequestID},
-		{"space", "a b", invalidRequestID},
-		{"semicolon", "a;b", invalidRequestID},
 		{"non ascii", "caf\u00e9", invalidRequestID},
-		{"longest accepted", strings.Repeat("r", maxInboundRequestID), strings.Repeat("r", maxInboundRequestID)},
-		{"one over", strings.Repeat("r", maxInboundRequestID+1), invalidRequestID},
-		{"far over", strings.Repeat("r", 4000), invalidRequestID},
+		{"far over", strings.Repeat("a", 4000), invalidRequestID},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -421,5 +430,33 @@ func TestAnAbortedResponseKeepsWhatWasCommittedAndOtherwiseHasNoStatusClass(t *t
 func TestALoggableRequestIDIsEmptyWhenNoneWasBound(t *testing.T) {
 	if got := LoggableRequestID(context.Background()); got != "" {
 		t.Errorf("LoggableRequestID(no id) = %q, want empty", got)
+	}
+}
+
+func TestASlashRedirectIsCountedAgainstTheRouteItAddresses(t *testing.T) {
+	h := newAccessHarness(t, slog.LevelInfo, func(o *ServerOptions) { o.RedirectSlashes = true }, itemsRoute())
+	if code := h.do(http.MethodGet, "/v1/items/a/", nil).Code; code != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want 307", code)
+	}
+	want := map[string]uint64{"route=/v1/items/{id},method=GET,status_class=3xx,listener=public": 1}
+	for _, name := range []string{requestsMetricName, durationMetricName} {
+		if got := h.series(t, name); fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
+	}
+	lines := h.accessLines(t)
+	if len(lines) != 1 || lines[0]["route"] != "/v1/items/{id}" || lines[0]["status"] != float64(307) {
+		t.Errorf("access lines = %v, want one 307 on /v1/items/{id}", lines)
+	}
+}
+
+func TestAnUnmatchedPathWithRedirectSlashesStaysUnmatched(t *testing.T) {
+	h := newAccessHarness(t, slog.LevelInfo, func(o *ServerOptions) { o.RedirectSlashes = true }, itemsRoute())
+	if code := h.do(http.MethodGet, "/nothing/here/", nil).Code; code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", code)
+	}
+	want := map[string]uint64{"route=unmatched,method=GET,status_class=4xx,listener=public": 1}
+	if got := h.series(t, requestsMetricName); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("requests = %v, want %v", got, want)
 	}
 }

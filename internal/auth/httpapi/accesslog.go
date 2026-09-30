@@ -182,18 +182,50 @@ func statusClass(status int) string {
 }
 
 // LoggableRequestID is the request id bound to ctx as it may appear in a log
-// line. The api echoes any non-empty X-Request-Id a client sends, so the
-// bound value is client-controlled; only one inside the narrow correlation
-// charset and length (acceptableRequestID, which every generated id meets) is
-// logged, anything else is "invalid". A header value such as "Bearer <token>"
-// therefore never reaches a log.
+// line. The api echoes any acceptable X-Request-Id a client sends, so the
+// bound value is client-controlled, and a credential (a JWT, an opaque token)
+// can fit any charset rule. Only a canonical UUID (8-4-4-4-12 hex, which is
+// every generated id) or a 32-hex id is logged; anything else is "invalid",
+// and correlation for such ids is by the response header only.
 func LoggableRequestID(ctx context.Context) string {
 	id := RequestIDFrom(ctx)
 	if id == "" {
 		return ""
 	}
-	if !acceptableRequestID(id) {
+	if !loggableRequestID(id) {
 		return invalidRequestID
 	}
 	return id
+}
+
+func loggableRequestID(id string) bool {
+	switch len(id) {
+	case 32:
+		return allHex(id)
+	case 36:
+		for i := 0; i < len(id); i++ {
+			if i == 8 || i == 13 || i == 18 || i == 23 {
+				if id[i] != '-' {
+					return false
+				}
+			} else if !isHex(id[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func allHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isHex(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHex(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }

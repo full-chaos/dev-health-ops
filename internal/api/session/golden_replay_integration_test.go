@@ -40,6 +40,9 @@ var metricsDDL = []string{
 // routes alone and compares every answer and row set with the Python
 // answers the venue oracle recorded.
 func TestSessionRoutesMatchGolden(t *testing.T) {
+	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
+	// the header's first hop. Trust this test's loopback peer so both planes agree.
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	st := startStack(t, ctx)

@@ -394,6 +394,9 @@ VALUES ($1, $2, $3, now() - interval '1 hour', now() - interval '2 hours')`, exp
 // memberships, link-token, org_invites, refresh_tokens and audit_logs rows
 // are compared at the end.
 func TestAuthFlowVenueOracle(t *testing.T) {
+	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
+	// the header's first hop. Trust this test's loopback peer so both planes agree.
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	pySink, goSink := smtpcapture.Start(t), smtpcapture.Start(t)

@@ -94,7 +94,7 @@ spec:
           {{- $hostPaths := list }}
           {{- range $host.paths }}{{- $hostPaths = append $hostPaths .path }}{{- end }}
           {{- range $allow }}
-          {{- if not (and (kindIs "map" .) (kindIs "string" .path) (regexMatch "^/[A-Za-z0-9_./-]*$" .path) (has .pathType (list "Prefix" "Exact"))) }}
+          {{- if not (and (kindIs "map" .) (kindIs "string" .path) (regexMatch "^(/[A-Za-z0-9_.-]+)*/?$" .path) (not (regexMatch "(^|/)[.]{1,2}(/|$)" .path)) (has .pathType (list "Prefix" "Exact"))) }}
           {{- fail (printf "ingress.hosts %q pythonAllowList entry %v must be {path: literal /path, pathType: Prefix|Exact}" $host.host .) }}
           {{- end }}
           {{- /* CHAOS-7221 (r1 P1): an allow-list entry may not be "/" (it would negate the default backend), repeat another entry, or repeat one of the host's own paths (two rules on one path: which backend wins is the controller's tie-break). */}}

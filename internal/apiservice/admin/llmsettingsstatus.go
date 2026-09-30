@@ -35,11 +35,9 @@ import (
 // A consequence worth naming: this handler can never report "stale" -- a
 // record whose underlying BYO config has since changed is reported at its
 // last-known outcome ("ready"/"failed") until 6252b lands, not as stale.
-// Separately, and independent of this scope cut: DELETE /llm-settings does
-// NOT clear this record on either plane (live-verified, filed as its own
-// defect, D2694 class, no Python fix) -- so a record can also outlive the
-// settings row it was certified for entirely; that is Python's existing
-// behavior, faithfully reproduced here, not introduced by this port.
+// Python's DELETE /llm-settings left this record behind (CHAOS-6975); Go's
+// DELETE (HTTP and the operator CLI) clears it, so after a delete this handler
+// reads not_configured/never_checked.
 
 const (
 	llmStatusReasonNotConfigured   = "not_configured"

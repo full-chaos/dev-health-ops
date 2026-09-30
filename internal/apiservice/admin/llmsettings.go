@@ -458,33 +458,8 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if !h.requireBYOLLMAccess(ctx, w, orgID, true) {
 		return
 	}
-	// CHAOS-6975: the org's readiness record and every role certification
-	// row are derived from the credentials this route deletes, so they go in
-	// the same statement (Python left them behind). An orphan pair of those
-	// rows with no credential rows is cleared too and still answers 404: no
-	// credential existed to delete.
-	rows, err := h.store.Pool.Query(ctx,
-		`DELETE FROM settings WHERE org_id = $1 AND category = $2
-		   AND (key = ANY($3) OR key = $4 OR starts_with(key, $5)) RETURNING key`,
-		orgID, llmCategory, llmSettingKeys, askDevAgentReadinessKey, llmRoleCertificationPrefix)
+	credentialsDeleted, err := h.deleteLLMSettingsRows(ctx, orgID)
 	if err != nil {
-		h.internalError(ctx, w, "delete llm settings", err)
-		return
-	}
-	credentialsDeleted := 0
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			rows.Close()
-			h.internalError(ctx, w, "delete llm settings", err)
-			return
-		}
-		if slices.Contains(llmSettingKeys, key) {
-			credentialsDeleted++
-		}
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
 		h.internalError(ctx, w, "delete llm settings", err)
 		return
 	}
@@ -495,4 +470,32 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 	out := pyjson.NewObject()
 	out.Set("deleted", true)
 	policy.WriteModel(w, http.StatusOK, out, nil)
+}
+
+// deleteLLMSettingsRows is the one delete both the HTTP route and the
+// `admin llm-settings delete` operator path run (CHAOS-6975). The org's
+// readiness record and every role certification row are derived from the
+// credentials, so they go in the same statement (Python left them behind).
+// It returns how many CREDENTIAL rows existed: orphan derived rows are cleared
+// but are not a credential, so a caller answers "not found" on zero.
+func (h *handlers) deleteLLMSettingsRows(ctx context.Context, orgID string) (int, error) {
+	rows, err := h.store.Pool.Query(ctx,
+		`DELETE FROM settings WHERE org_id = $1 AND category = $2
+		   AND (key = ANY($3) OR key = $4 OR starts_with(key, $5)) RETURNING key`,
+		orgID, llmCategory, llmSettingKeys, askDevAgentReadinessKey, llmRoleCertificationPrefix)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	credentials := 0
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return 0, err
+		}
+		if slices.Contains(llmSettingKeys, key) {
+			credentials++
+		}
+	}
+	return credentials, rows.Err()
 }

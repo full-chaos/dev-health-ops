@@ -38,6 +38,11 @@ type Fixture struct {
 	OrgB     string
 	RepoID   string
 	RepoName string
+	// RepoNameB is org B's name for the same repository. It differs from
+	// RepoName in case only: the id is minted from lower(trim(full_name)),
+	// so both names map to the one RepoID, and a leaked repos row shows up
+	// as a second label instead of hiding behind an identical one.
+	RepoNameB string
 	// Identity is the same author email in both orgs, as a real contributor
 	// to a shared open-source repository would be.
 	Identity string
@@ -46,11 +51,12 @@ type Fixture struct {
 // Default is the fixture every CHAOS-7239 test uses.
 func Default() Fixture {
 	return Fixture{
-		OrgA:     "org-a-chaos-7239",
-		OrgB:     "org-b-chaos-7239",
-		RepoID:   "72390000-0000-4000-8000-000000000001",
-		RepoName: "acme/shared",
-		Identity: "dev@shared.example",
+		OrgA:      "org-a-chaos-7239",
+		OrgB:      "org-b-chaos-7239",
+		RepoID:    "72390000-0000-4000-8000-000000000001",
+		RepoName:  "acme/shared",
+		RepoNameB: "Acme/Shared",
+		Identity:  "dev@shared.example",
 	}
 }
 
@@ -91,15 +97,15 @@ func Start(ctx context.Context, t *testing.T) (stdclickhouse.Conn, *dhclickhouse
 	return admin, client
 }
 
-// SeedRepos writes the shared repository once per org, under the same id and
-// name -- what two orgs syncing the same repository produce.
+// SeedRepos writes the shared repository once per org, under the same id --
+// what two orgs syncing the same repository produce.
 func SeedRepos(ctx context.Context, t *testing.T, admin stdclickhouse.Conn, f Fixture) {
 	t.Helper()
-	for _, org := range []string{f.OrgA, f.OrgB} {
+	for org, name := range map[string]string{f.OrgA: f.RepoName, f.OrgB: f.RepoNameB} {
 		Exec(ctx, t, admin, `
             INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced)
             VALUES (?, ?, 'github', ?, now64(3), now64(3))`,
-			f.RepoID, f.RepoName, org)
+			f.RepoID, name, org)
 	}
 }
 

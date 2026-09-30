@@ -24,18 +24,19 @@ func seedCrossOrgPeople(ctx context.Context, t *testing.T) (*Reader, crossorg.Fi
 	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
 	created := time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC)
 	for _, row := range []struct {
-		org   string
-		loc   uint32
-		pr    uint32
-		title string
+		org          string
+		loc          uint32
+		firstReviewH float64
+		pr           uint32
+		title        string
 	}{
-		{f.OrgA, 10, 1, "org-a pull request"},
-		{f.OrgB, 1000, 2, "org-b pull request"},
+		{f.OrgA, 10, 4, 1, "org-a pull request"},
+		{f.OrgB, 1000, 40, 2, "org-b pull request"},
 	} {
 		crossorg.Exec(ctx, t, admin, `
-            INSERT INTO user_metrics_daily (org_id, repo_id, day, author_email, identity_id, loc_touched, computed_at)
-            VALUES (?, ?, ?, ?, ?, ?, now())`,
-			row.org, f.RepoID, day, f.Identity, f.Identity, row.loc)
+            INSERT INTO user_metrics_daily (org_id, repo_id, day, author_email, identity_id, loc_touched, pr_first_review_p50_hours, computed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, now())`,
+			row.org, f.RepoID, day, f.Identity, f.Identity, row.loc, row.firstReviewH)
 		crossorg.Exec(ctx, t, admin, `
             INSERT INTO git_pull_requests (org_id, repo_id, number, title, author_email, created_at, last_synced)
             VALUES (?, ?, ?, ?, ?, ?, now64(3))`,
@@ -73,16 +74,19 @@ func TestPeopleReadersReturnOnlyTheCallingOrgsRowsForASharedRepoID(t *testing.T)
 		}
 	})
 
-	t.Run("metric by_repo breakdown", func(t *testing.T) {
-		resp, err := BuildMetricResponse(ctx, reader, f.OrgA, MetricParams{
-			PersonID: f.PersonID(), Metric: "churn", RangeDays: 30, CompareDays: 30, Now: crossOrgNow,
+	// Both metrics whose config carries a by_repo repos join.
+	for metric, want := range map[string]float64{"churn": 10, "review_latency": 4} {
+		t.Run("metric by_repo breakdown "+metric, func(t *testing.T) {
+			resp, err := BuildMetricResponse(ctx, reader, f.OrgA, MetricParams{
+				PersonID: f.PersonID(), Metric: metric, RangeDays: 30, CompareDays: 30, Now: crossOrgNow,
+			})
+			if err != nil {
+				t.Fatalf("BuildMetricResponse: %v", err)
+			}
+			got := resp.Breakdowns.ByRepo
+			if len(got) != 1 || got[0].Label != f.RepoName || got[0].Value != want {
+				t.Fatalf("org A by_repo = %+v; want exactly [{%s %v}] (org A's rows only, no org B repos row joined)", got, f.RepoName, want)
+			}
 		})
-		if err != nil {
-			t.Fatalf("BuildMetricResponse: %v", err)
-		}
-		got := resp.Breakdowns.ByRepo
-		if len(got) != 1 || got[0].Label != f.RepoName || got[0].Value != 10 {
-			t.Fatalf("org A by_repo = %+v; want exactly [{%s 10}] (org A's loc_touched once, no org B repos row joined)", got, f.RepoName)
-		}
-	})
+	}
 }

@@ -197,11 +197,6 @@ goApi:
   internal:
     enabled: true
     port: 8091
-    # -- One-roll bridge (CHAOS-7181): ALSO serve the two acr routes on the public
-    #    api listener, because acr calls the public host until it is repointed at
-    #    the internal Service. The follow-up flips this to false (then the public
-    #    listener serves no /api/v1/internal path) and removes the flag.
-    acrPublicCompat: true
     # -- Pod selectors (each `{matchLabels: {...}}`) allowed to reach the internal
     #    port. Empty admits NOBODY (the port is denied): the umbrella deploy chart
     #    sets acr's api pods here, for example

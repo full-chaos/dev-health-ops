@@ -71,9 +71,6 @@ spec:
             - {{ printf "--http-addr=:%v" .Values.goApi.operatorPort | quote }}
             {{- if .Values.goApi.internal.enabled }}
             - {{ printf "--api-internal-addr=:%v" .Values.goApi.internal.port | quote }}
-            {{- if .Values.goApi.internal.acrPublicCompat }}
-            - "--api-acr-public-compat=true"
-            {{- end }}
             {{- end }}
             {{- with .Values.goApi.corsAllowedOrigins }}
             - {{ printf "--cors-allowed-origins=%s" . | quote }}

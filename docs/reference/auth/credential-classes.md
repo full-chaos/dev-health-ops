@@ -227,9 +227,3 @@ which answers them 404. No Ingress may route to the internal Service
 (`<release>-go-api-internal`; the chart refuses an Ingress path to it), and the
 chart's NetworkPolicy admits only the pod selectors in
 `goApi.internal.allowedFrom` (acr's api pods); an empty list denies the port.
-
-For one roll only, `goApi.internal.acrPublicCompat` (chart default `true`;
-binary `--api-acr-public-compat`, default `false`) also mounts the two acr
-routes on the public listener, because acr calls the public host until it is
-repointed at the internal Service. A follow-up flips it to `false`; with it
-off the public listener serves no `/api/v1/internal` path.

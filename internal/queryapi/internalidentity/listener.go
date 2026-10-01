@@ -39,6 +39,25 @@ func OnInternalListener(ctx context.Context) bool {
 	return on
 }
 
+type mcpListenerKey struct{}
+
+// MCP marks every request served through next as arriving on the MCP
+// caller-class listener (CHAOS-7085, QUERY_API_MCP_ADDR). It is a separate
+// marker from Internal on purpose: a request on the MCP listener is NOT on
+// the internal listener, so authenticateInternalRequest refuses the
+// identity headers there, and only the MCP route reads them.
+func MCP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), mcpListenerKey{}, true)))
+	})
+}
+
+// OnMCPListener reports whether the request arrived on the MCP listener.
+func OnMCPListener(ctx context.Context) bool {
+	on, _ := ctx.Value(mcpListenerKey{}).(bool)
+	return on
+}
+
 var droppedCounter = mustDroppedCounter()
 
 func mustDroppedCounter() metric.Int64Counter {

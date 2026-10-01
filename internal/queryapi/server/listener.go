@@ -142,6 +142,40 @@ func Listeners(publicAddr, internalAddr string, plane *Plane, extra http.Handler
 	return public, internal
 }
 
+// MCPListener builds the MCP caller-class listener (CHAOS-7085) over
+// plane.MCPHandler, or nil when mcpAddr is empty. It is the third listener:
+// separate from the public one (which deletes the X-DH-Internal-* headers)
+// and from the internal one (whose routes honour them for the edge), and it
+// serves only the MCP class's own /query. The class comes from this
+// listener (internalidentity.MCP), never from a header.
+//
+// allowedPeers, when non-empty, accepts a connection only from a peer
+// inside one of these CIDRs (the same accept-time check as the internal
+// listener, D2953) -- the boundary on a venue with no NetworkPolicy. Empty
+// is logged once, loudly: in Kubernetes the NetworkPolicy admitting only
+// acr-api pods is then the whole boundary.
+func MCPListener(mcpAddr string, plane *Plane, allowedPeers []*net.IPNet) *Listener {
+	if mcpAddr == "" {
+		return nil
+	}
+	base := plane.MCPHandler
+	if base == nil {
+		// A Plane built by hand (a test, an older caller): serve nothing
+		// rather than fall back to a route set that is not the MCP class's.
+		log.Print("query-api: the MCP listener has no MCP route set; every request answers 404")
+		base = http.NotFoundHandler()
+	}
+	if len(allowedPeers) == 0 {
+		log.Print("query-api: the MCP listener has no peer allowlist (QUERY_API_MCP_ALLOWED_CIDRS unset) -- every peer that can reach the port is accepted; prod relies on its NetworkPolicy (acr-api pods only) for this boundary")
+	}
+	return &Listener{
+		name:         "query-mcp-http",
+		server:       newMCPListenerServer(mcpAddr, base),
+		errors:       make(chan error, 1),
+		allowedPeers: allowedPeers,
+	}
+}
+
 // Closer is the lifecycle component that releases the routes' dependencies. It is
 // started before the listeners, so the reverse shutdown order closes them only
 // after the listeners stopped serving.

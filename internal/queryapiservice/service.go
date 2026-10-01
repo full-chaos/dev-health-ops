@@ -123,5 +123,11 @@ func configure(
 	} else {
 		logger.WarnContext(ctx, "no internal listener: X-DH-Internal-* identity headers are honoured nowhere", "setting", "QUERY_API_INTERNAL_ADDR")
 	}
+	// CHAOS-7085: the MCP caller-class listener, only when its address is set.
+	if mcp := server.MCPListener(cfg.QueryAPIMCPAddress, plane, cfg.QueryAPIMCPAllowedCIDRs); mcp != nil {
+		components = append(components, mcp)
+	} else {
+		logger.InfoContext(ctx, "no MCP caller-class listener", "setting", "QUERY_API_MCP_ADDR")
+	}
 	return components, nil
 }

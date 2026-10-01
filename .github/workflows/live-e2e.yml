@@ -170,6 +170,10 @@ jobs:
       - name: Run live-e2e tier
         env:
           DISABLE_DOTENV: "1"
+          # Production's ordering contract (the only supported one): the schema
+          # is migrated under it and the Go worker reads under it. Unset is the
+          # same contract for the Go readers; contract 1 is refused.
+          OPERATIONAL_ORDERING_CONTRACT: "2"
           DATABASE_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
@@ -341,6 +345,9 @@ jobs:
         env:
           DISABLE_DOTENV: "1"
           OTEL_ENABLED: "false"
+          # Production's ordering contract: the schema is migrated under it and
+          # the Go worker reads under it (contract 1 is refused).
+          OPERATIONAL_ORDERING_CONTRACT: "2"
           # Workspace-relative, not under TMP_DIR: the script's own cleanup()
           # trap rm -rf's TMP_DIR on exit, before this job's own "Upload logs"
           # step runs -- logs left only there are already gone by upload time

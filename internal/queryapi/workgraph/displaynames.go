@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -219,6 +220,11 @@ func resolveDeploymentDisplayNames(ctx context.Context, client QueryClient, orgI
 	_ = rows.Err()
 }
 
+// operationalOrderingContractEnv is the process variable naming the ordering
+// contract (operationalordering.Env), read directly here so the query API's
+// declared direct environment reads (TestDirectEnvironmentReads) stay complete.
+const operationalOrderingContractEnv = "OPERATIONAL_ORDERING_CONTRACT"
+
 // resolveIncidentDisplayNames mirrors work_graph.py:388-414's incident branch.
 // The current row of each incident is selected by revision through the one
 // shared implementation (operationalordering.RevisionCurrentRows): the
@@ -229,7 +235,7 @@ func resolveDeploymentDisplayNames(ctx context.Context, client QueryClient, orgI
 // so unset is contract 2 here; any other value than 2 is refused loudly and no
 // name resolves (the lookup stays best-effort and never fails the request).
 func resolveIncidentDisplayNames(ctx context.Context, client QueryClient, orgID string, incidentIDs map[string]struct{}, resolved map[string]string) {
-	if err := operationalordering.CheckForRead(nil); err != nil {
+	if _, err := operationalordering.ResolveValue(os.LookupEnv(operationalOrderingContractEnv)); err != nil {
 		slog.Default().ErrorContext(ctx, "incident display names unavailable: ordering contract refused",
 			slog.String("error", err.Error()))
 		return

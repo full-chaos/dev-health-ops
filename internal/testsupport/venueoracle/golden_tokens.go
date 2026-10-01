@@ -63,21 +63,77 @@ const undecodableJWT = "<jwt|undecodable"
 // tokenShapes are the shapes the recorder refuses and the gate test walks every
 // golden for. Each is anchored on a prefix or structure that a stable id or a
 // route name never has.
-var tokenShapes = []tokenShape{
-	{name: "jwt", match: hasJWT},
-	{name: "github-token", re: regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`)},
-	{name: "github-fine-grained-pat", re: regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`)},
-	{name: "gitlab-pat", re: regexp.MustCompile(`glpat-[A-Za-z0-9_-]{20,}`)},
-	{name: "slack-token", re: regexp.MustCompile(`xox[abprs]-[A-Za-z0-9-]{10,}`)},
-	{name: "stripe-key", re: regexp.MustCompile(`\b[sr]k_(live|test)_[A-Za-z0-9]{16,}`)},
-	{name: "aws-access-key", re: regexp.MustCompile(`\b(AKIA|ASIA)[A-Z0-9]{16}\b`)},
-	{name: "google-api-key", re: regexp.MustCompile(`AIza[A-Za-z0-9_-]{35}`)},
-	{name: "private-key-block", re: regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
-	{name: "anthropic-key", re: regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`)},
-	{name: "openai-key", re: regexp.MustCompile(`\bsk-(proj-)?[A-Za-z0-9_-]{32,}`)},
-	{name: "linear-key", re: regexp.MustCompile(`lin_api_[A-Za-z0-9]{30,}`)},
-	{name: "customer-push-token", re: regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{16,}`)},
-	{name: "authorization-credential", re: regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{20,}`)},
+var tokenShapes []tokenShape
+
+// init fills the list: the encoded-credential shape reads the list itself.
+func init() {
+	tokenShapes = []tokenShape{
+		{name: "jwt", match: hasJWT},
+		{name: "github-token", re: regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`)},
+		{name: "github-fine-grained-pat", re: regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`)},
+		{name: "gitlab-pat", re: regexp.MustCompile(`glpat-[A-Za-z0-9_-]{20,}`)},
+		{name: "slack-token", re: regexp.MustCompile(`xox[abprs]-[A-Za-z0-9-]{10,}`)},
+		{name: "stripe-key", re: regexp.MustCompile(`\b[sr]k_(live|test)_[A-Za-z0-9]{16,}`)},
+		{name: "aws-access-key", re: regexp.MustCompile(`\b(AKIA|ASIA)[A-Z0-9]{16}\b`)},
+		{name: "google-api-key", re: regexp.MustCompile(`AIza[A-Za-z0-9_-]{35}`)},
+		{name: "private-key-block", re: regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
+		{name: "anthropic-key", re: regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`)},
+		{name: "openai-key", re: regexp.MustCompile(`\bsk-(proj-)?[A-Za-z0-9_-]{32,}`)},
+		{name: "linear-key", re: regexp.MustCompile(`lin_api_[A-Za-z0-9]{30,}`)},
+		{name: "customer-push-token", re: regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{16,}`)},
+		{name: "authorization-credential", match: hasAuthorizationCredential},
+		{name: "encoded-credential", match: func(text string) bool { return hasEncodedCredential(text, 2) }},
+	}
+}
+
+// maxPackDepth bounds how deep a body packed in a body is unpacked.
+const maxPackDepth = 8
+
+var authorizationScheme = regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+([A-Za-z0-9._~+/=-]{8,})`)
+
+// hasAuthorizationCredential reports a Bearer or Basic credential: long, or
+// short with a digit in it. A short word after "Basic" in prose has neither.
+func hasAuthorizationCredential(text string) bool {
+	for _, match := range authorizationScheme.FindAllStringSubmatch(text, -1) {
+		if len(match[1]) >= 20 || strings.ContainsAny(match[1], "0123456789") {
+			return true
+		}
+	}
+	return false
+}
+
+// encodedRun is a base64 or base64url run long enough to carry a credential.
+var encodedRun = regexp.MustCompile(`[A-Za-z0-9+/_-]{24,}={0,2}`)
+
+// hasEncodedCredential reports a token shape inside a base64 or base64url run
+// of text, to depth encodings deep: a token a Scrub-less golden holds encoded
+// is still a token.
+func hasEncodedCredential(text string, depth int) bool {
+	if depth <= 0 {
+		return false
+	}
+	for _, run := range encodedRun.FindAllString(text, 2000) {
+		run = strings.TrimRight(run, "=")
+		for _, encoding := range []*base64.Encoding{base64.RawStdEncoding, base64.RawURLEncoding} {
+			raw, err := encoding.DecodeString(run)
+			if err != nil || len(raw) == 0 {
+				continue
+			}
+			decoded := string(raw)
+			for _, shape := range tokenShapes {
+				if shape.name == "encoded-credential" {
+					continue
+				}
+				if shape.match != nil && shape.match(decoded) || shape.re != nil && shape.re.MatchString(decoded) {
+					return true
+				}
+			}
+			if hasEncodedCredential(decoded, depth-1) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // TokenShapeNames are the names of the shapes, in the order tested.
@@ -289,14 +345,18 @@ func tokenShapeErr(path string, raw []byte) error {
 		bodies = append(bodies, rows.Rows)
 	}
 	for _, body := range bodies {
-		if !strings.HasPrefix(body, packedPrefix) {
-			continue
+		// Unpack as deep as it goes: a packed body may hold a packed body.
+		for depth := 0; strings.HasPrefix(body, packedPrefix); depth++ {
+			if depth >= maxPackDepth {
+				return fmt.Errorf("golden %s holds a body packed more than %d deep, so it cannot be checked for tokens", path, maxPackDepth)
+			}
+			unpacked, err := unpackBody(body)
+			if err != nil {
+				return fmt.Errorf("golden %s holds a packed body that does not unpack, so it cannot be checked for tokens: %w", path, err)
+			}
+			texts = append(texts, unpacked)
+			body = unpacked
 		}
-		unpacked, err := unpackBody(body)
-		if err != nil {
-			return fmt.Errorf("golden %s holds a packed body that does not unpack, so it cannot be checked for tokens: %w", path, err)
-		}
-		texts = append(texts, unpacked)
 	}
 	for _, text := range texts {
 		if strings.Contains(text, undecodableJWT) {

@@ -15,6 +15,11 @@ import (
 // own virtual environment, whose python3 prints the named variables it sees.
 func checkoutWithInterpreter(t *testing.T, names ...string) string {
 	t.Helper()
+	// The checkout's own interpreter is the one under test: an override the
+	// process holds (a developer's shell, the Python-free job's tripwire, which
+	// points both names at its shim) would replace it.
+	t.Setenv("DEV_HEALTH_PYTHON", "")
+	t.Setenv("PYTHON", "")
 	root := t.TempDir()
 	script := "#!/bin/sh\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; echo \"$n=$v\"; done\n"
 	for _, name := range []string{"python", "python3"} {

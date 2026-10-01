@@ -73,6 +73,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
 
 // EnableModes are the only modes `enable` may set. Both make an operation
@@ -244,7 +246,37 @@ func (r EnableRequest) validateFields() error {
 	if !contains(EnableModes, r.Mode) {
 		return fmt.Errorf("goapiproof: enable may only set %v, got %q -- turning an operation OFF is `disable`'s job", EnableModes, r.Mode)
 	}
+	var classOps, documentOps int
 	for _, operation := range r.Operations {
+		if mcpclass.IsOperation(operation) {
+			classOps++
+		} else {
+			documentOps++
+		}
+	}
+	if classOps > 0 && documentOps > 0 {
+		return errors.New("goapiproof: an MCP class operation (mcp:<root>) and a document operation cannot be enabled in one run -- the two are admitted by different receipts and checked against different facts; run them separately")
+	}
+	for _, operation := range r.Operations {
+		if mcpclass.IsOperation(operation) {
+			// A class row: allowlisted root, the class digest, the class kind, and
+			// canary only (a class row has no edge route, so the primary route rule
+			// could never admit it -- refusing by name beats a generic "unproven").
+			switch {
+			case !mcpclass.AllowedOperation(operation):
+				return fmt.Errorf("goapiproof: %s is not an allowlisted MCP root field (allowed: %v)", operation, mcpclass.SortedRoots())
+			case r.DocumentDigest[operation] != mcpclass.DocumentDigest():
+				return fmt.Errorf("goapiproof: %s must carry the MCP class document digest %s, got %q", operation, mcpclass.DocumentDigest(), r.DocumentDigest[operation])
+			case r.OperationKinds[operation] != OperationKindMCPClass:
+				return fmt.Errorf("goapiproof: %s is an MCP class operation and needs kind %q, got %q", operation, OperationKindMCPClass, r.OperationKinds[operation])
+			case r.Mode != TargetModeCanary:
+				return fmt.Errorf("goapiproof: an MCP class row is enabled in mode %q only: it has no edge route, so %q could never be admitted and would say something about the row it cannot show", TargetModeCanary, r.Mode)
+			}
+			continue
+		}
+		if r.OperationKinds[operation] == OperationKindMCPClass {
+			return fmt.Errorf("goapiproof: %s is not an MCP class operation but was given kind %q", operation, OperationKindMCPClass)
+		}
 		if r.DocumentDigest[operation] == "" {
 			return fmt.Errorf("goapiproof: no document digest for %s -- the RUNNING process's /registry is the only source for it", operation)
 		}
@@ -345,6 +377,14 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 			continue
 		}
 		refused = append(refused, operation)
+	}
+	if len(refused) > 0 && mcpclass.IsOperation(refused[0]) {
+		// A class row is admitted by its per-root receipt and by nothing else: no
+		// go-served ledger limit can stand in for it.
+		return nil, fmt.Errorf("%w (%s=%s stage=%s terminal_state=%s route=%s document_digest=%s) for: %v\n"+
+			"  An MCP class root needs a per-root receipt for the exact candidate build. Record it with `dho goapi prove -mcp-roots <roots> -proof-url <internal listener>/query/proof-mcp` (the root's row must exist: `dho goapi routing seed -operations mcp:<root>`)",
+			ErrEnableUnproven, "candidate_build", request.RunningBuild,
+			EnablementProofStage, EnablementProofTerminalState, RouteProof, mcpclass.DocumentDigest(), refused)
 	}
 	if len(refused) > 0 {
 		return nil, fmt.Errorf("%w (%s=%s stage=%s terminal_state=%s) for: %v\n"+

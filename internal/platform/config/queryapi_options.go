@@ -184,7 +184,7 @@ var queryAPIOptions = func() []Option {
 		{
 			Flag: "proof-write-route-enabled", Env: "GO_API_PROOF_WRITE_ROUTE_ENABLED", Kind: KindBool,
 			Default: "false", Services: q, Group: GroupRoutes,
-			Usage: "enable /query/proof-write (CHAOS-7096, default off): internal listener only, mutation-only, gated per request by the go_api_proof_orgs allowlist (empty by default)",
+			Usage: "enable the internal listener's operator proof routes (default off): /query/proof-write (CHAOS-7096, mutation-only) and /query/proof-mcp (CHAOS-7214, the MCP caller class's measurement route), each gated per request by the go_api_proof_orgs allowlist (empty by default)",
 		},
 		{
 			Flag: "quadrant-enabled", Env: "GO_API_QUADRANT_ENABLED", Kind: KindBool,

@@ -87,13 +87,28 @@ func runEnable(argv []string) error {
 	if err != nil {
 		return err
 	}
-	catalog, kinds, err := goapiproof.LoadOperationCatalogWithKinds(common.catalogPath)
+	scope, isClass, err := resolveClassScope(common.operations)
 	if err != nil {
-		return refuse("%v -- refusing to enable anything on a catalog this process cannot read", err)
+		return err
 	}
-	operations, err := goapiproof.ResolveOperations(common.operations, catalog)
-	if err != nil {
-		return refuse("%v", err)
+	var catalog, kinds map[string]string
+	var operations []string
+	if isClass {
+		// MCP class rows (CHAOS-7214): no catalog and no registered document. The
+		// root-field checks below and the per-root proof receipt stand in.
+		if err := requireClassRootsServed(scope.Operations); err != nil {
+			return err
+		}
+		operations, kinds = scope.Operations, classKinds(scope.Operations)
+	} else {
+		catalog, kinds, err = goapiproof.LoadOperationCatalogWithKinds(common.catalogPath)
+		if err != nil {
+			return refuse("%v -- refusing to enable anything on a catalog this process cannot read", err)
+		}
+		operations, err = goapiproof.ResolveOperations(common.operations, catalog)
+		if err != nil {
+			return refuse("%v", err)
+		}
 	}
 
 	ctx := context.Background()
@@ -166,37 +181,42 @@ func runEnable(argv []string) error {
 
 	// --- Preflight 3: does the binary register each operation, under the
 	// digest the edge's catalog carries? --------------------------------
-	var notRegistered, digestDivergent []string
-	for _, operation := range operations {
-		registered, ok := registry.DocumentDigest[operation]
-		if !ok {
-			notRegistered = append(notRegistered, operation)
-			continue
+	documentDigests := registry.DocumentDigest
+	if isClass {
+		documentDigests = scope.Digests
+	} else {
+		var notRegistered, digestDivergent []string
+		for _, operation := range operations {
+			registered, ok := registry.DocumentDigest[operation]
+			if !ok {
+				notRegistered = append(notRegistered, operation)
+				continue
+			}
+			if registered != catalog[operation] {
+				digestDivergent = append(digestDivergent,
+					fmt.Sprintf("%s: catalog=%s go=%s", operation, catalog[operation], registered))
+			}
 		}
-		if registered != catalog[operation] {
-			digestDivergent = append(digestDivergent,
-				fmt.Sprintf("%s: catalog=%s go=%s", operation, catalog[operation], registered))
+		// `FetchRegistry`
+		// (internal/goapiproof/registry.go) REFUSES a /registry response
+		// that lists the same operation twice, matching the Python verb,
+		// rather than silently keeping the last one. This preflight's
+		// `registry.DocumentDigest` map can
+		// therefore never be decided by a malformed or tampered registry
+		// picking whichever duplicate the JSON decoder scanned last.
+		if len(notRegistered) > 0 {
+			return refuse("the running query-api does not register: %v. It serves %d operation(s); the catalog lists %d.\n"+
+				"  The deployed image is the authority -- an operation it does not serve cannot be enabled into it.",
+				notRegistered, len(registry.DocumentDigest), len(catalog))
 		}
-	}
-	// `FetchRegistry`
-	// (internal/goapiproof/registry.go) REFUSES a /registry response
-	// that lists the same operation twice, matching the Python verb,
-	// rather than silently keeping the last one. This preflight's
-	// `registry.DocumentDigest` map can
-	// therefore never be decided by a malformed or tampered registry
-	// picking whichever duplicate the JSON decoder scanned last.
-	if len(notRegistered) > 0 {
-		return refuse("the running query-api does not register: %v. It serves %d operation(s); the catalog lists %d.\n"+
-			"  The deployed image is the authority -- an operation it does not serve cannot be enabled into it.",
-			notRegistered, len(registry.DocumentDigest), len(catalog))
-	}
-	if len(digestDivergent) > 0 {
-		return refuse("document digest MISMATCH for %d operation(s): %v.\n"+
-			"  The registered document text differs between the edge's catalog and the deployed binary; a row written with the catalog's digest would never be looked up.\n"+
-			"  Regenerate the catalog (scripts/go_api/generate_operation_catalog.py) against the deployed revision, or redeploy.",
-			len(digestDivergent), digestDivergent)
-	}
+		if len(digestDivergent) > 0 {
+			return refuse("document digest MISMATCH for %d operation(s): %v.\n"+
+				"  The registered document text differs between the edge's catalog and the deployed binary; a row written with the catalog's digest would never be looked up.\n"+
+				"  Regenerate the catalog (scripts/go_api/generate_operation_catalog.py) against the deployed revision, or redeploy.",
+				len(digestDivergent), digestDivergent)
+		}
 
+	}
 	// The build is READ, never typed. -expect-build can only FAIL a run.
 	running, err := goapiproof.FetchBuildIdentity(ctx, client, buildInfoURL, credential)
 	if err != nil {
@@ -241,7 +261,7 @@ func runEnable(argv []string) error {
 		RunningBuild:      running,
 		Operations:        operations,
 		OperationKinds:    kinds,
-		DocumentDigest:    registry.DocumentDigest,
+		DocumentDigest:    documentDigests,
 		Mode:              mode,
 		RolloutPercentage: rollout,
 		RecordedBy:        common.recordedBy,

@@ -1594,6 +1594,9 @@ type ReceiptProvenance struct {
 	// or on something else.
 	CoveredByShape map[string]int `json:"covered_by_shape,omitempty"`
 	OutsideByShape map[string]int `json:"outside_by_shape,omitempty"`
+	// MCPClass is set on a class receipt only (CHAOS-7214): what the root's
+	// proof rests on, and what it names as excluded.
+	MCPClass *MCPClassProvenance `json:"mcp_class,omitempty"`
 }
 
 // reviewEvidence renders the provenance for one receipt. ONE constructor

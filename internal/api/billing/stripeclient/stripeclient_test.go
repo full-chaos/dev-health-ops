@@ -5,8 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -14,7 +12,7 @@ import (
 
 	"github.com/stripe/stripe-go/v86"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // TestIdempotencyKeyOnPostOnly pins the Python SDK's header rule through
@@ -57,30 +55,35 @@ func TestMissingKeyIsThePythonRuntimeError(t *testing.T) {
 	}
 }
 
-// TestPinnedAPIVersionMatchesPythonSDK reads the Python SDK's pinned API
-// version from the installed stripe package: a stripe-go bump that moves
-// the version away from Python's fails here.
-func TestPinnedAPIVersionMatchesPythonSDK(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+// stripeGoldens is the set of this package's frozen Python answers. The
+// producer is the installed Stripe SDK of the pinned build, so Identity names
+// that distribution. A golden recorded by another producer is refused.
+var stripeGoldens = programoracle.Set{
+	Package:       "./internal/api/billing/stripeclient/",
+	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity:      "python 3.14.7\nunicodedata 16.0.0\nstripe 15.6.1",
+	Distributions: []string{"stripe"},
+	// The goldenrecord verb writes each digest when it promotes a recording; a
+	// new golden starts as "PIN:" + its file name without ".json".
+	Pins: map[string]string{
+		"stripe-api-version.golden.json": "8db487417fac896f5c18f195e1ee39772a47ad195ef4c267faf40e4047de4719",
+	},
+}
+
+// TestPinnedAPIVersionMatchesFrozenPythonSDK holds the API version stripe-go
+// sends to the frozen answer of the Python SDK of the pinned build: a
+// stripe-go bump that moves the version away from Python's fails here.
+func TestPinnedAPIVersionMatchesFrozenPythonSDK(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the test source")
 	}
-	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
-	output, err := exec.Command(python, "-c", "import stripe; print(stripe.api_version)").CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if got := lines[len(lines)-1]; got != APIVersion {
+	output := stripeGoldens.Outputs(t, root, "stripe-api-version.golden.json", programoracle.Program{
+		Name: "stripe api version", Text: "import stripe; print(stripe.api_version)",
+	})[0]
+	if got := strings.TrimSpace(output); got != APIVersion {
 		t.Fatalf("Python stripe SDK sends API version %q, stripe-go sends %q", got, APIVersion)
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "api-billing-stripe-version"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }
 

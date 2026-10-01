@@ -390,6 +390,8 @@ type linearWorkItemRows struct {
 	Sprints            []linearSprintRow
 	ProjectMemberships []projectmembership.Row
 	Projects           []projectmembership.CatalogRow
+	// MembershipCreation counts the CHAOS-7361 creation-time ADD decisions.
+	MembershipCreation membershipCreationStats
 }
 
 // LinearWorkItemsRouteHandler is the canonical work-items vertical slice, and
@@ -1300,6 +1302,11 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 			}
 			if !fetchHistory {
 				payload.History.Nodes = nil
+				if payload.Project != nil && payload.Project.ID != "" {
+					// CHAOS-7361: without history "no project rows" is not
+					// provable, so no creation ADD is derived. Counted, not silent.
+					rows.MembershipCreation.skip(projectmembership.SkipHistoryUnavailable)
+				}
 			}
 			if !fetchComments {
 				payload.Comments.Nodes = nil
@@ -1330,6 +1337,13 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					teamClaim, item.WorkItemID, currentProjectID, currentProjectName,
 					payload.History.Nodes, normalizedAt,
 				)
+				rows.MembershipCreation.observeHistoryEnd(memberships, currentProjectID)
+				creation, creationCatalog := normalizeLinearCreationMembership(
+					teamClaim, item.WorkItemID, currentProjectID, currentProjectName,
+					payload.CreatedAt, memberships, &rows.MembershipCreation, normalizedAt,
+				)
+				memberships = append(memberships, creation...)
+				catalog = append(catalog, creationCatalog...)
 				rows.ProjectMemberships = append(rows.ProjectMemberships, memberships...)
 				rows.Projects = append(rows.Projects, catalog...)
 			}
@@ -1347,17 +1361,8 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 	}
 	watermark := claim.BeforeAt.UTC()
 	return CompleteRouteBatch{
-		Effects: effects,
-		Result: map[string]any{
-			"work_items_synced":          len(rows.WorkItems),
-			"transitions_synced":         len(rows.StatusTransitions),
-			"dependencies_synced":        len(rows.Dependencies),
-			"reopen_events_synced":       len(rows.ReopenEvents),
-			"interactions_synced":        len(rows.Interactions),
-			"sprints_synced":             len(rows.Sprints),
-			"project_memberships_synced": len(rows.ProjectMemberships),
-			"projects_synced":            len(rows.Projects),
-		},
+		Effects:   effects,
+		Result:    linearWorkItemsResult(rows),
 		Watermark: &watermark,
 		Evidence: FetchEvidence{Provider: "linear", Dataset: "work-items",
 			Requests: requests, Pages: pagesSeen,
@@ -1365,6 +1370,21 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 				len(rows.ReopenEvents) + len(rows.Interactions) + len(rows.Sprints) +
 				len(rows.ProjectMemberships) + len(rows.Projects)},
 	}, nil
+}
+
+func linearWorkItemsResult(rows linearWorkItemRows) map[string]any {
+	result := map[string]any{
+		"work_items_synced":          len(rows.WorkItems),
+		"transitions_synced":         len(rows.StatusTransitions),
+		"dependencies_synced":        len(rows.Dependencies),
+		"reopen_events_synced":       len(rows.ReopenEvents),
+		"interactions_synced":        len(rows.Interactions),
+		"sprints_synced":             len(rows.Sprints),
+		"project_memberships_synced": len(rows.ProjectMemberships),
+		"projects_synced":            len(rows.Projects),
+	}
+	rows.MembershipCreation.result("linear", result)
+	return result
 }
 
 func normalizeLinearWorkItem(
@@ -1679,6 +1699,41 @@ func normalizeLinearProjectMemberships(
 		}
 	}
 	return memberships, catalog
+}
+
+// normalizeLinearCreationMembership is CHAOS-7361's creation-time ADD for one
+// issue. history is the membership rows already derived from the issue's
+// history (the caller only reaches here with history fetched, so "no project
+// rows" is provable). createdAtRaw is the provider's createdAt string: an
+// unparseable value skips the row and is counted, it never falls back to the
+// sync clock (occurred_at is a sorting-key member).
+func normalizeLinearCreationMembership(
+	claim Claim,
+	workItemID, currentProjectID, currentProjectName, createdAtRaw string,
+	history []projectmembership.Row,
+	stats *membershipCreationStats,
+	normalizedAt time.Time,
+) ([]projectmembership.Row, []projectmembership.CatalogRow) {
+	createdAt := parseLinearTime(createdAtRaw)
+	if createdAt == nil {
+		if currentProjectID != "" || len(history) > 0 {
+			stats.skip(projectmembership.SkipCreatedAtUnparseable)
+		}
+		return nil, nil
+	}
+	template := projectmembership.Row{
+		OrgID: claim.OrgID, RepoID: uuid.Nil, SubjectKind: projectmembership.SubjectWorkItem,
+		SubjectID: workItemID, Provider: "linear", LastSynced: normalizedAt.UTC(),
+	}
+	row, outcome := projectmembership.CreationAdd(template, history, currentProjectID, "", *createdAt)
+	stats.record(outcome)
+	if outcome != projectmembership.CreationAdded || !linearProjectMembershipValid(row, claim) {
+		return nil, nil
+	}
+	return []projectmembership.Row{row}, []projectmembership.CatalogRow{
+		linearEnsureProjectsRow(claim.OrgID, row.ToProjectID,
+			projectDisplayName(row.ToProjectID, currentProjectID, currentProjectName), normalizedAt),
+	}
 }
 
 // projectDisplayName is the free name available without a live lookup

@@ -446,5 +446,13 @@
   "paths": [],
   "raw": "",
   "workflow": "on:\n  pull_request:\n    branches: [main]\n"
+ },
+ {
+  "name": "plain entry with trailing spaces and no comment",
+  "format": "nul",
+  "paths": [
+   "docs/a.md"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      - docs/**   \n"
  }
 ]

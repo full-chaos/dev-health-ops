@@ -166,7 +166,7 @@ func TestDeciderAnswersAsTheRecordedPythonDid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := rotguard.Spec("testdata/golden/go_relevance_cases.json", "4f2ccb327a9810029b8f70c7507c54d8a44c3f2a4f9c4b66163605a20b0a88ce",
+	spec := rotguard.Spec("testdata/golden/go_relevance_cases.json", "d65482a8568f5e0fe6b6aa92f6729f099e866391c7202f6eecf6ea26f1e3fb57",
 		"./internal/relevancedecider/", "^TestDeciderAnswersAsTheRecordedPythonDid$")
 	answers := programoracle.Run(t, spec, root(t), []programoracle.Program{{Name: "go_relevance.py over the corpus", Text: pythonProgram, Stdin: request}})
 	if answers[0].ExitCode != 0 {

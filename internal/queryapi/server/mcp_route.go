@@ -56,7 +56,9 @@ import (
 	"log"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -210,6 +212,7 @@ const (
 	mcpReasonInvalidOrgArgument  = "invalid_org_argument"
 	mcpReasonOrgMismatch         = "org_mismatch"
 	mcpReasonPersonScope         = "person_scope"
+	mcpReasonUnclassifiedInput   = "unclassified_input"
 	mcpReasonInputLimit          = "input_limit"
 	mcpReasonRootFieldNotEnabled = "root_field_not_enabled"
 	mcpReasonBytesCeiling        = "bytes_ceiling"
@@ -541,7 +544,7 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusForbidden, orgReason, "every orgId argument must name the caller's org")
 		return
 	}
-	if status, reason := mcpCheckRequestInputs(op, doc.Fragments, variables, payload.Variables, claims.OrgID); reason != "" {
+	if status, reason := mcpCheckRequestInputs(schema, op, doc.Fragments, variables, payload.Variables, claims.OrgID); reason != "" {
 		refuse(status, reason, "the request names another org, selects a person, or exceeds an input limit of the MCP caller class")
 		return
 	}
@@ -949,20 +952,15 @@ func mcpCheckNestedOrg(value any, check func(any)) {
 // alias cap), and ClickHouse's budget does not bound resolver-side CPU.
 const mcpMaxSimulations = 10000
 
-// mcpPersonValues are enum values that select a person: ScopeLevelInput
-// DEVELOPER and DimensionInput AUTHOR. The MCP caller class is person-free
-// (CHAOS-7087); they are refused wherever they appear in a value.
-var mcpPersonValues = map[string]bool{"DEVELOPER": true, "AUTHOR": true}
-
 // mcpCheckRequestInputs fails closed over EVERY value the request carries,
 // not only the arguments the selected fields read: the field arguments
 // (literals and variables resolved), the coerced variables (declared, used or
 // not, with their defaults), and the raw variables (including undeclared
 // ones). It refuses another org's id anywhere (orgId/org_id members and the
-// ids of an ORG-level scope), any person selector (an enum value DEVELOPER or
-// AUTHOR, a `who` filter, a `developers` list) and a `simulations` count over
+// ids of an ORG-level scope), any person selector (decided from the schema at
+// the value's typed position: see mcp_person_policy.go) and a `simulations` count over
 // mcpMaxSimulations. It returns the HTTP status and reason, or 0 and "".
-func mcpCheckRequestInputs(op *ast.OperationDefinition, fragments ast.FragmentDefinitionList, variables, rawVariables map[string]any, orgID string) (int, string) {
+func mcpCheckRequestInputs(schema *ast.Schema, op *ast.OperationDefinition, fragments ast.FragmentDefinitionList, variables, rawVariables map[string]any, orgID string) (int, string) {
 	status, reason := 0, ""
 	fail := func(s int, r string) {
 		if reason == "" {
@@ -973,9 +971,6 @@ func mcpCheckRequestInputs(op *ast.OperationDefinition, fragments ast.FragmentDe
 	scan = func(key string, value any) {
 		switch v := value.(type) {
 		case string:
-			if mcpPersonValues[v] {
-				fail(http.StatusForbidden, mcpReasonPersonScope)
-			}
 			if key == "orgId" || key == "org_id" {
 				if v != orgID {
 					fail(http.StatusForbidden, mcpReasonOrgMismatch)
@@ -993,16 +988,6 @@ func mcpCheckRequestInputs(op *ast.OperationDefinition, fragments ast.FragmentDe
 			}
 			for k, member := range v {
 				switch k {
-				case "who":
-					if member != nil {
-						fail(http.StatusForbidden, mcpReasonPersonScope)
-					}
-				case "developers":
-					if list, ok := member.([]any); !ok || len(list) > 0 {
-						if member != nil {
-							fail(http.StatusForbidden, mcpReasonPersonScope)
-						}
-					}
 				case "simulations":
 					if n, ok := mcpInt(member); !ok || n > mcpMaxSimulations {
 						fail(http.StatusBadRequest, mcpReasonInputLimit)
@@ -1035,6 +1020,18 @@ func mcpCheckRequestInputs(op *ast.OperationDefinition, fragments ast.FragmentDe
 			if err != nil {
 				fail(http.StatusForbidden, mcpReasonInvalidOrgArgument)
 				return
+			}
+			if field.Definition == nil || field.ObjectDefinition == nil {
+				// Validation sets both for every real field; a field without them
+				// cannot be classified, so it is refused (fail closed).
+				fail(http.StatusForbidden, mcpReasonUnclassifiedInput)
+			} else {
+				switch mcpClassifyArgument(schema, field.ObjectDefinition.Name, field.Name, field.Definition.Arguments.ForName(argument.Name), value) {
+				case mcpInputPerson:
+					fail(http.StatusForbidden, mcpReasonPersonScope)
+				case mcpInputUnclassified:
+					fail(http.StatusForbidden, mcpReasonUnclassifiedInput)
+				}
 			}
 			if argument.Name == "simulations" {
 				if n, ok := mcpInt(value); !ok || n > mcpMaxSimulations {
@@ -1174,11 +1171,11 @@ func (o *mcpObservation) fieldErrorCount() int {
 	return o.fieldErrors
 }
 
-func (o *mcpObservation) observe(err error) {
+func (o *mcpObservation) observe(err error, elapsed, ceiling time.Duration) {
 	if err == nil {
 		return
 	}
-	reason := mcpBudgetReason(err)
+	reason := mcpBudgetReason(err, elapsed, ceiling)
 	if reason == "" {
 		return
 	}
@@ -1195,9 +1192,17 @@ func (o *mcpObservation) budgetReason() string {
 	return o.budget
 }
 
+// mcpCeilingSlack is how early a socket deadline may fire against the ceiling
+// measured from the observed client's own clock: the driver's deadline starts
+// a moment before Query returns control here.
+const mcpCeilingSlack = 250 * time.Millisecond
+
 // mcpBudgetReason classifies a ClickHouse error as one of the class's
-// budget refusals, or "".
-func mcpBudgetReason(err error) string {
+// budget refusals, or "". elapsed is the time since the failing query started
+// and ceiling the read ceiling it ran under: a NET timeout is the time ceiling
+// only once the ceiling has passed; a timeout before it (a dial or any other
+// connectivity timeout) is a store fault and stays unclassified.
+func mcpBudgetReason(err error, elapsed, ceiling time.Duration) string {
 	var exception *clickhousedriver.Exception
 	if errors.As(err, &exception) {
 		switch exception.Code {
@@ -1218,6 +1223,29 @@ func mcpBudgetReason(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return mcpReasonTimeCeiling
 	}
+	// The same deadline reaches the connection as a socket read deadline, and
+	// whichever of the two fires first decides the error shape: a read that is
+	// in flight at the deadline fails as a net timeout (os.ErrDeadlineExceeded
+	// under a *net.OpError, wrapped by the driver), not as the context's
+	// error. CI saw exactly that at the 1 s ceiling: "ClickHouse row
+	// iteration failed: *fmt.wrapError", served as field_errors instead of
+	// the typed 422. This client's only read deadline is the ceiling's.
+	// A DIAL timeout (the client's own 5 s DialTimeout) is a connectivity
+	// failure, not the read ceiling: it stays a store error.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return ""
+	}
+	if elapsed < ceiling-mcpCeilingSlack {
+		return ""
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return mcpReasonTimeCeiling
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return mcpReasonTimeCeiling
+	}
 	return ""
 }
 
@@ -1226,6 +1254,15 @@ func mcpBudgetReason(err error) string {
 // or at Close.
 type mcpObservedClient struct {
 	next featureflags.QueryClient
+	// ceiling is the read ceiling the client runs under (zero: production's).
+	ceiling time.Duration
+}
+
+func (c mcpObservedClient) readCeiling() time.Duration {
+	if c.ceiling > 0 {
+		return c.ceiling
+	}
+	return time.Duration(mcpMaxExecutionTimeSeconds) * time.Second
 }
 
 func (c mcpObservedClient) Query(ctx context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
@@ -1233,39 +1270,42 @@ func (c mcpObservedClient) Query(ctx context.Context, statement string, bindings
 	if obs != nil {
 		obs.call()
 	}
+	started := time.Now()
 	rows, err := c.next.Query(ctx, statement, bindings)
 	if err != nil {
 		if obs != nil {
-			obs.observe(err)
+			obs.observe(err, time.Since(started), c.readCeiling())
 		}
 		return nil, err
 	}
 	if obs == nil {
 		return rows, nil
 	}
-	return mcpObservedRows{RowScanner: rows, obs: obs}, nil
+	return mcpObservedRows{RowScanner: rows, obs: obs, started: started, ceiling: c.readCeiling()}, nil
 }
 
 type mcpObservedRows struct {
 	dhclickhouse.RowScanner
-	obs *mcpObservation
+	obs     *mcpObservation
+	started time.Time
+	ceiling time.Duration
 }
 
 func (r mcpObservedRows) Scan(dest ...any) error {
 	err := r.RowScanner.Scan(dest...)
-	r.obs.observe(err)
+	r.obs.observe(err, time.Since(r.started), r.ceiling)
 	return err
 }
 
 func (r mcpObservedRows) Err() error {
 	err := r.RowScanner.Err()
-	r.obs.observe(err)
+	r.obs.observe(err, time.Since(r.started), r.ceiling)
 	return err
 }
 
 func (r mcpObservedRows) Close() error {
 	err := r.RowScanner.Close()
-	r.obs.observe(err)
+	r.obs.observe(err, time.Since(r.started), r.ceiling)
 	return err
 }
 

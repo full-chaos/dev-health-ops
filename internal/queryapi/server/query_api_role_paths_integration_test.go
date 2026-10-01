@@ -105,7 +105,7 @@ func TestQueryAPIRoleDriverObservesAMissingColumnGrant(t *testing.T) {
 		if _, _, err := policyStore.UserState(ctx, uuid.MustParse(pathsAdminUser)); err != nil {
 			return err
 		}
-		if _, err := policyStore.IsMember(ctx, uuid.MustParse(pathsAdminUser), uuid.MustParse(pathsOrg)); err != nil {
+		if _, _, err := policyStore.Membership(ctx, uuid.MustParse(pathsAdminUser), uuid.MustParse(pathsOrg)); err != nil {
 			return err
 		}
 		if _, err := policyStore.ActiveImpersonation(ctx, uuid.MustParse(pathsAdminUser)); err != nil {
@@ -124,6 +124,11 @@ func TestQueryAPIRoleDriverObservesAMissingColumnGrant(t *testing.T) {
 		if !errors.As(err, &pgErr) || pgErr.Code != "42501" || !strings.Contains(pgErr.Message, column.TableName) {
 			t.Errorf("with SELECT on %s.%s withheld, probe = %v, want a 42501 permission denial naming %s",
 				column.TableName, column.ColumnName, err, column.TableName)
+		}
+		// The refusal an operator reads names the grant the role lacks.
+		if missing := policy.MissingGrant(err); !strings.Contains(missing, column.TableName+" (") || !strings.Contains(missing, column.ColumnName) {
+			t.Errorf("with SELECT on %s.%s withheld, the store names the missing grant as %q, want it to name that table and column",
+				column.TableName, column.ColumnName, missing)
 		}
 		grant := "GRANT SELECT (" + column.ColumnName + ") ON public." + column.TableName + " TO " + fixture.role
 		if _, err := fixture.admin.Exec(ctx, grant); err != nil {
@@ -407,10 +412,10 @@ VALUES (gen_random_uuid(), $1, 'paths connector' || $2::text, 'github', '[]'::js
 	if err == nil && (!found || !state.IsActive || !state.IsSuperuser || state.TokenVersion != pathsAdminTokenVersion) {
 		fail("policy.UserState", fmt.Errorf("unexpected state: found=%v state=%+v", found, state))
 	}
-	isMember, err := policyStore.IsMember(ctx, uuid.MustParse(pathsAdminUser), uuid.MustParse(pathsOrg))
-	fail("policy.IsMember", err)
+	_, isMember, err := policyStore.Membership(ctx, uuid.MustParse(pathsAdminUser), uuid.MustParse(pathsOrg))
+	fail("policy.Membership", err)
 	if err == nil && !isMember {
-		fail("policy.IsMember", errors.New("expected the seeded membership row, found none"))
+		fail("policy.Membership", errors.New("expected the seeded membership row, found none"))
 	}
 	session, err := policyStore.ActiveImpersonation(ctx, uuid.MustParse(pathsAdminUser))
 	fail("policy.ActiveImpersonation", err)

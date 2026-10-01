@@ -1,13 +1,11 @@
 package sync
 
 import (
-	"bytes"
+	_ "embed"
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // goFeatureDecisionReasons is the closed set this package declares in
@@ -31,33 +29,28 @@ var goFeatureDecisionReasons = map[string]FeatureDecisionReason{
 	"TIER_REQUIRED":               FeatureDecisionReasonTierRequired,
 }
 
-// TestFeatureDecisionReasonMatchesLivePythonEnum pins the closed vocabulary:
-// every member Python's real FeatureDecisionReason StrEnum declares must
-// have a Go constant with the IDENTICAL string value, and Go must declare
-// no member Python doesn't have. A future Python addition, rename, or
-// removal fails this test instead of silently producing a Go reason string
-// that can never appear in a real CanonicalIncidentFeatureDisabledError
-// message, or missing one that can.
-func TestFeatureDecisionReasonMatchesLivePythonEnum(t *testing.T) {
-	python := livePythonExecutable(t)
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate Python feature-decision-reason oracle")
-	}
-	command := exec.Command(python, filepath.Join(filepath.Dir(currentFile), "testdata", "python_feature_decision_reason_oracle.py"))
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("execute live Python feature-decision-reason oracle: %v\nstderr:\n%s", err, stderr.String())
-	}
+// featureDecisionReasonScript prints {member name: value} for every member of
+// the FeatureDecisionReason StrEnum of the build it is executed on.
+//
+//go:embed testdata/python_feature_decision_reason_oracle.py
+var featureDecisionReasonScript string
 
+// TestFeatureDecisionReasonMatchesFrozenPythonEnum pins the closed vocabulary:
+// every member Python's real FeatureDecisionReason StrEnum declared must
+// have a Go constant with the IDENTICAL string value, and Go must declare
+// no member Python did not have. A Go addition, rename, or removal fails this
+// test instead of silently producing a Go reason string that can never appear
+// in a real CanonicalIncidentFeatureDisabledError message, or missing one
+// that can.
+func TestFeatureDecisionReasonMatchesFrozenPythonEnum(t *testing.T) {
+	output := frozenPython(t, "feature-decision-reason.golden.json", programoracle.Script("feature decision reasons",
+		"internal/scheduler/sync/testdata/python_feature_decision_reason_oracle.py", featureDecisionReasonScript, nil))[0]
 	var pythonReasons map[string]string
-	if err := json.Unmarshal(stdout.Bytes(), &pythonReasons); err != nil {
-		t.Fatalf("decode live Python feature-decision-reason oracle: %v\n%s", err, stdout.String())
+	if err := json.Unmarshal([]byte(output), &pythonReasons); err != nil {
+		t.Fatalf("decode the frozen Python feature-decision-reason answer: %v\n%s", err, output)
 	}
 	if len(pythonReasons) == 0 {
-		t.Fatal("live Python oracle returned no FeatureDecisionReason members")
+		t.Fatal("the frozen Python answer holds no FeatureDecisionReason members")
 	}
 
 	for name, pythonValue := range pythonReasons {
@@ -74,14 +67,5 @@ func TestFeatureDecisionReasonMatchesLivePythonEnum(t *testing.T) {
 		if _, present := pythonReasons[name]; !present {
 			t.Errorf("Go declares FeatureDecisionReason%s but Python's enum has no %s member", name, name)
 		}
-	}
-
-	// Shares the same proof-file marker planner_oracle_test.go writes: both
-	// tests run under the identical `go test ./internal/scheduler/sync/...`
-	// invocation ci/check_go.sh's live-python-oracles gate drives, and that
-	// gate only checks the marker's existence, not which test produced it.
-	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), livePythonOracleProofFile)
-	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {
-		t.Fatalf("write live Python oracle proof: %v", err)
 	}
 }

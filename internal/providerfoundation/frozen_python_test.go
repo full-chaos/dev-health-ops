@@ -22,12 +22,12 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0"
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"credential-field-grid.golden.json":        "65dd63db8a3aad124445b2315cf4b4288605313fb363a9f61b5cac568e5b95c5",
-	"credential-field-grid-derive.golden.json": "b63edf0621072f9583264e92162e5371e1d28776e867876800159db0003bca51",
-	"credential-field-reads.golden.json":       "b0bbdea306eef69a39080c98f85ba39dbc132e9b9f6e0a50f6dc781e8dfd366b",
-	"fernet-custom-salt.golden.json":           "35ee080ae1e4ad46fbc73830e5df8d2bf68a6ee319c328b5cfc3067558be35db",
-	"fernet-default-salt.golden.json":          "12c9132f337547e1d4e8516284713116b989ef7dbd31ee758eed5be762b9291b",
-	"fernet-unconfigured.golden.json":          "0111efb8933a8b89830a68693b50c208822ec60b16e265be1cde60761b9f3c1a",
+	"credential-field-grid.golden.json":        "c352036680cf5f75900bcde6ca706aad937b475bcc661dd6d4961005ca225bff",
+	"credential-field-grid-derive.golden.json": "e71b84df68c7c93ccd58147ad918fb45b30d6fd460d57572ab5a5321be4820ca",
+	"credential-field-reads.golden.json":       "a9e690ac1fd7f1cbdf04bab0311d627683a24876c540032cb1580ef9e1972a38",
+	"fernet-custom-salt.golden.json":           "fdd075ff62501b1fe2d0ae493c9aa96b1ae6482569ebd4e68d2821b1f4fbb433",
+	"fernet-default-salt.golden.json":          "a8bbc25e81c3b6a05836774c8cd32fe9ae093797f550f5a52c2946e471a5873d",
+	"fernet-unconfigured.golden.json":          "bcf07875c4eeb49ecd2ebfe0ea0fe21594c4f903b68557fcee36f014625b4653",
 }
 
 // goldens is the set of this package's frozen Python answers.

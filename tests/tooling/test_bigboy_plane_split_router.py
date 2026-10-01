@@ -790,10 +790,14 @@ def _emit(gen: ModuleType, doc: dict) -> dict:
     )
 
 
-def test_an_entry_that_names_query_api_is_routed_to_query_api(gen: ModuleType) -> None:
+def test_an_entry_that_names_query_api_is_routed_to_query_api(
+    gen: ModuleType, tmp_path: Path
+) -> None:
     doc = _named_backend_values([_GRAPHQL_QUERY], [_GRAPHQL_QUERY, _METRICS])
     assert gen.paths_on_two_planes(doc) == []
+    assert gen.query_api_paths_not_on_every_list(doc) == []
     assert gen.paths_in_two_objects(doc) == []
+    assert _run(gen, tmp_path, doc) == 0
     routed = _emit(gen, doc)
     assert _route(routed, "/graphql") == "http://query-api:8090"
     for lookalike in ("/graphqlx", "/graphql/", "/graphql/x"):
@@ -857,6 +861,51 @@ def test_half_a_backend_change_is_refused(
     assert f"and {go_list} entry /graphql$" in captured.err
 
 
+_SHARED_LIST = "ops.ingress.pythonAllowList"
+_OWN_LIST = "ops.ingress.hosts[in-cluster.example].pythonAllowList"
+
+
+@pytest.mark.parametrize(
+    ("shared", "own", "has", "lacks"),
+    [
+        ([], [_GRAPHQL_QUERY, _METRICS], _OWN_LIST, _SHARED_LIST),
+        ([_GRAPHQL_QUERY], [_METRICS], _SHARED_LIST, _OWN_LIST),
+        ([_GRAPHQL_QUERY], [], _SHARED_LIST, _OWN_LIST),
+    ],
+)
+def test_a_named_backend_that_differs_by_host_is_refused(
+    gen: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    shared: list[dict],
+    own: list[dict],
+    has: str,
+    lacks: str,
+) -> None:
+    """/graphql on query-api on one list and not named on the other is query-api on one prod
+    host and the Go api's default on another. This router has one host: whichever of the two
+    it emitted, it would prove a route that one prod host does not have."""
+    assert _run(gen, tmp_path, _named_backend_values(shared, own)) == 4
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "REFUSED: one path, a backend that differs by host" in captured.err
+    assert (
+        f"/graphql$ is sent to query-api by {has} and not by {lacks}\n" in captured.err
+    )
+
+
+def test_a_named_backend_is_the_same_path_in_either_form(
+    gen: ModuleType, tmp_path: Path
+) -> None:
+    """An Exact entry and an anchored entry for one path are one path: a shared list that
+    writes it one way and a host's list that writes it the other way agree."""
+    exact = {"path": "/graphql", "pathType": "Exact", "service": "query-api"}
+    doc = _named_backend_values([exact], [_GRAPHQL_QUERY, _METRICS])
+    assert gen.query_api_paths_not_on_every_list(doc) == []
+    assert _run(gen, tmp_path, doc) == 0
+    assert _route(_emit(gen, doc), "/graphql") == "http://query-api:8090"
+
+
 @pytest.mark.parametrize(
     "table_entry",
     [
@@ -916,6 +965,22 @@ def test_a_named_backend_and_a_path_table_for_one_path_are_refused(
             {**_GRAPHQL_PYTHON, "service": ""},
             "routes to api (the Python api, the default) or to query-api",
         ),
+        # What the ops chart refuses to render for an allow-list entry.
+        *[
+            (
+                {"path": path, "pathType": path_type, "service": "query-api"},
+                "is not a path the ops chart renders",
+            )
+            for path, path_type in (
+                ("/", "Exact"),
+                ("", "Exact"),
+                ("/a/../graphql", "Exact"),
+                ("/./graphql", "Exact"),
+                ("/a/\\.\\./graphql$", "ImplementationSpecific"),
+                ("//graphql", "Exact"),
+                ("graphql", "Exact"),
+            )
+        ],
     ],
 )
 def test_a_named_backend_this_router_cannot_route_is_refused(

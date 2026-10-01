@@ -159,7 +159,9 @@ def paths_from_doc(doc: dict) -> tuple[list[str], list[str]]:
         for e in ingress["queryApiPaths"]
     ]
     # An allow-list entry that names query-api (`service: query-api`) is a query-api path of
-    # this router too. Only the SHARED list is routed here, as for the Python entries.
+    # this router too. The shared list's entries are all of them: main refuses values in
+    # which a path is sent to query-api by one allow-list and not by every allow-list
+    # (query_api_paths_not_on_every_list), so no entry of a host's own list is left out.
     query_paths += [
         _segments_regex(segments)
         for source, _, _, segments in query_api_allow_list_entries(doc)
@@ -266,13 +268,46 @@ def query_api_allow_list_entries(doc: dict) -> list[tuple[str, str, str, Segment
                     " names query-api but is not one path (Exact, or an anchored ImplementationSpecific"
                     " `/literal$`): this router cannot route a subtree to query-api"
                 )
-            found.append(
-                (
-                    source,
-                    path,
-                    path_type,
-                    _segments(allow_list_literal(path, path_type)),
+            # The ops chart's own rules for an allow-list entry, so that this generator does
+            # not emit a router for values the chart cannot render.
+            literal = allow_list_literal(path, path_type)
+            if (
+                (path_type == "Exact" and not _LITERAL_ENTRY.fullmatch(path))
+                or literal.rstrip("/") == ""
+                or any(segment in (".", "..") for segment in literal.split("/"))
+            ):
+                raise SystemExit(
+                    f"generate-plane-split-router: {source} entry {{path: {path}, pathType: {path_type}}}"
+                    " names query-api but is not a path the ops chart renders: a literal path"
+                    " that is not `/` and has no `.` or `..` segment"
                 )
+            found.append((source, path, path_type, _segments(literal)))
+    return found
+
+
+def query_api_paths_not_on_every_list(doc: dict) -> list[str]:
+    """One line for each path that one allow-list sends to query-api and another allow-list
+    does not.
+
+    Each allow-list is the list of one or more prod hosts (the shared one, or a host's own),
+    so such a path has a backend that differs by host: query-api on one, the Go api's default
+    on another. This router has ONE host. It would send the path to one of the two and so
+    prove a route that a prod host does not have. (A Python entry for the path on the other
+    list is the same defect; paths_on_two_planes names that one.)
+    """
+    lists = [source for source, _ in _allow_lists(doc)]
+    named: dict[str, list[str]] = {}
+    written: dict[str, str] = {}
+    for source, path, path_type, _ in query_api_allow_list_entries(doc):
+        literal = allow_list_literal(path, path_type)
+        named.setdefault(literal, []).append(source)
+        written.setdefault(literal, path)
+    found = []
+    for literal, have in named.items():
+        if lacks := [source for source in lists if source not in have]:
+            found.append(
+                f"{written[literal]} is sent to query-api by {', '.join(have)}"
+                f" and not by {', '.join(lacks)}"
             )
     return found
 
@@ -311,6 +346,8 @@ BIGBOY_LOCAL_SOURCE = (
 # The anchored shape the ops chart accepts (deploy/helm/dev-health/templates/ingress.yaml):
 # literal segments, `\.` for a dot, exactly one trailing `$`.
 _ANCHORED_ENTRY = re.compile(r"(/([A-Za-z0-9_-]|\\\.)+)+\$")
+# The literal shape the ops chart accepts for a Prefix or Exact entry (same template).
+_LITERAL_ENTRY = re.compile(r"(/[A-Za-z0-9_.-]+)*/?")
 
 
 def python_sources(doc: dict) -> list[tuple[str, list[tuple[str, str]]]]:
@@ -598,6 +635,16 @@ def main(argv: list[str] | None = None) -> int:
             "REFUSED: one path, two backends. A path the Python api is given and a path a Go plane is"
             " given can match the same request. Take the path off every Python list in the same values"
             " change that moves it to the Go plane:\n  " + "\n  ".join(both),
+            file=sys.stderr,
+        )
+        return 4
+    if per_host := query_api_paths_not_on_every_list(doc):
+        print(
+            "REFUSED: one path, a backend that differs by host. An allow-list entry sends the path"
+            " to query-api, and another allow-list does not name it: prod would answer it from"
+            " query-api on one host and from the Go api's default on another, and this router has"
+            " one host. Give the entry to EVERY allow-list (the shared one and each host's own):\n  "
+            + "\n  ".join(per_host),
             file=sys.stderr,
         )
         return 4

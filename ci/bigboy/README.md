@@ -74,7 +74,13 @@ route prod may not have. The check is on the paths the rules match, not on the t
   path to query-api and leaves it out of the Python rule, and the entry counts as a Go plane path
   in this check, on whichever list it is: the same path still on Python on another list is half
   a change and is refused. Such an entry must be one path (`Exact`, or an anchored
-  `ImplementationSpecific`); a `Prefix` is refused.
+  `ImplementationSpecific`); a `Prefix` is refused. It must also be a path the ops chart
+  renders: not `/`, no `.` or `..` segment, and for `Exact` the chart's literal form.
+- A second refusal, `one path, a backend that differs by host`: an entry that names query-api
+  on one allow-list while another allow-list does not name the path at all. Each list is the
+  list of prod hosts, so prod would answer the path from query-api on one host and from the Go
+  api's default on another. This router has one host and cannot show both. The entry must be
+  on every allow-list: the shared one and each host's own.
 - One more refusal, `one path, two Ingress objects`: an entry that names query-api while
   `ingress.goApiPaths` or `ingress.queryApiPaths` also claims the path. Prod renders the
   allow-list in one Ingress object and the path tables in others, and its ingress admission

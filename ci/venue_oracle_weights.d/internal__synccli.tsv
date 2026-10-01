@@ -1,7 +1,5 @@
 internal/synccli	TestBatchLoopMatchesLivePython	83
 internal/synccli	TestDBLookupsMatchLivePython	52
-internal/synccli	TestLocalSyncMatchesLivePython	469
-internal/synccli	TestLocalSyncRerunKeepsHeldColumnsUnlikePython	27
 internal/synccli	TestSyncTargetMatchesLivePython	8
 internal/synccli	TestSyncTeamsGitHubVenueOracleMatchesThePythonProducer	120
 internal/synccli	TestSyncTeamsGitLabVenueOracleMatchesThePythonProducer	600

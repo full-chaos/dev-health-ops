@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -377,5 +379,312 @@ func TestAReRecordThatDropsCoverageIsRefusedUnlessAllowed(t *testing.T) {
 	fake.candidateBody = goldenJSON([]string{"a", "b", "c"}, []string{"orgs", "more"})
 	if _, err := Record(context.Background(), cfg); err != nil {
 		t.Fatalf("added coverage was refused: %v", err)
+	}
+}
+
+// backfillGolden is a venue golden in the form the harness writes, recorded
+// before a golden kept the key of its venue's Python settings.
+func backfillGolden(test string) string {
+	return "{\n  \"header\": {\n    \"test\": \"" + test + "\",\n    \"python_build\": \"" + strings.Repeat("0123456789", 4) + "\",\n    \"producer_digest\": \"" + strings.Repeat("a", 64) + "\",\n    \"recipe\": \"record it\"\n  },\n" +
+		"  \"requests\": [\n    {\n      \"name\": \"a\",\n      \"method\": \"GET\",\n      \"path\": \"/x\",\n      \"body_sha256\": \"\",\n      \"request_headers_sha256\": \"\",\n      \"status\": 200,\n" +
+		"      \"headers\": {\n        \"content-type\": \"application/json\"\n      },\n      \"body\": \"{\\\"n\\\": 1.50}\"\n    }\n  ]\n}\n"
+}
+
+var (
+	keyNow   = strings.Repeat("1", 64)
+	keyOther = strings.Repeat("2", 64)
+)
+
+func withKey(golden, key string) string {
+	return strings.Replace(golden, "\"recipe\": \"record it\"\n", "\"recipe\": \"record it\",\n    \"python_env\": \""+key+"\"\n", 1)
+}
+
+// backfillRun is a package with pinned goldens and stand-ins for what the
+// verb reads: the keys the tests declare now (tree = the root) and at a
+// recording commit (tree = "tree of <commit>"), git, and go test.
+type backfillRun struct {
+	cfg       Config
+	dir       string
+	now       map[string]string
+	then      map[string]map[string]string // commit -> test -> key
+	commits   map[string]string            // golden file name -> commit
+	calls     []string
+	replayErr error
+	// duringReplay runs inside the replay, as a test that writes its candidate again would.
+	duringReplay func()
+}
+
+func newBackfillRun(t *testing.T, goldens map[string]string) *backfillRun {
+	t.Helper()
+	root := t.TempDir()
+	run := &backfillRun{dir: filepath.Join(root, "pkg"), now: map[string]string{}, then: map[string]map[string]string{}, commits: map[string]string{}}
+	if err := os.MkdirAll(filepath.Join(run.dir, "testdata"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pins := "package pkg\n"
+	for name, golden := range goldens {
+		if err := os.WriteFile(filepath.Join(run.dir, "testdata", name), []byte(golden), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		pins += "const pin_" + strings.TrimSuffix(name, ".json") + " = \"" + digest([]byte(golden)) + "\"\n"
+		run.commits[name] = "c1"
+	}
+	if err := os.WriteFile(filepath.Join(run.dir, "x_test.go"), []byte(pins), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run.cfg = Config{Root: root, Package: "./pkg/", Test: "^Test"}
+	run.cfg.Keys = func(_ Config, tree string) (map[string]string, error) {
+		if tree == root {
+			run.calls = append(run.calls, "keys now")
+			if run.now == nil {
+				return nil, errors.New("does not build")
+			}
+			return run.now, nil
+		}
+		run.calls = append(run.calls, "keys in "+tree)
+		keys, ok := run.then[strings.TrimPrefix(tree, "tree of ")]
+		if !ok {
+			return nil, errors.New("does not build")
+		}
+		return keys, nil
+	}
+	run.cfg.RecordingCommit = func(_ Config, golden string) (string, error) {
+		commit := run.commits[filepath.Base(golden)]
+		if commit == "" {
+			return "", errors.New("no commit holds the golden as it is on disk")
+		}
+		return commit, nil
+	}
+	run.cfg.Tree = func(_ Config, commit string) (string, func(), error) {
+		if commit == "gone" {
+			return "", nil, errors.New("unknown revision")
+		}
+		run.calls = append(run.calls, "tree "+commit)
+		return "tree of " + commit, func() { run.calls = append(run.calls, "cleanup "+commit) }, nil
+	}
+	run.cfg.Run = func(cfg Config, env []string) error {
+		if strings.Join(env, " ") != strings.Join([]string{env[0], env[1], "DHO_VENUE_GOLDEN_CANDIDATE=1"}, " ") || len(env) != 3 {
+			t.Fatalf("the verb ran go test with %q: it replays candidates and does nothing else", env)
+		}
+		run.calls = append(run.calls, "replay "+cfg.Test)
+		if run.duringReplay != nil {
+			run.duringReplay()
+		}
+		return run.replayErr
+	}
+	return run
+}
+
+// untouched reports whether every golden and the pins are as the fixture wrote them and no candidate is on disk.
+func (run *backfillRun) untouched(t *testing.T, goldens map[string]string) bool {
+	t.Helper()
+	pins, _ := os.ReadFile(filepath.Join(run.dir, "x_test.go"))
+	for name, golden := range goldens {
+		landed, _ := os.ReadFile(filepath.Join(run.dir, "testdata", name))
+		if string(landed) != golden || !strings.Contains(string(pins), digest([]byte(golden))) || exists(filepath.Join(run.dir, "testdata", name+candidateSuffix)) {
+			return false
+		}
+	}
+	return true
+}
+
+func TestTheBackfillAddsTheKeyWhenTheTestDeclaredTheSameSettingsAtTheRecording(t *testing.T) {
+	goldens := map[string]string{"g.json": backfillGolden("TestProbe"), "sub.json": backfillGolden("TestOther/case"), "keyed.json": withKey(backfillGolden("TestKeyed"), keyOther),
+		"program.json": backfillGolden("TestProgram")}
+	run := newBackfillRun(t, goldens)
+	run.now = map[string]string{"TestProbe": keyNow, "TestOther/case": keyOther, "TestKeyed": keyNow}
+	run.then["c1"] = map[string]string{"TestProbe": keyNow, "TestOther/case": keyOther}
+	result, err := BackfillPythonEnv(context.Background(), run.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One tree for the one recording commit, removed again; the replay runs the tests of the backfilled goldens only.
+	if got, want := strings.Join(run.calls, ", "), "keys now, tree c1, keys in tree of c1, cleanup c1, replay ^(TestOther|TestProbe)$"; got != want {
+		t.Fatalf("calls:\n %s\nwant\n %s", got, want)
+	}
+	if len(result.Promoted) != 2 || len(result.Shown) != 2 || !strings.Contains(result.Shown[0], "testdata/g.json: recorded at c1; its test TestProbe") {
+		t.Fatalf("promoted %+v, shown %q", result.Promoted, result.Shown)
+	}
+	pins, _ := os.ReadFile(filepath.Join(run.dir, "x_test.go"))
+	for name, key := range map[string]string{"g.json": keyNow, "sub.json": keyOther} {
+		landed, _ := os.ReadFile(filepath.Join(run.dir, "testdata", name))
+		if string(landed) != withKey(goldens[name], key) || !strings.Contains(string(pins), digest(landed)) || exists(filepath.Join(run.dir, "testdata", name+candidateSuffix)) {
+			t.Errorf("%s did not land with its key and its pin:\n%s\n%s", name, landed, pins)
+		}
+	}
+	// A golden that holds a key, and a golden of a test that builds no venue, are not touched.
+	for _, name := range []string{"keyed.json", "program.json"} {
+		landed, _ := os.ReadFile(filepath.Join(run.dir, "testdata", name))
+		if string(landed) != goldens[name] {
+			t.Errorf("%s was changed", name)
+		}
+	}
+	// Nothing left to do: no tree is built and no test runs.
+	run.calls = nil
+	result, err = BackfillPythonEnv(context.Background(), run.cfg)
+	if err != nil || len(result.Promoted) != 0 || strings.Join(run.calls, ", ") != "keys now" {
+		t.Fatalf("a second run: err %v, promoted %+v, calls %v", err, result.Promoted, run.calls)
+	}
+}
+
+func TestTheBackfillRefusesAGoldenItCannotShowWasRecordedUnderTheSettingsOfToday(t *testing.T) {
+	goldens := map[string]string{"g.json": backfillGolden("TestProbe"), "h.json": backfillGolden("TestSecond")}
+	for name, c := range map[string]struct {
+		edit    func(run *backfillRun)
+		refusal string
+	}{
+		"the test declares another value now":      {func(run *backfillRun) { run.now["TestProbe"] = keyOther }, "g.json was recorded at c1 under other Python settings than its test TestProbe declares now"},
+		"the second golden's settings changed":     {func(run *backfillRun) { run.then["c1"]["TestSecond"] = keyOther }, "h.json was recorded at c1 under other Python settings"},
+		"the test built no venue at the recording": {func(run *backfillRun) { delete(run.then["c1"], "TestProbe") }, "its test TestProbe declared no venue settings at its recording commit c1"},
+		"no commit holds the golden":               {func(run *backfillRun) { run.commits["g.json"] = "" }, "its recording commit was not found"},
+		"the recording commit has no tree":         {func(run *backfillRun) { run.commits["h.json"] = "gone" }, "the tree of its recording commit gone could not be built"},
+		"the recording commit does not build":      {func(run *backfillRun) { delete(run.then, "c1") }, "declared at its recording commit c1 could not be read"},
+		"the tests of today do not build":          {func(run *backfillRun) { run.now = nil }, "declare now could not be read"},
+		"the replay fails":                         {func(run *backfillRun) { run.replayErr = errors.New("frozen test failed") }, "fresh-process replay of the candidates failed"},
+		"the replay changes a candidate": {func(run *backfillRun) {
+			run.duringReplay = func() {
+				_ = os.WriteFile(filepath.Join(run.dir, "testdata", "g.json"+candidateSuffix), []byte(withKey(strings.Replace(backfillGolden("TestProbe"), "1.50", "1.5", 1), keyNow)), 0o644)
+			}
+		}, "changed after it was replayed"},
+	} {
+		run := newBackfillRun(t, goldens)
+		run.now = map[string]string{"TestProbe": keyNow, "TestSecond": keyNow}
+		run.then["c1"] = map[string]string{"TestProbe": keyNow, "TestSecond": keyNow}
+		c.edit(run)
+		_, err := BackfillPythonEnv(context.Background(), run.cfg)
+		if err == nil || !strings.Contains(err.Error(), c.refusal) {
+			t.Errorf("%s: err = %v, want a refusal holding %q", name, err, c.refusal)
+		}
+		// One golden that cannot be shown stops the run for every golden.
+		if !run.untouched(t, goldens) {
+			t.Errorf("%s: a golden or a pin changed, or a candidate stayed", name)
+		}
+		if replayed := strings.Contains(strings.Join(run.calls, ", "), "replay"); replayed != strings.HasPrefix(name, "the replay") {
+			t.Errorf("%s: replay ran = %v (%v)", name, replayed, run.calls)
+		}
+	}
+	// A golden that is not in the harness's own form is not edited.
+	odd := map[string]string{"g.json": strings.Replace(backfillGolden("TestProbe"), "\"status\": 200", "\"status\":  200", 1)}
+	run := newBackfillRun(t, odd)
+	run.now = map[string]string{"TestProbe": keyNow}
+	run.then["c1"] = map[string]string{"TestProbe": keyNow}
+	if _, err := BackfillPythonEnv(context.Background(), run.cfg); err == nil || !strings.Contains(err.Error(), "not in the form") || !run.untouched(t, odd) {
+		t.Fatalf("a golden in another form: err %v", err)
+	}
+}
+
+func TestOnlyThePythonEnvKeyMayDifferBetweenAGoldenAndItsBackfill(t *testing.T) {
+	golden := backfillGolden("TestProbe")
+	good := withKey(golden, keyNow)
+	if err := onlyPythonEnvAdded([]byte(golden), []byte(good)); err != nil {
+		t.Fatalf("the golden with its key: %v", err)
+	}
+	for name, candidate := range map[string]string{
+		"an answer changed":       strings.Replace(good, "1.50", "1.5", 1),
+		"a status changed":        strings.Replace(good, "200", "201", 1),
+		"a request dropped":       good[:strings.Index(good, "  \"requests\"")] + "  \"requests\": []\n}\n",
+		"another header field":    strings.Replace(good, "\"test\": \"TestProbe\"", "\"test\": \"TestOther\"", 1),
+		"no key":                  golden,
+		"a key that is not a key": strings.Replace(good, keyNow, "yes", 1),
+	} {
+		if err := onlyPythonEnvAdded([]byte(golden), []byte(candidate)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if err := onlyPythonEnvAdded([]byte(good), []byte(strings.Replace(good, keyNow, keyOther, 1))); err == nil || !strings.Contains(err.Error(), "already holds") {
+		t.Fatalf("a key was replaced: %v", err)
+	}
+}
+
+func TestTheRecordingCommitIsTheNewestOneThatHoldsTheGoldenAsItIsOnDisk(t *testing.T) {
+	blobs := map[string]string{"c3": "reformatted", "c2": "recorded", "c1": "recorded-first"}
+	at := func(commit string) (string, bool) { blob, ok := blobs[commit]; return blob, ok }
+	for name, c := range map[string]struct {
+		want    string
+		history []string
+		commit  string
+		found   bool
+	}{
+		"the last change holds it":           {"reformatted", []string{"c3", "c2", "c1"}, "c3", true},
+		"the file on disk is an older state": {"recorded", []string{"c3", "c2", "c1"}, "c2", true},
+		"no commit holds it (uncommitted)":   {"edited", []string{"c3", "c2", "c1"}, "", false},
+		"a commit whose blob cannot be read": {"recorded", []string{"c9", "c2"}, "c2", true},
+		"no history":                         {"recorded", nil, "", false},
+	} {
+		if commit, found := newestCommitHolding(c.want, c.history, at); commit != c.commit || found != c.found {
+			t.Errorf("%s: %q %v, want %q %v", name, commit, found, c.commit, c.found)
+		}
+	}
+}
+
+func TestATreeIsUnpackedFromAnArchiveAndNeverOutsideItsDirectory(t *testing.T) {
+	archive := func(entries ...tar.Header) *bytes.Buffer {
+		var out bytes.Buffer
+		writer := tar.NewWriter(&out)
+		for _, header := range entries {
+			content := []byte("content of " + header.Name)
+			if header.Typeflag != tar.TypeReg {
+				content = nil
+			}
+			header.Size = int64(len(content))
+			if err := writer.WriteHeader(&header); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := writer.Write(content); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return &out
+	}
+	dir := t.TempDir()
+	err := extractTar(archive(
+		tar.Header{Name: "pax_global_header", Typeflag: tar.TypeXGlobalHeader},
+		tar.Header{Name: "internal/", Typeflag: tar.TypeDir, Mode: 0o755},
+		tar.Header{Name: "internal/pkg/a.go", Typeflag: tar.TypeReg, Mode: 0o644},
+		tar.Header{Name: "scripts/run.sh", Typeflag: tar.TypeReg, Mode: 0o755},
+		tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "internal/pkg/a.go"},
+	), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(dir, "internal", "pkg", "a.go")); string(raw) != "content of internal/pkg/a.go" {
+		t.Fatalf("file content %q", raw)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "scripts", "run.sh")); err != nil || info.Mode()&0o100 == 0 {
+		t.Fatalf("the script is not executable: %v", err)
+	}
+	if target, _ := os.Readlink(filepath.Join(dir, "link")); target != "internal/pkg/a.go" {
+		t.Fatalf("link target %q", target)
+	}
+	for name, header := range map[string]tar.Header{
+		"a path that leaves the tree": {Name: "../escape.go", Typeflag: tar.TypeReg, Mode: 0o644},
+		"an absolute path":            {Name: "/etc/escape", Typeflag: tar.TypeReg, Mode: 0o644},
+		"a device":                    {Name: "dev", Typeflag: tar.TypeChar},
+	} {
+		outside := t.TempDir()
+		if err := extractTar(archive(header), filepath.Join(outside, "tree")); err == nil {
+			t.Errorf("%s: unpacked", name)
+		}
+		if exists(filepath.Join(outside, "escape.go")) {
+			t.Errorf("%s: a file was written outside the tree", name)
+		}
+	}
+}
+
+// The report is put into venueoracle.Start by text: a Start whose head has
+// another form must fail here, not when a backfill is run.
+func TestTheStartOfThisTreeHasTheFormTheReportIsPutInto(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "venueoracle.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found := startHead.FindAllIndex(source, -1); len(found) != 1 {
+		t.Fatalf("venueoracle.Start matches the report's insertion point %d times, want once", len(found))
+	}
+	if !strings.Contains(reportSource, "pythonEnvKey(env)") || !strings.Contains(string(source), "options.PythonEnv") {
+		t.Fatal("the report no longer reads the key of options.PythonEnv")
 	}
 }

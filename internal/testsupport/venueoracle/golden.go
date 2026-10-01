@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -101,6 +102,10 @@ type Golden struct {
 	// verifiedRoot is the checkout PythonRoot verified; a recording run serves
 	// Python only through a venue built on exactly that root.
 	verifiedRoot string
+	// pythonEnv is the key of the venue's declared Python settings, once a
+	// venue was built for this golden.
+	pythonEnv      string
+	pythonEnvBound bool
 	// rowsUsed records which frozen row comparisons the test asked for: a
 	// snapshot nothing consumed is a comparison that no longer happens.
 	rowsUsed    map[string]bool
@@ -161,11 +166,64 @@ type goldenHeader struct {
 	// PassedEnv is the sorted names of the ambient variables the recorder
 	// passed to the recording beyond its fixed set (GoldenSpec.PassEnv).
 	PassedEnv []string `json:"passed_env,omitempty"`
+	// PythonEnv is the key of the Python settings the venue test declared
+	// when the answers were recorded (pythonEnvKey over Options.PythonEnv):
+	// a frozen run with other settings is refused instead of being served
+	// answers the real Python api would not give under them.
+	PythonEnv string `json:"python_env,omitempty"`
 }
 
 // goldenPassedEnv is how the recorder tells a recording which ambient
 // variables it passed by name (comma-separated).
 const goldenPassedEnv = "DHO_VENUE_GOLDEN_PASSED_ENV"
+
+// bindPythonEnv ties the golden to the Python settings its venue declares.
+// Recording, the key goes into the header. Frozen, the header's key must be
+// the test's: a changed, added or removed setting is refused.
+func (g *Golden) bindPythonEnv(env []string) error {
+	key, err := pythonEnvKey(env)
+	if err != nil {
+		return err
+	}
+	if g.pythonEnvBound && g.pythonEnv != key {
+		return fmt.Errorf("golden %s: two venues with different PythonEnv use one golden: its answers belong to one set of Python settings", g.spec.Path)
+	}
+	g.pythonEnv, g.pythonEnvBound = key, true
+	if g.recording {
+		g.recorded.Header.PythonEnv = key
+		return nil
+	}
+	recorded := g.loaded.Header.PythonEnv
+	switch {
+	case recorded == key:
+		return nil
+	case recorded == "":
+		return fmt.Errorf("golden %s was recorded before a golden kept the key of its venue's Python settings (Options.PythonEnv), so it cannot show that its answers were given under the settings this test declares; backfill the key (goldenrecord -backfill-python-env, which first shows that the test declared the same settings at the recording) or regenerate: %s", g.spec.Path, g.spec.Recipe)
+	default:
+		return fmt.Errorf("golden %s was recorded under other Python settings than this test declares (Options.PythonEnv key %s, the golden's %s): a changed, added or removed setting changes what the real Python api answers; regenerate: %s", g.spec.Path, keyHead(key), keyHead(recorded), g.spec.Recipe)
+	}
+}
+
+// pythonEnvUnboundErr is an error when the frozen golden holds the key of a
+// venue's Python settings and no venue was built for it: the settings were
+// never checked.
+func (g *Golden) pythonEnvUnboundErr() error {
+	if g.loaded.Header.PythonEnv != "" && !g.pythonEnvBound {
+		return fmt.Errorf("golden %s was recorded under a venue's Python settings, but this test built no venue for it (venueoracle.Start with Options.Golden): the settings cannot be checked; regenerate: %s", g.spec.Path, g.spec.Recipe)
+	}
+	return nil
+}
+
+// keyHead is the head of a key, for a message.
+func keyHead(key string) string {
+	if key == "" {
+		return "<none>"
+	}
+	if len(key) > 12 {
+		return key[:12]
+	}
+	return key
+}
 
 // envNames is names sorted, without blanks and duplicates.
 func envNames(names []string) []string {
@@ -932,8 +990,46 @@ func (g *Golden) Finish(t *testing.T) {
 	if err := g.unusedRows(); err != nil {
 		t.Fatal(err)
 	}
+	if err := g.pythonEnvUnboundErr(); err != nil {
+		t.Fatal(err)
+	}
 	WriteGoOnlyProof(t, "Go against the Python plane's answers executed on build "+g.spec.PythonBuild+" (frozen golden "+filepath.Base(g.spec.Path)+")")
 }
+
+// WithPythonEnvKey is the golden file raw with key as the key of its venue's
+// Python settings in the header, and every other byte as it was. goldenrecord
+// uses it to give the key to a golden recorded before a golden kept one, after
+// it has shown that the test declared the same settings at the recording. It
+// refuses a file that already holds a key, a key that is not one, and a file
+// that is not in the form this harness writes (re-encoding it must change no
+// byte: only then does adding the key touch nothing else).
+func WithPythonEnvKey(raw []byte, key string) ([]byte, error) {
+	if !pythonEnvKeyText.MatchString(key) {
+		return nil, fmt.Errorf("%q is not a key of Python settings", key)
+	}
+	var file goldenFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return nil, fmt.Errorf("not a golden file: %w", err)
+	}
+	if file.Header.PythonEnv != "" {
+		return nil, errors.New("the golden already holds the key of its venue's Python settings: a key is never replaced")
+	}
+	same, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(append(same, '\n'), raw) {
+		return nil, errors.New("the file is not in the form this harness writes (re-encoding it changes it), so the key cannot be added without touching the answers; record it again")
+	}
+	file.Header.PythonEnv = key
+	out, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
+}
+
+var pythonEnvKeyText = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // answersCompared is an error unless every answer handed out was compared by
 // Diff or declared inspected.

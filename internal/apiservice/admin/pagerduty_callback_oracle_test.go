@@ -291,7 +291,7 @@ type callbackOrg struct {
 
 func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, pagerDutyGolden("callback", "TestPagerDutyCallbackAndManualVenueOracle", "b2104e3f90b327508ca46700e9ced1aab894a421725e4d7b69ae71a4611fba6f"))
+	golden := venueoracle.OpenGolden(t, pagerDutyGolden("callback", "TestPagerDutyCallbackAndManualVenueOracle", "ed31f1ddef1b2fae281494d8e9015c2fea9cda6dbf8539b336180f6e6ae51165"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-callback-32-b"
 

@@ -32,7 +32,7 @@ const pagerDutyBindingsVenueEncryptionKey = "venue-pd-bindings-fernet-key-32-byt
 // leave (and every secret they store, opened with Python's decrypt) match.
 func TestPagerDutyWebhookBindingsVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, pagerDutyGolden("bindings", "TestPagerDutyWebhookBindingsVenueOracle", "0c0e664046168c828eb6cd91b64bd4a4a62ca772960b942382823411753bf159"))
+	golden := venueoracle.OpenGolden(t, pagerDutyGolden("bindings", "TestPagerDutyWebhookBindingsVenueOracle", "353822b1ff4c9feda9c9b215f6fb5fe7db5f343b67506ceabf3981c368bad6ec"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-bindings-32-b"
 

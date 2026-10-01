@@ -3,7 +3,8 @@
     "test": "TestManualTriggerVenueOracleFrozen",
     "python_build": "c2b14a3f2ed3d43bef927d88025a9c18eda4ce6e",
     "producer_digest": "b812562970c9c153f8c0acfdf8a6f39083cec8666ac6e084177b471de77b229e",
-    "recipe": "DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/syncadmin/ -test '^TestManualTriggerVenueOracleFrozen$' -python-root \u003cclean worktree at c2b14a3f2ed3d43bef927d88025a9c18eda4ce6e\u003e"
+    "recipe": "DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/syncadmin/ -test '^TestManualTriggerVenueOracleFrozen$' -python-root \u003cclean worktree at c2b14a3f2ed3d43bef927d88025a9c18eda4ce6e\u003e",
+    "python_env": "f9277cc55d4d10173d414fa34c5bbb52b6bb074c534fd2fc4723eb997b2201ef"
   },
   "requests": [
     {

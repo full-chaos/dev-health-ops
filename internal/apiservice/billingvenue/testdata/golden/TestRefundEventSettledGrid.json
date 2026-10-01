@@ -3,7 +3,8 @@
     "test": "TestRefundEventSettledGrid",
     "python_build": "c3a755abd3b30ba41625178c6bb00e1e2c219fcb",
     "producer_digest": "593bfd8c0effcfa724b10a3b0693c70faec29674020088362a4af2ad1d85568a",
-    "recipe": "git worktree add --detach \u003cdir\u003e c3a755abd3b30ba41625178c6bb00e1e2c219fcb; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestRefundEventSettledGrid$' ."
+    "recipe": "git worktree add --detach \u003cdir\u003e c3a755abd3b30ba41625178c6bb00e1e2c219fcb; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestRefundEventSettledGrid$' .",
+    "python_env": "5074525452a4c7b47984d94597778aaa76fd51d7934c07fae177d89fa4cc8cb9"
   },
   "requests": [
     {

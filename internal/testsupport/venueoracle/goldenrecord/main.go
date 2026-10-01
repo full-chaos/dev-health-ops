@@ -15,6 +15,15 @@
 // A test failure at any point, including a cleanup that fails after Finish,
 // deletes the candidates and leaves every golden as it was.
 //
+// A venue golden holds the key of the Python settings its test declares
+// (venueoracle.Options.PythonEnv). -backfill-python-env adds that key to a
+// golden recorded before the key existed. It records nothing and runs no
+// Python. It first executes what the golden's test declares now and what it
+// declared at the commit that holds the golden's bytes, and refuses a golden
+// whose two keys differ or whose recording commit cannot be found or built
+// (BackfillPythonEnv). Only then is the candidate the golden with exactly that
+// one header field added, and REPLAY and PROMOTE run as above.
+//
 // Usage, from the repository root:
 //
 //	go run ./internal/testsupport/venueoracle/goldenrecord \
@@ -22,6 +31,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -30,12 +40,17 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 const candidateSuffix = ".recording"
@@ -60,11 +75,24 @@ type Config struct {
 	// Run executes one go test invocation with the extra environment. The
 	// default runs `go test -tags=integration` in Root.
 	Run func(cfg Config, env []string) error
+	// Keys, RecordingCommit and Tree are what BackfillPythonEnv reads the
+	// declared Python settings with. Keys returns, for the venue tests Test
+	// selects in Package of the source tree, the key of the settings each
+	// declares (test name to key); RecordingCommit returns the commit that
+	// holds exactly the bytes of a golden (its path relative to Root); Tree
+	// returns that commit's source tree and a cleanup. The defaults execute
+	// the tests through a go test overlay, ask git, and unpack git archive.
+	Keys            func(cfg Config, tree string) (map[string]string, error)
+	RecordingCommit func(cfg Config, golden string) (string, error)
+	Tree            func(cfg Config, commit string) (string, func(), error)
 }
 
 // Result names what one recording promoted.
 type Result struct {
 	Promoted []Promotion
+	// Shown is, for a backfill, one line per golden: its recording commit and
+	// the key its test declared there and declares now.
+	Shown []string
 }
 
 // Promotion is one golden that landed.
@@ -84,11 +112,33 @@ func main() {
 	flag.StringVar(&cfg.PythonRoot, "python-root", "", "clean checkout at the pinned Python-bearing build")
 	flag.BoolVar(&cfg.AllowDrop, "allow-drop", false, "let a re-record drop requests or row comparisons the existing golden holds")
 	passEnv := flag.String("pass-env", "", "comma-separated NAMES of ambient variables to pass to the recording beyond the fixed set (names only, never values)")
+	backfill := flag.Bool("backfill-python-env", false, "do not record: add the key of the venue's Python settings to the selected venue goldens that hold none, each only after its test is shown to declare now the settings it declared at the golden's recording commit (no Python runs)")
 	flag.Parse()
 	for _, name := range strings.Split(*passEnv, ",") {
 		if name = strings.TrimSpace(name); name != "" {
 			cfg.PassEnv = append(cfg.PassEnv, name)
 		}
+	}
+	if *backfill {
+		if cfg.Package == "" || cfg.Test == "" || cfg.PythonRoot != "" {
+			fmt.Fprintln(os.Stderr, "goldenrecord: -backfill-python-env takes -pkg and -test, and no -python-root (it runs no Python)")
+			os.Exit(2)
+		}
+		result, err := BackfillPythonEnv(context.Background(), cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "goldenrecord: nothing was changed: %v\n", err)
+			os.Exit(1)
+		}
+		if len(result.Promoted) == 0 {
+			fmt.Println("nothing to backfill: every selected venue golden already holds the key of its venue's Python settings")
+		}
+		for _, line := range result.Shown {
+			fmt.Println(line)
+		}
+		for _, promotion := range result.Promoted {
+			fmt.Printf("backfilled %s\n  sha256 %s (was %s)\n", promotion.Path, promotion.NewDigest, orNone(promotion.OldDigest))
+		}
+		return
 	}
 	if cfg.Package == "" || cfg.Test == "" || cfg.PythonRoot == "" {
 		fmt.Fprintln(os.Stderr, "goldenrecord: -pkg, -test and -python-root are required")
@@ -338,6 +388,476 @@ func candidates(dir string) ([]string, error) {
 		return nil
 	})
 	return found, err
+}
+
+// BackfillPythonEnv adds the key of its venue's Python settings to the header
+// of each selected venue golden that was recorded before a golden kept that
+// key. It records nothing and runs no Python, and it adds a key only where it
+// can show the golden was recorded under the settings its test declares now:
+//
+//  1. It reads the key each selected venue test declares now (Config.Keys).
+//  2. For each golden of those tests that holds no key, it finds the commit
+//     that holds exactly the golden's bytes (the recording commit), builds
+//     that commit's tree and reads the key the test declared there.
+//  3. A golden whose two keys differ, whose test declared no venue settings at
+//     its recording commit, or whose recording commit cannot be found or built
+//     is refused, and nothing is changed: record it again.
+//  4. Otherwise the candidate is the golden with exactly that one header
+//     field added; the frozen tests replay the candidates in a fresh process,
+//     and only then are they promoted and re-pinned.
+func BackfillPythonEnv(ctx context.Context, cfg Config) (Result, error) {
+	if cfg.Run == nil {
+		cfg.Run = goTest
+	}
+	if cfg.Keys == nil {
+		cfg.Keys = declaredKeys
+	}
+	if cfg.RecordingCommit == nil {
+		cfg.RecordingCommit = recordingCommit
+	}
+	if cfg.Tree == nil {
+		cfg.Tree = commitTree
+	}
+	packageDir := filepath.Join(cfg.Root, cfg.Package)
+	if _, err := os.Stat(packageDir); err != nil {
+		return Result{}, err
+	}
+	stale, err := candidates(packageDir)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(stale) > 0 {
+		return Result{}, fmt.Errorf("candidates from an earlier run are still on disk (%s): delete them, then run again", stale[0])
+	}
+	now, err := cfg.Keys(cfg, cfg.Root)
+	if err != nil {
+		return Result{}, fmt.Errorf("the Python settings the selected tests declare now could not be read: %w", err)
+	}
+	keyless, err := keylessGoldens(packageDir, now)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(keyless) == 0 {
+		return Result{}, nil
+	}
+	// Every golden is checked before anything is written.
+	atCommit := map[string]map[string]string{}
+	written := map[string][]byte{}
+	tests := map[string]bool{}
+	var found, shown []string
+	for _, golden := range keyless {
+		relative, err := filepath.Rel(cfg.Root, golden.path)
+		if err != nil {
+			return Result{}, err
+		}
+		commit, err := cfg.RecordingCommit(cfg, relative)
+		if err != nil {
+			return Result{}, fmt.Errorf("golden %s: its recording commit was not found (%w): the key is not added; record it again", relative, err)
+		}
+		then, known := atCommit[commit]
+		if !known {
+			tree, cleanup, err := cfg.Tree(cfg, commit)
+			if err != nil {
+				return Result{}, fmt.Errorf("golden %s: the tree of its recording commit %s could not be built (%w): the key is not added; record it again", relative, commit, err)
+			}
+			then, err = cfg.Keys(cfg, tree)
+			cleanup()
+			if err != nil {
+				return Result{}, fmt.Errorf("golden %s: the Python settings its test declared at its recording commit %s could not be read (%w): the key is not added; record it again", relative, commit, err)
+			}
+			atCommit[commit] = then
+		}
+		recorded, declared := then[golden.test]
+		if !declared {
+			return Result{}, fmt.Errorf("golden %s: its test %s declared no venue settings at its recording commit %s: the key is not added; record it again", relative, golden.test, commit)
+		}
+		if recorded != now[golden.test] {
+			return Result{}, fmt.Errorf("golden %s was recorded at %s under other Python settings than its test %s declares now (key %.12s then, %.12s now): its answers are not the ones the real Python api gives under the settings of today, so the key is not added; record it again",
+				relative, commit, golden.test, recorded, now[golden.test])
+		}
+		candidate, err := venueoracle.WithPythonEnvKey(golden.raw, now[golden.test])
+		if err != nil {
+			return Result{}, fmt.Errorf("golden %s: %w", relative, err)
+		}
+		if err := onlyPythonEnvAdded(golden.raw, candidate); err != nil {
+			return Result{}, fmt.Errorf("golden %s: %w", relative, err)
+		}
+		shown = append(shown, fmt.Sprintf("%s: recorded at %s; its test %s declared there the Python settings it declares now (key %.12s)", relative, commit, golden.test, recorded))
+		path := golden.path + candidateSuffix
+		written[path] = candidate
+		found = append(found, path)
+		tests[strings.SplitN(golden.test, "/", 2)[0]] = true
+	}
+	discard := func() { removeAll(packageDir) }
+	for _, path := range found {
+		if err := os.WriteFile(path, written[path], 0o644); err != nil {
+			discard()
+			return Result{}, err
+		}
+	}
+	proofDir, err := os.MkdirTemp("", "goldenrecord-proof-")
+	if err != nil {
+		discard()
+		return Result{}, err
+	}
+	defer os.RemoveAll(proofDir)
+	// The replay runs the tests of the backfilled goldens only: a test whose
+	// golden already holds its key has no candidate to replay.
+	names := make([]string, 0, len(tests))
+	for name := range tests {
+		names = append(names, regexp.QuoteMeta(name))
+	}
+	sort.Strings(names)
+	replay := cfg
+	replay.Test = "^(" + strings.Join(names, "|") + ")$"
+	if err := cfg.Run(replay, []string{"DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=" + proofDir, "DHO_VENUE_GOLDEN_CANDIDATE=1"}); err != nil {
+		discard()
+		return Result{}, fmt.Errorf("the fresh-process replay of the candidates failed: %w", err)
+	}
+	for _, candidate := range found {
+		after, err := os.ReadFile(candidate)
+		if err != nil || !bytes.Equal(after, written[candidate]) {
+			discard()
+			return Result{}, fmt.Errorf("the candidate %s changed after it was replayed: only the replayed bytes may be promoted", candidate)
+		}
+	}
+	plan, result, err := planPromotion(packageDir, found, written, false)
+	if err != nil {
+		discard()
+		return Result{}, err
+	}
+	if err := apply(plan); err != nil {
+		discard()
+		return Result{}, err
+	}
+	for _, candidate := range found {
+		_ = os.Remove(candidate)
+	}
+	result.Shown = shown
+	return result, nil
+}
+
+// keylessGolden is a venue golden that holds no key of its venue's Python settings.
+type keylessGolden struct {
+	path, test string
+	raw        []byte
+}
+
+// keylessGoldens lists, in path order, the golden files under dir that hold no
+// key and belong to a test in keys (a venue test the run selected). A golden
+// of another test is not a venue golden of this run and is left alone.
+func keylessGoldens(dir string, keys map[string]string) ([]keylessGolden, error) {
+	var out []keylessGolden
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".json") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var file struct {
+			Header struct {
+				Test        string `json:"test"`
+				PythonBuild string `json:"python_build"`
+				PythonEnv   string `json:"python_env"`
+			} `json:"header"`
+		}
+		if json.Unmarshal(raw, &file) != nil || file.Header.PythonBuild == "" || file.Header.PythonEnv != "" {
+			return nil
+		}
+		if _, selected := keys[file.Header.Test]; selected {
+			out = append(out, keylessGolden{path: path, test: file.Header.Test, raw: raw})
+		}
+		return nil
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].path < out[j].path })
+	return out, err
+}
+
+// reportEnv names the file the overlay's report function appends to.
+const reportEnv = "DHO_VENUE_PYTHON_ENV_REPORT"
+
+// reportSource is a file declaredKeys adds to package venueoracle through a go
+// test overlay. It is never part of a tree: with it, Start writes the key of
+// the settings the test declares and stops the test before anything is built.
+const reportSource = `package venueoracle
+
+import (
+	"fmt"
+	"os"
+	"testing"
+)
+
+func venuePythonEnvReport(t *testing.T, env []string) {
+	key, err := pythonEnvKey(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(os.Getenv("` + reportEnv + `"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(file, "%s\t%s\n", t.Name(), key); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.SkipNow()
+}
+`
+
+// startHead is where the report call goes: the first statement of Start.
+var startHead = regexp.MustCompile(`func Start\(t \*testing\.T, ctx context\.Context, options Options\) \*Venue \{\n\tt\.Helper\(\)\n`)
+
+// declaredKeys is the default Config.Keys: it runs the selected tests of the
+// package in tree with a go test overlay that makes venueoracle.Start write
+// pythonEnvKey(options.PythonEnv) for the running test and stop, so it
+// executes what each test declares and builds no venue. The key function is
+// always the one of Root, so the keys of two trees compare.
+func declaredKeys(cfg Config, tree string) (map[string]string, error) {
+	work, err := os.MkdirTemp("", "goldenrecord-keys-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(work)
+	tree, err = filepath.Abs(tree)
+	if err != nil {
+		return nil, err
+	}
+	harness := filepath.Join(tree, "internal", "testsupport", "venueoracle")
+	source, err := os.ReadFile(filepath.Join(harness, "venueoracle.go"))
+	if err != nil {
+		return nil, err
+	}
+	at := startHead.FindIndex(source)
+	if at == nil {
+		return nil, fmt.Errorf("%s has no venueoracle.Start of the form the report is put into", tree)
+	}
+	patched := append(append(append([]byte{}, source[:at[1]]...), "\tvenuePythonEnvReport(t, options.PythonEnv)\n"...), source[at[1]:]...)
+	keyFunction, err := filepath.Abs(filepath.Join(cfg.Root, "internal", "testsupport", "venueoracle", "pythonenv.go"))
+	if err != nil {
+		return nil, err
+	}
+	overlay, err := json.Marshal(map[string]map[string]string{"Replace": {
+		filepath.Join(harness, "venueoracle.go"):          filepath.Join(work, "venueoracle.go"),
+		filepath.Join(harness, "zz_python_env_report.go"): filepath.Join(work, "report.go"),
+		filepath.Join(harness, "pythonenv.go"):            keyFunction,
+	}})
+	if err != nil {
+		return nil, err
+	}
+	for name, content := range map[string][]byte{"venueoracle.go": patched, "report.go": []byte(reportSource), "overlay.json": overlay} {
+		if err := os.WriteFile(filepath.Join(work, name), content, 0o644); err != nil {
+			return nil, err
+		}
+	}
+	report := filepath.Join(work, "report.tsv")
+	command := exec.Command("go", "test", "-tags=integration", "-count=1", "-overlay", filepath.Join(work, "overlay.json"), "-run", cfg.Test, cfg.Package)
+	command.Dir = tree
+	command.Env = append(recordingEnv(os.Environ(), nil), "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", reportEnv+"="+report)
+	if output, err := command.CombinedOutput(); err != nil {
+		text := string(output)
+		if len(text) > 4000 {
+			text = text[len(text)-4000:]
+		}
+		return nil, fmt.Errorf("go test of %s in %s: %w\n%s", cfg.Package, tree, err, text)
+	}
+	raw, err := os.ReadFile(report)
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	keys := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		test, key, ok := strings.Cut(line, "\t")
+		if !ok || !keyText.MatchString(key) {
+			return nil, fmt.Errorf("the report line %q is not a test and a key", line)
+		}
+		if earlier, seen := keys[test]; seen && earlier != key {
+			return nil, fmt.Errorf("test %s reported two keys", test)
+		}
+		keys[test] = key
+	}
+	return keys, nil
+}
+
+// git runs one git command in root and returns its trimmed output.
+func git(root string, args ...string) (string, error) {
+	command := exec.Command("git", args...)
+	command.Dir = root
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+// recordingCommit is the default Config.RecordingCommit: the newest commit in
+// the history of HEAD that changed golden and holds exactly the bytes the
+// file has on disk. A golden that is in no commit as it is on disk has no
+// recording commit.
+func recordingCommit(cfg Config, golden string) (string, error) {
+	path := filepath.ToSlash(golden)
+	want, err := git(cfg.Root, "hash-object", "--", path)
+	if err != nil {
+		return "", err
+	}
+	history, err := git(cfg.Root, "log", "--format=%H", "--", path)
+	if err != nil {
+		return "", err
+	}
+	commit, found := newestCommitHolding(want, strings.Fields(history), func(commit string) (string, bool) {
+		blob, err := git(cfg.Root, "rev-parse", "--verify", "--quiet", commit+":"+path)
+		return blob, err == nil
+	})
+	if !found {
+		return "", errors.New("no commit holds the golden as it is on disk")
+	}
+	return commit, nil
+}
+
+// newestCommitHolding is the first commit of history (newest first) whose blob
+// of the file is want.
+func newestCommitHolding(want string, history []string, blobAt func(commit string) (string, bool)) (string, bool) {
+	for _, commit := range history {
+		if blob, ok := blobAt(commit); ok && blob == want {
+			return commit, true
+		}
+	}
+	return "", false
+}
+
+// commitTree is the default Config.Tree: the files of commit, from git
+// archive, in a temporary directory. It writes nothing to the repository.
+func commitTree(cfg Config, commit string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "goldenrecord-tree-")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	command := exec.Command("git", "archive", "--format=tar", commit)
+	command.Dir = cfg.Root
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	stream, err := command.StdoutPipe()
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	if err := command.Start(); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	extractErr := extractTar(stream, dir)
+	if extractErr != nil {
+		_, _ = io.Copy(io.Discard, stream)
+	}
+	if err := command.Wait(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("git archive %s: %w: %s", commit, err, strings.TrimSpace(stderr.String()))
+	}
+	if extractErr != nil {
+		cleanup()
+		return "", nil, extractErr
+	}
+	return dir, cleanup, nil
+}
+
+// extractTar writes the directories, files and symbolic links of a tar stream under dir.
+func extractTar(stream io.Reader, dir string) error {
+	reader := tar.NewReader(stream)
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if header.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
+		if !filepath.IsLocal(header.Name) {
+			return fmt.Errorf("the archive names a path outside the tree: %q", header.Name)
+		}
+		target := filepath.Join(dir, header.Name)
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fs.FileMode(header.Mode)&0o777|0o600)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(file, reader); err != nil {
+				file.Close()
+				return err
+			}
+			if err := file.Close(); err != nil {
+				return err
+			}
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			if err := os.Symlink(header.Linkname, target); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("the archive holds %q of a kind this tool does not write (%c)", header.Name, header.Typeflag)
+		}
+	}
+}
+
+var keyText = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// onlyPythonEnvAdded is an error unless candidate is original with exactly
+// one change: header.python_env added, holding a key.
+func onlyPythonEnvAdded(original, candidate []byte) error {
+	decode := func(raw []byte) (map[string]any, error) {
+		var out map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&out); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+	before, err := decode(original)
+	if err != nil {
+		return fmt.Errorf("the golden does not decode: %w", err)
+	}
+	after, err := decode(candidate)
+	if err != nil {
+		return fmt.Errorf("the candidate does not decode: %w", err)
+	}
+	header, _ := after["header"].(map[string]any)
+	key, _ := header["python_env"].(string)
+	if !keyText.MatchString(key) {
+		return errors.New("the candidate's header holds no python_env key")
+	}
+	if oldHeader, _ := before["header"].(map[string]any); oldHeader["python_env"] != nil {
+		return errors.New("the golden already holds a python_env key: a backfill never replaces one")
+	}
+	delete(header, "python_env")
+	if !reflect.DeepEqual(before, after) {
+		return errors.New("the candidate differs from the golden in more than the python_env key of its header: a backfill touches no answer")
+	}
+	return nil
 }
 
 func removeAll(dir string) {

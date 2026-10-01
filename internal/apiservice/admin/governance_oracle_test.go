@@ -22,7 +22,7 @@ import (
 // compared byte for byte, and the rows the writes touched are compared after.
 func TestGovernanceRoutesVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, governanceGolden("governance", "TestGovernanceRoutesVenueOracle", "6efe0a8a6aba40b03e86e70414d18b2b726b721a88eee0eee567168196394fa6"))
+	golden := venueoracle.OpenGolden(t, governanceGolden("governance", "TestGovernanceRoutesVenueOracle", "b3d33bc6fe48f251c9431458fdc63e5024dfda338b0b66dcc3dd36bb1482b554"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("gov")
 	const jwtKey = "venue-oracle-test-secret-key-for-governance-flow-32-bytes!!"

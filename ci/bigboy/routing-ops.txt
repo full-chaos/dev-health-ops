@@ -1,7 +1,9 @@
 # CHAOS-6987 gap 5 (D2731): GraphQL operations ENABLED on prod (mode=canary, rollout=100, owner=go).
-# Source: the scribe's prod routing readback (rev 193). bigboy-cut.sh enables every listed
-# operation bigboy's ledger lacks, then check-routing-parity.py fails on any difference.
-# Not listed (MISSING on prod too, true parity): cloneSavedReport, createSavedReport, deleteSavedReport, triggerReport, updateSavedReport.
+# Source: the prod routing readback of 2026-10-01T07:53:40Z (`dho goapi routing status -json` from the
+# tools pod, helm revision 209, ops 187024533): 58 rows, all canary, rollout 100, owner go, reachable.
+# Every registered operation is enabled on prod, the five saved-report mutations included.
+# bigboy-cut.sh enables every listed operation bigboy's ledger lacks, then check-routing-parity.py
+# fails on any difference. Refresh this list from a prod readback when prod's rows change.
 # KNOWN-MISSING = enabled on prod, cannot be enabled on bigboy yet; reported, never passed silently.
 acrRepositoryScopes
 aiAttributedPrs
@@ -17,16 +19,20 @@ busFactor
 capacityForecast
 capacityForecasts
 catalogValues
+cloneSavedReport
 cognitiveLoad
 complexityTimeseries
 compoundingRisk
 connectorsDataHealth
+createSavedReport
 dataHealthIdentity
+deleteSavedReport
 experiments
 featureFlagEvents
 featureFlagTimeseries
 featureFlags
 flowMatrix
+home
 hotspots
 improveOpportunities
 investmentBreakdown
@@ -37,6 +43,7 @@ operatingReview
 pr
 productTelemetryDashboard
 productTelemetryPlatformDashboard
+recommendations
 releaseImpact
 reportRuns
 reviewEdges
@@ -49,7 +56,10 @@ testOpsPipeline
 testOpsTest
 testopsRisk KNOWN-MISSING CHAOS-6993 enable refused by the proof gate: no bigboy go-api-prove run (prod's proof does not count)
 throughputForecast
+triggerReport
+updateSavedReport
 workGraphArtifacts
 workGraphEdges
 workGraphFlow
+workItemTeamAttributions
 workUnitTeamAttributions

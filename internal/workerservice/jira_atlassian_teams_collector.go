@@ -127,10 +127,7 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 		// ledger and the run's result carry, with a value-free reason.
 		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID,
 			"strict", ref.Strict, "reason", atlassianLegReason(err), "error", err)
-		result.DegradedLegs = append(result.DegradedLegs, providersync.DegradedLeg{
-			Dataset: "teams", Leg: "jira_atlassian_teams", Outcome: "failed",
-			Reason: atlassianLegReason(err), Detail: err.Error(),
-		})
+		result.DegradedLegs = append(result.DegradedLegs, newDegradedAtlassianLeg(err))
 		return result, nil
 	}
 	// Every count/key below comes from atlassianteams.Write's own Result --
@@ -143,6 +140,17 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 	result.MembersWritten += atlassianResult.MembersWritten
 	result.TeamKeys = append(result.TeamKeys, atlassianResult.TeamKeys...)
 	return result, nil
+}
+
+// newDegradedAtlassianLeg records a failed Atlassian Teams leg. Detail is err.Error(): for a provider
+// failure that is its class, status and request path only (ProviderError.Error never formats the
+// response body), for the gateway's GraphQL errors the gateway's own message (e.g. "Invalid Organization
+// Ari: <uuid>"). The recorder bounds and sanitizes it again before it is stored.
+func newDegradedAtlassianLeg(err error) providersync.DegradedLeg {
+	return providersync.DegradedLeg{
+		Dataset: "teams", Leg: "jira_atlassian_teams", Outcome: "failed",
+		Reason: atlassianLegReason(err), Detail: err.Error(),
+	}
 }
 
 // atlassianLegReason is the fixed-vocabulary, value-free reason an Atlassian Teams leg failed.

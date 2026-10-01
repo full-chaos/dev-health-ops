@@ -422,11 +422,17 @@ func transientIdempotencyFailureRecovers(t *testing.T, failDelay time.Duration) 
 		state, attempt := f.jobState(t, id)
 		observe(state, attempt)
 		var errorCount int
+		var held bool
 		if err := f.pool.QueryRow(context.Background(),
-			`SELECT COALESCE(cardinality(errors), 0) FROM river.river_job WHERE id = $1`, id).Scan(&errorCount); err != nil {
+			`SELECT COALESCE(cardinality(errors), 0), scheduled_at > now() + interval '30 minutes' FROM river.river_job WHERE id = $1`, id).Scan(&errorCount, &held); err != nil {
 			t.Fatal(err)
 		}
 		if (state == "retryable" || state == "available") && attempt == 1 && errorCount == 1 {
+			// The hold must have fired for this park, in whichever state River chose:
+			// otherwise the retry is free to run while this test is still reading.
+			if !held {
+				t.Fatalf("the retry hold did not fire for the parked attempt (state=%s attempt=%d): the retry is not held timeline=%v", state, attempt, timeline)
+			}
 			// The (state, liveness) pair: row read and readiness answered in the
 			// same step, inside the backoff gap.
 			if err := f.ready(context.Background()); err != nil {

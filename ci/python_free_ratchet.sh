@@ -4,7 +4,8 @@
 #   ci/python_free_ratchet.sh classify GO_TEST_JSON HITS_OUT [TRIPWIRE_LOG]
 #   ci/python_free_ratchet.sh compare  KNOWN_TSV HITS_DIR
 #
-# The go-python-free job runs the integration shards with Python unreachable (ci/python_tripwire.sh).
+# The go-python-free job runs the integration shards AND the untagged unit tests with Python unreachable
+# (ci/python_tripwire.sh).
 # Tests that still start Python fail. Red must not become normal, so the failures are held to a list:
 #
 #   classify   reads one `go test -json` stream. A failed top-level test whose output (or whose
@@ -14,7 +15,7 @@
 #              fails when the log shows a Python start by a test binary that has no HIT: a test that
 #              swallowed the failure and passed is still a Python start.
 #   compare    unions every HITS file in HITS_DIR and compares it with the closed list
-#              (ci/python_free_known.tsv: package<TAB>TestName<TAB>CHAOS-ticket). Exit 0 only when
+#              (ci/python_free_known.tsv: package<TAB>TestName<TAB>CHAOS-ticket<TAB>class). Exit 0 only when
 #              the HIT set equals the list. A HIT not on the list is NEW (a new Python start); a listed
 #              test that did not hit is STALE (it was frozen: remove the entry in that PR). The summary
 #              line prints listed, hit, new and stale. PYTHON_FREE_REPORT_ONLY=1 (the provisional first
@@ -22,6 +23,10 @@
 set -euo pipefail
 
 MARKER='PYTHON TRIPWIRE|python-tripwire/no-python|exit status 97'
+# A skip whose reason says Python is missing, and does not blame the live-oracle gate (those skips are
+# the gated oracles and are expected).
+SKIP_MARKER='(?i)(neither python|no python|python[0-9.]*.*(not on path|not found|is missing|unavailable|cannot be)|(not on path|not found|missing).*python)'
+SKIP_GATE='DEV_HEALTH_LIVE_PYTHON_ORACLE'
 
 die() { printf 'python_free_ratchet: %s\n' "$1" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || die "jq is required"
@@ -50,16 +55,32 @@ classify() {
     | map(select(. as $p | ($withTest | index($p)) == null))[]
     | ["other", ., "(package-level failure)"] | @tsv
   ' "${json}" >>"${tmp}/failed.tsv"
+  # Skipped top-level tests whose reason says Python is missing.
+  jq -rs --arg marker "${SKIP_MARKER}" --arg gate "${SKIP_GATE}" '
+    [ .[] | select(.Package != null and .Test != null) ] as $events
+    | ( $events | map(select(.Action == "skip") | {p: .Package, t: (.Test | split("/")[0])}) | unique ) as $skipped
+    | $skipped[]
+    | . as $f
+    | ( $events
+        | map(select(.Package == $f.p and (.Test | split("/")[0]) == $f.t and .Action == "output") | .Output)
+        | join("") ) as $text
+    | select(($text | test($marker)) and (($text | contains($gate)) | not))
+    | ["skips-without-python", $f.p, $f.t] | @tsv
+  ' "${json}" >"${tmp}/skipped.tsv"
   : >"${hits_out}"
   while IFS=$'\t' read -r kind pkg test; do
     [ -n "${kind}" ] || continue
     if [ "${kind}" = "tripwire" ]; then
-      printf '%s\t%s\n' "${pkg}" "${test}" >>"${hits_out}"
+      printf '%s\t%s\ttripwire\n' "${pkg}" "${test}" >>"${hits_out}"
     else
       printf 'NON-TRIPWIRE FAILURE: %s %s\n' "${pkg}" "${test}" >&2
       rc=1
     fi
   done <"${tmp}/failed.tsv"
+  while IFS=$'\t' read -r kind pkg test; do
+    [ -n "${kind}" ] || continue
+    printf '%s\t%s\t%s\n' "${pkg}" "${test}" "${kind}" >>"${hits_out}"
+  done <"${tmp}/skipped.tsv"
   sort -u -o "${hits_out}" "${hits_out}"
   if [ -n "${log}" ] && [ -s "${log}" ]; then
     # A test binary that started Python (the shim's parent) but has no HIT swallowed the failure.
@@ -84,14 +105,17 @@ compare() {
   [ -f "${known}" ] || die "the closed list ${known} does not exist"
   local tmp
   tmp="$(mktemp -d)"
-  local line pkg test ticket
+  local line pkg test ticket class
   : >"${tmp}/listed"
   while IFS= read -r line; do
     case "${line}" in ''|\#*) continue ;; esac
-    IFS=$'\t' read -r pkg test ticket <<<"${line}"
-    [ -n "${pkg}" ] && [ -n "${test}" ] || die "malformed closed-list row (package<TAB>test<TAB>ticket): ${line}"
+    IFS=$'\t' read -r pkg test ticket class <<<"${line}"
+    if [ -z "${pkg}" ] || [ -z "${test}" ]; then
+      die "malformed closed-list row (package<TAB>test<TAB>ticket<TAB>class): ${line}"
+    fi
     case "${ticket}" in CHAOS-[0-9]*) ;; *) die "closed-list row without a CHAOS ticket: ${line}" ;; esac
-    printf '%s\t%s\n' "${pkg}" "${test}" >>"${tmp}/listed"
+    case "${class}" in tripwire|skips-without-python) ;; *) die "closed-list row without a class (tripwire or skips-without-python): ${line}" ;; esac
+    printf '%s\t%s\t%s\n' "${pkg}" "${test}" "${class}" >>"${tmp}/listed"
   done <"${known}"
   sort -u -o "${tmp}/listed" "${tmp}/listed"
   : >"${tmp}/hit"

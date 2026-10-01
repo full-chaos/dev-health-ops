@@ -79,7 +79,10 @@ def test_a_failed_test_that_names_the_tripwire_is_a_hit_and_other_failures_are_n
     )
     result, hits = _classify(tmp_path, stream)
     assert result.returncode == 0, result.stderr
-    assert hits.splitlines() == [f"{PKG}\tTestSpawns", f"{PKG}\tTestViaPyoracle"]
+    assert hits.splitlines() == [
+        f"{PKG}\tTestSpawns\ttripwire",
+        f"{PKG}\tTestViaPyoracle\ttripwire",
+    ]
 
     regression = stream + _events(
         ("output", "TestReal", "boom\n", ""), ("fail", "TestReal", "", "")
@@ -87,6 +90,37 @@ def test_a_failed_test_that_names_the_tripwire_is_a_hit_and_other_failures_are_n
     result, _ = _classify(tmp_path, regression)
     assert result.returncode == 1
     assert "NON-TRIPWIRE FAILURE" in result.stderr and "TestReal" in result.stderr
+
+
+def test_a_skip_that_says_python_is_missing_is_a_second_class_but_a_gated_skip_is_not(
+    tmp_path: Path,
+) -> None:
+    stream = _events(
+        (
+            "output",
+            "TestNeedsPython",
+            "neither python3 nor python is on PATH; skipping\n",
+            "",
+        ),
+        ("skip", "TestNeedsPython", "", ""),
+        (
+            "output",
+            "TestGated",
+            "the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1\n",
+            "",
+        ),
+        ("skip", "TestGated", "", ""),
+        ("output", "TestOtherSkip", "skipping: no docker\n", ""),
+        ("skip", "TestOtherSkip", "", ""),
+    )
+    result, hits = _classify(tmp_path, stream)
+    assert result.returncode == 0, result.stderr
+    assert hits.splitlines() == [f"{PKG}\tTestNeedsPython\tskips-without-python"]
+
+
+def test_a_closed_list_row_needs_a_class(tmp_path: Path) -> None:
+    result = _compare(tmp_path, f"{PKG}\tTestA\tCHAOS-7001\tmaybe\n", {"a.hits": ""})
+    assert result.returncode == 2 and "without a class" in result.stderr
 
 
 def test_a_package_level_failure_and_an_empty_stream_are_failures_not_passes(
@@ -123,19 +157,19 @@ def _compare(tmp_path: Path, known: str, hits: dict[str, str]):
 def test_the_ratchet_is_green_only_when_the_hit_set_equals_the_list(
     tmp_path: Path,
 ) -> None:
-    known = f"# header\n{PKG}\tTestA\tCHAOS-7001\n{PKG}\tTestB\tCHAOS-7002\n"
-    both = f"{PKG}\tTestA\n{PKG}\tTestB\n"
+    known = f"# header\n{PKG}\tTestA\tCHAOS-7001\ttripwire\n{PKG}\tTestB\tCHAOS-7002\ttripwire\n"
+    both = f"{PKG}\tTestA\ttripwire\n{PKG}\tTestB\ttripwire\n"
     ok = _compare(tmp_path, known, {"a.hits": both})
     assert ok.returncode == 0 and "listed=2 hit=2 new=0 stale=0" in ok.stdout
 
-    new = _compare(tmp_path, known, {"a.hits": both + f"{PKG}\tTestC\n"})
+    new = _compare(tmp_path, known, {"a.hits": both + f"{PKG}\tTestC\ttripwire\n"})
     assert (
         new.returncode == 1
         and "listed=2 hit=3 new=1 stale=0" in new.stdout
         and "TestC" in new.stderr
     )
 
-    stale = _compare(tmp_path, known, {"a.hits": f"{PKG}\tTestA\n"})
+    stale = _compare(tmp_path, known, {"a.hits": f"{PKG}\tTestA\ttripwire\n"})
     assert (
         stale.returncode == 1
         and "listed=2 hit=1 new=0 stale=1" in stale.stdout
@@ -148,11 +182,11 @@ def test_report_only_mode_prints_every_hit_and_exits_zero(tmp_path: Path) -> Non
     listed.write_text("# provisional\n")
     directory = tmp_path / "hits"
     directory.mkdir()
-    (directory / "a.hits").write_text(f"{PKG}\tTestA\n")
+    (directory / "a.hits").write_text(f"{PKG}\tTestA\ttripwire\n")
     env = {"PYTHON_FREE_REPORT_ONLY": "1"}
     result = _run(["bash", str(RATCHET), "compare", str(listed), str(directory)], env)
     assert result.returncode == 0
-    assert f"HIT\t{PKG}\tTestA" in result.stdout and "new=1" in result.stdout
+    assert f"HIT\t{PKG}\tTestA\ttripwire" in result.stdout and "new=1" in result.stdout
     enforcing = _run(["bash", str(RATCHET), "compare", str(listed), str(directory)])
     assert enforcing.returncode == 1
 
@@ -220,6 +254,9 @@ def test_the_workflow_is_path_scoped_and_keeps_python_out_of_the_shard() -> None
     )
     assert run_step["env"]["GO_PYTHON_FREE"] == "1"
     assert workflow["jobs"]["ratchet"]["if"] == "always()"
+    assert set(workflow["jobs"]["ratchet"]["needs"]) == {"plan", "shard", "unit"}
+    unit_steps = workflow["jobs"]["unit"]["steps"]
+    assert not any("setup-python" in str(step.get("uses", "")) for step in unit_steps)
     compare = next(
         step
         for step in workflow["jobs"]["ratchet"]["steps"]
@@ -238,7 +275,12 @@ def test_every_closed_list_row_cites_a_ticket_and_the_list_has_no_duplicates() -
         .splitlines()
         if line and not line.startswith("#")
     ]
-    assert rows and all(len(row) == 3 and row[2].startswith("CHAOS-") for row in rows)
+    assert rows and all(
+        len(row) == 4
+        and row[2].startswith("CHAOS-")
+        and row[3] in ("tripwire", "skips-without-python")
+        for row in rows
+    )
     assert len({(row[0], row[1]) for row in rows}) == len(rows)
 
 

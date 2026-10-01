@@ -1,4 +1,4 @@
-# The `go-python-free` workflow: the Go integration shards with NO Python reachable (CHAOS-7384).
+# The `go-python-free` workflow: the Go integration shards and the unit tests with NO Python reachable (CHAOS-7384).
 #
 # WHY. Hosted runners have python3, so a green Go job does not prove a frozen test is Python-free;
 # until now that proof was a local run with a broken interpreter. This workflow runs the same
@@ -124,25 +124,67 @@ jobs:
           path: ${{ runner.temp }}/python-free/*.hits
           if-no-files-found: warn
 
+  # The untagged unit set under the same tripwire (CHAOS-7384, lead's ruling): a unit test can start Python too,
+  # through PATH, and a test that SKIPS because Python is missing is how it hides. No Docker, no shards.
+  unit:
+    name: go-python-free-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Make the runner's own Python non-executable
+        if: runner.environment == 'github-hosted'
+        run: |
+          set -euo pipefail
+          sudo find /usr/bin /usr/local/bin /opt/hostedtoolcache -type f \( -name 'python' -o -name 'python[0-9]*' -o -name 'pip' -o -name 'pip[0-9]*' \) -exec chmod a-x {} +
+          if python3 --version 2>/dev/null; then
+            echo "python3 is still executable after the chmod: the Python-free proof would be void" >&2
+            exit 1
+          fi
+          echo "no interpreter is executable on this runner"
+
+      - name: Run the untagged unit tests with no Python
+        env:
+          GO_PYTHON_FREE: '1'
+          PYTHON_FREE_OUT: ${{ runner.temp }}/python-free
+        run: bash ci/check_go.sh python-free-unit
+
+      - name: Keep the unit leg's tripwire hits
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-free-hits-unit
+          path: ${{ runner.temp }}/python-free/*.hits
+          if-no-files-found: warn
+
   ratchet:
     name: go-python-free
     needs:
       - plan
       - shard
+      - unit
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       PLAN_RESULT: ${{ needs.plan.result }}
       SHARD_RESULT: ${{ needs.shard.result }}
+      UNIT_RESULT: ${{ needs.unit.result }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Require the plan and every shard to have reported
         run: |
           set -euo pipefail
-          if [ "${PLAN_RESULT}" != "success" ] || [ "${SHARD_RESULT}" != "success" ]; then
-            echo "go-python-free: FAILED (plan=${PLAN_RESULT} shards=${SHARD_RESULT}): a shard had a failure that is not a tripwire hit, or did not finish; the ratchet was not evaluated" | tee -a "${GITHUB_STEP_SUMMARY}" >&2
+          if [ "${PLAN_RESULT}" != "success" ] || [ "${SHARD_RESULT}" != "success" ] || [ "${UNIT_RESULT}" != "success" ]; then
+            echo "go-python-free: FAILED (plan=${PLAN_RESULT} shards=${SHARD_RESULT} unit=${UNIT_RESULT}): a leg had a failure that is not a tripwire hit, or did not finish; the ratchet was not evaluated" | tee -a "${GITHUB_STEP_SUMMARY}" >&2
             exit 1
           fi
 

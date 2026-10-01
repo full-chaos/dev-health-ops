@@ -273,8 +273,7 @@ func requireMemberOracleEnv(t *testing.T) string {
 	_, currentFile, _, _ := runtime.Caller(0)
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(currentFile))))
 	python := pyoracle.Resolve(t, repoRoot)
-	probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
-	pyoracle.RequireDeployed(t, python, probe, probeErr)
+	pyoracle.RequireDeployed(t, python, repoRoot)
 	return python
 }
 

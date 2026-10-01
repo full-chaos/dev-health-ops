@@ -147,7 +147,7 @@ func TestFernetCipherMatchesFrozenPythonDefaultSalt(t *testing.T) {
 // too (its route answers 500), so a missing key is a refused write in both
 // planes, never a plaintext or default-key write.
 func TestFernetRefusesWithoutKeyLikePython(t *testing.T) {
-	out := frozenPython(t, "fernet-no-key.golden.json", programoracle.Program{Name: "fernet without a key", Text: "from dev_health_ops.core.encryption import encrypt_value\n" +
+	out := frozenPython(t, "fernet-unconfigured.golden.json", programoracle.Program{Name: "fernet without a key", Text: "from dev_health_ops.core.encryption import encrypt_value\n" +
 		"try:\n    encrypt_value('x')\nexcept Exception as error:\n    print(type(error).__name__ + ': ' + str(error))\n"})[0]
 	if !strings.Contains(out, "SETTINGS_ENCRYPTION_KEY environment variable is required") {
 		t.Fatalf("Python encrypt_value without a key: output=%s", out)

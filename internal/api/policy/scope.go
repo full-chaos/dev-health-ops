@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 type contextKey int
@@ -17,6 +19,9 @@ type contextKey int
 const (
 	orgIDKey contextKey = iota
 	impersonationKey
+	impersonationDecidedKey
+	readsKey
+	orgDecidedKey
 )
 
 // OrgIDFrom returns the request's resolved org (the contextvar
@@ -33,6 +38,24 @@ func OrgIDFrom(ctx context.Context) string {
 func ImpersonationFrom(ctx context.Context) *Impersonation {
 	value, _ := ctx.Value(impersonationKey).(*Impersonation)
 	return value
+}
+
+// OrgScopeDecided reports whether the OrgScope middleware ran for the request
+// and let it through: only then is OrgIDFrom the scope's verified answer (the
+// X-Org-Id after its membership check, else the caller's own org) rather
+// than "nobody decided".
+func OrgScopeDecided(ctx context.Context) bool {
+	decided, _ := ctx.Value(orgDecidedKey).(bool)
+	return decided
+}
+
+// ImpersonationDecided reports whether the Impersonation middleware ran for
+// the request and let it through. Only then does a nil ImpersonationFrom mean
+// "not impersonating" rather than "nobody looked": a handler that serves the
+// effective identity from the middleware's decision refuses without one.
+func ImpersonationDecided(ctx context.Context) bool {
+	decided, _ := ctx.Value(impersonationDecidedKey).(bool)
+	return decided
 }
 
 // Scope holds the two request-wide middlewares. They run for every request
@@ -95,7 +118,8 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 		user, err := s.headerAuthenticate(r)
 		if err != nil {
 			s.logger.ErrorContext(r.Context(), "api org scope: caller lookup failed",
-				slog.String("path", r.URL.Path), slog.Bool("unavailable", isUnavailable(err)))
+				slog.String("path", r.URL.Path), slog.Bool("unavailable", isUnavailable(err)),
+				slog.String("missing_grant", MissingGrant(err)))
 			WriteInternal(w)
 			return
 		}
@@ -105,7 +129,8 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 			allowed, err := s.mayUseOrg(r.Context(), user, headerOrgID)
 			if err != nil {
 				s.logger.ErrorContext(r.Context(), "api org scope: membership lookup failed",
-					slog.String("user_id", user.UserID), slog.Bool("unavailable", isUnavailable(err)))
+					slog.String("user_id", user.UserID), slog.Bool("unavailable", isUnavailable(err)),
+					slog.String("missing_grant", MissingGrant(err)))
 				WriteInternal(w)
 				return
 			}
@@ -119,10 +144,11 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 		case user != nil && user.OrgID != "":
 			resolved = user.OrgID
 		}
+		ctx := context.WithValue(r.Context(), orgDecidedKey, true)
 		if resolved != "" {
-			r = r.WithContext(context.WithValue(r.Context(), orgIDKey, resolved))
+			ctx = context.WithValue(ctx, orgIDKey, resolved)
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -137,12 +163,33 @@ func (s *Scope) mayUseOrg(ctx context.Context, user *User, orgID string) (bool, 
 // IsMember is user_is_member_of_org: an id that does not parse is not a
 // member.
 func (a *Authenticator) IsMember(ctx context.Context, userID, orgID string) (bool, error) {
+	_, member, err := a.Membership(ctx, userID, orgID)
+	return member, err
+}
+
+// Membership is the user's membership in the org: the role they hold there,
+// and whether they are a member at all. An id that does not parse is not a
+// member and reads nothing. Within a request bound to a (ReadOnce) the row is
+// read once: the membership check and the role in that org are one answer.
+func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (string, bool, error) {
 	user, okUser := ParsePyUUID(userID)
 	org, okOrg := ParsePyUUID(orgID)
 	if !okUser || !okOrg {
-		return false, nil
+		return "", false, nil
 	}
-	return a.store.IsMember(ctx, user, org)
+	reads := a.readsFor(ctx)
+	if reads == nil {
+		return a.store.Membership(ctx, user, org)
+	}
+	reads.mu.Lock()
+	defer reads.mu.Unlock()
+	key := [2]uuid.UUID{user, org}
+	if got, ok := reads.members[key]; ok {
+		return got.role, got.member, got.err
+	}
+	role, member, err := a.store.Membership(ctx, user, org)
+	reads.members[key] = memberRead{role: role, member: member, err: err}
+	return role, member, err
 }
 
 // Impersonation is ImpersonationMiddleware. For a caller whose token claims
@@ -153,6 +200,9 @@ func (a *Authenticator) IsMember(ctx context.Context, userID, orgID string) (boo
 // other authorization lookups (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Every path below that calls next has decided; the refusals return
+		// without calling it.
+		r = r.WithContext(context.WithValue(r.Context(), impersonationDecidedKey, true))
 		if !maybeSuperuser(r) {
 			next.ServeHTTP(w, r)
 			return
@@ -160,7 +210,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 		user, err := s.headerAuthenticate(r)
 		if err != nil {
 			s.logger.ErrorContext(r.Context(), "api impersonation: caller lookup failed",
-				slog.Bool("unavailable", isUnavailable(err)))
+				slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)))
 			WriteInternal(w)
 			return
 		}
@@ -168,7 +218,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		session, err := s.auth.store.ActiveImpersonation(r.Context(), user.ID)
+		session, err := s.auth.activeImpersonation(r.Context(), user.ID)
 		if err != nil {
 			// Fail closed: an admin whose active session could not be read
 			// must not be served as though no session existed (that would
@@ -176,7 +226,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			// caller and membership lookups above.
 			s.logger.ErrorContext(r.Context(), "api impersonation: session lookup failed; refusing the request",
 				slog.String("path", r.URL.Path), slog.String("admin_user_id", user.UserID),
-				slog.Bool("unavailable", isUnavailable(err)), slog.Any("error", err))
+				slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)), slog.Any("error", err))
 			WriteInternal(w)
 			return
 		}

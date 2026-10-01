@@ -46,15 +46,18 @@ import (
 //     Authenticator (and its PGStore) to resolve is_active/is_superuser/
 //     token_version live per request (never trusting those three from the
 //     token, same as go-api's own REST plane and Python's
-//     authenticate_access_token), an IsMember check for the token's own
-//     claimed org, and an ActiveImpersonation lookup for a superuser caller.
+//     authenticate_access_token), a Membership read for the org the request
+//     acts in (its existence is the membership check, its role is the
+//     caller's role in that org), and an ActiveImpersonation lookup for a
+//     superuser caller.
 //     COLUMN-SCOPED, not table-wide (see ColumnScoped below): users holds
 //     password_hash/MFA-adjacent columns this role must never read.
 //     Exact columns, cited from the queries themselves
 //     (internal/api/policy/store.go):
 //   - UserState (:45, query :49): users.id (WHERE), .is_active,
 //     .is_superuser, .token_version.
-//   - IsMember (:65, query :68): memberships.user_id, .org_id.
+//   - Membership (query `SELECT role FROM memberships WHERE user_id AND
+//     org_id`): memberships.user_id, .org_id, .role.
 //   - ActiveImpersonation (:82, query :84-90): impersonation_sessions
 //     .id, .admin_user_id, .target_user_id, .target_org_id,
 //     .target_role, .expires_at, .ended_at (all WHERE/SELECT columns
@@ -109,6 +112,7 @@ func queryAPIPosture() RolePosture {
 			{"users", "email", "SELECT"},
 			{"memberships", "user_id", "SELECT"},
 			{"memberships", "org_id", "SELECT"},
+			{"memberships", "role", "SELECT"},
 			{"impersonation_sessions", "id", "SELECT"},
 			{"impersonation_sessions", "admin_user_id", "SELECT"},
 			{"impersonation_sessions", "target_user_id", "SELECT"},

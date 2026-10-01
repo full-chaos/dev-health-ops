@@ -121,7 +121,8 @@ spec:
           {{- if kindIs "slice" $host.pythonAllowList }}{{- $allow = $host.pythonAllowList }}
           {{- else if not (kindIs "bool" $host.pythonAllowList) }}{{- fail (printf "ingress.hosts %q pythonAllowList must be true or a list of {path, pathType}, got %s" $host.host (kindOf $host.pythonAllowList)) }}
           {{- end }}
-          {{- if not $.Values.api.enabled }}{{- fail (printf "ingress.hosts %q pythonAllowList routes to the Python api but api.enabled is false (the Service would not exist)" $host.host) }}{{- end }}
+          {{- /* CHAOS-6263: only a NON-EMPTY effective list routes anything to the Python api; an empty one (the default) needs no Python Service. */}}
+          {{- if and $allow (not $.Values.api.enabled) }}{{- fail (printf "ingress.hosts %q pythonAllowList routes to the Python api but api.enabled is false (the Service would not exist)" $host.host) }}{{- end }}
           {{- $seen := dict }}
           {{- $hostAnchored := false }}
           {{- range $allow }}{{- if and (kindIs "map" .) (eq (toString .pathType) "ImplementationSpecific") }}{{- $hostAnchored = true }}{{- end }}{{- end }}

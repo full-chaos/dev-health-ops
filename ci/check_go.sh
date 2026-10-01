@@ -130,6 +130,12 @@ usage() {
          A slice that selects zero rows fails; no arguments runs every row.
          Each leg logs its predicted and actual test seconds against
          VENUE_LEG_BUDGET_SECONDS (default 1800) and warns when over.
+  venue-oracles --changed FILE [--list]
+         (CHAOS-7653) Run only the registry rows of the packages that the paths in
+         FILE (NUL- or newline-separated, repo-relative) lie in: the form the
+         pull_request job runs, with a cost bounded by the packages a PR changes.
+         No row selected is a loud no-op. With --list print the selected rows
+         (SELECT, package, test, tab-separated) and run nothing.
   venue-oracle-plan COUNT
          Print the cost-balanced plan of COUNT legs: every run row with its leg
          and weight, then one "#leg" line per leg (rows, predicted seconds).
@@ -1673,13 +1679,41 @@ check_venue_oracle_plan() {
 # sequential job, so a package-level split could not get under ~23 min). The
 # hosted job runs COUNT matrix legs; a leg whose slice is empty FAILS (a
 # matrix wider than the registry is a config error, never a green no-op).
+# venue_oracle_changed_selects DIR: succeeds when a path in VENUE_CHANGED_FILE (NUL- or
+# newline-separated, repo-relative) belongs to the package in DIR: a file directly in DIR,
+# or under DIR/testdata (the goldens the package replays). A file in a SUB-package does
+# not select its parent: internal/apiservice/billingvenue/x.go selects billingvenue, not
+# internal/apiservice, and internal/apiservice/admin is not selected by a change in
+# internal/apiservice/adminllmvenue.
+venue_oracle_changed_selects() {
+  local escaped
+  escaped="$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')"
+  tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}/([^/]+|testdata/.+)$"
+}
+
 check_venue_oracles() {
-  local shard="${1:-}" shard_count="${2:-}"
+  local shard="${1:-}" shard_count="${2:-}" changed="${VENUE_CHANGED_FILE:-}"
+  if [ -n "${changed}" ]; then
+    [ -r "${changed}" ] || die "venue-oracles --changed: ${changed} is missing or unreadable"
+    [ -z "${shard}${shard_count}" ] || die "venue-oracles --changed does not combine with SHARD COUNT"
+  fi
   if [ -n "${shard}${shard_count}" ]; then
     case "${shard}" in ""|*[!0-9]*) die "venue-oracles SHARD must be a positive integer, got '${shard}'" ;; esac
     case "${shard_count}" in ""|*[!0-9]*) die "venue-oracles COUNT must be a positive integer, got '${shard_count}'" ;; esac
     { [ "${shard}" -ge 1 ] && [ "${shard_count}" -ge 1 ] && [ "${shard}" -le "${shard_count}" ]; } \
       || die "venue-oracles shard ${shard} is outside 1..${shard_count}"
+  fi
+  if [ -n "${changed}" ] && [ "${VENUE_CHANGED_LIST_ONLY:-}" = "--list" ]; then
+    # CHAOS-7653: print the registry rows the changed paths select and run nothing (no
+    # Go, jq, containers or Python needed). The registry-against-tree validation is the
+    # run's own first step; the selection reads the registry rows alone, so it is fast.
+    local list_dir list_name list_kind
+    while read -r list_dir list_name list_kind; do
+      if [ "${list_kind}" = run ] && venue_oracle_changed_selects "${list_dir}"; then
+        printf 'SELECT\t%s\t%s\n' "${list_dir}" "${list_name}"
+      fi
+    done < <(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2)
+    return 0
   fi
   [ "${DEV_HEALTH_LIVE_PYTHON_ORACLES:-}" = "1" ] \
     || die "venue-oracles requires DEV_HEALTH_LIVE_PYTHON_ORACLES=1 (this verb never sets it itself -- a skip must be visible to the caller, not swallowed here)"
@@ -1730,7 +1764,12 @@ check_venue_oracles() {
       run)
         pkg_has_run=1
         registered_runs=$((registered_runs + 1))
-        if [ -z "${shard}" ] || grep -qxF -- "${dir}"$'\t'"${name}" "${slice_file}"; then
+        if [ -n "${changed}" ]; then
+          if venue_oracle_changed_selects "${dir}"; then
+            names="${names:+${names}|}${name}"
+            total=$((total + 1))
+          fi
+        elif [ -z "${shard}" ] || grep -qxF -- "${dir}"$'\t'"${name}" "${slice_file}"; then
           names="${names:+${names}|}${name}"
           total=$((total + 1))
         fi
@@ -1747,6 +1786,11 @@ check_venue_oracles() {
     rm -rf -- "${proof_dir}"
     die "venue-oracles: the registry holds zero runnable venue-oracle tests -- the registry itself is broken, not a genuinely oracle-free tree"
   fi
+  if [ "${total}" -eq 0 ] && [ -n "${changed}" ]; then
+    rm -rf -- "${proof_dir}"
+    printf 'venue-oracles: no changed path lies in a package with a registered venue oracle: nothing to run for this change set\n'
+    return 0
+  fi
   if [ "${total}" -eq 0 ]; then
     rm -rf -- "${proof_dir}"
     die "venue-oracles: shard ${shard}/${shard_count} selects zero of the ${registered_runs} registered run rows -- the matrix is wider than the registry, so this leg would read green while running nothing"
@@ -1754,6 +1798,8 @@ check_venue_oracles() {
 
   if [ -n "${shard}" ]; then
     printf 'venue-oracles: shard %s/%s runs %d of %d registered run row(s) across %d package(s); the cost-balanced plan predicts %ss of tests for this leg (budget %ss, ci/venue_oracle_weights.d/)\n' "${shard}" "${shard_count}" "${total}" "${registered_runs}" "${#vo_dirs[@]}" "${predicted_seconds:-?}" "${VENUE_LEG_BUDGET_SECONDS:-1800}"
+  elif [ -n "${changed}" ]; then
+    printf 'venue-oracles: %d of %d registered run row(s) selected by the changed paths, across %d package(s)\n' "${total}" "${registered_runs}" "${#vo_dirs[@]}"
   else
     printf 'venue-oracles: %d registered test(s) across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
   fi
@@ -2947,8 +2993,15 @@ case "${1:-all}" in
     check_live_python_oracles
     ;;
   venue-oracles)
-    { [ "$#" -eq 1 ] || [ "$#" -eq 3 ]; } || die "venue-oracles accepts no arguments, or SHARD COUNT (1-based shard of COUNT)"
-    check_venue_oracles "${2:-}" "${3:-}"
+    if [ "${2:-}" = "--changed" ]; then
+      { [ "$#" -eq 3 ] || { [ "$#" -eq 4 ] && [ "$4" = "--list" ]; }; } || die "venue-oracles --changed accepts FILE [--list]"
+      VENUE_CHANGED_FILE="$3"
+      VENUE_CHANGED_LIST_ONLY="${4:-}"
+      check_venue_oracles
+    else
+      { [ "$#" -eq 1 ] || [ "$#" -eq 3 ]; } || die "venue-oracles accepts no arguments, or SHARD COUNT (1-based shard of COUNT), or --changed FILE [--list]"
+      check_venue_oracles "${2:-}" "${3:-}"
+    fi
     ;;
   venue-oracle-plan)
     [ "$#" -eq 2 ] || die "venue-oracle-plan accepts COUNT"

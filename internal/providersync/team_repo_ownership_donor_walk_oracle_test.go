@@ -195,7 +195,7 @@ func teamRepoOwnershipDonorWalkOracleCases() []oracleCase {
 	}
 }
 
-func TestTeamRepoOwnershipDonorWalkMatchesLivePythonProduction(t *testing.T) {
+func TestTeamRepoOwnershipDonorWalkMatchesFrozenPythonProduction(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"sync/team-repo-ownership/donor-walk",

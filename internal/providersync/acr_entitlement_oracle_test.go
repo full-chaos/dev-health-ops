@@ -104,7 +104,7 @@ func acrEntitlementOracleCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForAcrEntitlement(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForAcrEntitlement(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "acr/entitlements/agent-context-runtime", acrEntitlementOracleCases(),
 		buildAcrEntitlementDecisionForOracle, nil,

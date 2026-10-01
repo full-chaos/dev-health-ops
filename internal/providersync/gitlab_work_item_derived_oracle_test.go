@@ -123,7 +123,7 @@ func gitlabWorkItemOracleComputedAt(t *testing.T, input map[string]any) time.Tim
 	return githubDerivedOracleTime(t, input["ComputedAt"].(string))
 }
 
-func TestGitLabAIAttributionMatchesLivePythonProductionRows(t *testing.T) {
+func TestGitLabAIAttributionMatchesFrozenPythonProductionRows(t *testing.T) {
 	base := map[string]any{
 		"iid": 9, "title": "Repair delivery path", "description": "Routine repair",
 		"state": "opened", "created_at": "2026-08-01T08:00:00Z",

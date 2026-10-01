@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestGenericOracleMatchesFrozenPythonForSecurityRowConstruction",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair github/security/row: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGenericOracleMatchesFrozenPythonForSecurityRowConstruction$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "github/security/row",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "7a762c2de264eb08ce6a9e04bc5442bc80668b43ce9e16abd87d58300cfefb1b",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"dependabot\", \"row\": {\"alert_id\": {\"t\": \"str\", \"v\": \"dependabot:1\"}, \"source\": {\"t\": \"str\", \"v\": \"dependabot\"}, \"severity\": {\"t\": \"str\", \"v\": \"high\"}, \"state\": {\"t\": \"str\", \"v\": \"open\"}, \"package_name\": {\"t\": \"str\", \"v\": \"widget\"}, \"cve_id\": {\"t\": \"str\", \"v\": \"CVE-2026-0001\"}, \"url\": {\"t\": \"str\", \"v\": \"https://example.invalid/a\"}, \"title\": {\"t\": \"str\", \"v\": \"summary\"}, \"description\": {\"t\": \"str\", \"v\": \"description\"}, \"created_at\": {\"t\": \"datetime\", \"v\": \"2026-07-22T10:00:00Z\"}, \"fixed_at\": null, \"dismissed_at\": null}}, {\"id\": \"code-scanning\", \"row\": {\"alert_id\": {\"t\": \"str\", \"v\": \"code_scanning:2\"}, \"source\": {\"t\": \"str\", \"v\": \"code_scanning\"}, \"severity\": {\"t\": \"str\", \"v\": \"critical\"}, \"state\": {\"t\": \"str\", \"v\": \"dismissed\"}, \"package_name\": null, \"cve_id\": null, \"url\": {\"t\": \"str\", \"v\": \"https://example.invalid/b\"}, \"title\": {\"t\": \"str\", \"v\": \"rule\"}, \"description\": {\"t\": \"str\", \"v\": \"message\"}, \"created_at\": {\"t\": \"datetime\", \"v\": \"2026-07-22T11:00:00Z\"}, \"fixed_at\": null, \"dismissed_at\": {\"t\": \"datetime\", \"v\": \"2026-07-22T12:00:00Z\"}}}, {\"id\": \"advisory\", \"row\": {\"alert_id\": {\"t\": \"str\", \"v\": \"advisory:GHSA-demo\"}, \"source\": {\"t\": \"str\", \"v\": \"advisory\"}, \"severity\": {\"t\": \"str\", \"v\": \"medium\"}, \"state\": {\"t\": \"str\", \"v\": \"published\"}, \"package_name\": null, \"cve_id\": {\"t\": \"str\", \"v\": \"CVE-2026-0002\"}, \"url\": {\"t\": \"str\", \"v\": \"https://example.invalid/c\"}, \"title\": {\"t\": \"str\", \"v\": \"summary\"}, \"description\": {\"t\": \"str\", \"v\": \"description\"}, \"created_at\": {\"t\": \"datetime\", \"v\": \"2026-07-22T12:00:00Z\"}, \"fixed_at\": null, \"dismissed_at\": null}}], \"excluded_fields\": {\"repo_id\": \"attached by processors/github.py after the code-client mapping boundary\", \"last_synced\": \"stamped by the persistence boundary, not the code-client mapping\"}}\n"
+    }
+  ]
+}

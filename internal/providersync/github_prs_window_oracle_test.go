@@ -152,9 +152,9 @@ func buildWindowDecisionForOracle(
 	return windowDecisionResult{Excluded: excluded, Stop: stop}
 }
 
-// TestGenericOracleMatchesLivePythonForWindowDecision is the "current code
+// TestGenericOracleMatchesFrozenPythonForWindowDecision is the "current code
 // is clean" half for this boundary.
-func TestGenericOracleMatchesLivePythonForWindowDecision(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForWindowDecision(t *testing.T) {
 	builder := func(t *testing.T, input map[string]any) windowDecisionResult {
 		return buildWindowDecisionForOracle(t, input, pullOutsideKnownWindow, pullCrossedSinceBoundary)
 	}

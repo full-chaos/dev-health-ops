@@ -243,7 +243,7 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 	return cases
 }
 
-// TestBudgetExhaustionPredicateMatchesLivePython is a PREDICATE-PARITY check,
+// TestBudgetExhaustionPredicateMatchesFrozenPython is a PREDICATE-PARITY check,
 // and the name says so because the earlier one ("generic oracle ... for budget
 // exhaustion") read like a state-machine oracle and was reported as one.
 //
@@ -282,7 +282,7 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 //     write paths and fails this oracle if either ever touches an episode
 //     column. tests/test_chaos_3465_budget_surplus_retry.py owns the phase's
 //     own behaviour.
-func TestBudgetExhaustionPredicateMatchesLivePython(t *testing.T) {
+func TestBudgetExhaustionPredicateMatchesFrozenPython(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "syncunit/budget/exhaustion", budgetExhaustionOracleCases(t),
 		buildBudgetExhaustionDecisionForOracle, nil,

@@ -47,14 +47,14 @@ type identityAliasResolveProducerRow struct {
 	Facets   []string `json:"facets"`
 }
 
-// TestIdentityAliasResolverMatchesLivePythonResolverWithSeededAliases is a
+// TestIdentityAliasResolverMatchesFrozenPythonResolverWithSeededAliases is a
 // red-first parity proof: five scenarios the ported Go resolver
 // must match the live Python IdentityResolver on -- exact login alias,
 // case-different login alias (normKey lowercases before lookup), an email
 // alias, an unmapped identity (falls back to the provider-qualified id),
 // and a provider id that maps via alias to a DIFFERENT canonical person than
 // its raw qualified form would suggest.
-func TestIdentityAliasResolverMatchesLivePythonResolverWithSeededAliases(t *testing.T) {
+func TestIdentityAliasResolverMatchesFrozenPythonResolverWithSeededAliases(t *testing.T) {
 	seedIdentityAliasMapping(t)
 	compareRowsAgainstPythonOracle(
 		t, "identity/alias/resolve",

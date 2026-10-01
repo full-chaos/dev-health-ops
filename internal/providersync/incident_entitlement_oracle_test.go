@@ -72,7 +72,7 @@ func incidentEntitlementOracleCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForIncidentEntitlement(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForIncidentEntitlement(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "jira/incidents/entitlement", incidentEntitlementOracleCases(),
 		buildIncidentEntitlementDecisionForOracle, nil,

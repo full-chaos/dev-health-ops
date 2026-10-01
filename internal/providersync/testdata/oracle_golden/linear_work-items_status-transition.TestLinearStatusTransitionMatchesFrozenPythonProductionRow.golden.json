@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestLinearStatusTransitionMatchesFrozenPythonProductionRow",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair linear/work-items/status-transition: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestLinearStatusTransitionMatchesFrozenPythonProductionRow$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "linear/work-items/status-transition",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "7b8659ecc731181b595412803174f53049082882c37347154abfcd221936f7fa",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"complete_issue_with_reopen\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"linear:ENG-42\"}, \"provider\": {\"t\": \"str\", \"v\": \"linear\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-07-26T10:00:00Z\"}, \"from_status_raw\": {\"t\": \"str\", \"v\": \"Todo\"}, \"to_status_raw\": {\"t\": \"str\", \"v\": \"In Progress\"}, \"from_status\": {\"t\": \"str\", \"v\": \"todo\"}, \"to_status\": {\"t\": \"str\", \"v\": \"in_progress\"}, \"actor\": {\"t\": \"str\", \"v\": \"alice@example.com\"}, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}, {\"id\": \"optional_values_and_cycle_number\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"linear:ENG-43\"}, \"provider\": {\"t\": \"str\", \"v\": \"linear\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-07-30T11:00:00.123456Z\"}, \"from_status_raw\": null, \"to_status_raw\": {\"t\": \"str\", \"v\": \"Backlog\"}, \"from_status\": {\"t\": \"str\", \"v\": \"unknown\"}, \"to_status\": {\"t\": \"str\", \"v\": \"backlog\"}, \"actor\": null, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}], \"excluded_fields\": {}}\n"
+    }
+  ]
+}

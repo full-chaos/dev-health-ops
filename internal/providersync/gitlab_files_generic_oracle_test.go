@@ -37,7 +37,7 @@ func buildGitLabHTTPClassificationOracleRow(t *testing.T, input map[string]any) 
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabFilesHTTPClassification(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabFilesHTTPClassification(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"gitlab/files/http-classification",
@@ -81,7 +81,7 @@ func buildGitLabFileRowForOracle(t *testing.T, input map[string]any) gitFileRow 
 	)
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabFilesWorkerRows(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabFilesWorkerRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"gitlab/files/row",
@@ -202,7 +202,7 @@ func (doer *gitLabFilesTraceDoer) Do(request *http.Request) (*http.Response, err
 	}, nil
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabFilesTraversal(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabFilesTraversal(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"gitlab/files/trace",
@@ -228,7 +228,7 @@ func TestGenericOracleMatchesLivePythonForGitLabFilesTraversal(t *testing.T) {
 	)
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabFilesContentCap(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabFilesContentCap(t *testing.T) {
 	const count = 2_001
 	treePages := make([]any, 0, (count+99)/100)
 	treeNextPages := make([]any, 0, (count+99)/100-1)
@@ -264,7 +264,7 @@ func TestGenericOracleMatchesLivePythonForGitLabFilesContentCap(t *testing.T) {
 	)
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabFilesContentFailure(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabFilesContentFailure(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"gitlab/files/trace",
@@ -285,7 +285,7 @@ func TestGenericOracleMatchesLivePythonForGitLabFilesContentFailure(t *testing.T
 	)
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabFilesCaseSensitiveExtensions(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabFilesCaseSensitiveExtensions(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"gitlab/files/trace",

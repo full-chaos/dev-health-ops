@@ -155,7 +155,7 @@ type githubTeamCatalogFacetsProducerRow struct {
 	Facets []string `json:"facets"`
 }
 
-func TestGitHubTeamCatalogFacetsMatchLivePythonResolver(t *testing.T) {
+func TestGitHubTeamCatalogFacetsMatchFrozenPythonResolver(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "github/team-catalog/facets",
 		[]oracleCase{

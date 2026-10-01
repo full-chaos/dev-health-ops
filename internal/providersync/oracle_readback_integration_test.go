@@ -28,7 +28,7 @@ import (
 // Where the row-construction pair's "expected" side comes from a live
 // Python subprocess, this pair's "expected" side is the Go row the test
 // itself asked ClickHouse to store -- validated safe to use as ground truth
-// because TestGenericOracleMatchesLivePythonForRowConstruction already
+// because TestGenericOracleMatchesFrozenPythonForRowConstruction already
 // proves, independently, that a Go-built pullRequestRow is byte-for-byte
 // identical to Python's for the same input.
 //

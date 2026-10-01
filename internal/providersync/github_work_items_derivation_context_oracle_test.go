@@ -33,7 +33,7 @@ type githubWorkItemDerivationOracleCandidates struct {
 	UpdatedAt   []time.Time `json:"updated_at"`
 }
 
-func TestGitHubWorkItemDerivationMatchesLivePythonProduction(t *testing.T) {
+func TestGitHubWorkItemDerivationMatchesFrozenPythonProduction(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"github/work-items/derivation-context",

@@ -68,7 +68,7 @@ func oraclePagerDutyScheduleCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForPagerDutyScheduleRow(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForPagerDutyScheduleRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "pagerduty/schedules/row", oraclePagerDutyScheduleCases(),
 		buildPagerDutyScheduleRowForOracle, nil,

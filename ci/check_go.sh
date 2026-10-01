@@ -3096,6 +3096,28 @@ check_integration_prepull() {
   done
 }
 
+# python_free_enabled / python_free_go_test (CHAOS-7384): GO_PYTHON_FREE=1 runs the integration shards
+# with Python unreachable (ci/python_tripwire.sh) and holds the failures to the closed list
+# (ci/python_free_known.tsv, ci/python_free_ratchet.sh). Only .github/workflows/go-python-free.yml sets
+# it. The go test arguments after the shard label are the ordinary run's; the stream is `go test -json`
+# so each failure carries its own output, and the exit status is the classifier's.
+python_free_enabled() {
+  [ "${GO_PYTHON_FREE:-}" = "1" ]
+}
+
+python_free_go_test() {
+  local label="$1"
+  shift
+  local out="${PYTHON_FREE_OUT:?GO_PYTHON_FREE=1 needs PYTHON_FREE_OUT (a directory for the shard hits)}"
+  mkdir -p "${out}"
+  # shellcheck source=ci/python_tripwire.sh
+  source "${ROOT}/ci/python_tripwire.sh" || die "python_tripwire refused: the Python-free run cannot be proven"
+  local json="${out}/${label}.json"
+  "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
+    go test -mod=readonly -tags=integration -count=1 -timeout=30m -json "$@" >"${json}" || true
+  bash "${ROOT}/ci/python_free_ratchet.sh" classify "${json}" "${out}/${label}.hits" "${PYTHON_TRIPWIRE_LOG}"
+}
+
 check_integration_package_shard() {
   local shard="$1" mode="$2"
   local index module_dir pkg key
@@ -3133,7 +3155,11 @@ check_integration_package_shard() {
     fi
     (
       cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      if python_free_enabled; then
+        python_free_go_test "${shard}" "${run_pkgs[@]}"
+      else
+        "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      fi
     )
   done
 
@@ -3181,7 +3207,11 @@ check_providersync_test_shard() {
     "${shard}" "${selected_count}"
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
+    if python_free_enabled; then
+      python_free_go_test "providersync-${shard}" -run "${test_regex}" ./internal/providersync
+    else
+      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
+    fi
   )
 }
 

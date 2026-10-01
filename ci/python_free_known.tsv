@@ -1,0 +1,3 @@
+# Closed list of Go tests that still start Python (CHAOS-7384). Columns, tab separated:
+#   package<TAB>TestName (top level)<TAB>the CHAOS ticket that freezes it
+# The go-python-free job is green when the tripwire-hit set equals this list. Remove a row in the PR that freezes its test.

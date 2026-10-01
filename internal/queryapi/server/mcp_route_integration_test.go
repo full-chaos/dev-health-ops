@@ -80,7 +80,7 @@ func TestMCPClickHouseCeilingAgainstARealClickHouse(t *testing.T) {
 		}
 		defer func() { _ = client.Close() }()
 		obs := &mcpObservation{}
-		observed := mcpObservedClient{next: client}
+		observed := mcpObservedClient{next: client, ceiling: time.Second}
 		started := time.Now()
 		rows, err := observed.Query(context.WithValue(ctx, mcpObservationKey{}, obs), "SELECT sleepEachRow(0.5) FROM numbers(8) SETTINGS max_block_size = 1", nil)
 		if err == nil {

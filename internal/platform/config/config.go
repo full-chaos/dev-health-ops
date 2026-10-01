@@ -1018,6 +1018,26 @@ func Load(spec Spec) (Config, error) {
 			return Config{}, fmt.Errorf("%s: %w", settingLabel("QUERY_API_MCP_ALLOWED_CIDRS"), mcpCIDRErr)
 		}
 		cfg.QueryAPIMCPAllowedCIDRs = mcpCIDRs
+		// The MCP listener trusts the X-DH-Internal-* headers from whoever can
+		// connect, so its peer boundary is its only authentication. The address
+		// alone is not enough to start it: it must come with a boundary marker
+		// that the deployment sets ONLY where it also renders that boundary
+		// (the chart: inside queryApi.mcp.enabled, next to the Service and the
+		// NetworkPolicy). An address that arrives any other way -- extraEnv,
+		// envFrom, a hand-edited manifest -- has no marker and refuses boot.
+		if cfg.QueryAPIMCPAddress != "" {
+			switch boundary := strings.TrimSpace(envOrDefault(lookup, "QUERY_API_MCP_BOUNDARY", "")); boundary {
+			case "networkpolicy":
+			case "allowed-cidrs":
+				if len(cfg.QueryAPIMCPAllowedCIDRs) == 0 {
+					return Config{}, fmt.Errorf("%s=allowed-cidrs requires %s: the marker says the peer allowlist is the boundary, and it is empty",
+						settingLabel("QUERY_API_MCP_BOUNDARY"), settingLabel("QUERY_API_MCP_ALLOWED_CIDRS"))
+				}
+			default:
+				return Config{}, fmt.Errorf("%s is set but %s is %q: refusing to start the MCP listener without its boundary marker (networkpolicy, set by the chart next to the MCP NetworkPolicy, or allowed-cidrs with %s). An address from extraEnv, envFrom or a hand-edited manifest has no boundary",
+					settingLabel("QUERY_API_MCP_ADDR"), settingLabel("QUERY_API_MCP_BOUNDARY"), boundary, settingLabel("QUERY_API_MCP_ALLOWED_CIDRS"))
+			}
+		}
 		// The four listeners are separate: an identical pair would fail the
 		// second bind (port 0 asks the kernel for a free port each time).
 		addresses := map[string]string{

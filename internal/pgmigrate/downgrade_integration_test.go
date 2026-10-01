@@ -380,11 +380,14 @@ func (p *ackLossProxy) serve(client net.Conn, serverAddr string) {
 			if n > 0 {
 				if armed.Load() {
 					// the server has the COMMIT and answered; the client never hears it.
-					_ = client.Close()
-					_ = server.Close()
+					// Refuse first, then hang up: the client reconnects the instant it sees
+					// the close, so the listener must already be gone or the read-back
+					// can be accepted and the "outcome unknown" path never runs.
 					if p.refuseAfter {
 						_ = p.listener.Close()
 					}
+					_ = client.Close()
+					_ = server.Close()
 					return
 				}
 				if _, werr := client.Write(buffer[:n]); werr != nil {

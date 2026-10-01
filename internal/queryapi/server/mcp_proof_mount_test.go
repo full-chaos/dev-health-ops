@@ -44,9 +44,11 @@ func TestMCPProofRouteIsMountedOnTheInternalSetOnlyAndOnlyWithItsFlag(t *testing
 	if got := status(mcp); got == http.StatusTeapot {
 		t.Fatal("the MCP listener's set serves /query/proof-mcp: a caller there could read a shadow root")
 	}
+	// Gate off: the route's existence is not visible. 404, never 401/403, which
+	// would tell a caller that a route is there.
 	_, internal, _ = build("")
-	if got := status(internal); got == http.StatusTeapot {
-		t.Fatal("the proof route is mounted without GO_API_PROOF_WRITE_ROUTE_ENABLED")
+	if got := status(internal); got != http.StatusNotFound {
+		t.Fatalf("with the gate off the proof route answers %d, want 404", got)
 	}
 }
 

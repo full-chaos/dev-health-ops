@@ -759,6 +759,7 @@ func printMCPClassStatus(report statusReport) {
 		fmt.Fprintf(stdout, "mcp class rows: UNAVAILABLE (%s)\n", *report.MCPClassError)
 		return
 	}
+	fmt.Fprintln(stdout, "(class rows are enabled in canary only: they have no edge route, so primary is never admitted)")
 	fmt.Fprintf(stdout, "%-30s %-8s %-10s %-8s %s\n", "MCP CLASS ROOT", "DIGEST", "MODE", "PROOF", "LISTENER")
 	for _, row := range report.MCPClass {
 		proof := "-"

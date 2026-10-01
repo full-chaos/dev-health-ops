@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -165,17 +164,16 @@ func (db repairDB) goRun(t *testing.T, s repairScenario) repairResult {
 
 func (db repairDB) pythonRun(t *testing.T, s repairScenario) repairResult {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := pyoracle.Root(t)
 	python := pyoracle.Resolve(t, root)
 	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
 	command := exec.Command(python, append([]string{"-c", program, "migrate", "clickhouse", "repair"}, s.args...)...)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "CLICKHOUSE_URI="+db.httpDSN, "OTEL_ENABLED=false")
+	// A closed environment (CHAOS-7471): the DSN and the ordering contract of the database the scenario
+	// repairs (the contract-2 head), set on purpose; nothing inherited.
+	command.Env = pyoracle.ClosedEnv(root, "CLICKHOUSE_URI="+db.httpDSN, chmigrate.OrderingContractEnv+"=2")
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err = command.Run()
+	err := command.Run()
 	code := 0
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()

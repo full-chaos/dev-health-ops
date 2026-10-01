@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -164,17 +163,16 @@ func (e *migrateEnv) goVerb(t *testing.T, database, verb, contract string, args 
 // pythonVerb runs the real `dev-hops migrate clickhouse <verb>` on database.
 func (e *migrateEnv) pythonVerb(t *testing.T, database, verb, contract string, args ...string) (int, string, string) {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := pyoracle.Root(t)
 	python := pyoracle.Resolve(t, root)
 	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
 	command := exec.Command(python, append([]string{"-c", program, "migrate", "clickhouse", verb}, args...)...)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "CLICKHOUSE_URI="+httpDSN(t, context.Background(), e.instance, database), "OTEL_ENABLED=false")
+	// A closed environment (CHAOS-7471): the DSN and the contract the scenario names, nothing inherited.
+	extra := []string{"CLICKHOUSE_URI=" + httpDSN(t, context.Background(), e.instance, database)}
 	if contract != "" {
-		command.Env = append(command.Env, chmigrate.OrderingContractEnv+"="+contract)
+		extra = append(extra, chmigrate.OrderingContractEnv+"="+contract)
 	}
+	command.Env = pyoracle.ClosedEnv(root, extra...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	code := 0

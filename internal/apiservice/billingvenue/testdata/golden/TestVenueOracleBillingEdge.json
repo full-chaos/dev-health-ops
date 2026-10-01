@@ -4,7 +4,8 @@
     "python_build": "023ae3e584ef6345a3bfaef1f0b30abd89f5dee8",
     "producer_digest": "53028fde43de410ecb5704202be163d92617d6794f5d2108513c8868e2607e80",
     "recipe": "git worktree add --detach \u003cdir\u003e 023ae3e584ef6345a3bfaef1f0b30abd89f5dee8; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestVenueOracleBillingEdge$' .",
-    "python_env": "6de217ed41e5ff9e73862ac05fca86c150f40ef4575fb1113b7b2eb13ec0bd32"
+    "python_env": "a22f4ee8df175b9375c73f3fbe8765950505e9ba2abf317431c370b46af443ed",
+    "python_env_version": 2
   },
   "requests": [
     {
@@ -41,7 +42,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "5e39fe2651e8df62d0c862df355333733efab1532f610097fc16da9392e3e9d7",
+      "call_env": "61897229da1dca28c3b4dc506509d16acd72a3cffa49dbd091b383c9ba047edd",
       "status": 503,
       "headers": {
         "content-length": "188",
@@ -55,7 +56,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "5e39fe2651e8df62d0c862df355333733efab1532f610097fc16da9392e3e9d7",
+      "call_env": "61897229da1dca28c3b4dc506509d16acd72a3cffa49dbd091b383c9ba047edd",
       "status": 503,
       "headers": {
         "content-length": "188",
@@ -97,7 +98,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "4fff03e2105a7417a22abb6e5564598e10669db748916861e4484dc06e6a3a3d",
+      "call_env": "673597f0b86f796704d1bfcfb0f1e6cb95b68da8d880088d80413edb11e60dc2",
       "status": 503,
       "headers": {
         "content-length": "174",
@@ -111,7 +112,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "4fff03e2105a7417a22abb6e5564598e10669db748916861e4484dc06e6a3a3d",
+      "call_env": "673597f0b86f796704d1bfcfb0f1e6cb95b68da8d880088d80413edb11e60dc2",
       "status": 503,
       "headers": {
         "content-length": "174",
@@ -153,7 +154,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "79a1115942063fe48a1191d117d853b838dfceb1da5d338796f7b4e8020e8f07",
+      "call_env": "2f29b991aa6a599b32afddf38c351271147e08b86ed9f5832587e83a4dfb953e",
       "status": 503,
       "headers": {
         "content-length": "176",
@@ -167,7 +168,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "79a1115942063fe48a1191d117d853b838dfceb1da5d338796f7b4e8020e8f07",
+      "call_env": "2f29b991aa6a599b32afddf38c351271147e08b86ed9f5832587e83a4dfb953e",
       "status": 503,
       "headers": {
         "content-length": "176",
@@ -209,7 +210,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "6ceb330cf862c2efde43ce273b77fff5c7d84557dfd381c981eb91e4b68d1d02",
+      "call_env": "09cf5446b957f89fa7e2a386e37cf09a4d9e4798197c9259ba35b750728a20b8",
       "status": 503,
       "headers": {
         "content-length": "162",
@@ -223,7 +224,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "6ceb330cf862c2efde43ce273b77fff5c7d84557dfd381c981eb91e4b68d1d02",
+      "call_env": "09cf5446b957f89fa7e2a386e37cf09a4d9e4798197c9259ba35b750728a20b8",
       "status": 503,
       "headers": {
         "content-length": "162",
@@ -265,7 +266,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "59e459979222f05c3bb3c93ff78ee9858cc86625d37dea68f84ce36acac288f3",
+      "call_env": "b550e429bdeddc27df400b1f39f0262ee297fb2ebccc0e7113ee14e9c65dbe7a",
       "status": 503,
       "headers": {
         "content-length": "176",
@@ -279,7 +280,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "59e459979222f05c3bb3c93ff78ee9858cc86625d37dea68f84ce36acac288f3",
+      "call_env": "b550e429bdeddc27df400b1f39f0262ee297fb2ebccc0e7113ee14e9c65dbe7a",
       "status": 503,
       "headers": {
         "content-length": "176",
@@ -321,7 +322,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "297567db1871626c9cbce9b660fccf68e436a24e258731c368163b208608fb89",
+      "call_env": "64a7594a5fcce86abb8224b4778a68eb0133da48807d6954c30d5df2db3ddc5a",
       "status": 503,
       "headers": {
         "content-length": "162",
@@ -335,7 +336,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "297567db1871626c9cbce9b660fccf68e436a24e258731c368163b208608fb89",
+      "call_env": "64a7594a5fcce86abb8224b4778a68eb0133da48807d6954c30d5df2db3ddc5a",
       "status": 503,
       "headers": {
         "content-length": "162",
@@ -377,7 +378,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "72036b159e5eaef17e48664171c694c218c3f561abd448cfeb6c7b9fc3a308cd",
+      "call_env": "35323e62bb03cc1f22077983d03bb4c372df3ff6135e8b0e70d9d3887c3d1753",
       "status": 503,
       "headers": {
         "content-length": "164",
@@ -391,7 +392,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "72036b159e5eaef17e48664171c694c218c3f561abd448cfeb6c7b9fc3a308cd",
+      "call_env": "35323e62bb03cc1f22077983d03bb4c372df3ff6135e8b0e70d9d3887c3d1753",
       "status": 503,
       "headers": {
         "content-length": "164",
@@ -433,7 +434,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "0875793e8ef77a53af2c8646468672c5715277674a1d4f2e2c0485b1bceb000a",
+      "call_env": "d53aea5ad11924caaff93c8fde4244b69516a79e704c207f8c69e60b940cc78d",
       "status": 503,
       "headers": {
         "content-length": "150",
@@ -447,7 +448,7 @@
       "path": "/health",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "call_env": "0875793e8ef77a53af2c8646468672c5715277674a1d4f2e2c0485b1bceb000a",
+      "call_env": "d53aea5ad11924caaff93c8fde4244b69516a79e704c207f8c69e60b940cc78d",
       "status": 503,
       "headers": {
         "content-length": "150",

@@ -783,7 +783,13 @@ func (g *Golden) frozenAnswers(requests []Request) ([]Response, error) {
 func (g *Golden) CompareRows(t *testing.T, name string, source func() string, goRows string) string {
 	t.Helper()
 	value := g.snapshot(t, "CompareRows", name, source)
-	if err := rowsDiffer(name, value, goRows); err != nil {
+	// Both planes' rows are compared as projected: the golden stores no token
+	// and a per-run value is a typed placeholder (GoldenSpec.Scrub).
+	projectedGo, err := g.project(goRows)
+	if err != nil {
+		t.Fatalf("golden %s: row comparison %q: %v", g.spec.Path, name, err)
+	}
+	if err := rowsDiffer(name, value, projectedGo); err != nil {
 		t.Error(err)
 	}
 	g.rowsUsed[name] = true
@@ -816,7 +822,10 @@ func (g *Golden) snapshot(t *testing.T, call, name string, source func() string)
 		if g.rowsUsed[name] {
 			t.Fatalf("golden row comparison %q is recorded twice", name)
 		}
-		value := source()
+		value, err := g.project(source())
+		if err != nil {
+			t.Fatalf("golden %s: row comparison %q: %v", g.spec.Path, name, err)
+		}
 		g.recorded.Rows[name] = goldenRows{Rows: value}
 		return value
 	}

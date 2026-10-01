@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"net/url"
 	"regexp"
@@ -22,10 +23,36 @@ import (
 type tokenShape struct {
 	name string
 	re   *regexp.Regexp
+	// match, when set, decides instead of re (the JWT shape needs a decode).
+	match func(text string) bool
 }
 
-// jwtShape is a JWT: a base64url JSON header and payload, then a signature.
-var jwtShape = regexp.MustCompile(`eyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*`)
+// jwtCandidate is the text that may be a JWT or JWE: three to five dotted
+// base64url segments. Whether it is one is decided by its first segment
+// (jwtParts), not by a prefix: a header with legal leading whitespace does not
+// begin "eyJ".
+var jwtCandidate = regexp.MustCompile(`[A-Za-z0-9_-]{2,}(?:\.[A-Za-z0-9_-]*){2,4}`)
+
+// jwtParts is the dotted segments of candidate and whether the first is a JWT
+// header: it begins "eyJ" or decodes to a JSON object.
+func jwtParts(candidate string) ([]string, bool) {
+	parts := strings.Split(candidate, ".")
+	if strings.HasPrefix(parts[0], "eyJ") {
+		return parts, true
+	}
+	_, ok := decodeSegment(parts[0])
+	return parts, ok
+}
+
+// hasJWT reports whether text holds a JWT or JWE.
+func hasJWT(text string) bool {
+	for _, candidate := range jwtCandidate.FindAllString(text, -1) {
+		if _, ok := jwtParts(candidate); ok {
+			return true
+		}
+	}
+	return false
+}
 
 // undecodableJWT starts the projection of a token whose header or payload is
 // not a JSON object: a measurement that could not be made. The recorder
@@ -37,20 +64,20 @@ const undecodableJWT = "<jwt|undecodable"
 // golden for. Each is anchored on a prefix or structure that a stable id or a
 // route name never has.
 var tokenShapes = []tokenShape{
-	{"jwt", jwtShape},
-	{"github-token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`)},
-	{"github-fine-grained-pat", regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`)},
-	{"gitlab-pat", regexp.MustCompile(`glpat-[A-Za-z0-9_-]{20,}`)},
-	{"slack-token", regexp.MustCompile(`xox[abprs]-[A-Za-z0-9-]{10,}`)},
-	{"stripe-key", regexp.MustCompile(`\b[sr]k_(live|test)_[A-Za-z0-9]{16,}`)},
-	{"aws-access-key", regexp.MustCompile(`\b(AKIA|ASIA)[A-Z0-9]{16}\b`)},
-	{"google-api-key", regexp.MustCompile(`AIza[A-Za-z0-9_-]{35}`)},
-	{"private-key-block", regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
-	{"anthropic-key", regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`)},
-	{"openai-key", regexp.MustCompile(`\bsk-(proj-)?[A-Za-z0-9_-]{32,}`)},
-	{"linear-key", regexp.MustCompile(`lin_api_[A-Za-z0-9]{30,}`)},
-	{"customer-push-token", regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{16,}`)},
-	{"authorization-credential", regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{20,}`)},
+	{name: "jwt", match: hasJWT},
+	{name: "github-token", re: regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`)},
+	{name: "github-fine-grained-pat", re: regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`)},
+	{name: "gitlab-pat", re: regexp.MustCompile(`glpat-[A-Za-z0-9_-]{20,}`)},
+	{name: "slack-token", re: regexp.MustCompile(`xox[abprs]-[A-Za-z0-9-]{10,}`)},
+	{name: "stripe-key", re: regexp.MustCompile(`\b[sr]k_(live|test)_[A-Za-z0-9]{16,}`)},
+	{name: "aws-access-key", re: regexp.MustCompile(`\b(AKIA|ASIA)[A-Z0-9]{16}\b`)},
+	{name: "google-api-key", re: regexp.MustCompile(`AIza[A-Za-z0-9_-]{35}`)},
+	{name: "private-key-block", re: regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
+	{name: "anthropic-key", re: regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`)},
+	{name: "openai-key", re: regexp.MustCompile(`\bsk-(proj-)?[A-Za-z0-9_-]{32,}`)},
+	{name: "linear-key", re: regexp.MustCompile(`lin_api_[A-Za-z0-9]{30,}`)},
+	{name: "customer-push-token", re: regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{16,}`)},
+	{name: "authorization-credential", re: regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{20,}`)},
 }
 
 // TokenShapeNames are the names of the shapes, in the order tested.
@@ -66,7 +93,7 @@ func TokenShapeNames() []string {
 func TokenShapesIn(text string) []string {
 	var found []string
 	for _, shape := range tokenShapes {
-		if shape.re.MatchString(text) {
+		if shape.match != nil && shape.match(text) || shape.re != nil && shape.re.MatchString(text) {
 			found = append(found, shape.name)
 		}
 	}
@@ -85,11 +112,25 @@ var volatileTokenClaims = map[string]bool{"iat": true, "exp": true, "nbf": true,
 // percent-encoded so a quote or separator cannot break the surrounding JSON.
 // The result holds no token shape and projecting it again changes nothing.
 func ProjectTokens(text string) string {
-	return jwtShape.ReplaceAllStringFunc(text, projectJWT)
+	return jwtCandidate.ReplaceAllStringFunc(text, func(candidate string) string {
+		parts, ok := jwtParts(candidate)
+		if !ok {
+			return candidate
+		}
+		if len(parts) == 5 {
+			// A compact JWE: its claims are encrypted, so nothing can be compared.
+			return undecodableJWT + ":encrypted>"
+		}
+		// A fourth part is text after the token (a trailing dot, a word).
+		rest := ""
+		if len(parts) > 3 {
+			rest = "." + strings.Join(parts[3:], ".")
+		}
+		return projectJWT(parts[:3]) + rest
+	})
 }
 
-func projectJWT(token string) string {
-	parts := strings.SplitN(token, ".", 3)
+func projectJWT(parts []string) string {
 	header, ok := decodeSegment(parts[0])
 	if !ok {
 		return undecodableJWT + ":header>"
@@ -152,6 +193,11 @@ func decodeSegment(segment string) (map[string]any, bool) {
 	decoder.UseNumber()
 	var claims map[string]any
 	if err := decoder.Decode(&claims); err != nil || claims == nil {
+		return nil, false
+	}
+	// Nothing may follow the object: bytes the projection cannot see.
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
 		return nil, false
 	}
 	return claims, true
@@ -235,6 +281,9 @@ func tokenShapeErr(path string, raw []byte) error {
 	var bodies []string
 	for _, request := range file.Requests {
 		bodies = append(bodies, request.Body)
+		for _, value := range request.Headers {
+			bodies = append(bodies, value)
+		}
 	}
 	for _, rows := range file.Rows {
 		bodies = append(bodies, rows.Rows)

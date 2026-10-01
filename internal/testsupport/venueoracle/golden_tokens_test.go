@@ -1,12 +1,17 @@
 package venueoracle
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/base64"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -167,12 +172,30 @@ func goldenTokenViolations(t *testing.T, root string) (checked int, violations [
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, ".json") || !strings.Contains(filepath.ToSlash(path), "/testdata/") {
+		slash := filepath.ToSlash(path)
+		gz := strings.HasSuffix(slash, ".json.gz")
+		if !(strings.HasSuffix(slash, ".json") || gz) || !strings.Contains(slash, "/testdata/") {
 			return nil
 		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return err
+		}
+		if gz {
+			// A compressed golden (a recorded transport, a world file) is
+			// scanned as text: it has no venue header to look for.
+			reader, err := gzip.NewReader(bytes.NewReader(raw))
+			if err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+			if raw, err = io.ReadAll(reader); err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+			checked++
+			if found := TokenShapesIn(string(raw)); len(found) > 0 {
+				violations = append(violations, fmt.Sprintf("%s holds a token shape (%s)", path, strings.Join(found, ", ")))
+			}
+			return nil
 		}
 		if !strings.Contains(string(raw), `"python_build"`) {
 			return nil
@@ -351,5 +374,96 @@ func TestScrubIsTheEscapeForAFalsePositive(t *testing.T) {
 	}
 	if err := record(func(text string) string { return strings.ReplaceAll(text, lookalike, "<plan-name>") }); err != nil {
 		t.Fatalf("the scrub did not clear the lookalike: %v", err)
+	}
+}
+
+func TestRowSnapshotsAreScrubbedOnBothPlanes(t *testing.T) {
+	dir := t.TempDir()
+	scrub := func(text string) string { return strings.ReplaceAll(text, "reset=abc123", "reset=<token>") }
+	golden, err := openGolden(GoldenSpec{Path: filepath.Join(dir, "g.json"), PythonBuild: goldenBuild, Recipe: "record it", Scrub: scrub}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden.state = statePython
+	jwt := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":7}`, "sig")
+	value := golden.CompareRows(t, "mail", func() string { return "link reset=abc123 " + jwt }, "link reset=abc123 "+mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":99}`, "other"))
+	if strings.Contains(value, "abc123") || strings.Contains(value, jwt) || !strings.Contains(value, "reset=<token>") {
+		t.Fatalf("recorded rows hold a per-run value or a token: %q", value)
+	}
+	if got := golden.recorded.Rows["mail"].Rows; got != value {
+		t.Fatalf("stored rows %q differ from the returned %q", got, value)
+	}
+}
+
+func TestJWTFormsTheRegexOfAPrefixWouldMiss(t *testing.T) {
+	enc := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+	// Legal leading whitespace in the header JSON: the segment does not begin eyJ.
+	spaced := enc(` {"alg":"HS256"}`) + "." + enc(`{"sub":"u1","iat":1}`) + "." + enc("sig")
+	if strings.HasPrefix(spaced, "eyJ") {
+		t.Fatal("the sample is not the case it claims to be")
+	}
+	if got := TokenShapesIn(`{"t":"` + spaced + `"}`); !strings.Contains(strings.Join(got, ","), "jwt") {
+		t.Fatalf("a whitespace-led JWT was not found: %v", got)
+	}
+	projected := ProjectTokens(`{"t":"` + spaced + `"}`)
+	if !strings.Contains(projected, "sub=string:u1") || len(TokenShapesIn(projected)) > 0 {
+		t.Fatalf("a whitespace-led JWT was not projected: %s", projected)
+	}
+	// A compact JWE: five parts, claims encrypted.
+	jwe := enc(`{"alg":"dir","enc":"A128GCM"}`) + "." + enc("key") + "." + enc("iv-iv-iv") + "." + enc("cipher-text") + "." + enc("tag-tag-tag-tag")
+	if got := TokenShapesIn(jwe); !strings.Contains(strings.Join(got, ","), "jwt") {
+		t.Fatalf("a JWE was not found: %v", got)
+	}
+	encrypted := ProjectTokens(`{"t":"` + jwe + `"}`)
+	if !strings.Contains(encrypted, ":encrypted") {
+		t.Fatalf("a JWE is not marked encrypted: %s", encrypted)
+	}
+	if err := tokenShapeErr("g.json", []byte(`{"requests":[{"body":`+strconv.Quote(encrypted)+`}]}`)); err == nil {
+		t.Fatalf("the recorder accepted an encrypted token: %s", encrypted)
+	}
+	// Text after the token is kept.
+	if got := ProjectTokens("see " + spaced + "."); !strings.HasSuffix(got, ">.") {
+		t.Fatalf("the full stop after a token was eaten: %s", got)
+	}
+	// A dotted name that is not a token is left alone.
+	if got := ProjectTokens("dev_health_ops.api.graphql version 1.2.3"); got != "dev_health_ops.api.graphql version 1.2.3" {
+		t.Fatalf("a dotted name was rewritten: %s", got)
+	}
+}
+
+func TestTrailingBytesAfterTheClaimsMakeATokenUndecodable(t *testing.T) {
+	enc := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+	token := enc(`{"alg":"HS256"}`) + "." + enc(`{"sub":"u1"}junk`) + "." + enc("sig")
+	if got := ProjectTokens(token); !strings.Contains(got, undecodableJWT) {
+		t.Fatalf("a payload with trailing bytes was projected: %s", got)
+	}
+}
+
+func TestACredentialInAPackedHeaderValueIsRefused(t *testing.T) {
+	golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden.recorded.Header.ProducerDigest = strings.Repeat("c", 64)
+	golden.recorded.Requests = []goldenRequest{{Name: "a", Headers: map[string]string{"x-credential": PackBody([]byte("tok " + tokenSamples()["github-token"]))}}}
+	if _, err := golden.writeCandidate(false); err == nil || !strings.Contains(err.Error(), "github-token") {
+		t.Fatalf("a credential in a packed header value was recorded: %v", err)
+	}
+}
+
+func TestACompressedGoldenIsInTheWalk(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "x", "testdata")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, _ = zw.Write([]byte(`{"world":"` + tokenSamples()["github-token"] + `"}`))
+	_ = zw.Close()
+	if err := os.WriteFile(filepath.Join(dir, "world.json.gz"), buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if checked, violations := goldenTokenViolations(t, filepath.Dir(filepath.Dir(dir))); checked != 1 || len(violations) != 1 {
+		t.Fatalf("a token in a .json.gz golden was not reported: %d %v", checked, violations)
 	}
 }

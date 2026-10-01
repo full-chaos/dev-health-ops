@@ -100,7 +100,7 @@ func newMCPTestListeners(t *testing.T, ch *countingMCPClient, sw routeswitch.Swi
 		Registry:  stub,
 		BuildInfo: stub,
 		MCP:       newMCPHandlerWithLimits(ch, nil, sw, getenv, limits),
-	})
+	}, graphQLEdgeDeps{auth: ecEdgeAuth(t, &fakeEdgeStore{}), maxBytes: defaultGraphQLMaxQueryBytes})
 	// Build's tail: the public set is wrapped, the internal set falls through to it.
 	handler := markResponseModelRoutes(mux)
 	internalMux.Handle("/", handler)
@@ -475,13 +475,21 @@ func TestMCPRefusesOtherTransportShapes(t *testing.T) {
 
 func TestMCPListenerServesNothingButQuery(t *testing.T) {
 	l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
-	for _, path := range []string{"/registry", "/buildinfo", "/metrics", "/healthz", "/api/v1/meta", "/query/proof", "/query/proof-write"} {
+	for _, path := range []string{"/registry", "/buildinfo", "/metrics", "/healthz", "/api/v1/meta", "/query/proof", "/query/proof-write", "/graphql"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		l.mcp.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("%s on the MCP listener: status %d, want 404", path, rec.Code)
 		}
+	}
+	// /graphql IS mounted on the public set of the same route sets (its 401
+	// for a request with no credential), so the 404 above is the MCP
+	// listener not reaching it, not a route nobody mounted.
+	rec := httptest.NewRecorder()
+	l.public.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ x }"}`)))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/graphql on the public listener: status %d, want its 401", rec.Code)
 	}
 }
 

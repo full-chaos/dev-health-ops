@@ -44,10 +44,23 @@ type ChunkPolicy struct {
 	MaxWallTime         time.Duration
 }
 
+// defaultMaxChunksPerAttempt is the chunk-count bound of one attempt. The wall
+// bound (MaxWallTime, below) is the one meant to end a normal attempt: the
+// continuation between attempts costs a 1 s River snooze plus the fetch and
+// completion hand-off, and the unit's cap slot stays held through it
+// (dispatch_guard.go countActiveBucketUnits counts a fresh `dispatching` unit).
+// CHAOS-7692 measured on prod: a heavy unit (blame, commit-stats, files) is
+// ~380-880 chunks at ~0.66 s each, 8 chunks ended an attempt after ~5 s, and
+// ~80 % of the unit's slot time was spent between attempts. At ~0.66 s a chunk
+// 64 chunks is ~42 s, so the count bound now sits just under the 45 s wall and
+// still ends an attempt of very fast chunks; memory stays bounded per chunk
+// (MaxSourceItems, MaxEffectRows, MaxPreparedBytes), not per attempt.
+const defaultMaxChunksPerAttempt = 64
+
 func DefaultChunkPolicy() ChunkPolicy {
 	return ChunkPolicy{
 		MaxSourceItems: 100, MaxEffectRows: 500,
-		MaxPreparedBytes: 2 << 20, MaxChunksPerAttempt: 8,
+		MaxPreparedBytes: 2 << 20, MaxChunksPerAttempt: defaultMaxChunksPerAttempt,
 		MaxWallTime: 45 * time.Second,
 	}
 }

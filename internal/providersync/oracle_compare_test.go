@@ -78,8 +78,8 @@ func compareRowsAgainstPythonOracle[T any](
 // compareRowsAgainstFrozenOracle is compareRowsAgainstPythonOracle's frozen-
 // golden twin, same field-by-field comparison and reporting shape, but reads
 // the Python side from a checked-in JSON snapshot
-// (testdata/oracle_frozen/<snapshotName>.json) instead of shelling out to
-// live Python. snapshotName is an explicit filename stem, not necessarily the
+// (testdata/oracle_frozen/<snapshotName>.json) instead of the pair's golden
+// (testdata/oracle_golden). snapshotName is an explicit filename stem, not necessarily the
 // pair id: two call sites can share one pair id (same oracle_registry
 // registration) while using different case sets, which need different frozen
 // snapshots -- see work_item_attribution_backstop_oracle_test.go and
@@ -106,7 +106,7 @@ func compareRowsAgainstFrozenOracle[T any](
 // reportOracleDivergences turns a flat divergence-message list (case-prefixed
 // by caseDivergencePrefix, or unattributed for a batch-level finding) into
 // per-case subtests plus one "exclusion integrity" subtest for anything left
-// over -- the reporting shape both the live and frozen comparators share.
+// over -- the reporting shape both comparators share.
 func reportOracleDivergences(t *testing.T, cases []oracleCase, all []string) {
 	t.Helper()
 	attributed := make(map[string]bool, len(all))
@@ -189,7 +189,7 @@ func oracleDivergences(
 // validation and field-by-field diff, but the Python side comes from a
 // checked-in JSON snapshot (captured once via the same python_generic_row_
 // oracle.py CLI, back when the pair's Python producer still existed) instead
-// of a live shellout. See testdata/oracle_frozen/README.md.
+// of a pair golden. See testdata/oracle_frozen/README.md.
 func frozenOracleDivergences(
 	t *testing.T,
 	snapshotName string,
@@ -250,7 +250,7 @@ func validateOracleCasesAndFields(
 }
 
 // decodeGenericRowOracleOutput decodes python_generic_row_oracle.py's own
-// output shape -- shared by the live shellout and the frozen JSON snapshot,
+// output shape -- shared by the pair golden and the frozen JSON snapshot,
 // since a snapshot is byte-for-byte that CLI's stdout from capture time.
 func decodeGenericRowOracleOutput(
 	t *testing.T,
@@ -294,7 +294,7 @@ func decodeGenericRowOracleOutput(
 
 // diffAgainstPythonRows is the field-by-field comparison tail oracleDivergences
 // and frozenOracleDivergences share once each has its own pythonRows/
-// excludedFields, live or frozen.
+// excludedFields, from a pair golden or a frozen snapshot.
 func diffAgainstPythonRows(
 	t *testing.T,
 	cases []oracleCase,

@@ -98,7 +98,7 @@ func TestGitHubProjectV2TransitionMatchesFrozenPythonProductionRow(t *testing.T)
 // The pin is not deleted, and that matters. `transition_count` stays compared,
 // so the other half of the decision -- that a PR board item still contributes
 // no status transitions, its `changes` history being CHAOS-4221's problem --
-// remains pinned to live Python. Deleting the pair would have thrown that away
+// remains pinned to the recorded Python answer. Deleting the pair would have thrown that away
 // to record one divergence.
 //
 // The case input gained a repository and a createdAt so the divergence is real

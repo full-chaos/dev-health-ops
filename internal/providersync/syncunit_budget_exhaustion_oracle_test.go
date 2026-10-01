@@ -74,7 +74,7 @@ type budgetEpisodeSnapshot struct {
 // file, which is what stops the new Python writers from invalidating this
 // corpus unobserved.
 //
-// What the mirror IS for is the differential against the live Python
+// What the mirror IS for is the differential against the recorded Python
 // authority: the pair below fails the moment the two readings of a shared
 // sync_run_units row disagree, so when the Go runtime does take over unit
 // admission it inherits an executable specification instead of a prose one.
@@ -130,7 +130,7 @@ func buildBudgetExhaustionDecisionForOracle(
 // stampedErrorCategory extracts the literal error_category a Go result stamp
 // writes, DERIVED from the SQL constant rather than restated here. That is
 // what makes the go_stamp_* cases below a guard on the real statements: edit
-// the stamp's category and the case that runs through the live Python
+// the stamp's category and the case that runs through the recorded Python
 // predicate changes with it.
 func stampedErrorCategory(t *testing.T, sql string) string {
 	t.Helper()
@@ -201,7 +201,7 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 		// Which of the two kills it, stated exactly rather than as "these
 		// cases": only the PAST-the-wall-clock one. Under the mutant, Go
 		// short-circuits on the zero counter and answers "not exhausted" while
-		// live Python answers "exhausted" -- the disagreement. The
+		// recorded Python answers "exhausted" -- the disagreement. The
 		// inside-the-wall-clock case AGREES with the mutant (both say "not
 		// exhausted"), so it kills nothing on its own. It is the boundary
 		// companion: it proves the past-the-cap case is decided by the elapsed
@@ -218,7 +218,7 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 	// and a spurious terminalization is the category the stamp wrote --
 	// derived from the live SQL constants, not restated. If a stamp is ever
 	// changed to PRESERVE the prior category, the derived value here becomes
-	// 'budget_deferred' and the live Python predicate answers "exhausted" for
+	// 'budget_deferred' and the recorded Python predicate answers "exhausted" for
 	// a unit that is merely being retried.
 	for name, sql := range map[string]string{
 		"release_for_retry": releaseForRetrySQL,
@@ -233,7 +233,7 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 	// Request-reservation contention is a real Go budget-related stamp, but it
 	// starts a distinct episode and clears the intrinsic pair. Build the exact
 	// post-stamp field shape, with its category derived from production SQL, so
-	// live Python proves it can never call that state intrinsic unfitness.
+	// recorded Python proves it can never call that state intrinsic unfitness.
 	cases = append(cases, oracleCase{
 		ID: "go_stamp_provider_budget_contention_is_not_intrinsic_exhaustion",
 		Input: snapshot(
@@ -247,13 +247,13 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 // and the name says so because the earlier one ("generic oracle ... for budget
 // exhaustion") read like a state-machine oracle and was reported as one.
 //
-// WHAT IT MEASURES. One side is the live, unmodified
+// WHAT IT MEASURES. One side is the recorded answer of the unmodified
 // sync/budget_guard.py::_budget_deferral_exhausted; the other is the
 // hand-written Go mirror above. Given the same unit-state snapshot, the two
 // must return the same verdict. ONE case input is DERIVED from a production
 // Go SQL constant (the single go_stamp_* case reads the stamped
 // error_category straight out of releaseForRetrySQL), so that one case does
-// bind a real Go statement to the live predicate -- the rest compare two
+// bind a real Go statement to the recorded predicate -- the rest compare two
 // predicates, not two producers. It said "two" while the loop below built
 // one, which overstates how much of this corpus is anchored to real SQL.
 //

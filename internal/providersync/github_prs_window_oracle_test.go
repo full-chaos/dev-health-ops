@@ -10,9 +10,8 @@ import (
 // (pullOutsideKnownWindow / pullCrossedSinceBoundary, both
 // github_prs_route.go) to the "github/prs/window" pair registered in
 // testdata/oracle_pairs/github_prs_window.py. See that file's module
-// docstring for why this pair's Python side is a pinned, freshness-checked
-// copy rather than a live execution of _collect_github_pr_objects (unlike
-// github_prs_row.py) -- a documented, narrower scope, not a silent one.
+// docstring for how this pair's Python side drives
+// _collect_github_pr_objects; the test compares with its recorded answer.
 
 func windowDecisionOracleCase(id string, updatedAt, since, until *string) oracleCase {
 	input := map[string]any{}

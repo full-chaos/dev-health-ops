@@ -9,7 +9,7 @@ import (
 // team_repo_ownership_donor_walk_oracle_test.go is CHAOS-4365 item 1b's
 // differential-oracle pair: it proves buildDonorProjectIDResolver's edge
 // gating (docs/contribute/architecture/team-attribution.md Sec 0.6) matches
-// the LIVE, production compute_work_items.py::build_linked_issue_team_resolver
+// the recorded answer of production compute_work_items.py::build_linked_issue_team_resolver
 // it was built to mirror -- not just this package's own inline unit tests
 // (team_repo_ownership_derivation_test.go), which only check Go's internal
 // self-consistency. A future drift between the two implementations of this

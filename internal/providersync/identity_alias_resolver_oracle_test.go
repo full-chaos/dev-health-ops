@@ -9,7 +9,7 @@ import (
 )
 
 // identity_alias_resolver_oracle_test.go proves internal/identityalias's Go
-// port of providers/identity.py's IdentityResolver matches the LIVE Python
+// port of providers/identity.py's IdentityResolver matches the recorded Python
 // resolver under a SEEDED, non-empty alias config. The existing
 // github/team-catalog/facets pair (github_team_catalog_generic_oracle_test.go)
 // only ever runs against this deployment's checked-in EMPTY
@@ -49,7 +49,7 @@ type identityAliasResolveProducerRow struct {
 
 // TestIdentityAliasResolverMatchesFrozenPythonResolverWithSeededAliases is a
 // red-first parity proof: five scenarios the ported Go resolver
-// must match the live Python IdentityResolver on -- exact login alias,
+// must match the recorded Python IdentityResolver on -- exact login alias,
 // case-different login alias (normKey lowercases before lookup), an email
 // alias, an unmapped identity (falls back to the provider-qualified id),
 // and a provider id that maps via alias to a DIFFERENT canonical person than

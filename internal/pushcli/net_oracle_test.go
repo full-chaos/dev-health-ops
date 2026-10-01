@@ -349,7 +349,7 @@ const (
 
 // netPythonRun runs every case through the real dev-hops entry point against the Python plane's fake. The
 // jobs (input) name netOracleBase and netOracleDir; they are replaced by the live fake and a fresh directory.
-func netPythonRun(t *testing.T, python, root string, cases []netCase, input []byte) []netResult {
+func netPythonRun(t *testing.T, producer *venueoracle.Producer, cases []netCase, input []byte) []netResult {
 	t.Helper()
 	fake := newNetFake(cases)
 	server := httptest.NewServer(fake)
@@ -357,12 +357,14 @@ func netPythonRun(t *testing.T, python, root string, cases []netCase, input []by
 	dir := t.TempDir()
 	// The host alone is swapped: userinfo cases put "login:password@" between the scheme and the host.
 	live := bytes.ReplaceAll(bytes.ReplaceAll(input, []byte(netOracleHost), []byte(strings.TrimPrefix(server.URL, "http://"))), []byte(netOracleDir), []byte(dir))
-	command := exec.Command(python, "-c", pythonNetProgram)
-	command.Env = pushPythonEnv(root)
+	command, err := producer.Command(context.Background(), pushPythonSettings, nil, "-c", pythonNetProgram)
+	if err != nil {
+		t.Fatal(err)
+	}
 	command.Stdin = bytes.NewReader(live)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, output))
 	}
 	marker := strings.LastIndex(string(output), "RESULT")
 	if marker < 0 {
@@ -463,9 +465,9 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("push net corpus", pythonNetProgram, append(append([]byte{}, input...), script...), pushPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
-		results := netPythonRun(t, python, root, cases, input)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		results := netPythonRun(t, producer, cases, input)
 		body, err := json.Marshal(results)
 		if err != nil {
 			t.Fatal(err)

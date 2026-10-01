@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -20,7 +19,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -244,26 +242,24 @@ const (
 // ORG_ID is the scenario's own (in its input) and CLICKHOUSE_URI a per-run value: both are appended by name.
 var validateFlagsPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "TZ": "UTC"}
 
-func validateFlagsPythonEnv(root string) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	for _, name := range []string{"OTEL_ENABLED", "PYTHONHASHSEED", "TZ"} {
-		env = append(env, name+"="+validateFlagsPythonSettings[name])
-	}
-	return env
-}
-
-func pythonRunErr(t *testing.T, root string, ch clickHouse, org string, patched bool, args ...string) (int, string, string) {
+func pythonRunErr(t *testing.T, producer *venueoracle.Producer, ch clickHouse, org string, patched bool, args ...string) (int, string, string) {
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
 	program := validateFlagsShippedProgram
 	if patched {
 		program = validateFlagsPatchedProgram
 	}
-	command := exec.Command(python, append([]string{"-c", program, "metrics", "validate-flags"}, args...)...)
-	command.Env = append(validateFlagsPythonEnv(root), "CLICKHOUSE_URI="+ch.httpDSN, "ORG_ID="+org)
+	// ORG_ID is the scenario's own and is in the request's input (the key): it is declared with the settings.
+	declared := map[string]string{"ORG_ID": org}
+	for name, value := range validateFlagsPythonSettings {
+		declared[name] = value
+	}
+	command, err := producer.Command(context.Background(), declared, []string{"CLICKHOUSE_URI=" + ch.httpDSN}, append([]string{"-c", program, "metrics", "validate-flags"}, args...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
+	err = command.Run()
 	code := 0
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
@@ -348,7 +344,7 @@ func TestValidateFlagsAgainstClickHouse(t *testing.T) {
 	}
 	request := venueoracle.ProgramRequest("validate-flags scenarios", validateFlagsPatchedProgram, input, validateFlagsPythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		root := producer.Root
+		producer.RequireDeployed()
 		ch := startClickHouse(t)
 		seed(t, ch)
 		var produced validateFlagsAnswers
@@ -356,7 +352,7 @@ func TestValidateFlagsAgainstClickHouse(t *testing.T) {
 			if scenario.prepare != nil {
 				scenario.prepare(t, ch)
 			}
-			code, out, stderr := pythonRunErr(t, root, ch, scenario.org, true, scenario.args...)
+			code, out, stderr := pythonRunErr(t, producer, ch, scenario.org, true, scenario.args...)
 			if !strings.Contains(out, "Feature Flag Pipeline Validation") {
 				t.Fatalf("the producer printed no report for org %q %v: the comparison would measure nothing:\n%s\n%s", scenario.org, scenario.args, out, stderr)
 			}
@@ -364,7 +360,7 @@ func TestValidateFlagsAgainstClickHouse(t *testing.T) {
 		}
 		// The named difference is real: the producer as it ships fails on this ClickHouse before printing
 		// anything.
-		code, out, stderr := pythonRunErr(t, root, ch, orgBad, false)
+		code, out, stderr := pythonRunErr(t, producer, ch, orgBad, false)
 		produced.Shipped.Exit, produced.Shipped.HasStdout, produced.Shipped.Refused = code, out != "", strings.Contains(stderr, "Cannot read DateTime")
 		body, err := json.Marshal(produced)
 		if err != nil {

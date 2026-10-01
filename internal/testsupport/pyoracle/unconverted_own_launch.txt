@@ -8,12 +8,7 @@ internal/api/externalingest
 internal/api/legacyingest
 internal/apiservice
 internal/apiservice/customerpush
-internal/backfillrun
 internal/chmigrate
 internal/fixturescli
-internal/maintenancecli
-internal/metricscli
-internal/operationalbackfill
 internal/pgmigrate
 internal/providersync
-internal/pushcli

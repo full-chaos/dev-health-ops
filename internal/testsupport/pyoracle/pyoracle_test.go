@@ -198,13 +198,13 @@ func TestClosedEnvInheritsNothingAndCarriesTheExtras(t *testing.T) {
 
 // The recorders of the goldens that were hand-recorded with the whole shell environment run Python
 // through ClosedEnv and never inherit it: a closed list of the test files, each of which must call
-// ClosedEnv and must not call os.Environ().
+// ClosedEnv and must not call os.Environ(). A package converted to the launcher (venueoracle.Producer.Command)
+// leaves this list: the launcher builds the closed environment itself.
 func TestTheClosedEnvironmentRecordersDoNotInheritTheEnvironment(t *testing.T) {
 	for _, file := range []string{
 		"../../chmigrate/migrate_venue_oracle_integration_test.go",
 		"../../chmigrate/repair_integration_test.go",
 		"../../chmigrate/chain_record_integration_test.go",
-		"../../operationalbackfill/backfill_integration_test.go",
 	} {
 		raw, err := os.ReadFile(file)
 		if err != nil {

@@ -604,11 +604,10 @@ func localScenarios() []localScenario {
 			mustSymlink("real.txt", "link-to-file")
 			mustSymlink("dir", "link-to-dir")
 			mustSymlink("nowhere.txt", "broken-link")
-			outside := filepath.Join(filepath.Dir(f.dir), "outside.txt")
-			if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
-				f.t.Fatal(err)
-			}
-			mustSymlink(outside, "link-outside")
+			// An existing file outside the repository, at a path that does not depend on the run's temporary
+			// directory: the link's target is part of the commit, and a per-run path would make the commit hash
+			// differ between the recording and the replay.
+			mustSymlink("/dev/null", "link-outside")
 			f.commit("links\n")
 		}},
 		{name: "blame: a .git file and a nested .git directory", build: func(f *fixture) {

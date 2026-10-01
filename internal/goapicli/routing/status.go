@@ -93,6 +93,8 @@ type statusReportMCPRoot struct {
 	ProofShapesCounted  int      `json:"proof_shapes_counted"`
 	ProofShapesMatched  int      `json:"proof_shapes_matched"`
 	ProofShapesExcluded []string `json:"proof_shapes_excluded"`
+	// ProofShapesStochastic names the shapes proven under the stochastic leaf class (counted, never matched).
+	ProofShapesStochastic []string `json:"proof_shapes_stochastic"`
 }
 
 // Python's per-operation object carries exactly: operation,
@@ -794,6 +796,9 @@ func printMCPClassStatus(report statusReport) {
 				reference = "(not recorded)"
 			}
 			fmt.Fprintf(stdout, "    proof: reference=%s shapes counted=%d matched=%d excluded=%d\n", reference, row.ProofShapesCounted, row.ProofShapesMatched, len(row.ProofShapesExcluded))
+			for _, stochastic := range row.ProofShapesStochastic {
+				fmt.Fprintf(stdout, "      proven under the stochastic leaf class (not a match): %s\n", stochastic)
+			}
 			for _, excluded := range row.ProofShapesExcluded {
 				fmt.Fprintf(stdout, "      excluded: %s\n", excluded)
 			}
@@ -816,7 +821,10 @@ func mcpClassStatus(ctx context.Context, pool *pgxpool.Pool, liveDigest string) 
 	for _, row := range rows {
 		entry := statusReportMCPRoot{Root: row.Root, Operation: row.Operation, ServedByBinary: row.ServedByBinary,
 			DigestState: row.DigestState, Reachable: row.Reachable, Proven: row.Proven, Dark: row.Dark, StaleDigests: row.StaleDigests,
-			ProofReference: row.ProofReference, ProofShapesCounted: row.ProofExecuted, ProofShapesMatched: row.ProofMatched, ProofShapesExcluded: row.ProofExcluded}
+			ProofReference: row.ProofReference, ProofShapesCounted: row.ProofExecuted, ProofShapesMatched: row.ProofMatched, ProofShapesExcluded: row.ProofExcluded, ProofShapesStochastic: row.ProofStochastic}
+		if entry.ProofShapesStochastic == nil {
+			entry.ProofShapesStochastic = []string{}
+		}
 		if entry.ProofShapesExcluded == nil {
 			entry.ProofShapesExcluded = []string{}
 		}

@@ -239,7 +239,7 @@ var sinceField = regexp.MustCompile(`"since":"[^"]*"`)
 // with the real Python api and the real Go api over the same organizations
 // and ClickHouse rows, and requires the same status and response text.
 func TestAdminLLMSpendVenueOracle(t *testing.T) {
-	runSpendVenue(t, "", "utc", "73ce7dd4395876b5c16aa14c93d0fe320aa772efce5a819a1ddc5c3a45b14cfb")
+	runSpendVenue(t, "", "utc", "5adf6653989638eeb38586be3d95ab43c18c47ab82054204d6b6e7b53f9ff66f")
 }
 
 // TestAdminLLMSpendLocalZoneVenueOracle runs both planes in
@@ -247,7 +247,7 @@ func TestAdminLLMSpendVenueOracle(t *testing.T) {
 // `since` is local time there, so a window edge that lands exactly on a row
 // only matches when both read it the same way.
 func TestAdminLLMSpendLocalZoneVenueOracle(t *testing.T) {
-	runSpendVenue(t, "America/Los_Angeles", "localzone", "ce0ed1331d265f0f35ee00eae7d49f66c89bb929dc49540d5403f3bf6e817d21")
+	runSpendVenue(t, "America/Los_Angeles", "localzone", "af2e618c5b6d1fcc0a3e8bb66f7b1ecd5a8dc171d7a90c44f3b10588ec3db4ae")
 }
 
 // spendBase is the clock of the frozen golden: the hour the Python plane's

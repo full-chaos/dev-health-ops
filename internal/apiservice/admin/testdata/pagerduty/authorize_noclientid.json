@@ -4,7 +4,7 @@
     "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
     "producer_digest": "c0f6de73e34fa0583fea646a33b5f133309c1639cf5fc59dd5ebe0f439faed19",
     "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestPagerDutyAuthorizeWithoutClientIDVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
-    "python_env": "20ced1c26025589a85b73a191a4e5f48d9f51a3cf62aef356d3bce28ddcf192f"
+    "python_env": "9d3aa865c5fc627ee8ceb2cbee7a6f7c5be9076f54795927034c4c17d895e2b2"
   },
   "requests": [
     {

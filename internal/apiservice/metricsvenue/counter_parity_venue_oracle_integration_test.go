@@ -50,7 +50,7 @@ const ingestAPIKey = "venue-metrics-ingest-key"
 // then proves nothing.
 func TestCounterParityVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, goldenSpec("counter_parity", "TestCounterParityVenueOracle", "9a5e1afe9afd372e255b1db0131c855d5e77a20753621e76a1c631d3a00b1116"))
+	golden := venueoracle.OpenGolden(t, goldenSpec("counter_parity", "TestCounterParityVenueOracle", "b05c472e9e72f003a730e629eed7bcec45595f0cbf955bf61f35597a020cca98"))
 	nextID := func() func() uuid.UUID {
 		next := 0
 		return func() uuid.UUID {

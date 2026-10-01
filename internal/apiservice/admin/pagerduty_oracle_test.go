@@ -18,7 +18,7 @@ import (
 // copies of one database, byte for byte.
 func TestPagerDutyStatusAndPreflightVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, pagerDutyGolden("status_preflight", "TestPagerDutyStatusAndPreflightVenueOracle", "41b3d4a273a6726fe82ccd6bdab29e674c72800037df144b6f220a671aea5163"))
+	golden := venueoracle.OpenGolden(t, pagerDutyGolden("status_preflight", "TestPagerDutyStatusAndPreflightVenueOracle", "330564a0e051de2fcfce96251f9f048e5a4ccc26bce120fcdabefc9c8ba86858"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-status-32-bytes!"
 

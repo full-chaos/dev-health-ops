@@ -4,7 +4,7 @@
     "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
     "producer_digest": "c0f6de73e34fa0583fea646a33b5f133309c1639cf5fc59dd5ebe0f439faed19",
     "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/adminllmspendvenue/ -test '^TestAdminLLMSpendVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
-    "python_env": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    "python_env": "10f3d94a192dad4e128e8a39fb664460a06963554e9a09606e67611146d5e088"
   },
   "requests": [
     {

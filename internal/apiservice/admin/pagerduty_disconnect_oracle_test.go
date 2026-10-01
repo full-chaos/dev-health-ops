@@ -79,7 +79,7 @@ func (f *pagerDutyDisconnectFakeServer) count() int {
 // left after the request are compared byte for byte.
 func TestPagerDutyDisconnectVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, pagerDutyGolden("disconnect", "TestPagerDutyDisconnectVenueOracle", "5f7e8d374934caba8a9551bf904010346beb89e2c949894c23763c9d11cfd806"))
+	golden := venueoracle.OpenGolden(t, pagerDutyGolden("disconnect", "TestPagerDutyDisconnectVenueOracle", "fde105bee2dd3c2db34a0aee1d6a6eb95116a6a76b53ed9c5de6cdb39844dc2d"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-disconnect-32-by"
 

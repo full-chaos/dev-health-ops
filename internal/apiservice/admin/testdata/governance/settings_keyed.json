@@ -4,7 +4,7 @@
     "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
     "producer_digest": "c0f6de73e34fa0583fea646a33b5f133309c1639cf5fc59dd5ebe0f439faed19",
     "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestSettingsRoutesVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
-    "python_env": "4c9388bdf8e13ada22d3e9bb5602a1a7dc28af2b026ed8aa9e535d7af905053b"
+    "python_env": "e4409e9335e3135737f84815a8de758bdf6baafdbb122e1a3b47169bee198ca8"
   },
   "requests": [
     {

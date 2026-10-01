@@ -4,7 +4,7 @@
     "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
     "producer_digest": "c0f6de73e34fa0583fea646a33b5f133309c1639cf5fc59dd5ebe0f439faed19",
     "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestPagerDutyDisconnectVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
-    "python_env": "6a84bffc782c005a737a7e84fce3c1a61e94723f9505ad11979d566de3fad4f0"
+    "python_env": "49f2b360239957af8d859aa2e8a54bd2910696b7b3895cf1ce514c6dabc398fd"
   },
   "requests": [
     {

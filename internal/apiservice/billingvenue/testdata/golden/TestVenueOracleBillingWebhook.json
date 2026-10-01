@@ -4,7 +4,7 @@
     "python_build": "c3a755abd3b30ba41625178c6bb00e1e2c219fcb",
     "producer_digest": "593bfd8c0effcfa724b10a3b0693c70faec29674020088362a4af2ad1d85568a",
     "recipe": "git worktree add --detach \u003cdir\u003e c3a755abd3b30ba41625178c6bb00e1e2c219fcb; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestVenueOracleBillingWebhook$' .",
-    "python_env": "b608a89f515633e52d3bd26a4d5cc4f107e4f8c4c14065ec9ae3ddac21cd0a56"
+    "python_env": "8c7f6f27a5e8147e9222a35ec2a98183e37e80bbdbf95d519f10d46645203ce4"
   },
   "requests": [
     {

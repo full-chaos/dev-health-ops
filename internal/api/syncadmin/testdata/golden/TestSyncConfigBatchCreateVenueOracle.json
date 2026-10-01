@@ -4,7 +4,7 @@
     "python_build": "758a8d9fbb1f7548bef84df452597f9e7ddf145a",
     "producer_digest": "53028fde43de410ecb5704202be163d92617d6794f5d2108513c8868e2607e80",
     "recipe": "git worktree add --detach \u003cdir\u003e 758a8d9fbb1f7548bef84df452597f9e7ddf145a; from internal/api/syncadmin: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestSyncConfigBatchCreateVenueOracle$' .",
-    "python_env": "9b11fddf4e6521f848079898bf744329866dec04c2407ca746fe61121aec0620"
+    "python_env": "3ae6ea5e390a9cf280e91251e589df609f2b724063fa8e1da486700515b0bb1e"
   },
   "requests": [
     {

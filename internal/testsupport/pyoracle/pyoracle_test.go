@@ -3,6 +3,7 @@ package pyoracle
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -212,5 +213,72 @@ func TestTheClosedEnvironmentRecordersDoNotInheritTheEnvironment(t *testing.T) {
 		if !strings.Contains(text, "pyoracle.ClosedEnv(") {
 			t.Errorf("%s does not run Python through pyoracle.ClosedEnv", file)
 		}
+	}
+}
+
+// refusingInterpreter is a stand-in interpreter that behaves like the real one
+// under a recording test's guard: with PYTHONHOME set it cannot start (it says
+// why on standard error and exits 1); otherwise it writes the environment it
+// got to envFile and prints version.
+func refusingInterpreter(t *testing.T, version string) (python, envFile string) {
+	t.Helper()
+	dir := t.TempDir()
+	envFile = filepath.Join(dir, "env")
+	python = filepath.Join(dir, "python3")
+	script := "#!/bin/sh\nif [ -n \"${PYTHONHOME+set}\" ]; then echo \"Fatal Python error: Failed to import encodings module; PYTHONHOME = '$PYTHONHOME'\" >&2; exit 1; fi\n" +
+		"env > '" + envFile + "'\nprintf '%s\\n' '" + version + "'\n"
+	if err := os.WriteFile(python, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return python, envFile
+}
+
+// The version probe is a Python child like any other: it runs in the closed
+// environment and takes nothing of the process, so the variable a recording
+// test holds to stop every inheriting Python child does not stop the probe.
+func TestTheVersionProbeRunsInTheClosedEnvironment(t *testing.T) {
+	python, envFile := refusingInterpreter(t, "3.14")
+	root := t.TempDir()
+	t.Setenv("PYTHONHOME", "/a-directory-that-does-not-exist")
+	t.Setenv("AMBIENT_OF_THE_DAY", "1")
+	if err := ProbeDeployed(python, root); err != nil {
+		t.Fatalf("the probe did not pass under a recording test's guard: %v", err)
+	}
+	raw, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		// The shell adds its own bookkeeping; only what the caller gave it counts.
+		if name, _, _ := strings.Cut(line, "="); name == "PWD" || name == "SHLVL" || name == "_" || name == "OLDPWD" {
+			continue
+		}
+		got[line] = true
+	}
+	want := map[string]bool{}
+	for _, entry := range ClosedEnv(root) {
+		want[entry] = true
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the probe's environment:\n got  %v\n want %v (ClosedEnv, nothing else)", got, want)
+	}
+}
+
+// A probe that cannot start says why: the end of the interpreter's standard
+// error is in the error, not only its exit status.
+func TestAProbeThatCannotStartSaysWhatTheInterpreterWrote(t *testing.T) {
+	dir := t.TempDir()
+	python := filepath.Join(dir, "python3")
+	if err := os.WriteFile(python, []byte("#!/bin/sh\necho 'Fatal Python error: the reason is here' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := ProbeDeployed(python, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "Fatal Python error: the reason is here") || !strings.Contains(err.Error(), "exit status 1") {
+		t.Fatalf("the error does not hold what the interpreter wrote: %v", err)
+	}
+	old, _ := refusingInterpreter(t, "3.12")
+	if err := ProbeDeployed(old, t.TempDir()); err == nil || !strings.Contains(err.Error(), `resolved Python "3.12"`) {
+		t.Fatalf("an older release was not refused by what it said: %v", err)
 	}
 }

@@ -151,6 +151,17 @@ func (p *Producer) Command(ctx context.Context, declared map[string]string, extr
 	return command, nil
 }
 
+// RequireDeployed fails the test when the producer's interpreter is older than
+// the deployed release or does not start. The probe runs in the closed
+// environment (pyoracle.ProbeDeployed), as every child the producer starts.
+func (p *Producer) RequireDeployed() {
+	p.t.Helper()
+	if err := p.activate(); err != nil {
+		p.t.Fatal(err)
+	}
+	pyoracle.RequireDeployed(p.t, p.python, p.Root)
+}
+
 // PythonDir is the directory of the producer's interpreter: for a producer
 // that is not a Python command itself (a shell program that calls python3)
 // and so needs that directory first on its own PATH, as one more entry after

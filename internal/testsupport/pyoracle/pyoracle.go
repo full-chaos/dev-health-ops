@@ -15,6 +15,7 @@
 package pyoracle
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -86,11 +87,11 @@ const (
 	DeployedMinor = 14
 )
 
-// VersionProbeArgs are the arguments that make an interpreter print its
-// "major.minor" version. The caller runs them (exec of the resolved
-// interpreter stays in test files, where every oracle already does it) and
-// hands the output to RequireDeployed.
-var VersionProbeArgs = []string{"-c", "import sys; print('%d.%d' % sys.version_info[:2])"}
+// versionProbeArgs are the arguments that make an interpreter print its
+// "major.minor" version. They are not exported: the probe is a Python child
+// like any other, and this package starts it (ProbeDeployed), in the closed
+// environment, so no test starts it with the environment it inherited.
+var versionProbeArgs = []string{"-c", "import sys; print('%d.%d' % sys.version_info[:2])"}
 
 // DeployedVersionError reports why an interpreter that answered the version
 // probe with output (or failed with runErr) is not at least the deployed
@@ -111,13 +112,42 @@ func DeployedVersionError(python string, output []byte, runErr error) error {
 	return nil
 }
 
-// RequireDeployed fails (never skips) the test when the interpreter is older
-// than the deployed release. Call it right after Resolve in every oracle
-// whose answer depends on the Python release, passing the output of
-// exec.Command(python, VersionProbeArgs...).Output().
-func RequireDeployed(t *testing.T, python string, versionOutput []byte, runErr error) {
+// ProbeDeployed asks the interpreter at python for its version and reports why
+// it is not at least the deployed release, or nil when it is. The probe runs
+// in ClosedEnv(root) and takes nothing of the process's environment: a probe
+// that inherits it answers for the shell of the day, and a recording test
+// holds a variable in its process that stops every Python child that inherits
+// it (venueoracle's producer guard). When the interpreter fails to start, the
+// error holds the end of what it wrote to standard error, which says why.
+func ProbeDeployed(python, root string) error {
+	command := exec.Command(python, versionProbeArgs...)
+	command.Env = ClosedEnv(root)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, runErr := command.Output()
+	if runErr != nil {
+		said := strings.TrimSpace(stderr.String())
+		if len(said) > probeStderrLimit {
+			said = "..." + said[len(said)-probeStderrLimit:]
+		}
+		if said != "" {
+			runErr = fmt.Errorf("%w; it wrote: %s", runErr, said)
+		}
+	}
+	return DeployedVersionError(python, output, runErr)
+}
+
+// probeStderrLimit is how much of a failed probe's standard error an error
+// message carries.
+const probeStderrLimit = 600
+
+// RequireDeployed fails (never skips) the test when the interpreter at python
+// is older than the deployed release or does not start. Call it right after
+// Resolve in every oracle whose answer depends on the Python release; root is
+// the checkout the oracle's Python runs from.
+func RequireDeployed(t *testing.T, python, root string) {
 	t.Helper()
-	if err := DeployedVersionError(python, versionOutput, runErr); err != nil {
+	if err := ProbeDeployed(python, root); err != nil {
 		t.Fatalf("pyoracle: %v", err)
 	}
 }

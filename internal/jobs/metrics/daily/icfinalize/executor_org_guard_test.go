@@ -113,6 +113,9 @@ func TestIcFinalizeRefusalIsCountedAndLogged(t *testing.T) {
 	if total != 1 {
 		t.Fatalf("refusal counter = %d, want 1", total)
 	}
+	if lines := strings.Count(strings.TrimSpace(logs.String()), "\n") + 1; lines != 1 {
+		t.Fatalf("refusal wrote %d log lines, want exactly 1: %q", lines, logs.String())
+	}
 	if line := logs.String(); !strings.Contains(line, "level=ERROR") || !strings.Contains(line, "family=ic_finalize") || !strings.Contains(line, "target_day=2026-08-27") {
 		t.Fatalf("refusal log line = %q", line)
 	}

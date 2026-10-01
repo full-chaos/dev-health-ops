@@ -920,26 +920,51 @@ func TestTheKeyVersionRatchetNamesEachBreach(t *testing.T) {
 }
 
 // TestAKeyGeneratedForTheRunIsKeyedByNameWhateverItsValue pins the one name the
-// GitHub App venue sets to a new RSA key in every run: two different keys under
-// it are one Python environment, and the same variable set by the harness (not
-// the test) would still be keyed by value.
+// GitHub App venue sets to a new RSA key in every run (the key is generated in
+// the test, internal/api/githubapp/venue_oracle_integration_test.go, never read
+// from the host). Needed: two runs with two different generated keys are ONE
+// Python environment, in the venue's key and in a call's key (the venue sets it
+// with t.Setenv). Safe: nothing derived from the key's value reaches the key
+// (equal for two values, so no digest of key material is stored), and the
+// same name supplied by anyone but the test (the harness, the host) is keyed
+// by value as every other setting.
 func TestAKeyGeneratedForTheRunIsKeyedByNameWhateverItsValue(t *testing.T) {
-	first, err := pythonEnvKey(fromTest("GITHUB_APP_PRIVATE_KEY=generated-one", "GITHUB_APP_ID=12345"))
-	if err != nil {
-		t.Fatal(err)
+	key := func(entries ...envEntry) string {
+		t.Helper()
+		out, err := pythonEnvKey(entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
 	}
-	second, err := pythonEnvKey(fromTest("GITHUB_APP_PRIVATE_KEY=generated-two", "GITHUB_APP_ID=12345"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first != second {
+	if key(fromTest("GITHUB_APP_PRIVATE_KEY=generated-one", "GITHUB_APP_ID=12345")...) != key(fromTest("GITHUB_APP_PRIVATE_KEY=generated-two", "GITHUB_APP_ID=12345")...) {
 		t.Fatal("a private key generated for the run changes the Python environment key")
 	}
-	other, err := pythonEnvKey(fromTest("GITHUB_APP_PRIVATE_KEY=generated-one", "GITHUB_APP_ID=99999"))
+	if key(fromTest("GITHUB_APP_PRIVATE_KEY=generated-one", "GITHUB_APP_ID=12345")...) == key(fromTest("GITHUB_APP_PRIVATE_KEY=generated-one", "GITHUB_APP_ID=99999")...) {
+		t.Fatal("a changed GITHUB_APP_ID no longer changes the key: the whole environment became per-run")
+	}
+	if key(tagged([]string{"GITHUB_APP_PRIVATE_KEY=host-one"}, false)...) == key(tagged([]string{"GITHUB_APP_PRIVATE_KEY=host-two"}, false)...) {
+		t.Fatal("a key supplied by the harness or the host is keyed by name only: its value must be in the key")
+	}
+	recording, err := openGolden(GoldenSpec{Path: t.TempDir() + "/g.json", PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if other == first {
-		t.Fatal("a changed GITHUB_APP_ID no longer changes the key: the whole environment became per-run")
+	if err := recording.bindPythonEnv(Options{JWTKey: "k"}); err != nil {
+		t.Fatal(err)
+	}
+	call := func() string {
+		t.Helper()
+		got, err := recording.callEnvKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	t.Setenv("GITHUB_APP_PRIVATE_KEY", "generated-one")
+	first := call()
+	t.Setenv("GITHUB_APP_PRIVATE_KEY", "generated-two")
+	if first == "" || call() != first {
+		t.Fatalf("the call key of a variable the test set to a generated key depends on the key (%q then %q)", first, call())
 	}
 }

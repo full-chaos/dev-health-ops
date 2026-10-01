@@ -2,6 +2,7 @@ package programoracle
 
 import (
 	"io"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -80,14 +81,14 @@ func TestAPythonStringLiteralKeepsEveryCharacter(t *testing.T) {
 }
 
 // TestTheInterpreterRunsInThePinnedCheckout pins the command of a recording:
-// the program as -c text, the pinned checkout as working directory, the
-// program's input, and the interpreter environment.
+// python3 by name with the program as -c text, the pinned checkout as working
+// directory, the program's input, and the interpreter environment.
 func TestTheInterpreterRunsInThePinnedCheckout(t *testing.T) {
-	command := interpreterCommand("/pinned/.venv/bin/python", "/pinned", Program{Text: "print(1)", Stdin: []byte("in")})
+	command := interpreterCommand("/pinned", Program{Text: "print(1)", Stdin: []byte("in")})
 	if command.Dir != "/pinned" {
 		t.Errorf("working directory = %q", command.Dir)
 	}
-	if strings.Join(command.Args, " ") != "/pinned/.venv/bin/python -c print(1)" {
+	if strings.Join(command.Args, " ") != "python3 -c print(1)" {
 		t.Errorf("arguments = %q", command.Args)
 	}
 	if input, err := io.ReadAll(command.Stdin); err != nil || string(input) != "in" {
@@ -209,5 +210,49 @@ func TestOutputsNeedThePinnedProducerAndSuccessfulPrograms(t *testing.T) {
 		if _, err := successfulOutputs(pinned, programs, answers); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
+	}
+}
+
+// TestTheInterpreterDirectoryMustHoldPython3 pins interpreterDir: the directory
+// of the chosen interpreter, which is activated on PATH, must hold an
+// executable python3.
+func TestTheInterpreterDirectoryMustHoldPython3(t *testing.T) {
+	bin := t.TempDir()
+	python := filepath.Join(bin, "python")
+	for name, mode := range map[string]os.FileMode{"python": 0o755, "python3": 0o755} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if dir, err := interpreterDir(python); err != nil || dir != bin {
+		t.Fatalf("interpreterDir = %q, %v, want %q", dir, err, bin)
+	}
+	if err := os.Chmod(filepath.Join(bin, "python3"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := interpreterDir(python); err == nil {
+		t.Error("a python3 that is not executable was accepted")
+	}
+	if err := os.Remove(filepath.Join(bin, "python3")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := interpreterDir(python); err == nil {
+		t.Error("a directory with no python3 was accepted")
+	}
+	if err := os.Mkdir(filepath.Join(bin, "python3"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := interpreterDir(python); err == nil {
+		t.Error("a python3 that is a directory was accepted")
+	}
+	// A name that is not on PATH is refused even when the working directory
+	// holds a python3: a name is looked up, never taken as a relative path.
+	here := t.TempDir()
+	if err := os.WriteFile(filepath.Join(here, "python3"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(here)
+	if _, err := interpreterDir("no-such-interpreter-on-path"); err == nil {
+		t.Error("an interpreter name that is not on PATH was accepted")
 	}
 }

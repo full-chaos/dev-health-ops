@@ -134,6 +134,17 @@ func (p *Producer) Command(ctx context.Context, declared map[string]string, extr
 	return command, nil
 }
 
+// PythonDir is the directory of the producer's interpreter: for a producer
+// that is not a Python command itself (a shell program that calls python3)
+// and so needs that directory first on its own PATH, as one more entry after
+// Env's.
+func (p *Producer) PythonDir() (string, error) {
+	if err := p.activate(); err != nil {
+		return "", err
+	}
+	return filepath.Dir(p.python), nil
+}
+
 // Env is the closed environment Command gives the child.
 func (p *Producer) Env(declared map[string]string, extra ...string) []string {
 	names := make([]string, 0, len(declared))

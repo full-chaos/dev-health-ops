@@ -185,33 +185,78 @@ func leaf(name string, value any) string {
 }
 
 // project is what the golden stores and compares of one piece of text: its
-// JWTs projected, then the spec's Scrub.
-func (g *Golden) project(text string) string {
+// JWTs projected, then the spec's Scrub. A packed body (PackBody) is unpacked,
+// projected and packed again, so a token inside it is projected too; one that
+// does not unpack is an error.
+func (g *Golden) project(text string) (string, error) {
+	if strings.HasPrefix(text, packedPrefix) {
+		raw, err := unpackBody(text)
+		if err != nil {
+			return "", err
+		}
+		projected, err := g.project(raw)
+		if err != nil || projected == raw {
+			return text, err
+		}
+		return PackBody([]byte(projected)), nil
+	}
 	text = ProjectTokens(text)
 	if g.spec.Scrub != nil {
 		text = g.spec.Scrub(text)
 	}
-	return text
+	return text, nil
 }
 
 // projectResponse is response with every header value and the body projected.
-func (g *Golden) projectResponse(response Response) Response {
+func (g *Golden) projectResponse(response Response) (Response, error) {
 	out := clone(response)
-	out.Body = g.project(out.Body)
-	for name, value := range out.Headers {
-		out.Headers[name] = g.project(value)
+	var err error
+	if out.Body, err = g.project(out.Body); err != nil {
+		return out, err
 	}
-	return out
+	for name, value := range out.Headers {
+		if out.Headers[name], err = g.project(value); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
 }
 
 // tokenShapeErr is an error naming the token shapes the golden's recorded
 // text holds: a golden stores none.
 func tokenShapeErr(path string, raw []byte) error {
-	if strings.Contains(string(raw), undecodableJWT) {
-		return fmt.Errorf("golden %s holds a token whose header or payload could not be decoded: the projection cannot tell it from any other undecodable token, so it is not recorded", path)
+	texts := []string{string(raw)}
+	// A packed body is opaque to a scan of the file: look inside every one.
+	var file goldenFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return fmt.Errorf("golden %s is not a golden file: %w", path, err)
 	}
-	if found := TokenShapesIn(string(raw)); len(found) > 0 {
-		return fmt.Errorf("golden %s holds a token shape (%s): a golden stores no token value, because a stored credential is a leaked credential; turn it into a typed placeholder with GoldenSpec.Scrub instead of recording it", path, strings.Join(found, ", "))
+	var bodies []string
+	for _, request := range file.Requests {
+		bodies = append(bodies, request.Body)
+	}
+	for _, rows := range file.Rows {
+		bodies = append(bodies, rows.Rows)
+	}
+	for _, body := range bodies {
+		if !strings.HasPrefix(body, packedPrefix) {
+			continue
+		}
+		unpacked, err := unpackBody(body)
+		if err != nil {
+			return fmt.Errorf("golden %s holds a packed body that does not unpack, so it cannot be checked for tokens: %w", path, err)
+		}
+		texts = append(texts, unpacked)
+	}
+	for _, text := range texts {
+		if strings.Contains(text, undecodableJWT) {
+			return fmt.Errorf("golden %s holds a token whose header or payload could not be decoded: the projection cannot tell it from any other undecodable token, so it is not recorded", path)
+		}
+	}
+	for _, text := range texts {
+		if found := TokenShapesIn(text); len(found) > 0 {
+			return fmt.Errorf("golden %s holds a token shape (%s): a golden stores no token value, because a stored credential is a leaked credential; turn it into a typed placeholder with GoldenSpec.Scrub instead of recording it", path, strings.Join(found, ", "))
+		}
 	}
 	return nil
 }

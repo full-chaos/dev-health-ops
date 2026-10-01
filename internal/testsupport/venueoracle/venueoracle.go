@@ -975,7 +975,14 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 		if options.Golden != nil {
 			// A golden stores no token value: both planes are compared as
 			// projected, and a projected body has another length.
-			projectedPython, projectedGo := options.Golden.projectResponse(pythonResponse), options.Golden.projectResponse(goResponse)
+			projectedPython, err := options.Golden.projectResponse(pythonResponse)
+			if err != nil {
+				t.Fatal(err)
+			}
+			projectedGo, err := options.Golden.projectResponse(goResponse)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if projectedPython.Body != pythonResponse.Body || projectedGo.Body != goResponse.Body {
 				compareOptions.SkipContentLength = func(r Request) bool { return true }
 			}

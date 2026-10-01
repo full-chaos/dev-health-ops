@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -114,7 +115,10 @@ func TestRecordingProjectsAJWTAndScrubsWhatTheSpecNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":7}`, "sig")
-	got := golden.projectResponse(Response{Status: 200, Headers: map[string]string{"set-cookie": "session=opaque-session-12345; token=" + token}, Body: `{"access_token":"` + token + `"}`})
+	got, err := golden.projectResponse(Response{Status: 200, Headers: map[string]string{"set-cookie": "session=opaque-session-12345; token=" + token}, Body: `{"access_token":"` + token + `"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if found := TokenShapesIn(got.Body + got.Headers["set-cookie"]); len(found) > 0 {
 		t.Fatalf("projected answer holds %v", found)
 	}
@@ -256,5 +260,68 @@ func TestAnUndecodableTokenIsRefusedByTheRecorderAndByDiff(t *testing.T) {
 		if err := undecodableErr(Request{Name: "r"}, Response{Body: projected}); err == nil {
 			t.Errorf("%s: Diff accepted it", name)
 		}
+	}
+}
+
+func TestATokenInsideAPackedBodyIsProjectedRefusedAndReported(t *testing.T) {
+	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":7}`, "sig")
+	golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packed := PackBody([]byte("program output " + token))
+	projected, err := golden.projectResponse(Response{Body: packed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := unpackBody(projected.Body)
+	if err != nil || strings.Contains(raw, token) || !strings.Contains(raw, "sub=string:u1") {
+		t.Fatalf("a packed body was not projected: %q %v", raw, err)
+	}
+	if _, err := golden.projectResponse(Response{Body: packedPrefix + "not-base64!"}); err == nil {
+		t.Fatal("a packed body that does not unpack was accepted")
+	}
+	golden.recorded.Header.ProducerDigest = strings.Repeat("c", 64)
+	golden.recorded.Requests = []goldenRequest{{Name: "a", Body: packed}}
+	if _, err := golden.writeCandidate(false); err == nil || !strings.Contains(err.Error(), "jwt") {
+		t.Fatalf("the recorder accepted a token inside a packed body: %v", err)
+	}
+	dir := filepath.Join(t.TempDir(), "x", "testdata")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"header":{"python_build":"x"},"requests":[{"body":"` + packed + `"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "g.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if checked, violations := goldenTokenViolations(t, filepath.Dir(filepath.Dir(dir))); checked != 1 || len(violations) != 1 {
+		t.Fatalf("the walk missed a token inside a packed body: %d %v", checked, violations)
+	}
+}
+
+// TestDiffRefusesAnUndecodableToken runs the failing Diff in a child test
+// process, because the refusal is t.Fatal: the child must fail naming the
+// reason, so the call in Diff is shown wired and not only its helper.
+func TestDiffRefusesAnUndecodableToken(t *testing.T) {
+	if os.Getenv("VENUEORACLE_CHILD_UNDECODABLE") == "1" {
+		t.Setenv(goldenUpdateEnv, "")
+		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
+		requests := []Request{{Name: "login", Method: "GET", Path: "/x"}}
+		file := sampleGolden(requests)
+		file.Header.Test = t.Name()
+		file.Requests[0].Body = `{"token":"` + undecodableJWT + `:payload>"}`
+		path, digest := writeGoldenFile(t, t.TempDir(), file)
+		goPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) }))
+		t.Cleanup(goPlane.Close)
+		golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+		answers := golden.Python(t, nil, requests)
+		Diff(t, goPlane.URL, requests, answers, DiffOptions{Golden: golden})
+		return
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestDiffRefusesAnUndecodableToken$", "-test.v")
+	command.Env = append(os.Environ(), "VENUEORACLE_CHILD_UNDECODABLE=1")
+	out, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "not a JSON object") {
+		t.Fatalf("Diff did not refuse an undecodable token: err=%v\n%s", err, out)
 	}
 }

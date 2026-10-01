@@ -706,7 +706,11 @@ func (g *Golden) answer(t *testing.T, call string, requests []Request, rootErr f
 		}
 		answers = live()
 		for index := range answers {
-			answers[index] = g.projectResponse(answers[index])
+			projected, err := g.projectResponse(answers[index])
+			if err != nil {
+				t.Fatalf("golden %s: %v", g.spec.Path, err)
+			}
+			answers[index] = projected
 		}
 		if len(answers) != len(requests) {
 			t.Fatalf("golden %s: the Python producer answered %d of %d requests", g.spec.Path, len(answers), len(requests))

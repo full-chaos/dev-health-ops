@@ -1302,11 +1302,12 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 			}
 			if !fetchHistory {
 				payload.History.Nodes = nil
-				if payload.Project != nil && payload.Project.ID != "" {
-					// CHAOS-7361: without history "no project rows" is not
-					// provable, so no creation ADD is derived. Counted, not silent.
-					rows.MembershipCreation.skip(projectmembership.SkipHistoryUnavailable)
-				}
+				// CHAOS-7361: without history "no project rows" is not provable
+				// (an item with no current project may have had one), so no
+				// creation ADD is derived for ANY item. Counted per item, not
+				// silent: a counter that reads 0 for a skipped item is a wrong
+				// measurement.
+				rows.MembershipCreation.skip(projectmembership.SkipHistoryUnavailable)
 			}
 			if !fetchComments {
 				payload.Comments.Nodes = nil

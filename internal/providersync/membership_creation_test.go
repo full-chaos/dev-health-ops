@@ -183,6 +183,12 @@ func TestLinearCreationAddSkipsAreCountedNeverSilentNeverClockStamped(t *testing
 			t.Fatalf("rows=%+v result=%+v", rows, result)
 		}
 	})
+	t.Run("history off, issue has no current project: still counted (an earlier project is unprovable)", func(t *testing.T) {
+		rows, result := linearCreationRows(t, linearIssue("2026-07-25T09:00:00Z", "", ``), false)
+		if len(rows) != 0 || result["membership_creation_skipped"] != 1 {
+			t.Fatalf("rows=%+v result=%+v", rows, result)
+		}
+	})
 	t.Run("unparseable createdAt: no row, never the sync clock", func(t *testing.T) {
 		rows, result := linearCreationRows(t, linearIssue("not-a-time", "P", ``), true)
 		if len(rows) != 0 || result["membership_creation_skipped"] != 1 {

@@ -1,0 +1,21 @@
+{
+  "header": {
+    "test": "TestIntMaxStrDigitsMatchesLivePython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/workgraph/edges/ -test '^TestIntMaxStrDigitsMatchesLivePython$' -python-root $DIR",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "int max str digits",
+      "method": "PYTHON",
+      "path": "program sha256 b03afe88b6ffa0cdbbab522f73d326532207428e6558ef7b5af0abc1f4c08f3e env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "4300\n"
+    }
+  ]
+}

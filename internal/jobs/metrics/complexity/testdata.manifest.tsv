@@ -1,4 +1,6 @@
 # Every file under internal/jobs/metrics/complexity/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/blame_maxfiles_oracle.json
+-	header	golden/should_process_oracle.json
 b409d3f2416a0c7050b7de2c5f65d336a883943899e4b3a7a950da33c387a3d4	unclassified	python_blame_maxfiles_oracle.py
 9970cef5120f1bb001aab7b0d8e3024416695239015a7c405427c2f52f161ef7	unclassified	python_should_process_oracle.py

@@ -1,0 +1,7 @@
+# Every file under internal/jobs/workgraph/edges/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/int_max_str_digits.json
+-	header	golden/numeric_type_digit_table.json
+-	header	golden/python_decimal_blocks.json
+-	header	golden/python_lower_allrunes.json
+-	header	golden/python_lower_multirune.json

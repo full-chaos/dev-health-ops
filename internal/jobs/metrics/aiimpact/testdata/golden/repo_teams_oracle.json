@@ -1,0 +1,21 @@
+{
+  "header": {
+    "test": "TestRepoPatternResolverMatchesLivePython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/metrics/aiimpact/ -test '^TestRepoPatternResolverMatchesLivePython$' -python-root $DIR",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "repo teams oracle",
+      "method": "PYTHON",
+      "path": "program sha256 1736035d6911d08ff7fef7360b27758cc4c87d424a99d7bfee6608e1df4b0cd8 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"acme/anything\": \"team-star\", \"acme/platform-x\": \"team-long\", \"acme/platform-core\": \"team-exact\", \"ACME/Platform-Core\": \"team-exact\", \"  acme/platform-core \": \"team-exact\", \"WIDGETS/ALPHA\": \"team-case\", \"widgets/alpha\": \"team-case\", \"totally/unrelated\": null, \"blank/thing\": null, \"dup/repo\": \"team-dup-b\", \"\": null, \"   \": null}\n"
+    }
+  ]
+}

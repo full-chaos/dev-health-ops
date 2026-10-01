@@ -163,7 +163,7 @@ func runRepoTeamsOracle(t *testing.T) map[string]*string {
 	spec := venueoracle.GoldenSpec{
 		Path:        "testdata/golden/repo_teams_oracle.json",
 		PythonBuild: rotguard.PythonBuild,
-		SHA256:      "PIN:repo_teams_oracle",
+		SHA256:      "bc769a998695e292148aeba7c0cd95ac96deb96c70914dc5dfd42b051f8e0014",
 		Recipe: "git worktree add --detach $DIR " + rotguard.PythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/metrics/aiimpact/ -test '^TestRepoPatternResolverMatchesLivePython$' -python-root $DIR",
 	}

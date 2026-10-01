@@ -209,6 +209,6 @@ func textrefsProgram(t *testing.T, slug, test, name, text string) string {
 // textrefsGoldenPins holds the digest each golden of this package is pinned to (a placeholder until the
 // goldenrecord verb records the golden and replaces it).
 var textrefsGoldenPins = map[string]string{
-	"charclass_allrunes": "PIN:charclass_allrunes",
-	"number_allrunes":    "PIN:number_allrunes",
+	"charclass_allrunes": "6fca1b168d90373b1953e42aff8c7cbdab500e98655bc210ba07ca6e2f230875",
+	"number_allrunes":    "b04a33e7e6c192c47e38a2169c66561eb95ac0a7863deadca66d63ab60628402",
 }

@@ -8,8 +8,8 @@
 // joining types) is frozen in tables.go from the pinned package, and the
 // unicodedata questions come from pyunicodedata (the interpreter's own
 // Unicode edition), so the two sources idna consults are both pinned.
-// TestIDNATablesMatchLivePython and TestBehaviourMatchesLivePython keep them
-// honest.
+// TestIDNATablesMatchFrozenPython and TestBehaviourMatchesFrozenPython keep
+// them honest.
 //
 // Strings are code points ([]rune), since a Python str may hold a lone
 // surrogate.

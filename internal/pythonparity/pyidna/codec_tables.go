@@ -1,5 +1,5 @@
 // Code generated from CPython's stringprep module (3.14); DO NOT EDIT.
-// TestCodecEncodeMatchesLivePython checks every code point against the live interpreter.
+// TestCodecEncodeMatchesFrozenPython checks every code point against the frozen answers of the interpreter.
 
 package pyidna
 

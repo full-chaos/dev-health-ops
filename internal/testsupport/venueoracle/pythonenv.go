@@ -21,6 +21,7 @@ var perRunPythonEnv = map[string]string{
 	"PYTHONPATH":                          "holds the checkout's path (the venue's site directory and src)",
 	"REDIS_URL":                           "the address of the run's own cache",
 	"REQUESTS_CA_BUNDLE":                  "a temporary certificate file of the test's fake TLS server",
+	"TELEMETRY_ENDPOINT":                  "the address of the test's fake telemetry endpoint",
 	"VENUE_PAGERDUTY_API_BASE_OVERRIDE":   "the address of the test's fake PagerDuty server",
 	"VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": "the address of the test's fake PagerDuty server",
 	"VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE":  "the address of the test's fake PagerDuty server",

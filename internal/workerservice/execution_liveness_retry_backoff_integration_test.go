@@ -50,6 +50,9 @@ type backoffIdempotency struct {
 	// pool (a transient blip); otherwise Begin fails exactly when the pool does.
 	failFirst int64
 	proceed   backoffClaim
+	// failDelay holds each injected failure open before it is returned, so a test
+	// can force a slow failing attempt instead of hoping for one.
+	failDelay atomic.Int64
 }
 
 func (*backoffIdempotency) Supports(string) bool { return true }
@@ -58,6 +61,12 @@ func (store *backoffIdempotency) Begin(ctx context.Context, _ jobruntime.ClaimRe
 	call := store.beginCall.Add(1)
 	if store.failFirst > 0 {
 		if call <= store.failFirst {
+			if delay := time.Duration(store.failDelay.Load()); delay > 0 {
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+				}
+			}
 			return nil, errors.New("idempotency unavailable")
 		}
 		return store.proceed, nil
@@ -102,6 +111,7 @@ type backoffFixture struct {
 	handled   *atomic.Int64
 	insert    func(t *testing.T) int64
 	window    time.Duration
+	idem      *backoffIdempotency
 }
 
 func newBackoffFixture(t *testing.T, failFirst int64, window time.Duration) *backoffFixture {
@@ -173,6 +183,7 @@ func newBackoffFixture(t *testing.T, failFirst int64, window time.Duration) *bac
 	observer := claimLivenessObserver{MetricsCollector: collector, liveness: claim}
 
 	var handled atomic.Int64
+	idempotency := &backoffIdempotency{pool: workPool, failFirst: failFirst}
 	adapter, err := jobruntime.NewAdapter[jobruntime.RetentionCleanupArgs](
 		runtimeRegistry, spec,
 		jobruntime.HandlerFunc[jobruntime.RetentionCleanupArgs](func(context.Context, *jobruntime.Execution[jobruntime.RetentionCleanupArgs]) error {
@@ -182,7 +193,7 @@ func newBackoffFixture(t *testing.T, failFirst int64, window time.Duration) *bac
 		jobruntime.Dependencies{
 			Logger: logger, Observer: observer,
 			TenantScope: backoffTenantScope{}, Budget: backoffBudget{},
-			Idempotency: &backoffIdempotency{pool: workPool, failFirst: failFirst},
+			Idempotency: idempotency,
 		},
 	)
 	if err != nil {
@@ -233,7 +244,7 @@ func newBackoffFixture(t *testing.T, failFirst int64, window time.Duration) *bac
 	return &backoffFixture{
 		pool: pool, claim: claim, sampler: sampler, workServe: workServer, handled: &handled,
 		ready:  dependencies.claimLivenessReady(claim),
-		window: window,
+		window: window, idem: idempotency,
 		insert: func(t *testing.T) int64 {
 			t.Helper()
 			args := retentionRiverArgs(t)
@@ -346,17 +357,37 @@ func TestExecutionLivenessSeesIdempotencyFailuresSpacedByRiverRetryBackoff(t *te
 // negative control on the same live path: one Begin failure, River's backoff,
 // then a normal run. Readiness must stay green through the whole sequence.
 func TestExecutionLivenessIgnoresATransientIdempotencyFailureThatRecovers(t *testing.T) {
+	// River parks a failed attempt as `available` instead of `retryable` when the
+	// next retry is within its 5s scheduler interval (river job_executor.go), and
+	// our backoff is 5s +/-10% from attempted_at: how long the failing attempt ran
+	// decides which state the row gets. Both outcomes are forced here, not hoped for.
+	for _, scenario := range []struct {
+		name      string
+		failDelay time.Duration
+	}{
+		{"fast failing attempt", 0},
+		{"slow failing attempt", time.Second},
+	} {
+		t.Run(scenario.name, func(t *testing.T) { transientIdempotencyFailureRecovers(t, scenario.failDelay) })
+	}
+}
+
+func transientIdempotencyFailureRecovers(t *testing.T, failDelay time.Duration) {
+
 	// The window is longer than River's first retry delay (5s +/-10%). With a
 	// window SHORTER than the backoff, the queue is legitimately "available work,
 	// no handler for the window" for the instant River promotes the retry, and the
 	// long-standing backlog arm (not this change) reads it red: that is a separate
 	// finding, not this control's question, which is a single Begin blip.
 	f := newBackoffFixture(t, 1, 15*time.Second)
+	f.idem.failDelay.Store(int64(failDelay))
 	// The retry wait is held by the database, not by the clock: a trigger pushes
-	// scheduled_at an hour out whenever River parks the row as retryable, so the
-	// gap lasts until this test releases it and no poll timing can miss it.
+	// scheduled_at an hour out whenever a running attempt is parked for retry, in
+	// EITHER state River uses for that (`retryable`, or `available` when the retry
+	// is within its scheduler interval), so the gap lasts until this test releases
+	// it and no poll timing or attempt duration can skip it.
 	for _, statement := range []string{
-		`CREATE FUNCTION river.hold_retry() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.state = 'retryable' THEN NEW.scheduled_at := now() + interval '1 hour'; END IF; RETURN NEW; END $$`,
+		`CREATE FUNCTION river.hold_retry() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.state = 'running' AND NEW.state IN ('retryable', 'available') THEN NEW.scheduled_at := now() + interval '1 hour'; END IF; RETURN NEW; END $$`,
 		`CREATE TRIGGER hold_retry BEFORE UPDATE ON river.river_job FOR EACH ROW EXECUTE FUNCTION river.hold_retry()`,
 	} {
 		if _, err := f.pool.Exec(context.Background(), statement); err != nil {
@@ -383,21 +414,34 @@ func TestExecutionLivenessIgnoresATransientIdempotencyFailureThatRecovers(t *tes
 			timeline = append(timeline, fmt.Sprintf("+%s %s", time.Since(started).Round(time.Millisecond), key))
 		}
 	}
-	// Phase 1: wait for River to park the failed attempt as retryable. The hold
-	// keeps it there, so this wait ends on the state, not on a timing window.
+	// Phase 1: wait for River to park the failed attempt for retry. The mechanism
+	// is the recorded failure (attempt 1 ended with one error and the row left
+	// `running`), not a state name: River records `retryable` or `available`
+	// depending on how long the attempt ran. The hold keeps it parked.
 	for {
 		state, attempt := f.jobState(t, id)
 		observe(state, attempt)
-		if state == "retryable" {
+		var errorCount int
+		var held bool
+		if err := f.pool.QueryRow(context.Background(),
+			`SELECT COALESCE(cardinality(errors), 0), scheduled_at > now() + interval '30 minutes' FROM river.river_job WHERE id = $1`, id).Scan(&errorCount, &held); err != nil {
+			t.Fatal(err)
+		}
+		if (state == "retryable" || state == "available") && attempt == 1 && errorCount == 1 {
+			// The hold must have fired for this park, in whichever state River chose:
+			// otherwise the retry is free to run while this test is still reading.
+			if !held {
+				t.Fatalf("the retry hold did not fire for the parked attempt (state=%s attempt=%d): the retry is not held timeline=%v", state, attempt, timeline)
+			}
 			// The (state, liveness) pair: row read and readiness answered in the
 			// same step, inside the backoff gap.
 			if err := f.ready(context.Background()); err != nil {
-				t.Fatalf("a single transient Begin failure turned readiness red in the retry wait (attempt=%d): %v timeline=%v", attempt, err, timeline)
+				t.Fatalf("a single transient Begin failure turned readiness red in the retry wait (state=%s attempt=%d): %v timeline=%v", state, attempt, err, timeline)
 			}
 			break
 		}
 		if state == "completed" || time.Now().After(deadline) {
-			t.Fatalf("the job never parked as retryable (state=%s attempt=%d) timeline=%v", state, attempt, timeline)
+			t.Fatalf("the failed attempt was never parked for retry (state=%s attempt=%d errors=%d) timeline=%v", state, attempt, errorCount, timeline)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

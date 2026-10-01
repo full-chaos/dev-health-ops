@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -288,21 +287,17 @@ func goRun(t *testing.T, ch clickHouse, s scenario) (int, string, string, [2]tim
 
 func pythonRun(t *testing.T, ch clickHouse, s scenario) (int, string, string, [2]time.Time) {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := pyoracle.Root(t)
 	python := pyoracle.Resolve(t, root)
 	command := exec.Command(python, append([]string{"-c", "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n", "backfill", "operational"}, s.args()...)...)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "CLICKHOUSE_URI="+ch.httpDSN, "OTEL_ENABLED=false")
-	if !s.envSet {
-		command.Env = removeEnv(command.Env, ContractEnv)
-	}
-	command.Env = append(command.Env, s.environ()...)
+	// A closed environment (CHAOS-7471): the DSN and the contract the scenario sets (none when it is unset),
+	// nothing inherited: SERVICE_NAME and SERVICE_VERSION stay unset, as the golden's writer-rejection text
+	// ("service=dev-health-ops version=unknown") assumes.
+	command.Env = pyoracle.ClosedEnv(root, append([]string{"CLICKHOUSE_URI=" + ch.httpDSN}, s.environ()...)...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	start := time.Now()
-	err = command.Run()
+	err := command.Run()
 	code := 0
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()

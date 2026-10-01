@@ -13,7 +13,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -53,12 +52,12 @@ type externalIngestVenueSeed struct {
 
 func newExternalIngestVenueSeed() externalIngestVenueSeed {
 	return externalIngestVenueSeed{
-		orgID:                  uuid.New().String(),
-		sourceID:               uuid.New().String(),
-		token:                  "fcpush_venue-oracle-" + uuid.New().String(),
-		seededBatchID:          uuid.New().String(),
-		seededFailedBatchID:    uuid.New().String(),
-		seededRecomputeBatchID: uuid.New().String(),
+		orgID:                  stableVenueID("ei-orgID").String(),
+		sourceID:               stableVenueID("ei-sourceID").String(),
+		token:                  "fcpush_venue-oracle-" + stableVenueID("ei-token").String(),
+		seededBatchID:          stableVenueID("ei-seededBatchID").String(),
+		seededFailedBatchID:    stableVenueID("ei-seededFailedBatchID").String(),
+		seededRecomputeBatchID: stableVenueID("ei-seededRecomputeBatchID").String(),
 		// A fixed literal, not now(): the batch row and the job row below
 		// must carry the IDENTICAL timestamp for listRecomputeJobs'
 		// dispatched_at equality join (recompute_status.py's
@@ -88,7 +87,7 @@ VALUES ($1::uuid, $2, 'github', 'acme/venue-repo', 'legacy', 'customer_push', tr
 			[]any{seed.sourceID, seed.orgID}},
 		{`INSERT INTO external_ingest_tokens (id, org_id, source_id, name, token_hash, token_prefix, scopes, created_at)
 VALUES ($1::uuid, $2, $3::uuid, 'venue oracle token', $4, 'fcpush_venue', $5::jsonb, now())`,
-			[]any{uuid.New().String(), seed.orgID, seed.sourceID, tokenHash, `["schema:read","ingest:write","ingest:status"]`}},
+			[]any{stableVenueID("ei-token-row").String(), seed.orgID, seed.sourceID, tokenHash, `["schema:read","ingest:write","ingest:status"]`}},
 		// created_at/updated_at are a FIXED literal, not now(): its
 		// microseconds (254860) end in a trailing zero on purpose --
 		// formatOptionalRFC3339 used to format this through Go's
@@ -141,7 +140,7 @@ VALUES ($1::uuid, $2, 'venue-seeded-recompute-batch', 'venue-seeded-recompute-ha
 		},
 		{`INSERT INTO external_ingest_recompute_jobs (id, org_id, source_system, source_instance, celery_task_name, celery_task_id, queue, repo_id, status, dispatched_at)
 VALUES ($1::uuid, $2, 'github', 'acme/venue-repo', 'run_daily_metrics', 'task-123', 'metrics', 'repo-1', 'dispatched', $3::timestamptz)`,
-			[]any{uuid.New().String(), seed.orgID, seed.recomputeDispatchedAt}},
+			[]any{stableVenueID("ei-recompute-job").String(), seed.orgID, seed.recomputeDispatchedAt}},
 	}
 	for _, statement := range statements {
 		if _, err := admin.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -246,13 +245,14 @@ func seededListItemField(t *testing.T, body, ingestionID, field string) string {
 // the body is compared as raw text (key order, separators, no trailing
 // newline), so it fails on any byte the two planes render differently.
 func TestExternalIngestVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("external-ingest-venue-oracle", t.Name(), "dd63b98c18167b8ca4647284b17a75e16cb0e0905a3096dc512f723436faf031"))
 	ctx := context.Background()
 	root := webhookintakeRepoRoot(t)
 
 	seed := newExternalIngestVenueSeed()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Golden: golden, Root: golden.PythonRoot(t, root),
 		JWTKey: "venue-oracle-jwt-signing-key-32-bytes-min",
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seedExternalIngestVenue(t, ctx, admin, seed)
@@ -420,7 +420,7 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 		// scope and one matching recompute_jobs row, both previously
 		// hardcoded to null/[] regardless of what was stored.
 		{Name: "get seeded recompute batch by id", Method: "GET", Path: "/api/v1/external-ingest/batches/" + seed.seededRecomputeBatchID, Headers: auth},
-		{Name: "get batch unknown id", Method: "GET", Path: "/api/v1/external-ingest/batches/" + uuid.New().String(), Headers: auth},
+		{Name: "get batch unknown id", Method: "GET", Path: "/api/v1/external-ingest/batches/" + stableVenueID("ei-unknown-batch").String(), Headers: auth},
 		{Name: "get batch invalid uuid", Method: "GET", Path: "/api/v1/external-ingest/batches/not-a-uuid", Headers: auth},
 		{Name: "get batch simple uuid form", Method: "GET", Path: "/api/v1/external-ingest/batches/" + strings.ReplaceAll(seed.seededBatchID, "-", ""), Headers: auth},
 		{Name: "get batch braced uuid form", Method: "GET", Path: "/api/v1/external-ingest/batches/{" + seed.seededBatchID + "}", Headers: auth},
@@ -433,8 +433,10 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 		{Name: "get batch errorLimit leading zeros then minus", Method: "GET", Path: "/api/v1/external-ingest/batches/" + seed.seededBatchID + "?errorLimit=0-5", Headers: auth},
 	}
 
-	python := venue.ServePython(t, requests)
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Normalize: blankExternalIngestVolatileFields})
+	python := golden.Python(t, venue, requests)
+	listRequest := venueoracle.Request{Name: "list batches (createdAt check)", Method: "GET", Path: "/api/v1/external-ingest/batches", Headers: auth}
+	listPython := golden.Python(t, venue, []venueoracle.Request{listRequest})[0]
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden, Normalize: blankExternalIngestVolatileFields})
 	t.Log(receipt)
 
 	// batchListItem's own createdAt formatting (handlers.go, separate from
@@ -444,8 +446,7 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 	// in the Diff above) with the seeded ones. This pins the one list item
 	// this test CAN check exactly: the seeded batch's own entry, by its
 	// known fixed id, unblanked.
-	listRequest := venueoracle.Request{Name: "list batches (createdAt check)", Method: "GET", Path: "/api/v1/external-ingest/batches", Headers: auth}
-	listPython := venue.ServePython(t, []venueoracle.Request{listRequest})[0]
+	golden.Consumed(t, listPython)
 	listGo := venueoracle.Do(t, goBase, listRequest)
 	pythonSeededCreatedAt := seededListItemField(t, listPython.Body, seed.seededBatchID, "createdAt")
 	goSeededCreatedAt := seededListItemField(t, listGo.Body, seed.seededBatchID, "createdAt")
@@ -453,16 +454,13 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 		t.Errorf("list batches: seeded item createdAt python=%q go=%q", pythonSeededCreatedAt, goSeededCreatedAt)
 	}
 
-	pythonBatches := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB),
-		`SELECT idempotency_key, status, items_received, items_accepted, items_rejected, coalesce(record_counts::text, '<null>'),
-			coalesce(error_summary::text, '<null>'), coalesce(recompute_scope::text, '<null>') FROM external_ingest_batches ORDER BY idempotency_key`)
-	goBatches := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB),
-		`SELECT idempotency_key, status, items_received, items_accepted, items_rejected, coalesce(record_counts::text, '<null>'),
-			coalesce(error_summary::text, '<null>'), coalesce(recompute_scope::text, '<null>') FROM external_ingest_batches ORDER BY idempotency_key`)
-	if pythonBatches != goBatches {
-		t.Errorf("external_ingest_batches rows differ:\n python: %s\n go:     %s", pythonBatches, goBatches)
-	}
+	batchesQuery := `SELECT idempotency_key, status, items_received, items_accepted, items_rejected, coalesce(record_counts::text, '<null>'),
+			coalesce(error_summary::text, '<null>'), coalesce(recompute_scope::text, '<null>') FROM external_ingest_batches ORDER BY idempotency_key`
+	golden.CompareRows(t, "external_ingest_batches", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), batchesQuery)
+	}, venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), batchesQuery))
 	// venueoracle.Start already wrote this test's own proof file.
+	golden.Finish(t)
 }
 
 // malformedEnvelope is a JSON POST of body to path with the ingest token.

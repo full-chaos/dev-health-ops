@@ -1,0 +1,699 @@
+{
+  "header": {
+    "test": "TestLegacyIngestVenueOracle",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/ -test '^TestLegacyIngestVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "1e324e6104f8d4c7c2cbb22d0b5b450e3df67025e1e0e9efea6b18f4ba6259f6"
+  },
+  "requests": [
+    {
+      "name": "commits accepted",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "4e83142098af7d45a1c3ecb1a8498dfb294e197016f109131a2e4f9cd9ff4299",
+      "status": 202,
+      "headers": {
+        "content-length": "130",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "beab7d3a-d18f-4c6d-a462-05e31b2996be"
+      },
+      "body": "{\"ingestion_id\":\"dcd3004d-8a54-4bcf-87d2-bffffdbd05d6\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-venue:commits\"}"
+    },
+    {
+      "name": "deployments accepted",
+      "method": "POST",
+      "path": "/api/v1/ingest/deployments",
+      "body_sha256": "e3250159cee90e44391de764a0cf13a839390473156dde7ef1f2f68339f537f6",
+      "request_headers_sha256": "c751d65fb2e97b606eae5589eb8f7c4864ac23a0aa56cf00ef8373eb71c3c749",
+      "status": 202,
+      "headers": {
+        "content-length": "134",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3c6b09ae-2a17-4111-bdad-08d9103d69c5"
+      },
+      "body": "{\"ingestion_id\":\"8374b169-009b-457e-9d96-c6ece208c6e9\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-venue:deployments\"}"
+    },
+    {
+      "name": "incidents accepted",
+      "method": "POST",
+      "path": "/api/v1/ingest/incidents",
+      "body_sha256": "1809aaaba6498ee741b187af15668ad3dbf45826204d2bd7457034ff5c153407",
+      "request_headers_sha256": "bc30eeee5d11626aa485d2e36999d55510d18c8a04151bedc2dc1e35f7356e0a",
+      "status": 202,
+      "headers": {
+        "content-length": "132",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6313d424-3385-4b0d-9f7f-7520dcce2c18"
+      },
+      "body": "{\"ingestion_id\":\"ef63b855-2863-424b-93a2-695b603ba378\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-venue:incidents\"}"
+    },
+    {
+      "name": "two items, defaults",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "5d70dd68a1980c91e03526f39a257adffac336a48d6a4638fb406a6fc7820785",
+      "request_headers_sha256": "786a927810b3d94edc7df6d5f81456cd9e1e475f3649ce876b7fea2fdb623d9b",
+      "status": 202,
+      "headers": {
+        "content-length": "130",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1fff38f3-91f9-45ff-99ce-11e854b0f7c3"
+      },
+      "body": "{\"ingestion_id\":\"f33ec186-146d-4a61-93b2-ec949374bcc4\",\"status\":\"accepted\",\"items_received\":2,\"stream\":\"ingest:org-venue:commits\"}"
+    },
+    {
+      "name": "unicode org and text",
+      "method": "POST",
+      "path": "/api/v1/ingest/incidents",
+      "body_sha256": "99c15c15a6f3e40067168a598c0188fe989ced5d9a9b952ff9c03e46431f7f47",
+      "request_headers_sha256": "d94b45c1ed544b3f86da159b7a14f0c254ccce30f44e6214ce61f24372583e1f",
+      "status": 202,
+      "headers": {
+        "content-length": "133",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cc8d1636-3fb5-4d72-ae90-89b0f65beed1"
+      },
+      "body": "{\"ingestion_id\":\"061ac684-2344-4299-a8de-a3bd8bf78c8e\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-é😀:incidents\"}"
+    },
+    {
+      "name": "pull requests accepted",
+      "method": "POST",
+      "path": "/api/v1/ingest/pull-requests",
+      "body_sha256": "0714ed9e7a0c19334452c94f8e56908276eadb32bd3aab7bfd2e96e550ab7ec8",
+      "request_headers_sha256": "4b46f5beb3f733566ef4a6311fda678b671ee63b567991fa41b0042bb6ddb435",
+      "status": 202,
+      "headers": {
+        "content-length": "136",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9f47dced-8dc9-4426-acf9-7ae1946c7b08"
+      },
+      "body": "{\"ingestion_id\":\"b0fa6ffe-fb12-4cc5-b0d9-2ca5cccd99b0\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-venue:pull-requests\"}"
+    },
+    {
+      "name": "pull request without reviews, defaults",
+      "method": "POST",
+      "path": "/api/v1/ingest/pull-requests",
+      "body_sha256": "c3cf7e40d62a9d6a7f4e134f80adc23edae868583fddfbd149b721970d7e26bc",
+      "request_headers_sha256": "16d77aa86166ffd6a4d810a915b97adfec37ac837381124b9a05abcd96a2df20",
+      "status": 202,
+      "headers": {
+        "content-length": "136",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9cabdc1e-f612-416b-a216-0dfb28ee7c81"
+      },
+      "body": "{\"ingestion_id\":\"3a67107b-1d40-41e8-88f6-f2934fcb2f4a\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-venue:pull-requests\"}"
+    },
+    {
+      "name": "pull request shape errors",
+      "method": "POST",
+      "path": "/api/v1/ingest/pull-requests",
+      "body_sha256": "14d64c1dc957c2415f493a8383a7a9901556c07cf7202edf9c69ef3f68214161",
+      "request_headers_sha256": "27824ed2f3aa2e6acc7119aac3cd669fa1f98e9537601969ba1b2065665f094b",
+      "status": 422,
+      "headers": {
+        "content-length": "1512",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "11d7ae56-2f12-4069-a549-033d042b0055"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"body\",\"items\",0,\"number\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"x\"},{\"type\":\"missing\",\"loc\":[\"body\",\"items\",0,\"title\"],\"msg\":\"Field required\",\"input\":{\"number\":\"x\",\"reviews\":[{\"review_id\":1},\"y\"],\"created_at\":\"2026-13-01\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"items\",0,\"state\"],\"msg\":\"Field required\",\"input\":{\"number\":\"x\",\"reviews\":[{\"review_id\":1},\"y\"],\"created_at\":\"2026-13-01\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"items\",0,\"author_name\"],\"msg\":\"Field required\",\"input\":{\"number\":\"x\",\"reviews\":[{\"review_id\":1},\"y\"],\"created_at\":\"2026-13-01\"}},{\"type\":\"datetime_from_date_parsing\",\"loc\":[\"body\",\"items\",0,\"created_at\"],\"msg\":\"Input should be a valid datetime or date, month value is outside expected range of 1-12\",\"input\":\"2026-13-01\",\"ctx\":{\"error\":\"month value is outside expected range of 1-12\"}},{\"type\":\"string_type\",\"loc\":[\"body\",\"items\",0,\"reviews\",0,\"review_id\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"missing\",\"loc\":[\"body\",\"items\",0,\"reviews\",0,\"reviewer\"],\"msg\":\"Field required\",\"input\":{\"review_id\":1}},{\"type\":\"missing\",\"loc\":[\"body\",\"items\",0,\"reviews\",0,\"state\"],\"msg\":\"Field required\",\"input\":{\"review_id\":1}},{\"type\":\"missing\",\"loc\":[\"body\",\"items\",0,\"reviews\",0,\"submitted_at\"],\"msg\":\"Field required\",\"input\":{\"review_id\":1}},{\"type\":\"model_attributes_type\",\"loc\":[\"body\",\"items\",0,\"reviews\",1],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":\"y\"}]}"
+    },
+    {
+      "name": "work items accepted",
+      "method": "POST",
+      "path": "/api/v1/ingest/work-items",
+      "body_sha256": "773ab42fda8477dc36b36b0402882e5385bb257c4e3a98f84ceed129fd07cdfb",
+      "request_headers_sha256": "ea0fa43848da5e2c98120ab12f382411286991edfe3909ddf47657a8bb65d370",
+      "status": 202,
+      "headers": {
+        "content-length": "133",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f940fae3-e47c-4aa5-b9f8-03d9b3c24e64"
+      },
+      "body": "{\"ingestion_id\":\"64010079-e756-4ea8-a9fa-7578ac60fbad\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-venue:work-items\"}"
+    },
+    {
+      "name": "work item defaults",
+      "method": "POST",
+      "path": "/api/v1/ingest/work-items",
+      "body_sha256": "ab1d809ff2097b4ee6f7623fc8921f7782b8c1c32a40bc90aa512547167ab86c",
+      "request_headers_sha256": "c95bd7171e5c253bef199f0b2cb7dc2ee9e9b97f33b479b881da40f81c23ba08",
+      "status": 202,
+      "headers": {
+        "content-length": "133",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b5cfc3ad-dde8-4229-82ce-a30462e7c2dd"
+      },
+      "body": "{\"ingestion_id\":\"91c4d26e-b51c-4802-8b2d-8b09ba12d421\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-venue:work-items\"}"
+    },
+    {
+      "name": "work item enum errors",
+      "method": "POST",
+      "path": "/api/v1/ingest/work-items",
+      "body_sha256": "c8f1a2c67aeb32630b4533b51eb814d3b7a887cd0c1d6b9a8486e2bca3b6ff56",
+      "request_headers_sha256": "e2fbc93c6fd88427b30789ee8eba4d071179763b89b9c14df56e8680e00dbc39",
+      "status": 422,
+      "headers": {
+        "content-length": "779",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e6f338d7-49f2-4eba-9757-7a66297fc8e7"
+      },
+      "body": "{\"detail\":[{\"type\":\"literal_error\",\"loc\":[\"body\",\"items\",0,\"provider\"],\"msg\":\"Input should be 'jira', 'github', 'gitlab' or 'linear'\",\"input\":\"bitbucket\",\"ctx\":{\"expected\":\"'jira', 'github', 'gitlab' or 'linear'\"}},{\"type\":\"literal_error\",\"loc\":[\"body\",\"items\",0,\"type\"],\"msg\":\"Input should be 'story', 'task', 'bug', 'epic', 'issue', 'incident', 'chore' or 'unknown'\",\"input\":\"Bug\",\"ctx\":{\"expected\":\"'story', 'task', 'bug', 'epic', 'issue', 'incident', 'chore' or 'unknown'\"}},{\"type\":\"literal_error\",\"loc\":[\"body\",\"items\",0,\"status\"],\"msg\":\"Input should be 'backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'canceled' or 'unknown'\",\"input\":\"open\",\"ctx\":{\"expected\":\"'backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'canceled' or 'unknown'\"}}]}"
+    },
+    {
+      "name": "work items need no repo_url",
+      "method": "POST",
+      "path": "/api/v1/ingest/work-items",
+      "body_sha256": "6421fae4be3da3305bcc82fa8c79c4744fcc5f5779e483e47227f39e68065b9a",
+      "request_headers_sha256": "d11a36a499ab706461f1b33d3433975cb12381ef9922d30303ce12b2c7eb258e",
+      "status": 202,
+      "headers": {
+        "content-length": "125",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d8c72dfe-9d72-43ba-8588-c5502756a406"
+      },
+      "body": "{\"ingestion_id\":\"85108806-f851-4d45-91b2-19653629a2ae\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:o:work-items\"}"
+    },
+    {
+      "name": "no api key",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "5ecb608e2502a1d6d648f8406597df3c7d2e5d4c222ca1d19b12c26c88ad1e5f",
+      "status": 401,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a5086505-cf5c-4bb9-9d3a-36f5a09e9a61"
+      },
+      "body": "{\"detail\":\"Invalid API key\"}"
+    },
+    {
+      "name": "wrong api key",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "0048f99d2084fc3266d3c323634a5f25cd3339df9578a99aa474bf6acc09ed2d",
+      "status": 401,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6d6330b0-f441-4182-9057-143e6d304964"
+      },
+      "body": "{\"detail\":\"Invalid API key\"}"
+    },
+    {
+      "name": "second key of the list",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "6419b9659f331a24784aa4d5814c27c2be8e41c8a9e669a9821286091ab53a48",
+      "status": 202,
+      "headers": {
+        "content-length": "130",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bba8d80f-f55f-420e-9576-7f3f29f3f9ad"
+      },
+      "body": "{\"ingestion_id\":\"e6849977-fec3-4457-bf57-d9667ba6a27b\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-venue:commits\"}"
+    },
+    {
+      "name": "no signature",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "c4b0da982e0e98e6214fcbd16fec225d7fbc85fbaca7d0523b76530b765a1e22",
+      "status": 401,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cb21a28f-64c1-4bdc-a36c-fe84a7183394"
+      },
+      "body": "{\"detail\":\"Invalid signature\"}"
+    },
+    {
+      "name": "wrong signature",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "942055ad8ad9fc80adbce046ec73da73f1338dd37b8afb9b40b4816fa65ef44d",
+      "status": 401,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d36ec4f5-1d36-4c64-945b-07119cd55a23"
+      },
+      "body": "{\"detail\":\"Invalid signature\"}"
+    },
+    {
+      "name": "signature of another body",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "bc30eeee5d11626aa485d2e36999d55510d18c8a04151bedc2dc1e35f7356e0a",
+      "status": 401,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c9d5e52a-b874-452c-8ffe-f8400dd63a86"
+      },
+      "body": "{\"detail\":\"Invalid signature\"}"
+    },
+    {
+      "name": "signature without prefix",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "b76b708b316d1f7ee0389baf9d48c2917857cbe50204c31fab7be7a1bd18d6fc",
+      "status": 401,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8c256adc-f5e8-4e28-954b-e2b9d3a83ab4"
+      },
+      "body": "{\"detail\":\"Invalid signature\"}"
+    },
+    {
+      "name": "bad json beats credentials",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "request_headers_sha256": "19bc8a876a5a3b0d1a5b4595abd49a6aee777f6452e389793771abc81fce724e",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "53ff3390-eb76-4bed-9bd9-7f162070f494"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
+    },
+    {
+      "name": "empty body, credentials wrong",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "621995891f7a05caddb71ab4b3e99a8ab71622a69809607b80c4e5ecf7fc181a",
+      "status": 401,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "32b04fbc-88c2-46d0-a9fc-7cdf9e3c4c8a"
+      },
+      "body": "{\"detail\":\"Invalid API key\"}"
+    },
+    {
+      "name": "validation error only after credentials",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "665c3943f933a9a2c911da2ea5a0374a4d67b9bf6879b394dc2bf6863527ce64",
+      "status": 401,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "924a59d1-87b4-4780-a718-9ebf57199acc"
+      },
+      "body": "{\"detail\":\"Invalid API key\"}"
+    },
+    {
+      "name": "validation error",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "532a6e6af2d5123bdf616e6e90a20970dfe86a4821b7a006c5e2193ca7d45b93",
+      "status": 422,
+      "headers": {
+        "content-length": "244",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9d8a2252-fd6a-4d23-ba6d-8b7dbd8072c0"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"org_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"repo_url\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"items\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "shape errors",
+      "method": "POST",
+      "path": "/api/v1/ingest/deployments",
+      "body_sha256": "fcc67428f6388ebc06a497c3b225818d29c08e353be3b918cb52550c872e7289",
+      "request_headers_sha256": "ff053d94efc07115ae82d7b34e5d69561407c3de028b91b12787e2f813062cc0",
+      "status": 422,
+      "headers": {
+        "content-length": "892",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "962222ae-8cd7-4860-a9b4-08f8175e98e1"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"org_id\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"string_type\",\"loc\":[\"body\",\"repo_url\"],\"msg\":\"Input should be a valid string\",\"input\":null},{\"type\":\"string_type\",\"loc\":[\"body\",\"items\",0,\"deployment_id\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"missing\",\"loc\":[\"body\",\"items\",0,\"status\"],\"msg\":\"Field required\",\"input\":{\"deployment_id\":1}},{\"type\":\"missing\",\"loc\":[\"body\",\"items\",0,\"environment\"],\"msg\":\"Field required\",\"input\":{\"deployment_id\":1}},{\"type\":\"datetime_from_date_parsing\",\"loc\":[\"body\",\"items\",1,\"started_at\"],\"msg\":\"Input should be a valid datetime or date, input is too short\",\"input\":\"nope\",\"ctx\":{\"error\":\"input is too short\"}},{\"type\":\"int_parsing\",\"loc\":[\"body\",\"items\",1,\"pull_request_number\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"x\"}]}"
+    },
+    {
+      "name": "overflow integer in float field",
+      "method": "POST",
+      "path": "/api/v1/ingest/deployments",
+      "body_sha256": "31ebbf00cf8cef3ced8cac3e3de9933d633e496828894f3de3666ba2e7461217",
+      "request_headers_sha256": "2cc32cac6c92406d4a5e88bf152aff7b3bd8c77004f040fe05e91040df7c03fd",
+      "status": 422,
+      "headers": {
+        "content-length": "441",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "dc236a00-a70a-4396-9b9d-54857d972a6c"
+      },
+      "body": "{\"detail\":[{\"type\":\"float_type\",\"loc\":[\"body\",\"items\",0,\"release_ref_confidence\"],\"msg\":\"Input should be a valid number\",\"input\":999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999}]}"
+    },
+    {
+      "name": "empty items",
+      "method": "POST",
+      "path": "/api/v1/ingest/incidents",
+      "body_sha256": "ff1a847fa30e174393cb220711c4a7b807fba88d65505d568dad29bb8b616265",
+      "request_headers_sha256": "8ce5dcf2d245e72fe49969c267f0d781d7cfe9ce5db0827170a52138b84bdcdf",
+      "status": 422,
+      "headers": {
+        "content-length": "193",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c5943b6b-9afa-4f44-aed8-d35b5cf29592"
+      },
+      "body": "{\"detail\":[{\"type\":\"too_short\",\"loc\":[\"body\",\"items\"],\"msg\":\"List should have at least 1 item after validation, not 0\",\"input\":[],\"ctx\":{\"field_type\":\"List\",\"min_length\":1,\"actual_length\":0}}]}"
+    },
+    {
+      "name": "integer past jiter and json.loads digit limits",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "59d9d3bae4df95bef7ce656104d118947eef58b58b5536e8498eec9d00be7aad",
+      "request_headers_sha256": "0299bcb9d786c153af51460bd7e70beab7144f87650673c63803e13209b1477a",
+      "status": 400,
+      "headers": {
+        "content-length": "48",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f07841d4-c39d-43e7-a73c-0cdde03b6741"
+      },
+      "body": "{\"detail\":\"There was an error parsing the body\"}"
+    },
+    {
+      "name": "idempotency first",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "e796f95854783d18e9fafc92e51e70c90d5628d2b37d8994f9fa74bfe4afbc44",
+      "status": 202,
+      "headers": {
+        "content-length": "130",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1bf91e70-0c80-475f-8228-726294b16153"
+      },
+      "body": "{\"ingestion_id\":\"3bb18076-b928-4afe-ba8c-97c86928ef5d\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-venue:commits\"}"
+    },
+    {
+      "name": "idempotency repeat",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "e796f95854783d18e9fafc92e51e70c90d5628d2b37d8994f9fa74bfe4afbc44",
+      "status": 409,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cc2ca32c-b67b-41cc-a528-51dbed303f15"
+      },
+      "body": "{\"detail\":\"Duplicate request\"}"
+    },
+    {
+      "name": "idempotency other route, same key",
+      "method": "POST",
+      "path": "/api/v1/ingest/incidents",
+      "body_sha256": "1809aaaba6498ee741b187af15668ad3dbf45826204d2bd7457034ff5c153407",
+      "request_headers_sha256": "5cca7ab920d5885661a75f18ae8ebc16204e91b6772ba171f83b8bbc31a236c2",
+      "status": 409,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b635b8cd-4a5e-4799-adbd-97a57f7900ad"
+      },
+      "body": "{\"detail\":\"Duplicate request\"}"
+    },
+    {
+      "name": "idempotency claimed by an invalid request",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "5b3045462147990a7bdaa364fc8674281b53d7e45df6024321bef3d0ad8b3264",
+      "status": 422,
+      "headers": {
+        "content-length": "244",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2f0fe147-d2fe-46cc-8d48-d010efffc76a"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"org_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"repo_url\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"items\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "idempotency after the invalid one",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "db49c43bdf02436e393e3b3b06074a0fb13e562f427031f12944b63475017aee",
+      "status": 409,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9a2f5d90-35b9-4c14-a5a0-448dde2f1a5c"
+      },
+      "body": "{\"detail\":\"Duplicate request\"}"
+    },
+    {
+      "name": "idempotency claimed by a refused credential",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "456169e10a3bedc0d7dadfa465630af0397b79c5712ba3c888dd1f2e3884da30",
+      "status": 401,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "08223acd-de1f-4305-a693-b3640b8227c9"
+      },
+      "body": "{\"detail\":\"Invalid API key\"}"
+    },
+    {
+      "name": "idempotency after the refused credential",
+      "method": "POST",
+      "path": "/api/v1/ingest/commits",
+      "body_sha256": "e5f2c454c4e5c795a695f9f4b4ed2639221b39d455942fff43f6c898637e8ad0",
+      "request_headers_sha256": "134510e2ac27de930ca58948cb26c537cd837c9a4409a7c05243f7cf6165cb79",
+      "status": 202,
+      "headers": {
+        "content-length": "130",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "20f47ce1-beb5-49b1-877b-a0a850568d71"
+      },
+      "body": "{\"ingestion_id\":\"358c0040-a40b-4c16-81bf-2e0bdedefeb7\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-venue:commits\"}"
+    }
+  ],
+  "rows": {
+    "idempotency keys": {
+      "rows": "idem:venue-key-1=1 ttl-is-a-day=yes | idem:venue-key-2=1 ttl-is-a-day=yes | idem:venue-key-3=1 ttl-is-a-day=yes"
+    },
+    "ingest stream entries": {
+      "rows": "ingest:o:work-items: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"o\",\"items\":[{\"work_item_id\":\"jira:ABC-1\",\"provider\":\"jira\",\"title\":\"t\",\"type\":\"unknown\",\"status\":\"unknown\",\"status_raw\":null,\"description\":null,\"project_key\":null,\"assignees\":[],\"reporter\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":null,\"started_at\":null,\"completed_at\":null,\"labels\":[\"x\",\"y\"],\"story_points\":2.5,\"priority_raw\":null,\"url\":\"https://example.test/i\"}]} | ingest:org-venue:commits: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"org-venue\",\"repo_url\":\"https://example.test/r.git\",\"items\":[{\"hash\":\"abc\",\"message\":\"m\",\"author_name\":\"a\",\"author_email\":\"a@example.test\",\"author_when\":\"2026-01-01T00:00:00+02:00\",\"committer_name\":null,\"committer_email\":null,\"committer_when\":\"2026-01-01T00:00:00.500000Z\",\"parents\":1}]} | ingest:org-venue:commits: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"org-venue\",\"repo_url\":\"https://example.test/r.git\",\"items\":[{\"hash\":\"abc\",\"message\":\"m\",\"author_name\":\"a\",\"author_email\":\"a@example.test\",\"author_when\":\"2026-01-01T00:00:00+02:00\",\"committer_name\":null,\"committer_email\":null,\"committer_when\":\"2026-01-01T00:00:00.500000Z\",\"parents\":1},{\"hash\":\"h2\",\"message\":\"\",\"author_name\":\"\",\"author_email\":\"\",\"author_when\":\"2026-01-01T00:00:00\",\"committer_name\":null,\"committer_email\":null,\"committer_when\":null,\"parents\":1}]} | ingest:org-venue:commits: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"org-venue\",\"repo_url\":\"https://example.test/r.git\",\"items\":[{\"hash\":\"abc\",\"message\":\"m\",\"author_name\":\"a\",\"author_email\":\"a@example.test\",\"author_when\":\"2026-01-01T00:00:00+02:00\",\"committer_name\":null,\"committer_email\":null,\"committer_when\":\"2026-01-01T00:00:00.500000Z\",\"parents\":1}]} | ingest:org-venue:commits: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"org-venue\",\"repo_url\":\"https://example.test/r.git\",\"items\":[{\"hash\":\"abc\",\"message\":\"m\",\"author_name\":\"a\",\"author_email\":\"a@example.test\",\"author_when\":\"2026-01-01T00:00:00+02:00\",\"committer_name\":null,\"committer_email\":null,\"committer_when\":\"2026-01-01T00:00:00.500000Z\",\"parents\":1}]} | ingest:org-venue:commits: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"org-venue\",\"repo_url\":\"https://example.test/r.git\",\"items\":[{\"hash\":\"abc\",\"message\":\"m\",\"author_name\":\"a\",\"author_email\":\"a@example.test\",\"author_when\":\"2026-01-01T00:00:00+02:00\",\"committer_name\":null,\"committer_email\":null,\"committer_when\":\"2026-01-01T00:00:00.500000Z\",\"parents\":1}]} | ingest:org-venue:deployments: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"org-venue\",\"repo_url\":\"https://example.test/r.git\",\"items\":[{\"deployment_id\":\"d1\",\"status\":\"success\",\"environment\":\"prod\",\"started_at\":\"2026-01-01T00:00:00Z\",\"finished_at\":null,\"deployed_at\":null,\"pull_request_number\":7,\"release_ref\":null,\"release_ref_confidence\":1.0}]} | ingest:org-venue:incidents: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"org-venue\",\"repo_url\":\"https://example.test/r.git\",\"items\":[{\"incident_id\":\"i1\",\"status\":\"open\",\"started_at\":\"2026-01-01T00:00:00Z\",\"resolved_at\":null}]} | ingest:org-venue:pull-requests: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"org-venue\",\"repo_url\":\"https://example.test/r.git\",\"items\":[{\"number\":12,\"title\":\"t\",\"body\":null,\"state\":\"merged\",\"author_name\":\"a\",\"author_email\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"merged_at\":\"2026-01-01T00:00:00Z\",\"closed_at\":null,\"head_branch\":null,\"base_branch\":null,\"additions\":3,\"deletions\":null,\"changed_files\":null,\"reviews\":[{\"review_id\":\"r1\",\"reviewer\":\"u\",\"state\":\"APPROVED\",\"submitted_at\":\"2026-01-01T00:00:00.250000Z\"},{\"review_id\":\"r2\",\"reviewer\":\"v\",\"state\":\"COMMENTED\",\"submitted_at\":\"2026-01-01T01:00:00+05:30\"}]}]} | ingest:org-venue:pull-requests: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"org-venue\",\"repo_url\":\"https://example.test/r.git\",\"items\":[{\"number\":1,\"title\":\"t\",\"body\":null,\"state\":\"open\",\"author_name\":\"a\",\"author_email\":null,\"created_at\":\"2026-01-01T00:00:00\",\"merged_at\":null,\"closed_at\":null,\"head_branch\":null,\"base_branch\":null,\"additions\":null,\"deletions\":null,\"changed_files\":null,\"reviews\":[]}]} | ingest:org-venue:work-items: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"org-venue\",\"items\":[{\"work_item_id\":\"jira:ABC-1\",\"provider\":\"jira\",\"title\":\"t\",\"type\":\"unknown\",\"status\":\"unknown\",\"status_raw\":null,\"description\":null,\"project_key\":null,\"assignees\":[],\"reporter\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":null,\"started_at\":null,\"completed_at\":null,\"labels\":[\"x\",\"y\"],\"story_points\":2.5,\"priority_raw\":null,\"url\":\"https://example.test/i\"}]} | ingest:org-venue:work-items: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"org-venue\",\"items\":[{\"work_item_id\":\"w\",\"provider\":\"github\",\"title\":\"t\",\"type\":\"unknown\",\"status\":\"unknown\",\"status_raw\":null,\"description\":null,\"project_key\":null,\"assignees\":[],\"reporter\":null,\"created_at\":\"2026-01-01T00:00:00Z\",\"updated_at\":null,\"started_at\":null,\"completed_at\":null,\"labels\":[],\"story_points\":null,\"priority_raw\":null,\"url\":null}]} | ingest:org-é😀:incidents: ingestion_id=\u003cblank\u003e payload={\"org_id\":\"org-é😀\",\"repo_url\":\"r\",\"items\":[{\"incident_id\":\"é\\u0000😀\",\"status\":\"open\",\"started_at\":\"2026-01-01T00:00:00Z\",\"resolved_at\":null}]}"
+    }
+  }
+}

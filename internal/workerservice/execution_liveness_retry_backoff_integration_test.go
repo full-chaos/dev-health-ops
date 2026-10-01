@@ -363,6 +363,10 @@ func TestExecutionLivenessIgnoresATransientIdempotencyFailureThatRecovers(t *tes
 			t.Fatalf("install the retry hold: %v", err)
 		}
 	}
+	// The hold also goes away when the test fails before the release step.
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS hold_retry ON river.river_job`)
+	})
 	// The claim clock was seeded when the fixture was built, before the container
 	// and River client finished starting. Age it from the moment the job exists.
 	f.claim.recordClaim("retention", time.Now())

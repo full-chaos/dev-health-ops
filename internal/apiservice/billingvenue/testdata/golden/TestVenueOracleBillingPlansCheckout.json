@@ -3,7 +3,8 @@
     "test": "TestVenueOracleBillingPlansCheckout",
     "python_build": "023ae3e584ef6345a3bfaef1f0b30abd89f5dee8",
     "producer_digest": "53028fde43de410ecb5704202be163d92617d6794f5d2108513c8868e2607e80",
-    "recipe": "git worktree add --detach \u003cdir\u003e 023ae3e584ef6345a3bfaef1f0b30abd89f5dee8; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestVenueOracleBillingPlansCheckout$' ."
+    "recipe": "git worktree add --detach \u003cdir\u003e 023ae3e584ef6345a3bfaef1f0b30abd89f5dee8; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestVenueOracleBillingPlansCheckout$' .",
+    "python_env": "07334548c765d13579678e9ab205deaf8a279b85611cb4f955e12479c29458cd"
   },
   "requests": [
     {

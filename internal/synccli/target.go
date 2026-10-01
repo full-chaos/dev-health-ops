@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/pyargparse"
 	"io"
+	"log/slog"
 	"math/big"
 	"os"
 	"strings"
@@ -13,6 +14,9 @@ import (
 	"unicode"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // The `sync <target>` verbs (git, prs, blame, cicd, deployments, incidents,
@@ -725,13 +729,24 @@ func runTarget(ctx context.Context, env cli.Env, target string, exec Executor, n
 		writeLine(env.Stdout, targetUsage(target))
 		return cli.ExitOK
 	}
+	// Everything the run logs (the sinks under the executor log database
+	// errors through the process logger) passes through the same boundary as
+	// the error the verb prints.
+	redact := planBoundary(plan)
+	defer redactProcessLogger(redact)()
 	if err := exec(ctx, plan, env); err != nil {
 		var refused *Refusal
 		if errors.As(err, &refused) {
+			// dho's own refusal text (it names no database error).
 			writeLine(env.Stderr, fmt.Sprintf("dho sync %s: %s", target, refused.Message))
 			return refused.Code
 		}
-		writeLine(env.Stderr, fmt.Sprintf("dho sync %s: %s", target, err))
+		// Any other error can carry a database error: a server names the login
+		// in its refusals and a driver can carry the password it was given. The
+		// boundary is built from the sink and the PostgreSQL URI this run
+		// resolved and applied here, so no layer under the executor has to
+		// remember which of its errors can carry them.
+		writeLine(env.Stderr, fmt.Sprintf("dho sync %s: %s", target, redact(err.Error())))
 		if errors.Is(err, ErrNotAvailable) {
 			return cli.ExitRefused
 		}
@@ -923,4 +938,30 @@ func fillSynthetic(plan *Plan, v map[string]string, in Inputs) *Refusal {
 	}
 	plan.Finalizes = runBacked && !plan.DeferFinalize
 	return nil
+}
+
+// planBoundary redacts the credential components of the ClickHouse sink URI and
+// of the PostgreSQL URI (resolved the way the driver resolves it) from a text.
+func planBoundary(plan Plan) func(string) string {
+	sink := secrets.NewBoundary(plan.SinkURI)
+	var postgres *secrets.Boundary
+	if plan.DB != nil && strings.TrimSpace(*plan.DB) != "" {
+		boundary := pgstorage.Boundary(*plan.DB)
+		postgres = &boundary
+	}
+	return func(text string) string {
+		text = sink.RedactText(text)
+		if postgres != nil {
+			text = postgres.RedactText(text)
+		}
+		return text
+	}
+}
+
+// redactProcessLogger makes every text the process logger is given pass through
+// redact until the returned function is called: the sinks and collectors under
+// a verb log database errors through it, and its own redactor recognises
+// credential shapes, not a login name.
+func redactProcessLogger(redact func(string) string) (restore func()) {
+	return logging.InstallDefault(slog.New(logging.WithValueRedaction(slog.Default().Handler(), redact)))
 }

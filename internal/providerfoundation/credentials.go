@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -38,7 +37,7 @@ type FernetDecryptor struct {
 
 func NewFernetDecryptor(key secrets.Value, salt string) (FernetDecryptor, error) {
 	if !key.Configured() {
-		return FernetDecryptor{}, ErrCredentialInvalid
+		return FernetDecryptor{}, credentialInvalid("encryption_key_not_configured")
 	}
 	if salt == "" {
 		salt = defaultEncryptionSalt
@@ -301,33 +300,35 @@ func ValidateCredentialShape(credential Credential) error {
 		// so an empty, missing, unreadable or non-UTF-8 file is no key.
 		key, err := githubResolvedKeyConfigured(credential)
 		if err != nil {
-			return ErrCredentialInvalid
+			return credentialInvalid("shape_invalid:" + credential.Provider)
 		}
 		app := has("app_id") && key && has("installation_id")
 		if token == app {
-			return ErrCredentialInvalid
+			return credentialInvalid("shape_invalid:" + credential.Provider)
 		}
 		// CHAOS-6781: GitHubCredentials.__post_init__ raises when a token comes
 		// with ANY App field, not only a complete triple.
 		if token && (has("app_id") || has("installation_id") || key) {
-			return ErrCredentialInvalid
+			return credentialInvalid("shape_invalid:" + credential.Provider)
 		}
 	case "gitlab":
 		if !has("token") {
-			return ErrCredentialInvalid
+			return &credentialShapeError{missing: []string{"token"}}
 		}
 	case "jira":
-		// JiraCredentials requires api_token, email AND base_url.
-		if !hasAny(credential, jiraAPITokenAliases) || !has("email") || jiraCredentialBaseURL(credential) == "" {
-			return ErrCredentialInvalid
+		// JiraCredentials requires api_token, email AND base_url. The refusal names the missing
+		// FIELDS (never a value) so an operator can tell which one a stored credential lacks
+		// (CHAOS-7132); it still wraps ErrCredentialInvalid.
+		if missing := jiraMissingFields(credential); len(missing) > 0 {
+			return &credentialShapeError{missing: missing}
 		}
 	case "linear":
 		if !has("api_key") {
-			return ErrCredentialInvalid
+			return &credentialShapeError{missing: []string{"api_key"}}
 		}
 	case "launchdarkly":
 		if !has("api_key") {
-			return ErrCredentialInvalid
+			return &credentialShapeError{missing: []string{"api_key"}}
 		}
 	case "pagerduty":
 		mode := credentialValue(credential, "auth_mode")
@@ -344,24 +345,46 @@ func ValidateCredentialShape(credential Credential) error {
 		switch mode {
 		case "api_token":
 			if !has("api_token") || has("access_token") {
-				return ErrCredentialInvalid
+				return credentialInvalid("shape_invalid:" + credential.Provider)
 			}
 		case "oauth":
 			if !has("access_token") || has("api_token") {
-				return ErrCredentialInvalid
+				return credentialInvalid("shape_invalid:" + credential.Provider)
 			}
 		case "client_credentials":
 			if !has("client_id") || !has("client_secret") || !has("subdomain") || has("api_token") {
-				return ErrCredentialInvalid
+				return credentialInvalid("shape_invalid:" + credential.Provider)
 			}
 		default:
-			return ErrCredentialInvalid
+			return credentialInvalid("shape_invalid:" + credential.Provider)
 		}
 		if region := credentialValue(credential, "region"); region != "" && region != "us" && region != "eu" {
-			return ErrCredentialInvalid
+			return credentialInvalid("shape_invalid:" + credential.Provider)
 		}
 	default:
-		return fmt.Errorf("%w: unsupported provider", ErrCredentialInvalid)
+		return credentialInvalid("unsupported_provider")
 	}
 	return nil
+}
+
+// credentialShapeError is ErrCredentialInvalid with the NAMES of the required fields a stored
+// credential lacks. It never carries a value, and errors.Is(err, ErrCredentialInvalid) still holds.
+type credentialShapeError struct{ missing []string }
+
+func (e *credentialShapeError) Error() string {
+	return ErrCredentialInvalid.Error() + ": missing " + strings.Join(e.missing, ", ")
+}
+
+func (e *credentialShapeError) Unwrap() error { return ErrCredentialInvalid }
+
+// jiraMissingFields lists, in jira_credentials_from_mapping's order, the required fields (api_token,
+// email, base_url) the credential does not resolve to a non-empty value.
+func jiraMissingFields(credential Credential) []string {
+	var missing []string
+	for _, field := range jiraMappingFields(credential) {
+		if !field.Present {
+			missing = append(missing, field.Name)
+		}
+	}
+	return missing
 }

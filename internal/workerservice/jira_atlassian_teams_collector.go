@@ -2,6 +2,7 @@ package workerservice
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -14,8 +15,10 @@ import (
 	"atlassian/atlassian/graph"
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 )
 
 // jiraCombinedTeamCatalogCollector composes the existing project-as-team
@@ -113,19 +116,20 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 		return result, nil
 	}
 	if client == nil || client.BaseURL == nil {
+		// A skipped Atlassian Teams leg must say so (CHAOS-7132): this return used to leave no line,
+		// so an org with no real Atlassian Teams rows could not be told from one with none to write.
+		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID, "reason", "no_base_url")
 		return result, nil
 	}
 	atlassianResult, err := collector.collectAtlassianTeams(ctx, ref, credential, client, selections, normalizedAt)
 	if err != nil {
-		if ref.Strict {
-			return result, err
-		}
-		// Non-strict (post-sync dispatch): the project-as-team write above
-		// already succeeded (or was itself skipped) and must not be undone
-		// by an Atlassian Teams failure -- log and keep that result,
-		// mirroring every other collector's non-strict walk-failure
-		// discipline in this package.
-		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "error", err)
+		// The Atlassian Teams leg is ADDITIVE and independent (D2778): its failure must neither fail
+		// reference discovery (strict) nor undo the project-as-team write above. It is never silent
+		// and never a clean success (CHAOS-7132): a Warn line and a degraded leg that the discovery
+		// ledger and the run's result carry, with a value-free reason.
+		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID,
+			"strict", ref.Strict, "reason", atlassianLegReason(err), "error", syncdispatchruntime.SanitizeErrorText(err.Error()))
+		result.DegradedLegs = append(result.DegradedLegs, newDegradedAtlassianLeg(err))
 		return result, nil
 	}
 	// Every count/key below comes from atlassianteams.Write's own Result --
@@ -140,6 +144,57 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 	return result, nil
 }
 
+// newDegradedAtlassianLeg records a failed Atlassian Teams leg. Detail is err.Error(): for a provider
+// failure that is its class, status and request path only (ProviderError.Error never formats the
+// response body), for the gateway's GraphQL errors the gateway's own message (e.g. "Invalid Organization
+// Ari: <uuid>"). The recorder bounds and sanitizes it again before it is stored.
+func newDegradedAtlassianLeg(err error) providersync.DegradedLeg {
+	return providersync.DegradedLeg{
+		Dataset: "teams", Leg: "jira_atlassian_teams", Outcome: "failed",
+		Reason: atlassianLegReason(err), Detail: syncdispatchruntime.SanitizeErrorText(err.Error()),
+	}
+}
+
+// atlassianLegReason is the fixed-vocabulary, value-free reason an Atlassian Teams leg failed.
+func atlassianLegReason(err error) string {
+	switch {
+	case errors.Is(err, atlassianteams.ErrOrganizationPermission):
+		return "organization_permission"
+	case errors.Is(err, atlassianteams.ErrOrganizationNotFound):
+		return "organization_not_found"
+	case errors.Is(err, atlassianteams.ErrConfiguration), errors.Is(err, providersync.ErrInvalidConfiguration):
+		return "configuration"
+	}
+	if reason := providerfoundation.FailureReason(err); reason != "" {
+		return reason
+	}
+	return "unclassified"
+}
+
+// redactedLegError is an Atlassian-leg error whose text has the credential removed: the gateway can
+// echo the credential it was sent (CHAOS-7132). It unwraps to the original, so the reason and the
+// sentinel checks (errors.Is) are unchanged.
+type redactedLegError struct {
+	text  string
+	cause error
+}
+
+func (e *redactedLegError) Error() string { return e.text }
+func (e *redactedLegError) Unwrap() error { return e.cause }
+
+func redactLegError(err error, values ...string) error {
+	if err == nil {
+		return nil
+	}
+	// The existing value-based primitive (secrets.Boundary, the one every dho verb redacts through),
+	// fed the credential this leg actually authenticated with.
+	text := secrets.NewBoundaryWith("", values...).RedactText(err.Error())
+	if text == err.Error() {
+		return err
+	}
+	return &redactedLegError{text: text, cause: err}
+}
+
 func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	ctx context.Context,
 	ref providersync.TeamCatalogReference,
@@ -147,7 +202,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	client *providerfoundation.HTTPClient,
 	selections providersync.TeamCatalogSelections,
 	normalizedAt time.Time,
-) (atlassianteams.Result, error) {
+) (result atlassianteams.Result, err error) {
 	if collector.Conn == nil {
 		return atlassianteams.Result{}, providersync.ErrInvalidConfiguration
 	}
@@ -177,6 +232,8 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	if !email.Configured() || token == "" {
 		return atlassianteams.Result{}, providersync.ErrInvalidConfiguration
 	}
+	// From here on any error can carry what the gateway echoes back: strip the credential at the source.
+	defer func() { err = redactLegError(err, token, email.Reveal()) }()
 	gatewayURL := tenant.String() + "/gateway/api"
 	auth := atlassian.BasicAPITokenAuth{Email: email.Reveal(), Token: token}
 

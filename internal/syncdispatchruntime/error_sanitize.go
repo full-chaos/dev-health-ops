@@ -72,3 +72,7 @@ func sanitizeErrorText(text string) string {
 	}
 	return sanitized
 }
+
+// SanitizeErrorText is sanitizeErrorText for callers outside the package that log or store error text
+// (CHAOS-7132): credential-shaped substrings are replaced and the text is bounded.
+func SanitizeErrorText(text string) string { return sanitizeErrorText(text) }

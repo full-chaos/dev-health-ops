@@ -21,7 +21,7 @@ import (
 
 // deleteRouteOracleGoldenDigest is the SHA-256 pinned for the admin delete
 // route's oracle.
-const deleteRouteOracleGoldenDigest = "1e2b76845bead4cd7837eb4ebb1c3a4dce212676c07321fcf45db225dbf2de1c"
+const deleteRouteOracleGoldenDigest = "a3ca62cf86105653b606b6e6f310a6f5ebad5087c687c55069627e290f7e3c7f"
 
 // TestCredentialDeleteVenueOracle is the venue-oracle proof for DELETE
 // /admin/credentials/{provider}/{name}: the real Python api and the real Go

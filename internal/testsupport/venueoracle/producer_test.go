@@ -165,3 +165,52 @@ func TestTheProducersCommandRefusesTheOptionsThatIgnoreTheEnvironment(t *testing
 		}
 	}
 }
+
+// underTheVerb makes the test's recordings ones the record verb started: the
+// verb always sets goldenPassedEnv for its runs, with no names when it passed
+// none.
+func underTheVerb(t *testing.T) {
+	t.Helper()
+	t.Setenv(goldenPassedEnv, "")
+}
+
+// A recording holds the record verb's stamp when the verb started it, and a
+// run a person started by hand writes no candidate at all.
+func TestOnlyARecordingTheVerbStartedWritesACandidateAndItHoldsTheStamp(t *testing.T) {
+	record := func(t *testing.T) (*Golden, string) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "g.json")
+		golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		golden.recorded.Header.ProducerDigest = strings.Repeat("a", 64)
+		body := "{}"
+		golden.recorded.Requests = append(golden.recorded.Requests, goldenRequest{Name: "one", Method: "GET", Path: "/x", Status: 200, Body: body})
+		return golden, path
+	}
+	t.Run("started by hand", func(t *testing.T) {
+		os.Unsetenv(goldenPassedEnv)
+		golden, path := record(t)
+		if _, err := golden.writeCandidate(false); err == nil || !strings.Contains(err.Error(), "was not started by the record verb") {
+			t.Fatalf("a hand-started recording: err = %v, want a refusal", err)
+		}
+		if _, err := os.Stat(path + GoldenCandidateSuffix); err == nil {
+			t.Fatal("a hand-started recording wrote a candidate")
+		}
+	})
+	t.Run("started by the verb", func(t *testing.T) {
+		underTheVerb(t)
+		golden, path := record(t)
+		if _, err := golden.writeCandidate(false); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(path + GoldenCandidateSuffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), `"recorded_by": "goldenrecord"`) {
+			t.Fatalf("the candidate holds no stamp of the verb:\n%s", raw)
+		}
+	})
+}

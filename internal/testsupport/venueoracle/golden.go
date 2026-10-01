@@ -190,7 +190,17 @@ type goldenHeader struct {
 	// on the closed list legacy_python_env_goldens.txt may still hold that.
 	PythonEnv        string `json:"python_env,omitempty"`
 	PythonEnvVersion int    `json:"python_env_version,omitempty"`
+	// RecordedBy is the stamp of the record verb: the recording ran under the
+	// verb (its fixed environment, its two runs, its replay), not under a
+	// hand-started go test. A golden with no stamp was recorded before the
+	// stamp existed; the manifest of its directory holds it by digest
+	// (recordedfiles). The stamp stops an accident: a hand-made golden has
+	// none. It does not stop a hand edit that also writes the stamp.
+	RecordedBy string `json:"recorded_by,omitempty"`
 }
+
+// recordVerbName is what the record verb's stamp holds.
+const recordVerbName = "goldenrecord"
 
 // goldenPassedEnv is how the recorder tells a recording which ambient
 // variables it passed by name (comma-separated).
@@ -392,6 +402,11 @@ func openGolden(spec GoldenSpec, test string, recording bool) (*Golden, error) {
 			return nil, err
 		}
 		g.recorded = goldenFile{Header: goldenHeader{Test: test, PythonBuild: spec.PythonBuild, Recipe: spec.Recipe, PassedEnv: envNames(spec.PassEnv)}, Rows: map[string]goldenRows{}}
+		// The record verb always sets goldenPassedEnv for its runs, with no
+		// names when it passed none: its presence is the verb.
+		if _, byVerb := os.LookupEnv(goldenPassedEnv); byVerb {
+			g.recorded.Header.RecordedBy = recordVerbName
+		}
 		return g, nil
 	}
 	raw, err := os.ReadFile(spec.Path)
@@ -1148,6 +1163,9 @@ func (g *Golden) writeCandidate(failed bool) (string, error) {
 	}
 	if len(g.recorded.Header.ProducerDigest) != 64 {
 		return "", fmt.Errorf("recording %s: the Python producer was never verified (golden.PythonRoot was not called)", g.spec.Path)
+	}
+	if g.recorded.Header.RecordedBy != recordVerbName {
+		return "", fmt.Errorf("recording %s: this run was not started by the record verb, so no candidate was written: a golden is recorded under the verb's fixed environment, twice, and replayed before it is promoted (%s)", g.spec.Path, g.spec.Recipe)
 	}
 	raw, err := json.MarshalIndent(g.recorded, "", "  ")
 	if err != nil {

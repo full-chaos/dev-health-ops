@@ -118,6 +118,11 @@ func TestAnInstrumentIsPushedOnceNotTwice(t *testing.T) {
 	if metrics, points := countNamed(c.metrics, "probe_instrument_total"); metrics != 1 || points != 1 {
 		t.Errorf("the instrument arrived as %d metrics with %d points, want exactly 1 and 1 (pushed twice)", metrics, points)
 	}
+	// The instruments' own fragment is excluded from the bridge, but its status
+	// is still in the source-failure gauge, as on the scrape.
+	if !hasSourceStatus(c.metrics, SourceName) {
+		t.Errorf("the source-failure gauge over OTLP lacks source=%q, which the scrape carries", SourceName)
+	}
 	if metrics, points := countNamed(c.metrics, "hand_written_total"); metrics != 1 || points != 1 {
 		t.Errorf("the hand-written family arrived as %d metrics with %d points, want 1 and 1", metrics, points)
 	}
@@ -175,4 +180,24 @@ func TestRegisterWithPushRegistersThePushCountersOnTheRegistry(t *testing.T) {
 	if !bytes.Contains(text.Bytes(), []byte("dev_health_otlp_metrics_export_failures_total 0")) {
 		t.Errorf("the push counters are not on /metrics: %s", text.String())
 	}
+}
+
+func hasSourceStatus(metrics []*metricpb.Metric, source string) bool {
+	for _, m := range metrics {
+		if m.GetName() != "dev_health_runtime_metrics_source_failed" {
+			continue
+		}
+		gauge, ok := m.GetData().(*metricpb.Metric_Gauge)
+		if !ok {
+			continue
+		}
+		for _, point := range gauge.Gauge.GetDataPoints() {
+			for _, kv := range point.GetAttributes() {
+				if kv.GetKey() == "source" && kv.GetValue().GetStringValue() == source {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

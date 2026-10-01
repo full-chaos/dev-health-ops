@@ -27,6 +27,10 @@ const (
 	defaultEnvironment = "production"
 	defaultEndpoint    = "localhost:4317"
 	defaultInterval    = 60 * time.Second
+	// maxIntervalMillis bounds OTEL_METRIC_EXPORT_INTERVAL at one day: a larger
+	// value overflows time.Duration (a huge positive count of milliseconds
+	// becomes a negative interval, which panics the periodic reader).
+	maxIntervalMillis = int64(24 * time.Hour / time.Millisecond)
 )
 
 // Options is the push configuration, read from the same OTEL_* environment as
@@ -74,9 +78,9 @@ func OptionsFromEnv(defaultName string, lookup LookupFunc) (Options, error) {
 	}
 	if raw, ok := lookup("OTEL_METRIC_EXPORT_INTERVAL"); ok {
 		millis, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-		if err != nil || millis <= 0 {
+		if err != nil || millis <= 0 || millis > maxIntervalMillis {
 			options.Enabled = false
-			return options, fmt.Errorf("OTEL_METRIC_EXPORT_INTERVAL must be a positive number of milliseconds, got %q", raw)
+			return options, fmt.Errorf("OTEL_METRIC_EXPORT_INTERVAL must be between 1 and %d milliseconds, got %q", maxIntervalMillis, raw)
 		}
 		options.Interval = time.Duration(millis) * time.Millisecond
 	}

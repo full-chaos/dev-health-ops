@@ -40,6 +40,10 @@ func TestOptionsFromEnv(t *testing.T) {
 		{name: "url endpoint and interval", env: map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.example:4317", "OTEL_METRIC_EXPORT_INTERVAL": "15000"}, defaultName: "bin", enabled: true, service: "bin", endpoint: "http://collector.example:4317", interval: 15 * time.Second},
 		{name: "malformed interval disables", env: map[string]string{"OTEL_METRIC_EXPORT_INTERVAL": "soon"}, defaultName: "bin", enabled: false, service: "bin", endpoint: "localhost:4317", interval: time.Minute, wantErr: true},
 		{name: "zero interval disables", env: map[string]string{"OTEL_METRIC_EXPORT_INTERVAL": "0"}, defaultName: "bin", enabled: false, service: "bin", endpoint: "localhost:4317", interval: time.Minute, wantErr: true},
+		{name: "overflowing interval disables", env: map[string]string{"OTEL_METRIC_EXPORT_INTERVAL": "9223372036854775807"}, defaultName: "bin", enabled: false, service: "bin", endpoint: "localhost:4317", interval: time.Minute, wantErr: true},
+		{name: "just over a day disables", env: map[string]string{"OTEL_METRIC_EXPORT_INTERVAL": "86400001"}, defaultName: "bin", enabled: false, service: "bin", endpoint: "localhost:4317", interval: time.Minute, wantErr: true},
+		{name: "one day is accepted", env: map[string]string{"OTEL_METRIC_EXPORT_INTERVAL": "86400000"}, defaultName: "bin", enabled: true, service: "bin", endpoint: "localhost:4317", interval: 24 * time.Hour},
+		{name: "one millisecond is accepted", env: map[string]string{"OTEL_METRIC_EXPORT_INTERVAL": "1"}, defaultName: "bin", enabled: true, service: "bin", endpoint: "localhost:4317", interval: time.Millisecond},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

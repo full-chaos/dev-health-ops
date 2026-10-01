@@ -282,14 +282,20 @@ type Scrape struct {
 }
 
 // EachMetricsFragment yields the runtime fragment, then each registered source
-// except those in skip, then the source-failure fragment.
+// except those in skip, then the source-failure fragment. A skipped source is
+// still written once to learn whether it failed: the failure fragment lists
+// every registered source, as the scrape's does, so a skipped source's status
+// is not lost; only its own fragment is not yielded.
 func (s Scrape) EachMetricsFragment(skip map[string]bool, fn func(source string, fragment []byte, err error)) {
 	var runtime bytes.Buffer
 	s.Registry.WriteRuntimeMetrics(context.Background(), s.Service, s.Version, &runtime)
 	fn("runtime", runtime.Bytes(), nil)
 	var outcomes []MetricsSourceOutcome
-	s.Registry.EachMetricsFragment(skip, func(source string, fragment []byte, err error) {
+	s.Registry.EachMetricsFragment(nil, func(source string, fragment []byte, err error) {
 		outcomes = append(outcomes, MetricsSourceOutcome{Source: source, Err: err})
+		if skip[source] {
+			return
+		}
 		fn(source, fragment, err)
 	})
 	var failed bytes.Buffer

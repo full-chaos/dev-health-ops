@@ -69,3 +69,41 @@ func TestEverythingTheScrapeServesIsPushed(t *testing.T) {
 		t.Fatalf("compared %d families and %d series: fewer than the scrape serves", families, seriesCount)
 	}
 }
+
+// TestASkippedSourceStillHasItsFailureStatusOverOTLP: the instruments' own
+// fragment is excluded from the push, but the scrape's source-failure gauge
+// lists every registered source, so the push must too, healthy or failing.
+func TestASkippedSourceStillHasItsFailureStatusOverOTLP(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+	registry.SetLive(true)
+	registry.SetReady(true)
+	for name, source := range map[string]health.MetricsSource{
+		"skipped_ok":     fixedSource("# TYPE skipped_ok_total counter\nskipped_ok_total 1\n"),
+		"skipped_broken": brokenSource{},
+		"kept":           fixedSource("# TYPE kept_total counter\nkept_total 2\n"),
+	} {
+		if err := registry.RegisterMetrics(name, source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	skip := map[string]bool{"skipped_ok": true, "skipped_broken": true}
+	resources, _ := push(t, health.Scrape{Registry: registry, Service: "svc", Version: "v"}, skip)
+	received := collect(resources)
+	failed := received["dev_health_runtime_metrics_source_failed"]
+	if failed == nil {
+		t.Fatal("the source-failure gauge did not arrive")
+	}
+	for source, want := range map[string]float64{"skipped_ok": 0, "skipped_broken": 1, "kept": 0} {
+		got, ok := failed.numbers["source="+source]
+		if !ok || got != want {
+			t.Errorf("source_failed{source=%q} = %v (present %v) over OTLP, want %v: %v", source, got, ok, want, failed.numbers)
+		}
+	}
+	// The skipped sources' own families are not pushed by the Scrape.
+	if received["skipped_ok_total"] != nil {
+		t.Error("a skipped source's family was pushed")
+	}
+	if received["kept_total"] == nil {
+		t.Error("a kept source's family was not pushed")
+	}
+}

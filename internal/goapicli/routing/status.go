@@ -19,6 +19,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"sort"
 	"strings"
 	"time"
@@ -64,6 +67,26 @@ type statusReport struct {
 	CatalogError        *string                 `json:"catalog_error"`
 	RowsBySchemaDigest  map[string]int          `json:"rows_by_schema_digest"`
 	Operations          []statusReportOperation `json:"operations"`
+	// MCPClass is the MCP caller class's per-root-field state (CHAOS-7214), Go-only:
+	// the class rows are not catalog operations, so they are not in Operations.
+	// MCPClassError is its own failure field for the same reason ClassificationError
+	// is: a failure here must not erase the census or the operations table.
+	MCPClass      []statusReportMCPRoot `json:"mcp_class"`
+	MCPClassError *string               `json:"mcp_class_error"`
+}
+
+// statusReportMCPRoot is one allowlisted MCP root field's class-row state.
+type statusReportMCPRoot struct {
+	Root                  string   `json:"root"`
+	Operation             string   `json:"operation"`
+	ServedByBinary        bool     `json:"served_by_binary"`
+	DigestState           string   `json:"digest_state"`
+	Mode                  *string  `json:"mode"`
+	CurrentCandidateBuild *string  `json:"current_candidate_build"`
+	Reachable             bool     `json:"reachable"`
+	Proven                bool     `json:"proven"`
+	Dark                  bool     `json:"dark"`
+	StaleDigests          []string `json:"stale_digests"`
 }
 
 // Python's per-operation object carries exactly: operation,
@@ -311,6 +334,13 @@ func runStatus(argv []string) error {
 			report.RegistryDBError = stringPtr(redactCredentials(err.Error()))
 		} else {
 			report.RowsBySchemaDigest = counts
+			// The MCP class table is independent of the catalog: it needs only the
+			// census's own database and this binary's SDL.
+			classRows, classErr := mcpClassStatus(dbCtx, pool, liveDigest)
+			if classErr != nil {
+				report.MCPClassError = stringPtr(redactCredentials(classErr.Error()))
+			}
+			report.MCPClass = classRows
 			// Only attempt the per-operation classification once the census
 			// succeeded and there is a catalog to drive it: a failure here
 			// must not erase the census, which is meaningful on its own.
@@ -466,6 +496,7 @@ func printStatusText(report statusReport, local string) {
 		fmt.Fprintln(stdout, "  The per-digest census above is still accurate; only the per-operation table could not be built.")
 		return
 	}
+	defer printMCPClassStatus(report)
 	fmt.Fprintf(stdout, "%-24s %-8s %-10s %-8s PROOF\n", "OPERATION", "DIGEST", "MODE", "ROLLOUT")
 	for _, operation := range report.Operations {
 		mode := derefOr(operation.Mode, "-")
@@ -716,4 +747,63 @@ func proofWord(operation statusReportOperation) string {
 		}
 	}
 	return proof
+}
+
+// printMCPClassStatus prints the MCP class table after the operations table.
+// DARK names a root with no reachable row at the live digest: after a schema
+// digest move that is what a missed carry looks like, and "missing is not
+// healthy" applies to it as to any operation.
+func printMCPClassStatus(report statusReport) {
+	fmt.Fprintln(stdout)
+	if report.MCPClassError != nil {
+		fmt.Fprintf(stdout, "mcp class rows: UNAVAILABLE (%s)\n", *report.MCPClassError)
+		return
+	}
+	fmt.Fprintf(stdout, "%-30s %-8s %-10s %-8s %s\n", "MCP CLASS ROOT", "DIGEST", "MODE", "PROOF", "LISTENER")
+	for _, row := range report.MCPClass {
+		proof := "-"
+		if row.DigestState == goapiproof.DigestMatch {
+			proof = "UNPROVEN"
+			if row.Proven {
+				proof = "ok"
+			}
+		}
+		listener := "DARK (answers 404 root_field_not_enabled)"
+		if row.Reachable {
+			listener = "serves"
+		}
+		if !row.ServedByBinary {
+			listener += "; NOT a Query root of this binary's SDL"
+		}
+		fmt.Fprintf(stdout, "%-30s %-8s %-10s %-8s %s\n", row.Operation, row.DigestState, derefOr(row.Mode, "-"), proof, listener)
+		if len(row.StaleDigests) > 0 {
+			fmt.Fprintf(stdout, "    rows at other schema or document digests, never read: %v\n", row.StaleDigests)
+		}
+	}
+}
+
+// mcpClassStatus builds the MCP class table: this binary's served roots (the class
+// allowlist intersected with its SDL) against the rows at the live digest.
+func mcpClassStatus(ctx context.Context, pool *pgxpool.Pool, liveDigest string) ([]statusReportMCPRoot, error) {
+	served, err := mcpclass.ServedRoots(schemav1.SDL)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := goapiproof.MCPClassStatusRows(ctx, pool, liveDigest, served)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]statusReportMCPRoot, 0, len(rows))
+	for _, row := range rows {
+		entry := statusReportMCPRoot{Root: row.Root, Operation: row.Operation, ServedByBinary: row.ServedByBinary,
+			DigestState: row.DigestState, Reachable: row.Reachable, Proven: row.Proven, Dark: row.Dark, StaleDigests: row.StaleDigests}
+		if row.DigestState == goapiproof.DigestMatch {
+			entry.Mode, entry.CurrentCandidateBuild = stringPtr(row.Mode), stringPtr(row.CurrentCandidateBuild)
+		}
+		if entry.StaleDigests == nil {
+			entry.StaleDigests = []string{}
+		}
+		out = append(out, entry)
+	}
+	return out, nil
 }

@@ -47,7 +47,7 @@ var sinkTable = map[string]struct {
 	"main.go:redacted:.Error()":                 {treatBuilder, 1, "the comparison in redacted() that decides whether the text changed"},
 	"main.go:refuse:fmt.Errorf":                 {treatBuilder, 1, "refuse redacts what it builds"},
 	"main.go:internal:fmt.Errorf":               {treatBuilder, 1, "internal redacts what it builds"},
-	"status.go:runStatus:.Error() [redacted]":   {treatRedacted, 3, "status's database errors (connect, census, classification)"},
+	"status.go:runStatus:.Error() [redacted]":   {treatRedacted, 4, "status's database errors (connect, census, classification, MCP class rows)"},
 	"carry.go:runCarry:.Error() [redacted]":     {treatRedacted, 1, "the -json result's Message field -- the same defense-in-depth redaction runCarry's other error-print sites apply"},
 	"carry.go:printCarryResult:.Error()":        {treatNotDatabase, 1, "a json.Marshal failure encoding carryResult's own string/int fields -- never a database error"},
 	"repoint.go:runRepoint:.Error() [redacted]": {treatRedacted, 1, "the -json result's Message field -- same defense-in-depth redaction as carry.go's"},

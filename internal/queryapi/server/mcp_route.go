@@ -52,6 +52,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"io"
 	"log"
 	"log/slog"
@@ -142,45 +143,23 @@ const mcpCallerClass = "mcp"
 // (D.8's "3 resolvers that panic" at design time). Sub-field policy (person
 // output paths, the basis-free analytics shape) is acr-api's policy artifact
 // (D.5), not this list.
-var mcpRootFieldAllowlist = map[string]bool{
-	"analytics":            true,
-	"capacityForecast":     true,
-	"capacityForecasts":    true,
-	"catalog":              true,
-	"cognitiveLoad":        true,
-	"complexityTimeseries": true,
-	"compoundingRisk":      true,
-	"hotspots":             true,
-	"securityAlerts":       true,
-	"securityOverview":     true,
-	"throughputForecast":   true,
-	"workGraphArtifacts":   true,
-	"workGraphEdges":       true,
-	"workGraphFlow":        true,
-}
+var mcpRootFieldAllowlist = mcpclass.AllowedRoots()
 
 // mcpClassDocumentKey names the free-form class in go_api_routing_state. A
 // free-form query has no registered document, so no per-document row can
 // exist for it; the class row stands in, one per root field, keyed
 // (schema_digest, sha256(mcpClassDocumentKey), "mcp:<rootField>"). Bump the
 // version only with the routing tooling that writes these rows.
-const mcpClassDocumentKey = "dev-health-ops/mcp-freeform-class/v1"
+const mcpClassDocumentKey = mcpclass.DocumentKey
 
 // mcpRoutingOperationPrefix prefixes a root field to form its class row's
 // selected_operation. No registered operation name contains ':', so a class
 // row can never collide with a per-document row.
-const mcpRoutingOperationPrefix = "mcp:"
+const mcpRoutingOperationPrefix = mcpclass.OperationPrefix
 
 // mcpRoutingDigests is the operation -> document digest map the class's
 // routeswitch.PostgresSwitch looks rows up by.
-func mcpRoutingDigests() map[string]string {
-	classDigest := digestHex(mcpClassDocumentKey)
-	digests := make(map[string]string, len(mcpRootFieldAllowlist))
-	for root := range mcpRootFieldAllowlist {
-		digests[mcpRoutingOperationPrefix+root] = classDigest
-	}
-	return digests
-}
+func mcpRoutingDigests() map[string]string { return mcpclass.Digests() }
 
 // mcpOperatorRoles is datahealth.RequireOperator's role set (compared
 // lowercased there too). A header claiming one of them is refused.
@@ -294,6 +273,13 @@ type mcpHandler struct {
 	sw     routeswitch.Switch
 	getenv getenvFunc
 	limits mcpLimits
+	// admit says whether the request arrived where this handler may serve it,
+	// and authenticate says who it is. The MCP listener's route and its proof
+	// variant (mcp_proof_route.go) differ in these two and in sw, and in NOTHING
+	// else: one ServeHTTP is the pipeline of both, so a proof measures the code
+	// that serves.
+	admit        func(context.Context) bool
+	authenticate func(*http.Request) (authctx.Claims, int, string)
 }
 
 // newMCPHandler builds the MCP class's route over ch (the class's own
@@ -311,7 +297,8 @@ func newMCPHandlerWithLimits(ch featureflags.QueryClient, pg datahealth.PGQuerie
 		Postgres:   pg,
 	}
 	es := graph.NewExecutableSchema(graph.Config{Resolvers: resolver})
-	return &mcpHandler{gql: newMCPGraphQLServer(es, limits), es: es, sw: sw, getenv: getenv, limits: limits}
+	return &mcpHandler{gql: newMCPGraphQLServer(es, limits), es: es, sw: sw, getenv: getenv, limits: limits,
+		admit: internalidentity.OnMCPListener, authenticate: mcpAuthenticate}
 }
 
 // newMCPGraphQLServer is the class's own gqlgen server: POST only, no
@@ -393,7 +380,7 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeMCPRefusal(w, status, reason, message)
 	}
 
-	if !internalidentity.OnMCPListener(r.Context()) {
+	if !h.admit(r.Context()) {
 		// Wired without the listener middleware: the class is where the
 		// request arrived, and this one did not arrive on the MCP listener.
 		refuse(http.StatusNotFound, mcpReasonOffListener, "not found")
@@ -421,7 +408,7 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Carrier before the document: every identity outcome is decided before
 	// anything about the query is.
-	claims, status, reason := mcpAuthenticate(r)
+	claims, status, reason := h.authenticate(r)
 	if reason != "" {
 		refuse(status, reason, "the MCP caller class accepts the internal identity headers only, naming one org with no elevated claim")
 		return
@@ -586,6 +573,14 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// gqlgen's body is already JSON: re-emit it through the one response path.
 	writeMCPJSON(w, buffered.status, json.RawMessage(buffered.body.Bytes()))
 }
+
+// mcpProofAdmit and mcpIdentityHeadersPresent are the two reads of the internal
+// identity the proof variant (mcp_proof_route.go) needs. They live here, with the
+// other MCP reads, because TestOnlyInternalPathsReadTheInternalIdentity pins
+// exactly which files may touch that package.
+func mcpProofAdmit(ctx context.Context) bool { return internalidentity.OnInternalListener(ctx) }
+
+func mcpIdentityHeadersPresent(h http.Header) bool { return internalidentity.Present(h) }
 
 // mcpAuthenticate takes the identity from the internal identity headers
 // ONLY, and refuses any elevated claim. The returned claims always carry

@@ -32,8 +32,10 @@ import (
 	"io"
 	"time"
 
+	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
 	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
 
 // carryResult is -json's output shape: one line, prefixed carryJSONPrefix, printed to
@@ -196,6 +198,15 @@ func runCarry(argv []string) (err error) {
 		return refuse("%v -- the registered-document dump for THIS image is what says the documents did not change; without it nothing can be carried safely", err)
 	}
 
+	// The MCP class rows (CHAOS-7214) are judged against what THIS image serves:
+	// the class allowlist intersected with its own SDL's Query root fields.
+	// An SDL that cannot be read is a refusal, never an empty set that would
+	// quietly refuse (or worse, skip) every class row.
+	mcpRoots, err := mcpclass.ServedRoots(schemav1.SDL)
+	if err != nil {
+		return refuse("%v -- the MCP class rows cannot be judged without this image's SDL", err)
+	}
+
 	ctx := context.Background()
 	client := httpClient(common.timeout)
 
@@ -264,6 +275,7 @@ func runCarry(argv []string) (err error) {
 			LiveDocumentDigest:    registry.DocumentDigest,
 			TargetDocumentDigest:  targetDigests,
 			CatalogDocumentDigest: catalog,
+			MCPRoots:              mcpRoots,
 		},
 		Operations:     operationFilter,
 		RecordedBy:     common.recordedBy,

@@ -120,6 +120,11 @@ func TestMCPPersonNamesAreRecognisedPerToken(t *testing.T) {
 	}
 }
 
+// These tests delete and restore entries of the package-level mcpInputClasses.
+// No MCP test calls t.Parallel(); the parallel tests elsewhere in this package
+// are paused until every serial test has finished and never touch the MCP class
+// table, so there is no concurrent reader. A new parallel MCP test must use a copy.
+//
 // The runtime half: with one reachable position missing from the table, the
 // MCP listener refuses a request that uses it, before any ClickHouse call.
 func TestMCPListenerRefusesAnUnclassifiedPositionAtRuntime(t *testing.T) {
@@ -154,6 +159,11 @@ func TestMCPCheckRequestInputsRefusesAFieldWithoutDefinitions(t *testing.T) {
 	}
 }
 
+// These tests delete and restore entries of the package-level mcpInputClasses.
+// No MCP test calls t.Parallel(); the parallel tests elsewhere in this package
+// are paused until every serial test has finished and never touch the MCP class
+// table, so there is no concurrent reader. A new parallel MCP test must use a copy.
+//
 // r1 on #3447: an explicit null at an unlisted position is still an unlisted
 // position. Argument and input-object member, null and absent-but-declared.
 func TestMCPNullAtAnUnclassifiedPositionIsRefused(t *testing.T) {

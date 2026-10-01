@@ -65,6 +65,9 @@ func run(args []string) int {
 	for _, problem := range problems {
 		fmt.Println(problem)
 	}
+	if remaining, err := recordedfiles.Remaining(repo); err == nil {
+		fmt.Println(remaining)
+	}
 	if len(problems) > 0 {
 		fmt.Printf("%d problem(s) left\n", len(problems))
 		return 1

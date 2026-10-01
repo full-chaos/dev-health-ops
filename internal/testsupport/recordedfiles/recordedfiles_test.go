@@ -22,6 +22,23 @@ func TestEveryFileATestReadsIsInItsManifest(t *testing.T) {
 	for _, problem := range found {
 		t.Error(problem)
 	}
+	remaining, err := Remaining(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// In the log of every run that shows test output (go test -v, a CI log, a
+	// failure); the verb prints the same line on every run.
+	t.Log(remaining)
+}
+
+func TestRemainingCountsTheDayOneListByTopLevelPackage(t *testing.T) {
+	repo := t.TempDir()
+	write(t, repo, DayOneList, "# note\ninternal/b/testdata/x\ninternal/a/testdata/y\ninternal/a/sub/testdata/z\ntests/fixtures/f.json\n")
+	got, err := Remaining(repo)
+	want := "4 files are still unclassified (their bytes are pinned, their kind is not known; " + DayOneList + "): internal/a 2, internal/b 1, tests/fixtures 1"
+	if err != nil || got != want {
+		t.Errorf("Remaining = %q, %v, want %q", got, err, want)
+	}
 }
 
 const goldenText = `{"header": {"test": "TestX", "python_build": "0123456789012345678901234567890123456789"}, "requests": []}`
@@ -115,15 +132,15 @@ func TestTheGuardRefusesEachWayAFileCanChangeUnseen(t *testing.T) {
 		{"a new file with no row", func(t *testing.T, repo string) { write(t, repo, "a/testdata/new.json", "{}") },
 			[][]string{{"a/testdata/new.json is not in a/testdata.manifest.tsv", "-kind <python-recorded|provider-recorded|hand-written|go-generated> a/testdata/new.json"}}},
 		{"one byte more in a hand-written file", func(t *testing.T, repo string) { write(t, repo, "a/testdata/case.json", `{"case": 1} `) },
-			[][]string{{"a/testdata/case.json changed", "-kind hand-written a/testdata/case.json"}}},
+			[][]string{{"a/testdata/case.json changed", "its row in a/testdata.manifest.tsv holds", "-kind hand-written a/testdata/case.json"}}},
 		{"one byte more in a recorded Python answer", func(t *testing.T, repo string) {
 			write(t, repo, "a/testdata/recorded.json", `{"python": "said this"} `)
 		},
-			[][]string{{"a/testdata/recorded.json changed", "recorded answer of a Python producer", "-recorded-again -kind python-recorded a/testdata/recorded.json"}}},
+			[][]string{{"a/testdata/recorded.json changed", "its row in a/testdata.manifest.tsv holds", "recorded answer of a Python producer", "-recorded-again -kind python-recorded a/testdata/recorded.json"}}},
 		{"one byte more in a recorded file in a subdirectory", func(t *testing.T, repo string) { write(t, repo, "a/testdata/sub/second_recorded.txt", "and this\n\n") },
 			[][]string{{"a/testdata/sub/second_recorded.txt changed", "-recorded-again"}}},
 		{"one byte more in a file under tests/fixtures", func(t *testing.T, repo string) { write(t, repo, "tests/fixtures/x_python_golden.json", `{"x": 1.50}`) },
-			[][]string{{"tests/fixtures/x_python_golden.json changed", "-recorded-again"}}},
+			[][]string{{"tests/fixtures/x_python_golden.json changed", "its row in tests/fixtures.manifest.tsv holds", "-recorded-again"}}},
 		{"one byte more in a provider's recorded page", func(t *testing.T, repo string) { write(t, repo, "a/testdata/pages/page_0.json", `{"page": 0} `) },
 			[][]string{{"a/testdata/pages/page_0.json changed", "-kind provider-recorded"}}},
 		{"one byte more in an unclassified file", func(t *testing.T, repo string) { write(t, repo, "a/testdata/old.sql", "select 2;\n") },
@@ -162,12 +179,12 @@ func TestTheGuardRefusesEachWayAFileCanChangeUnseen(t *testing.T) {
 		{"the record verb's candidate beside a golden", func(t *testing.T, repo string) { write(t, repo, "a/testdata/golden/TestX.json.recording", "{}") }, nil},
 		{"an unclassified file that is not on the day-one list", func(t *testing.T, repo string) {
 			write(t, repo, DayOneList, "# none\n")
-		}, [][]string{{"a/testdata/old.sql is unclassified and is not on the day-one list", "-kind <"}, {"holds 0 files and unclassifiedDayOne says 1"}}},
+		}, [][]string{{"a/testdata/old.sql is unclassified in a/testdata.manifest.tsv and is not on the day-one list", "-kind <"}, {"holds 0 files and unclassifiedDayOne says 1"}}},
 		{"a file on the day-one list that has a kind now, the list left as it was", func(t *testing.T, repo string) {
 			list := read(t, repo, DayOneList)
 			set(t, repo, Change{Kind: HandWritten}, "a/testdata/old.sql")
 			write(t, repo, DayOneList, list)
-		}, [][]string{{"a/testdata/old.sql is on the day-one list", "lower unclassifiedDayOne by one"}}},
+		}, [][]string{{"a/testdata/old.sql is on the day-one list", "-kind <kind> a/testdata/old.sql", "lower unclassifiedDayOne by one"}}},
 		{"a line added to the day-one list for a new file", func(t *testing.T, repo string) {
 			write(t, repo, "a/testdata/later.bin", "x")
 			set(t, repo, Change{Kind: Unclassified, DayOne: true}, "a/testdata/later.bin")

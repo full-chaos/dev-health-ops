@@ -286,6 +286,37 @@ func knownKind(kind string) bool {
 	return false
 }
 
+// Remaining says how many files are still unclassified, for the guard and the
+// verb to print on every run: the number a reader watches go down.
+func Remaining(repo string) (string, error) {
+	dayOne, err := DayOne(repo)
+	if err != nil {
+		return "", err
+	}
+	byTop := map[string]int{}
+	for _, file := range dayOne {
+		parts := strings.SplitN(file, "/", 3)
+		if len(parts) > 2 {
+			byTop[parts[0]+"/"+parts[1]]++
+		}
+	}
+	var tops []string
+	for top := range byTop {
+		tops = append(tops, top)
+	}
+	sort.Slice(tops, func(a, b int) bool {
+		if byTop[tops[a]] != byTop[tops[b]] {
+			return byTop[tops[a]] > byTop[tops[b]]
+		}
+		return tops[a] < tops[b]
+	})
+	var shown []string
+	for _, top := range tops {
+		shown = append(shown, fmt.Sprintf("%s %d", top, byTop[top]))
+	}
+	return fmt.Sprintf("%d files are still %s (their bytes are pinned, their kind is not known; %s): %s", len(dayOne), Unclassified, DayOneList, strings.Join(shown, ", ")), nil
+}
+
 // DayOne is the day-one list: the repository paths that may be unclassified.
 func DayOne(repo string) ([]string, error) {
 	raw, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(DayOneList)))
@@ -358,7 +389,7 @@ func problems(repo string, roots, dayOne []string, dayOneCount int) ([]string, e
 			if row.Kind == Unclassified {
 				unclassified[full] = true
 				if !listed[full] {
-					out = append(out, fmt.Sprintf("%s is %s and is not on the day-one list (%s): a new file gets a kind. Give it one: %s -kind <%s> %s", full, Unclassified, DayOneList, Verb, strings.Join(addable(), "|"), full))
+					out = append(out, fmt.Sprintf("%s is %s in %s and is not on the day-one list (%s): a new file gets a kind. Give it one: %s -kind <%s> %s", full, Unclassified, ManifestPath(root), DayOneList, Verb, strings.Join(addable(), "|"), full))
 				}
 			}
 			if row.Kind == Header {
@@ -374,10 +405,10 @@ func problems(repo string, roots, dayOne []string, dayOneCount int) ([]string, e
 			switch {
 			case digest == row.Digest:
 			case row.Kind == PythonRecorded:
-				out = append(out, fmt.Sprintf("%s changed (sha256 %s, its manifest row holds %s). It is a recorded answer of a Python producer: it changes only when it is recorded again, never by an edit. If it was recorded again: %s -recorded-again -kind %s %s",
-					full, digest, row.Digest, Verb, PythonRecorded, full))
+				out = append(out, fmt.Sprintf("%s changed (sha256 %s, its row in %s holds %s). It is a recorded answer of a Python producer: it changes only when it is recorded again, never by an edit. If it was recorded again: %s -recorded-again -kind %s %s",
+					full, digest, ManifestPath(root), row.Digest, Verb, PythonRecorded, full))
 			default:
-				out = append(out, fmt.Sprintf("%s changed (sha256 %s, its manifest row holds %s). If the change is meant: %s -kind %s %s", full, digest, row.Digest, Verb, row.Kind, full))
+				out = append(out, fmt.Sprintf("%s changed (sha256 %s, its row in %s holds %s). If the change is meant: %s -kind %s %s", full, digest, ManifestPath(root), row.Digest, Verb, row.Kind, full))
 			}
 		}
 		for _, row := range sorted(valuesOf(rows)) {
@@ -393,7 +424,7 @@ func problems(repo string, roots, dayOne []string, dayOneCount int) ([]string, e
 	}
 	for _, file := range dayOne {
 		if !unclassified[file] && !under(unread, file) {
-			out = append(out, fmt.Sprintf("%s is on the day-one list (%s) and is not an %s file any more: delete its line, and lower unclassifiedDayOne by one", file, DayOneList, Unclassified))
+			out = append(out, fmt.Sprintf("%s is on the day-one list (%s) and is not an %s file any more: give it its kind with the verb, which writes the list (%s -kind <kind> %s), and lower unclassifiedDayOne by one", file, DayOneList, Unclassified, Verb, file))
 		}
 	}
 	if len(dayOne) != dayOneCount {

@@ -3,6 +3,7 @@ package providerfoundation
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"net/http"
 	"testing"
 )
@@ -58,5 +59,26 @@ func TestClientConstructorsRefuseWithAReason(t *testing.T) {
 		if err == nil || !errors.Is(err, ErrCredentialInvalid) || FailureReason(err) == "" {
 			t.Errorf("%s: an empty credential: %v reason %q, want a refusal that names its cause", provider, err, FailureReason(err))
 		}
+	}
+}
+
+// r1 P1: the GitHub App and PagerDuty client-credentials helpers refused a nil doer, and missing fields, with
+// no cause. Valid credential shapes with a nil doer must name http_client_missing; a missing field is named.
+func TestAuthHelpersNameTheirRefusals(t *testing.T) {
+	pagerDuty := NewCredential("pagerduty", "id", map[string]string{"auth_mode": "client_credentials"}, map[string]secrets.Value{
+		"client_id": secrets.NewValue("cid"), "client_secret": secrets.NewValue("csecret"), "subdomain": secrets.NewValue("acme")})
+	if _, err := NewPagerDutyClientCredentialsAuth(pagerDuty, nil); FailureReason(err) != "http_client_missing" {
+		t.Errorf("pagerduty client credentials, nil doer: reason %q (%v)", FailureReason(err), err)
+	}
+	gapPagerDuty := NewCredential("pagerduty", "id", nil, map[string]secrets.Value{"client_id": secrets.NewValue("cid")})
+	if _, err := NewPagerDutyClientCredentialsAuth(gapPagerDuty, &http.Client{}); FailureReason(err) != "missing_fields:client_secret,subdomain" {
+		t.Errorf("pagerduty client credentials, gaps: reason %q (%v)", FailureReason(err), err)
+	}
+	gapGitHub := NewCredential("github", "id", nil, map[string]secrets.Value{"app_id": secrets.NewValue("1")})
+	if _, err := NewGitHubAppAuth(gapGitHub, "https://api.github.com", &http.Client{}); FailureReason(err) != "missing_fields:installation_id,private_key" {
+		t.Errorf("github app, gaps: reason %q (%v)", FailureReason(err), err)
+	}
+	if _, err := NewGitHubAppAuth(gapGitHub, "https://api.github.com", nil); FailureReason(err) != "http_client_missing" {
+		t.Errorf("github app, nil doer: reason %q (%v)", FailureReason(err), err)
 	}
 }

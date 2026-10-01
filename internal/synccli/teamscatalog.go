@@ -112,7 +112,7 @@ func buildCatalogCollector(env cli.Env, d deps, request catalogRequest, owner, t
 			map[string]secrets.Value{"token": secrets.NewValue(token)})
 		client, err := providerfoundation.NewGitHubClient(credential, doer, providerfoundation.DefaultRetryPolicy(), teamCatalogLease{})
 		if err != nil {
-			return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitFailure, "client_invalid", "the GitHub client could not be built")
+			return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitFailure, "client_invalid", clientBuildDetail("GitHub", err))
 		}
 		collector := providersync.GitHubTeamCatalogCollector{
 			Client: providersync.GitHubTeamCatalogRouteHandler{ResolveEmail: true},
@@ -134,7 +134,7 @@ func buildCatalogCollector(env cli.Env, d deps, request catalogRequest, owner, t
 			map[string]secrets.Value{"token": secrets.NewValue(token)})
 		client, err := providerfoundation.NewGitLabClient(credential, doer, providerfoundation.DefaultRetryPolicy(), teamCatalogLease{})
 		if err != nil {
-			return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitFailure, "client_invalid", "the GitLab client could not be built")
+			return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitFailure, "client_invalid", clientBuildDetail("GitLab", err))
 		}
 		collector := providersync.GitLabTeamCatalogCollector{
 			Handler: providersync.GitLabTeamCatalogRouteHandler{},
@@ -155,7 +155,7 @@ func buildCatalogCollector(env cli.Env, d deps, request catalogRequest, owner, t
 			map[string]secrets.Value{"api_key": secrets.NewValue(token)})
 		client, err := providerfoundation.NewLinearClient(credential, doer, providerfoundation.DefaultRetryPolicy(), teamCatalogLease{})
 		if err != nil {
-			return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitFailure, "client_invalid", "the Linear client could not be built")
+			return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitFailure, "client_invalid", clientBuildDetail("Linear", err))
 		}
 		collector := providersync.LinearTeamCatalogCollector{
 			Sink: providersync.LinearReferenceCatalogClickHouseEffects{Conn: conn, Lease: teamCatalogLease{}},
@@ -164,6 +164,16 @@ func buildCatalogCollector(env cli.Env, d deps, request catalogRequest, owner, t
 	default:
 		return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitUsage, "unsupported_provider", "provider "+request.provider+" has no team catalog verb")
 	}
+}
+
+// clientBuildDetail is the refusal's detail with its fixed, value-free cause (a typed credential refusal's
+// reason), so an operator sees why the provider client could not be built.
+func clientBuildDetail(provider string, err error) string {
+	detail := "the " + provider + " client could not be built"
+	if reason := providerfoundation.FailureReason(err); reason != "" {
+		detail += ": " + reason
+	}
+	return detail
 }
 
 // runCatalogTeams runs one provider's catalog into the ClickHouse the DSN names.

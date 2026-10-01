@@ -139,13 +139,13 @@ func defaultDeps() deps {
 			// page that promises a next page without a cursor fails it too.
 			return &graph.Client{
 				BaseURL: gatewayURL, Auth: auth, Strict: true,
-				HTTPClient: &http.Client{Timeout: 30 * time.Second, Transport: atlassianteams.CompletePagesOnly(nil)},
+				HTTPClient: atlassianteams.GatewayHTTPClient(30 * time.Second),
 			}
 		},
 		newOrganizationResolver: func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.OrganizationResolver {
 			return &graph.Client{
 				BaseURL: gatewayURL, Auth: auth, Strict: true,
-				HTTPClient: &http.Client{Timeout: 30 * time.Second, Transport: atlassianteams.CompletePagesOnly(nil)},
+				HTTPClient: atlassianteams.GatewayHTTPClient(30 * time.Second),
 			}
 		},
 		openStore: func(ctx context.Context, dsn string) (driver.Conn, error) {

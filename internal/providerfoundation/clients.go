@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,19 @@ const pagerDutyReadScopes = "escalation_policies.read incidents.read oncalls.rea
 // clientRefusal is why a credential cannot build the provider's client: another provider's credential, or
 // a stored shape the provider refuses. Both are typed (the reason names a cause, never a value), so a
 // refusal reaches the CLI output and the stored sync result with its cause (CHAOS-7132).
+// unconfiguredNames is the sorted names whose secret is not configured: the fields a refusal names (never a
+// value).
+func unconfiguredNames(fields map[string]secrets.Value) []string {
+	var missing []string
+	for name, value := range fields {
+		if !value.Configured() {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
 func clientRefusal(credential Credential, provider string) error {
 	if credential.Provider != provider {
 		return credentialInvalid("provider_mismatch")
@@ -269,8 +283,11 @@ func NewPagerDutyClientCredentialsAuth(credential Credential, doer HTTPDoer) (*P
 	clientID, _ := credential.Secret("client_id")
 	clientSecret, _ := credential.Secret("client_secret")
 	subdomain, _ := credential.Secret("subdomain")
-	if doer == nil || !clientID.Configured() || !clientSecret.Configured() || !subdomain.Configured() {
-		return nil, ErrCredentialInvalid
+	if doer == nil {
+		return nil, credentialInvalid("http_client_missing")
+	}
+	if missing := unconfiguredNames(map[string]secrets.Value{"client_id": clientID, "client_secret": clientSecret, "subdomain": subdomain}); len(missing) > 0 {
+		return nil, &credentialShapeError{missing: missing}
 	}
 	region := credentialValue(credential, "region")
 	if region == "" {
@@ -391,12 +408,15 @@ func NewGitHubAppAuth(credential Credential, baseURL string, doer HTTPDoer) (*Gi
 			}
 		}
 	}
-	if doer == nil || !appID.Configured() || !privateKey.Configured() || !installationID.Configured() {
-		return nil, ErrCredentialInvalid
+	if doer == nil {
+		return nil, credentialInvalid("http_client_missing")
+	}
+	if missing := unconfiguredNames(map[string]secrets.Value{"app_id": appID, "private_key": privateKey, "installation_id": installationID}); len(missing) > 0 {
+		return nil, &credentialShapeError{missing: missing}
 	}
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return nil, ErrCredentialInvalid
+		return nil, credentialInvalid("base_url_invalid")
 	}
 	return &GitHubAppAuth{appID: appID.Reveal(), installationID: installationID.Reveal(), privateKey: privateKey, baseURL: strings.TrimRight(baseURL, "/"), doer: doer, now: time.Now}, nil
 }

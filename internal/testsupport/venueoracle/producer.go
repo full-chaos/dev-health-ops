@@ -22,15 +22,22 @@ import (
 // of the run's own database). Nothing of the test process's environment
 // reaches the child.
 //
-// A producer that starts Python itself with the process environment is
-// stopped by a guard on behaviour, not on text: while a producer runs in a
-// recording, the test process holds producerPoisonName set to a directory
-// that does not exist, so a Python child that inherits the process
-// environment cannot start. The child Producer.Command builds does not carry
-// it.
+// A Python child started any other way with the process environment is
+// stopped by a guard on behaviour, not on text: for the whole of a recording
+// test (OpenGolden, in a recording), the test process holds producerPoisonName
+// set to a directory that does not exist, so a Python child that inherits the
+// process environment cannot start. The children the harness starts do not
+// carry it: the venue's plane and its migration get an explicit environment
+// (pythonenv.go), a producer's child the closed one (Command).
 //
-// NOT covered: a producer that copies the process environment and removes
-// producerPoisonName by name. That is a deliberate edit, visible in a review.
+// NOT covered, two limits:
+//   - a child that copies the process environment and removes
+//     producerPoisonName by name. That is a deliberate edit, visible in a
+//     review.
+//   - a child started with the interpreter option -E or -I: the interpreter
+//     then ignores every PYTHON* variable, the poison with them (executed).
+//     Command refuses these options; no producer of this repository passes
+//     them.
 
 // producerPoisonName is the variable the guard sets in the test process while
 // a producer runs: the interpreter reads it before anything else, and with a
@@ -41,18 +48,32 @@ const producerPoisonName = "PYTHONHOME"
 // interpreter prints when it fails, so the failure says what happened.
 const producerPoison = "/a-python-producer-inherited-the-test-process-environment--start-it-with-the-command-Produce-gives"
 
-// poisonInheritedEnvironment puts the poison in the process and returns what
-// takes it out again.
-func poisonInheritedEnvironment() (restore func()) {
-	before, held := os.LookupEnv(producerPoisonName)
-	os.Setenv(producerPoisonName, producerPoison)
-	return func() {
-		if held {
-			os.Setenv(producerPoisonName, before)
-			return
+// poisonInheritedEnvironment puts the poison in the process until t ends.
+// t.Setenv refuses a parallel test: a recording is never parallel, and no
+// other test of the process sees the poison while one records.
+func poisonInheritedEnvironment(t *testing.T) {
+	t.Helper()
+	t.Setenv(producerPoisonName, producerPoison)
+}
+
+// ignoresEnvironment reports the interpreter option among args that makes
+// Python ignore its PYTHON* variables: -E or -I, alone or in a cluster of
+// short options, before the program (-c, -m or a script).
+func ignoresEnvironment(args []string) string {
+	for _, arg := range args {
+		if arg == "-c" || arg == "-m" || arg == "-" || len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+			return ""
 		}
-		os.Unsetenv(producerPoisonName)
+		if arg[1] == 'X' || arg[1] == 'W' {
+			continue // an option with a value, not a cluster of flags
+		}
+		for _, flag := range arg[1:] {
+			if flag == 'E' || flag == 'I' {
+				return arg
+			}
+		}
 	}
+	return ""
 }
 
 // Producer starts the Python side of a Produce oracle while it is recorded.
@@ -90,6 +111,9 @@ func (p *Producer) activate() error {
 // launch is refused unless python3 through PATH is still the interpreter the
 // producer fixed.
 func (p *Producer) Command(ctx context.Context, declared map[string]string, extra []string, args ...string) (*exec.Cmd, error) {
+	if option := ignoresEnvironment(args); option != "" {
+		return nil, fmt.Errorf("produce: the interpreter option %s makes Python ignore its environment variables, the closed environment's and the recording guard's with them: start the producer without it", option)
+	}
 	if err := p.activate(); err != nil {
 		return nil, err
 	}

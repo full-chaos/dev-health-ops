@@ -374,6 +374,11 @@ func OpenGolden(t *testing.T, spec GoldenSpec) *Golden {
 		t.Fatal(err)
 	}
 	g.use = use
+	if recording {
+		// For the whole recording test: a Python child that inherits the
+		// process environment cannot start (producer.go).
+		poisonInheritedEnvironment(t)
+	}
 	return g
 }
 
@@ -739,7 +744,6 @@ func (g *Golden) Produce(t *testing.T, root string, requests []Request, live fun
 	return g.answer(t, "Produce", "", requests,
 		func() error { return g.producerRootErr(root) },
 		func() []Response {
-			defer poisonInheritedEnvironment()()
 			return live(&Producer{Root: root, t: t}, requests)
 		},
 		func() error { return liveVenueErr(t, "golden "+g.spec.Path+"'s frozen answers") })

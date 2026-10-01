@@ -54,8 +54,8 @@ func TestTheProducersCommandRunsInTheClosedEnvironment(t *testing.T) {
 	t.Setenv("TZ", "Pacific/Auckland")
 	producer := &Producer{Root: root, t: t}
 	declared := map[string]string{"DECLARED_B": "2", "DECLARED_A": "1"}
-	// As Produce does while the producer runs.
-	defer poisonInheritedEnvironment()()
+	// As OpenGolden does in a recording.
+	poisonInheritedEnvironment(t)
 	command, err := producer.Command(context.Background(), declared, []string{"DATABASE_URI=postgresql://run"}, "-c", "pass")
 	if err != nil {
 		t.Fatal(err)
@@ -101,30 +101,67 @@ func TestTheProducersCommandRunsInTheClosedEnvironment(t *testing.T) {
 	}
 }
 
-// The poison is in the process only while a producer runs, and what was
-// there before comes back.
-func TestThePoisonIsThereOnlyWhileAProducerRuns(t *testing.T) {
-	os.Unsetenv(producerPoisonName)
-	restore := poisonInheritedEnvironment()
-	if got := os.Getenv(producerPoisonName); got != producerPoison {
-		t.Fatalf("%s = %q, want the poison", producerPoisonName, got)
-	}
+// A recording test holds the poison from OpenGolden to its end; a test that
+// is not recording never holds it; and the poison is the harness's, never the
+// test's: no venue child gets it and no key holds it.
+func TestARecordingTestHoldsThePoisonAndOnlyARecordingTest(t *testing.T) {
 	if _, err := os.Stat(producerPoison); err == nil {
 		t.Fatalf("the poison directory %s exists: an interpreter could start with it", producerPoison)
 	}
-	restore()
+	spec := func(t *testing.T) GoldenSpec {
+		return GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}
+	}
+	t.Run("recording", func(t *testing.T) {
+		t.Setenv(goldenUpdateEnv, "1")
+		t.Setenv(goldenCandidateEnv, "")
+		OpenGolden(t, spec(t))
+		if got := os.Getenv(producerPoisonName); got != producerPoison {
+			t.Fatalf("in a recording test %s = %q, want the poison", producerPoisonName, got)
+		}
+		if set := strings.Join(testSetEnv(), " "); strings.Contains(set, producerPoisonName) {
+			t.Errorf("the test-set variables hold the poison: %q", set)
+		}
+	})
 	if got, held := os.LookupEnv(producerPoisonName); held {
-		t.Fatalf("after the producer %s = %q, want it unset", producerPoisonName, got)
+		t.Fatalf("after the recording test ended %s is still %q", producerPoisonName, got)
 	}
-	t.Setenv(producerPoisonName, "/the/tests/own")
-	poisonInheritedEnvironment()()
-	if got := os.Getenv(producerPoisonName); got != "/the/tests/own" {
-		t.Fatalf("after the producer %s = %q, want the value it had", producerPoisonName, got)
-	}
-	// The poison is the harness's, never the test's: no venue child gets it
-	// and no key holds it.
-	defer poisonInheritedEnvironment()()
-	if set := strings.Join(testSetEnv(), " "); strings.Contains(set, producerPoisonName) {
-		t.Errorf("the test-set variables hold the poison: %q", set)
+	t.Run("frozen", func(t *testing.T) {
+		t.Setenv(goldenUpdateEnv, "")
+		t.Setenv(goldenCandidateEnv, "")
+		requests := []Request{ProgramRequest("corpus", sampleProgram, []byte("abc"), nil)}
+		path, digest := programGolden(t, requests, "out")
+		OpenGolden(t, GoldenSpec{Path: path, SHA256: digest, PythonBuild: goldenBuild, Recipe: "record it"})
+		if got, held := os.LookupEnv(producerPoisonName); held {
+			t.Fatalf("a test that is not recording holds %s = %q", producerPoisonName, got)
+		}
+	})
+}
+
+// The interpreter options that make Python ignore its PYTHON* variables are
+// refused by the producer's command: with one of them the closed environment
+// and the recording guard would say nothing.
+func TestTheProducersCommandRefusesTheOptionsThatIgnoreTheEnvironment(t *testing.T) {
+	root := checkoutWithInterpreter(t, "TZ")
+	producer := &Producer{Root: root, t: t}
+	for _, row := range []struct {
+		args    []string
+		refused bool
+	}{
+		{[]string{"-c", "pass"}, false},
+		{[]string{"-m", "dev_health_ops.cli", "-I"}, false}, // the program's own argument
+		{[]string{"-c", "pass", "-E"}, false},
+		{[]string{"-u", "-B", "-c", "pass"}, false},
+		{[]string{"-X", "importtime", "-c", "pass"}, false},
+		{[]string{"-Werror", "-c", "pass"}, false},
+		{[]string{"script.py", "-E"}, false},
+		{[]string{"-E", "-c", "pass"}, true},
+		{[]string{"-I", "-c", "pass"}, true},
+		{[]string{"-sE", "-c", "pass"}, true},
+		{[]string{"-u", "-BI", "-m", "x"}, true},
+	} {
+		_, err := producer.Command(context.Background(), nil, nil, row.args...)
+		if refused := err != nil && strings.Contains(err.Error(), "makes Python ignore its environment variables"); refused != row.refused {
+			t.Errorf("python3 %v: refused = %v (%v), want %v", row.args, refused, err, row.refused)
+		}
 	}
 }

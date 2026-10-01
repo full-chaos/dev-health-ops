@@ -129,19 +129,13 @@ func TestARecordingRunsTheProducerOnlyFromTheVerifiedRoot(t *testing.T) {
 		if producer.Root != verified || len(got) != 1 {
 			t.Fatalf("producer ran from %s with %d requests", producer.Root, len(got))
 		}
-		// While the producer runs, a Python child that inherits the process
-		// environment cannot start (producer.go).
-		if got := os.Getenv(producerPoisonName); got != producerPoison {
-			t.Fatalf("while the producer runs %s = %q, want the poison", producerPoisonName, got)
-		}
+
 		return []Response{{Status: 3, Headers: map[string]string{"stderr": "boom"}, Body: "out"}}
 	})
 	if ran != 1 || answers[0].Status != 3 || answers[0].Body != "out" {
 		t.Fatalf("ran %d, answers %+v", ran, answers)
 	}
-	if got, held := os.LookupEnv(producerPoisonName); held {
-		t.Fatalf("after the producer ran %s is still %q", producerPoisonName, got)
-	}
+
 	if len(golden.recorded.Requests) != 1 || golden.recorded.Requests[0].Status != 3 || golden.recorded.Requests[0].Headers["stderr"] != "boom" ||
 		golden.recorded.Requests[0].Path != requests[0].Path {
 		t.Fatalf("recorded %+v", golden.recorded.Requests)

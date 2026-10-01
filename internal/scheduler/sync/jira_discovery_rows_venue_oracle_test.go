@@ -4,18 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonJiraDiscoveryRowsProgram runs each case through the api's own
@@ -74,30 +69,20 @@ func jiraRowsCases() []jiraRowsCase {
 	return cases
 }
 
-// TestJiraDiscoveryRowsVenueOracleMatchesLivePython holds discoverJira's
-// rows, as the upsert tags and writes them, to the api's own
+// TestJiraDiscoveryRowsMatchFrozenPython holds discoverJira's rows, as the
+// upsert tags and writes them, to the frozen answers of the api's own
 // discover_jira_projects and _tuples_to_source_dicts over the same project
 // list: the same external_id, source_type, name and full_name, and the same
 // metadata text, in order.
-func TestJiraDiscoveryRowsVenueOracleMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the jira discovery rows oracle needs the full project Python environment; ci/check_go.sh venue-oracles runs it")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestJiraDiscoveryRowsMatchFrozenPython(t *testing.T) {
 	cases := jiraRowsCases()
-	input, _ := json.Marshal(cases)
-	command := exec.Command(python, "-c", pythonJiraDiscoveryRowsProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
+	input, err := json.Marshal(cases)
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	output := frozenPython(t, "jira-discovery-rows.golden.json", programoracle.Program{Name: "jira discovery rows", Text: pythonJiraDiscoveryRowsProgram, Stdin: input})[0]
 	var want [][][5]string
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil || len(want) != len(cases) {
+	if err := json.Unmarshal([]byte(output), &want); err != nil || len(want) != len(cases) {
 		t.Fatalf("decode: %v\n%s", err, output)
 	}
 	rows := 0
@@ -138,5 +123,4 @@ func TestJiraDiscoveryRowsVenueOracleMatchesLivePython(t *testing.T) {
 		t.Fatal("no case produced a row")
 	}
 	t.Logf("%d cases, %d rows compared", len(cases), rows)
-	venueoracle.WriteProof(t)
 }

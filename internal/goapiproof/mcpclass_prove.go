@@ -26,9 +26,11 @@ package goapiproof
 //   - nothing failed unexplained.
 //
 // A shape the MCP class refuses BY POLICY (HTTP 400/403/422 from the
-// listener's own gate while Python served it: a person selector, a depth or
-// complexity limit, a ClickHouse budget) cannot be a served shape, so it is
-// EXCLUDED, never silently: it is counted and named on the receipt. Every
+// listener's own gate, with a typed reason from the closed policy set, while the
+// reference served it: a person selector, a size or cost limit, a ClickHouse budget)
+// cannot be a served shape, so it is EXCLUDED, never silently: it is counted and
+// named on the receipt with its reason. A refusal for any other reason (an identity
+// or document-validity one) blocks the root. Every
 // other non-executed shape (a 404 root_field_not_enabled, a 5xx, a transport
 // failure, an admission refusal) is a failure and blocks the match. A cited
 // baseline-defect mismatch is NOT admitted for the class: the class has no
@@ -42,6 +44,7 @@ package goapiproof
 // comparison of the SAME document on the Go and Python planes.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,9 +59,13 @@ import (
 
 // MCPClassProvenance is the class receipt's own account of what it rests on.
 type MCPClassProvenance struct {
-	Root     string `json:"root"`
-	Executed int    `json:"shapes_executed"`
-	Matched  int    `json:"shapes_matched"`
+	Root string `json:"root"`
+	// Reference says what the MCP pipeline's answers were compared with:
+	// "python_edge" (the Python app's /graphql) or "go_document_route"
+	// (query-api's own /graphql for the registered document, CHAOS-7442).
+	Reference string `json:"reference"`
+	Executed  int    `json:"shapes_executed"`
+	Matched   int    `json:"shapes_matched"`
 	// Excluded names every shape left out and why, "operation[:variant]=reason".
 	Excluded []string `json:"shapes_excluded,omitempty"`
 	// Failed names every shape that blocked the match.
@@ -122,14 +129,44 @@ func MCPClassSourceOperations(classOperations []string, documents map[string]str
 	return out, nil
 }
 
-// policyRefusalStatuses are the listener's own refusals of a shape it will
-// never serve: 400 (a limit or validation), 403 (person scope, org, a root or
-// claim) and 422 (a ClickHouse read budget). 404 is deliberately absent: it is
+// policyRefusalStatuses are the HTTP statuses of the listener's own refusals of a shape it
+// will never serve: 400 (a limit or validation), 403 (person scope, org, a root or claim)
+// and 422 (a ClickHouse read budget). 404 is deliberately absent: it is
 // root_field_not_enabled, and a root that cannot be reached is a failure.
-var policyRefusalStatuses = map[int]string{
-	http.StatusBadRequest:          "listener_limit_or_validation",
-	http.StatusForbidden:           "listener_policy",
-	http.StatusUnprocessableEntity: "listener_read_budget",
+var policyRefusalStatuses = map[int]bool{
+	http.StatusBadRequest:          true,
+	http.StatusForbidden:           true,
+	http.StatusUnprocessableEntity: true,
+}
+
+// mcpPolicyRefusalReasons is the CLOSED set of listener refusal reasons that mean "this
+// shape is outside what the MCP class serves, by policy": a person selector, an input or
+// size limit, a cost cap, a read budget. A shape refused for one of them is excluded and
+// named. Every other reason blocks the root, notably the identity ones (org_mismatch,
+// invalid_org_argument, elevated_claim, no_carrier, authorization_header, invalid_org):
+// the proof's org is the header org, so one of those firing is the identity mapping
+// diverging from the document route, which is exactly what this proof exists to catch,
+// and so are the document-validity reasons (the registered documents validate on both).
+var mcpPolicyRefusalReasons = map[string]bool{
+	"person_scope": true, "input_limit": true, "unclassified_input": true,
+	"depth_limit": true, "alias_limit": true, "complexity_limit": true,
+	"bytes_ceiling": true, "rows_ceiling": true, "time_ceiling": true,
+}
+
+// mcpRefusalReason reads the listener's typed refusal reason out of a response body
+// (errors[0].extensions.reason), "" when the body is not one.
+func mcpRefusalReason(body []byte) string {
+	var parsed struct {
+		Errors []struct {
+			Extensions struct {
+				Reason string `json:"reason"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &parsed) != nil || len(parsed.Errors) != 1 {
+		return ""
+	}
+	return parsed.Errors[0].Extensions.Reason
 }
 
 // classifyMCPOutcome says what one measured shape is to its root's proof:
@@ -143,9 +180,9 @@ func classifyMCPOutcome(o Outcome) (state, reason string) {
 	case o.RefusalReason == RefusalNeedsInstanceID:
 		return "excluded", "needs_instance_identifier"
 	case o.RefusalReason == RefusalNonSuccessStatus && o.Candidate != nil && o.Baseline != nil:
-		if why, ok := policyRefusalStatuses[o.Candidate.StatusCode]; ok &&
+		if reason := mcpRefusalReason(o.Candidate.Body); policyRefusalStatuses[o.Candidate.StatusCode] && mcpPolicyRefusalReasons[reason] &&
 			o.Baseline.StatusCode >= http.StatusOK && o.Baseline.StatusCode < http.StatusMultipleChoices {
-			return "excluded", why
+			return "excluded", "listener_policy:" + reason
 		}
 	}
 	return "failed", o.RefusalReason
@@ -155,9 +192,22 @@ func classifyMCPOutcome(o Outcome) (state, reason string) {
 // what Run returned for exactly the source operations of rootSources; the run's
 // sealed measurements are the only evidence read. Receipts are returned, not
 // written. A root with nothing executed gets a verdict and NO receipt.
-func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]string, observedAt time.Time) ([]Receipt, []MCPClassVerdict, error) {
+//
+// docBacked is, in the doc-route reference mode, the set of document operations that
+// are themselves receipt-backed at this build (DocumentOperationsReceiptBacked): a
+// shape counts only if its document operation is, and a shape whose document
+// operation is not (a go_only_unproven operation, a named limit) is EXCLUDED and
+// named, never counted. It is required in that mode and unused otherwise.
+func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]string, docBacked map[string]bool, observedAt time.Time) ([]Receipt, []MCPClassVerdict, error) {
 	if len(outcomes) != len(r.sealed) {
 		return nil, nil, errors.New("goapiproof: the outcomes are not the ones this run sealed")
+	}
+	if r.Config.DocRouteReference && docBacked == nil {
+		return nil, nil, errors.New("goapiproof: the doc-route reference mode needs the set of receipt-backed document operations (docBacked) to judge a shape")
+	}
+	reference := "python_edge"
+	if r.Config.DocRouteReference {
+		reference = "go_document_route"
 	}
 	rootOf := map[string]string{}
 	for classOperation, operations := range rootSources {
@@ -187,13 +237,23 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 		}
 		sealed := r.sealed[index]
 		state, reason := classifyMCPOutcome(outcome)
+		// An unbacked document operation's shape is excluded only when it MATCHED: a
+		// divergence between the MCP pipeline and the document route blocks the root
+		// whether or not the document operation itself is receipt-backed.
+		if state == "executed" && r.Config.DocRouteReference && !docBacked[outcome.Operation] && sealedMatches(sealed) {
+			state, reason = "excluded", "doc_operation_not_receipt_backed"
+		}
+		// A shape refused for measuring nothing (both answers empty: the org holds no data
+		// for it) says nothing either way, so for an operation that is not receipt-backed it
+		// is excluded too; for a backed one it stays a failure (a data gap must be read).
+		if state == "failed" && r.Config.DocRouteReference && !docBacked[outcome.Operation] && outcome.RefusalReason == RefusalVacuousEmptyLegs {
+			state, reason = "excluded", "doc_operation_not_receipt_backed"
+		}
 		switch state {
 		case "executed":
 			b.verdict.Executed++
 			b.sealed = append(b.sealed, sealed)
-			if sealed.terminalState == TerminalStateMatch && sealed.admitted && sealed.executed &&
-				sealed.differencesOutsideBaselineDefect == 0 && sealed.edgeBinding == EdgeBuildPresent &&
-				sealed.route == RouteProof {
+			if sealedMatches(sealed) {
 				b.verdict.Matched++
 			} else {
 				b.verdict.Failed = append(b.verdict.Failed, label+"="+sealed.terminalState)
@@ -255,7 +315,8 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 			Operator:         r.Config.ReviewEvidence,
 			MeasurementRoute: RouteProof,
 			EdgeBuildBinding: binding,
-			MCPClass:         &MCPClassProvenance{Root: v.Root, Executed: v.Executed, Matched: v.Matched, Excluded: v.Excluded, Failed: v.Failed},
+			EdgeMode:         r.edgeMode(),
+			MCPClass:         &MCPClassProvenance{Root: v.Root, Reference: reference, Executed: v.Executed, Matched: v.Matched, Excluded: v.Excluded, Failed: v.Failed},
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("goapiproof: encode the class receipt's provenance: %w", err)
@@ -282,6 +343,42 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 		})
 	}
 	return receipts, verdicts, nil
+}
+
+// sealedMatches is the one definition of "this measurement is a match for the class
+// proof": admitted and executed, terminal match, nothing outside a declaration, the
+// serving build bound per response, measured through the proof route.
+func sealedMatches(s sealedOutcome) bool {
+	return s.terminalState == TerminalStateMatch && s.admitted && s.executed &&
+		s.differencesOutsideBaselineDefect == 0 && s.edgeBinding == EdgeBuildPresent && s.route == RouteProof
+}
+
+// edgeMode is the provenance edge_mode of a class receipt: empty for the Python
+// reference (the historic default), doc_route for the Go document route.
+func (r *Runner) edgeMode() string {
+	if r.Config.DocRouteReference {
+		return EdgeModeDocRoute
+	}
+	return ""
+}
+
+// DocumentOperationsReceiptBacked reports which document operations hold an
+// admissible receipt (match, or the cited go_only arm) for exactly this schema
+// digest and candidate build: the same reader `enable` uses for a query
+// operation, so "receipt-backed" here means what it means there.
+func DocumentOperationsReceiptBacked(ctx context.Context, db Querier, schemaDigest, candidateBuild string, documentDigests map[string]string) (map[string]bool, error) {
+	kinds := make(map[string]string, len(documentDigests))
+	for operation := range documentDigests {
+		kinds[operation] = OperationKindQuery
+	}
+	found, err := OperationsWithEnablementProofByKind(ctx, db, schemaDigest, candidateBuild, TargetModeCanary, documentDigests, kinds)
+	if err != nil {
+		return nil, err
+	}
+	if found == nil {
+		found = map[string]bool{}
+	}
+	return found, nil
 }
 
 func anyTerminal(sealed []sealedOutcome, state string) bool {

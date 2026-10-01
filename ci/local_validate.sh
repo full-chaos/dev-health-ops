@@ -457,7 +457,7 @@ DHO="${DHO:-${ROOT}/.build/dho}"
 #     goes red — an ambient-env artifact, not a real defect. `ci/check_go.sh`'s
 #     live-Python-oracle stage inherits the same pair (it shells out to python3
 #     with the ambient environment attached) and produces a matching false-red in
-#     TestBuildScheduledPlanMatchesLivePythonPlanner; see check_go.sh's own
+#     a live planner oracle; see check_go.sh's own
 #     GO_ENV_OFF for that side. Confirmed by two lanes in one morning
 #     (2026-08-21): one false-GREEN that masked a real switch-off case, one
 #     35-test false-RED across the full gate — both traced to this exact pair,

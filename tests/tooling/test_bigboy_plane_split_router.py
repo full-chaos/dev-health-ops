@@ -17,6 +17,7 @@ import importlib.util
 import re
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 import yaml
@@ -373,7 +374,7 @@ def _planes_matching(routed: dict, path: str) -> set[str]:
 # Each row: what the values add, and one request path BOTH generated rules match (None when
 # only prod's ingress would see the overlap: a host's own list, or a Prefix that ingress-nginx
 # reads as "starts with" on a host in regex mode).
-OVERLAPS = {
+OVERLAPS: dict[str, tuple[dict[str, Any], str | None]] = {
     "a Prefix over a Go path under it": (
         {"query": [("/graphql/sub", "Exact")], "allow": [("/graphql", "Prefix")]},
         "/graphql/sub",
@@ -495,7 +496,7 @@ def test_a_refusal_names_the_list_the_entry_and_the_go_plane_path(
     ) in capsys.readouterr().err
 
 
-DISJOINT = {
+DISJOINT: dict[str, dict[str, Any]] = {
     "a Prefix beside an unrelated Go path": {"allow": [("/api/v1/internal", "Prefix")]},
     "a Prefix longer than the Go path": {
         "query": [("/graphql", "Exact")],

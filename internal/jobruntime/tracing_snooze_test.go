@@ -57,6 +57,7 @@ func TestJobSpanStatusByHandlerOutcome(t *testing.T) {
 	}{
 		{"success", nil, tracepb.Status_STATUS_CODE_OK, false, false},
 		{"RetryableAfter snooze", RetryableAfter(boom, 5*time.Second), tracepb.Status_STATUS_CODE_UNSET, true, false},
+		{"smallest possible snooze (1ns)", RetryableAfter(boom, time.Nanosecond), tracepb.Status_STATUS_CODE_UNSET, true, false},
 		{"BudgetContention snooze", BudgetContention(boom, 5*time.Second), tracepb.Status_STATUS_CODE_UNSET, true, false},
 		{"RateLimited snooze", RateLimited(boom, 5*time.Second), tracepb.Status_STATUS_CODE_UNSET, true, false},
 		{"plain Retryable failure", Retryable(boom), tracepb.Status_STATUS_CODE_ERROR, false, true},

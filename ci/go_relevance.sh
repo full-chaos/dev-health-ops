@@ -73,6 +73,24 @@ glob_to_regex() {
   printf '^%s$' "${out}"
 }
 
+raw=$(mktemp); trap 'rm -f "${raw}"' EXIT
+cat > "${raw}"
+changed=()
+if [ "$(tr -d '\0' < "${raw}" | wc -c)" != "$(wc -c < "${raw}")" ]; then
+  while IFS= read -r -d '' path || [ -n "${path}" ]; do [ -n "${path}" ] && changed+=("${path}"); done < "${raw}"
+else
+  while IFS= read -r line || [ -n "${line}" ]; do
+    line=${line#"${line%%[![:space:]]*}"}; line=${line%"${line##*[![:space:]]}"}
+    [ -n "${line}" ] && changed+=("${line}")
+  done < "${raw}"
+fi
+
+if [ "${#changed[@]}" -eq 0 ]; then
+  echo "no changed files resolved; treating as RELEVANT (fail closed)"
+  echo "relevant=true"
+  exit 0
+fi
+
 patterns=()
 status=0
 while IFS= read -r line; do patterns+=("${line}"); done < <(read_patterns; echo "rc=$?")
@@ -88,24 +106,6 @@ esac
 
 regexes=()
 for pattern in "${patterns[@]}"; do regexes+=("$(glob_to_regex "${pattern}")"); done
-
-raw=$(mktemp); trap 'rm -f "${raw}"' EXIT
-cat > "${raw}"
-changed=()
-if [ "$(tr -d '\0' < "${raw}" | wc -c)" != "$(wc -c < "${raw}")" ]; then
-  while IFS= read -r -d '' path; do [ -n "${path}" ] && changed+=("${path}"); done < "${raw}"
-else
-  while IFS= read -r line || [ -n "${line}" ]; do
-    line=${line#"${line%%[![:space:]]*}"}; line=${line%"${line##*[![:space:]]}"}
-    [ -n "${line}" ] && changed+=("${line}")
-  done < "${raw}"
-fi
-
-if [ "${#changed[@]}" -eq 0 ]; then
-  echo "no changed files resolved; treating as RELEVANT (fail closed)"
-  echo "relevant=true"
-  exit 0
-fi
 
 matched=()
 for path in "${changed[@]}"; do

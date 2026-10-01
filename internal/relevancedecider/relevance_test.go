@@ -23,12 +23,18 @@ import (
 
 type decisionCase struct {
 	Name   string   `json:"name"`
-	Format string   `json:"format"` // "nul" or "newline"
+	Format string   `json:"format"` // "nul", "newline", or "raw" (Raw is the exact stdin, with no terminator added)
 	Paths  []string `json:"paths"`
+	Raw    string   `json:"raw,omitempty"`
+	// Workflow, when set, is the workflow text the case is judged against instead of the pinned snapshot.
+	Workflow string `json:"workflow,omitempty"`
 }
 
 // stdin is the bytes the producer would have written for the case.
 func (c decisionCase) stdin() []byte {
+	if c.Format == "raw" {
+		return []byte(c.Raw)
+	}
 	var out bytes.Buffer
 	for _, path := range c.Paths {
 		out.WriteString(path)
@@ -53,6 +59,9 @@ var refusals = []refusalCase{
 	{"a negated pattern", "on:\n  pull_request:\n    paths:\n      - '!docs/**'\n"},
 	{"no paths declared", "on:\n  pull_request:\n    branches: [main]\n"},
 	{"no pull_request block", "on:\n  push:\n    paths:\n      - '**/*.go'\n"},
+	{"a lone closing bracket in a pattern", "on:\n  pull_request:\n    paths:\n      - 'internal/a].go'\n"},
+	{"a lone opening bracket in a pattern", "on:\n  pull_request:\n    paths:\n      - 'internal/a[.go'\n"},
+	{"a non-list line inside the paths list", "on:\n  pull_request:\n    paths:\n      - 'a'\n      notalist: x\n"},
 }
 
 // pythonProgram runs the old decider over the cases and the refusal workflows. It imports the real ci/go_relevance.py
@@ -84,7 +93,8 @@ def run(workflow_text, raw):
 answers = {"cases": {}, "refusals": {}}
 for case in request["cases"]:
     sep = "\0" if case["format"] == "nul" else "\n"
-    answers["cases"][case["name"]] = run(request["workflow"], "".join(path + sep for path in case["paths"]))
+    raw = case.get("raw", "") if case["format"] == "raw" else "".join(path + sep for path in case["paths"])
+    answers["cases"][case["name"]] = run(case.get("workflow") or request["workflow"], raw)
 for refusal in request["refusals"]:
     answers["refusals"][refusal["name"]] = run(refusal["yaml"], "internal/a.go\n")["failed"]
 print(json.dumps(answers, sort_keys=True, ensure_ascii=True))
@@ -156,7 +166,7 @@ func TestDeciderAnswersAsTheRecordedPythonDid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := rotguard.Spec("testdata/golden/go_relevance_cases.json", "ec6a25fdf026c7597ff6b8097157cffa7d31f61dadcb62a6274f9344a9bcbe6a",
+	spec := rotguard.Spec("testdata/golden/go_relevance_cases.json", "4f2ccb327a9810029b8f70c7507c54d8a44c3f2a4f9c4b66163605a20b0a88ce",
 		"./internal/relevancedecider/", "^TestDeciderAnswersAsTheRecordedPythonDid$")
 	answers := programoracle.Run(t, spec, root(t), []programoracle.Program{{Name: "go_relevance.py over the corpus", Text: pythonProgram, Stdin: request}})
 	if answers[0].ExitCode != 0 {
@@ -175,7 +185,14 @@ func TestDeciderAnswersAsTheRecordedPythonDid(t *testing.T) {
 			if !present {
 				t.Fatalf("the recording has no answer for %q", c.Name)
 			}
-			got, failed := decide(t, fixturePath(t), c.stdin())
+			workflow := fixturePath(t)
+			if c.Workflow != "" {
+				workflow = filepath.Join(t.TempDir(), "workflow.yml")
+				if err := os.WriteFile(workflow, []byte(c.Workflow), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, failed := decide(t, workflow, c.stdin())
 			if failed != expected.Failed || got != expected.Stdout {
 				t.Errorf("the new decider differs from the recorded Python:\n  python (failed=%v):\n%s\n  new    (failed=%v):\n%s", expected.Failed, expected.Stdout, failed, got)
 			}

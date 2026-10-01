@@ -318,5 +318,133 @@
   "paths": [
    "internal/b.go  "
   ]
+ },
+ {
+  "name": "NUL format with an unterminated last entry",
+  "format": "raw",
+  "paths": [],
+  "raw": "docs/a.md\u0000internal/b.go"
+ },
+ {
+  "name": "newline format with an unterminated last line",
+  "format": "raw",
+  "paths": [],
+  "raw": "docs/a.md\ninternal/b.go"
+ },
+ {
+  "name": "a path matching two entries is counted once",
+  "format": "nul",
+  "paths": [
+   "internal/x/testdata/a.go"
+  ]
+ },
+ {
+  "name": "dot in an entry is a literal dot",
+  "format": "nul",
+  "paths": [
+   "docs/cargo"
+  ]
+ },
+ {
+  "name": "entry is anchored at the start",
+  "format": "nul",
+  "paths": [
+   "docs/Makefile"
+  ]
+ },
+ {
+  "name": "single star stops at a slash in a pattern with a star",
+  "format": "nul",
+  "paths": [
+   "docs/sub/a.md"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      - 'docs/*.md'\n"
+ },
+ {
+  "name": "single star matches within one directory",
+  "format": "nul",
+  "paths": [
+   "docs/a.md"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      - 'docs/*.md'\n"
+ },
+ {
+  "name": "paths-ignore is not read as paths",
+  "format": "nul",
+  "paths": [
+   "docs/a.md"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths-ignore:\n      - 'docs/**'\n    paths:\n      - '**/*.go'\n"
+ },
+ {
+  "name": "single-quoted entry with a trailing comment",
+  "format": "nul",
+  "paths": [
+   "docs/a.md"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      # a comment line inside the list\n      - 'docs/**'  # trailing comment on a single-quoted entry\n      - \"scripts/**\"   # trailing comment on a double-quoted entry\n      - src/plain/**  # trailing comment on a plain entry\n      - plainfile.txt\n"
+ },
+ {
+  "name": "double-quoted entry with a trailing comment",
+  "format": "nul",
+  "paths": [
+   "scripts/b.sh"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      # a comment line inside the list\n      - 'docs/**'  # trailing comment on a single-quoted entry\n      - \"scripts/**\"   # trailing comment on a double-quoted entry\n      - src/plain/**  # trailing comment on a plain entry\n      - plainfile.txt\n"
+ },
+ {
+  "name": "plain entry with a trailing comment",
+  "format": "nul",
+  "paths": [
+   "src/plain/x.txt"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      # a comment line inside the list\n      - 'docs/**'  # trailing comment on a single-quoted entry\n      - \"scripts/**\"   # trailing comment on a double-quoted entry\n      - src/plain/**  # trailing comment on a plain entry\n      - plainfile.txt\n"
+ },
+ {
+  "name": "plain entry without a comment",
+  "format": "nul",
+  "paths": [
+   "plainfile.txt"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      # a comment line inside the list\n      - 'docs/**'  # trailing comment on a single-quoted entry\n      - \"scripts/**\"   # trailing comment on a double-quoted entry\n      - src/plain/**  # trailing comment on a plain entry\n      - plainfile.txt\n"
+ },
+ {
+  "name": "path outside every quoted-form entry",
+  "format": "nul",
+  "paths": [
+   "other/z.txt"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      # a comment line inside the list\n      - 'docs/**'  # trailing comment on a single-quoted entry\n      - \"scripts/**\"   # trailing comment on a double-quoted entry\n      - src/plain/**  # trailing comment on a plain entry\n      - plainfile.txt\n"
+ },
+ {
+  "name": "double-quoted on key",
+  "format": "nul",
+  "paths": [
+   "internal/a.go"
+  ],
+  "workflow": "\"on\":\n  pull_request:\n    paths:\n      - '**/*.go'\n"
+ },
+ {
+  "name": "single-quoted on key",
+  "format": "nul",
+  "paths": [
+   "internal/a.go"
+  ],
+  "workflow": "'on':\n  pull_request:\n    paths:\n      - '**/*.go'\n"
+ },
+ {
+  "name": "paths under another top-level key are not read",
+  "format": "nul",
+  "paths": [
+   "docs/a.md"
+  ],
+  "workflow": "on:\n  pull_request:\n    paths:\n      - '**/*.go'\nother:\n  pull_request:\n    paths:\n      - 'docs/**'\n"
+ },
+ {
+  "name": "empty change set with a workflow that would be refused",
+  "format": "raw",
+  "paths": [],
+  "raw": "",
+  "workflow": "on:\n  pull_request:\n    branches: [main]\n"
  }
 ]

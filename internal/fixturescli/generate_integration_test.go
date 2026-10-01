@@ -395,7 +395,16 @@ func TestGenerateVenueOracleMatchesThePythonProducer(t *testing.T) {
 		ch := startClickHouse(t)
 		stopMerges(t, ch.httpDSN)
 		before := rowCounts(t, ch.httpDSN)
+		pythonStart := time.Now().UTC().Add(-time.Second)
 		pythonGenerate(t, ch.httpDSN, set.Org, set.Params)
+		// CHAOS-7265 executed cell: the Python work_items writers name their columns and omit
+		// ingested_at, so every row they write has a value at or after the run start (the column exists, the DEFAULT applied, no insert broke).
+		// NOT pinned here: server time vs a client clock, which this predicate cannot tell apart; that is
+		// pinned by tests/test_work_items_ingested_at_server_stamped.py, which asserts what the Python writers send.
+		stamped := strings.Fields(strings.TrimSpace(clickHouseHTTP(t, ch.httpDSN, fmt.Sprintf("SELECT count(), countIf(ingested_at >= toDateTime64(%d, 3, 'UTC')) FROM work_items FORMAT TSV", pythonStart.Unix()))))
+		if len(stamped) != 2 || stamped[0] == "0" || stamped[0] != stamped[1] {
+			t.Fatalf("Python producer work_items rows / rows server-stamped at write = %v, want all, and at least one", stamped)
+		}
 		after := rowCounts(t, ch.httpDSN)
 		changed := map[string]int{}
 		for name, count := range after {
@@ -408,7 +417,13 @@ func TestGenerateVenueOracleMatchesThePythonProducer(t *testing.T) {
 		frozen := map[string]int{}
 		for _, table := range world.Tables {
 			frozen[table.Name] = len(table.Rows)
-			columns := worldColumns(t, ch.httpDSN, table.Name)
+			// The frozen world never carries a server-stamped column (the loader would refuse to replay it).
+			var columns []FrozenColumn
+			for _, column := range worldColumns(t, ch.httpDSN, table.Name) {
+				if !serverStampedColumns[table.Name][column.Name] {
+					columns = append(columns, column)
+				}
+			}
 			if !reflect.DeepEqual(columns, table.Columns) {
 				t.Fatalf("%s: the schema's columns differ from the frozen ones", table.Name)
 			}
@@ -709,29 +724,63 @@ func TestLoadWorldStampsServerStampedColumnsAtLoadTime(t *testing.T) {
 			replayed := world
 			replayed.Tables = append([]WorldTable(nil), world.Tables...)
 			for index, table := range replayed.Tables {
-				if table.Name != "team_project_ownership" {
-					continue
+				// A literal list, NOT serverStampedColumns: a test that derived the replayed columns from
+				// the map under test could not notice an entry missing from it.
+				for _, column := range map[string][]string{
+					"team_project_ownership": {"last_synced"},
+					"work_items":             {"ingested_at"},
+				}[table.Name] {
+					columnType := "DateTime64(3, 'UTC')"
+					table.Columns = append(append([]FrozenColumn(nil), table.Columns...), FrozenColumn{Name: column, Type: columnType})
+					rows := make([][]any, len(table.Rows))
+					for rowIndex, row := range table.Rows {
+						rows[rowIndex] = append(append([]any(nil), row...), "2020-01-01 00:00:00.000")
+					}
+					table.Rows = rows
+					replayed.Tables[index] = table
 				}
-				table.Columns = append(append([]FrozenColumn(nil), table.Columns...), FrozenColumn{Name: "last_synced", Type: "DateTime64(3, 'UTC')"})
-				rows := make([][]any, len(table.Rows))
-				for rowIndex, row := range table.Rows {
-					rows[rowIndex] = append(append([]any(nil), row...), "2020-01-01 00:00:00.000")
-				}
-				table.Rows = rows
-				replayed.Tables[index] = table
 			}
+			// The generator writes no project_membership_transitions rows, so a replayed capture of that
+			// table is built here: without it the table's server-stamped mapping would go unexercised.
+			replayed.Tables = append(replayed.Tables, WorldTable{FrozenTable: FrozenTable{
+				Name: "project_membership_transitions",
+				Columns: []FrozenColumn{
+					{Name: "org_id", Type: "String"}, {Name: "source_id", Type: "Nullable(UUID)"}, {Name: "repo_id", Type: "UUID"},
+					{Name: "subject_kind", Type: "LowCardinality(String)"}, {Name: "subject_id", Type: "String"},
+					{Name: "provider", Type: "LowCardinality(String)"}, {Name: "from_project_id", Type: "String"},
+					{Name: "to_project_id", Type: "String"}, {Name: "from_project_key", Type: "String"},
+					{Name: "to_project_key", Type: "String"}, {Name: "actor", Type: "String"},
+					{Name: "occurred_at", Type: "DateTime64(3)"}, {Name: "last_synced", Type: "DateTime64(3)"},
+					{Name: "event_id", Type: "String"}, {Name: "ingested_at", Type: "DateTime64(3, 'UTC')"},
+				},
+				Rows: [][]any{{world.OrgID, nil, "00000000-0000-0000-0000-000000000000", "pull_request", "1", "github", "", "ghprojv2:acme:1", "", "1", "",
+					"2020-01-01 00:00:00.000", "2020-01-01 00:00:00.000", "event-1", "2020-01-01 00:00:00.000"}},
+			}})
 			startedAt := time.Now().UTC().Add(-time.Second)
 			if _, err := load(context.Background(), replayed, world.OrgID, frozenAt); err != nil {
 				t.Fatalf("load: %v", err)
 			}
-			for tableName, columns := range serverStampedColumns {
-				for column := range columns {
+			measured := 0
+			for tableName, columns := range map[string][]string{
+				"team_project_ownership":         {"last_synced"},
+				"work_items":                     {"ingested_at"},
+				"project_membership_transitions": {"ingested_at"},
+			} {
+				for _, column := range columns {
 					out := strings.TrimSpace(clickHouseHTTP(t, ch.httpDSN, fmt.Sprintf("SELECT count(), countIf(`%s` >= toDateTime64(%d, 3, 'UTC')) FROM `%s` FORMAT TSV", column, startedAt.UnixMilli()/1000, tableName)))
 					fields := strings.Fields(out)
-					if len(fields) != 2 || fields[0] == "0" || fields[0] != fields[1] {
-						t.Fatalf("%s.%s: rows / rows stamped at or after the load start = %q, want every loaded row stamped by the server at load time (and at least one row)", tableName, column, out)
+					if len(fields) != 2 || fields[0] != fields[1] {
+						t.Fatalf("%s.%s: rows / rows stamped at or after the load start = %q, want every loaded row stamped by the server at load time", tableName, column, out)
+					}
+					// A table the world holds no rows for (project_membership_transitions: the generator
+					// writes none) proves nothing; the measurement below must still happen somewhere.
+					if fields[0] != "0" {
+						measured++
 					}
 				}
+			}
+			if measured == 0 {
+				t.Fatal("no server-stamped table held a loaded row: the measurement did not happen")
 			}
 		})
 	}

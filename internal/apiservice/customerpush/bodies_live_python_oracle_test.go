@@ -1,11 +1,11 @@
 package customerpush
 
 import (
+	"context"
 	"encoding/json"
 	"maps"
 	"math/rand"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -210,20 +210,22 @@ func goBodyAnswer(model, body string) (int, string) {
 // TestCustomerPushBodiesMatchLiveFastAPI compares the write routes' body
 // validation with FastAPI's on the real request models.
 func TestCustomerPushBodiesMatchFrozenFastAPI(t *testing.T) {
-	frozen := venueoracle.OpenGolden(t, programGolden("bodies", t.Name(), "f94d527b161e5ac97fb0131f67e9d77b7670f0fc2b74379868148e3d3ad8b495"))
+	frozen := venueoracle.OpenGolden(t, programGolden("bodies", t.Name(), "8621a3713da2931fd05bb40ab28b8c1a3ec3213c2fd73c3a3e6d6724cc79ac50"))
 	_, file, _, _ := runtime.Caller(0)
 	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
 	corpus := bodiesCorpus()
 	input, _ := json.Marshal(corpus)
 	request := venueoracle.ProgramRequest("request model corpus", pythonBodiesProgram, input, producerEnv)
-	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
-		command := exec.Command(python, "-c", pythonBodiesProgram)
-		command.Env = producerCommandEnv(root)
+	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		producer.RequireDeployed()
+		command, err := producer.Command(context.Background(), producerEnv, nil, "-c", pythonBodiesProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
 		command.Stdin = strings.NewReader(string(input))
 		output, err := command.CombinedOutput()
 		if err != nil {
-			t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, output))
 		}
 		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
 	})

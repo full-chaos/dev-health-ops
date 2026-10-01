@@ -6,9 +6,6 @@
 # producer.Command and deletes its line in the same change (CHAOS-7707).
 internal/adminops
 internal/api/externalingest
-internal/api/legacyingest
-internal/apiservice
-internal/apiservice/customerpush
 internal/backfillrun
 internal/chmigrate
 internal/fixturescli

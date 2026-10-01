@@ -54,26 +54,3 @@ func TestNoWriterOfTheIngestedAtTablesSendsIngestedAt(t *testing.T) {
 		t.Fatalf("INSERT statements into the ingested_at tables by file = %v, want exactly %v", got, want)
 	}
 }
-
-// The Python writers of work_items name their columns and never name ingested_at.
-func TestPythonWorkItemsWritersNeverNameIngestedAt(t *testing.T) {
-	for _, path := range []string{"storage/clickhouse.py", "metrics/sinks/clickhouse/work_graph.py"} {
-		data, err := os.ReadFile(filepath.Join("..", "..", "src", "dev_health_ops", path))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(data), "ingested_at") && path == "storage/clickhouse.py" {
-			// storage/clickhouse.py also writes other tables that carry their own ingested_at; only
-			// the work_items column list matters.
-			start := strings.Index(string(data), "async def insert_work_items(")
-			end := strings.Index(string(data[start:]), "async def insert_work_item_transitions(")
-			if start < 0 || end < 0 || strings.Contains(string(data[start:start+end]), "ingested_at") {
-				t.Fatalf("%s: insert_work_items names ingested_at (or the function moved)", path)
-			}
-			continue
-		}
-		if strings.Contains(string(data), "ingested_at") {
-			t.Fatalf("%s names ingested_at", path)
-		}
-	}
-}

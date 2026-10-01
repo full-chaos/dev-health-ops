@@ -400,7 +400,7 @@ func TestGenerateVenueOracleMatchesThePythonProducer(t *testing.T) {
 		// CHAOS-7265 executed cell: the Python work_items writers name their columns and omit
 		// ingested_at, so every row they write has a value at or after the run start (the column exists, the DEFAULT applied, no insert broke).
 		// NOT pinned here: server time vs a client clock, which this predicate cannot tell apart; that is
-		// pinned statically by TestPythonWorkItemsWritersNeverNameIngestedAt (providersync).
+		// pinned by tests/test_work_items_ingested_at_server_stamped.py, which asserts what the Python writers send.
 		stamped := strings.Fields(strings.TrimSpace(clickHouseHTTP(t, ch.httpDSN, fmt.Sprintf("SELECT count(), countIf(ingested_at >= toDateTime64(%d, 3, 'UTC')) FROM work_items FORMAT TSV", pythonStart.Unix()))))
 		if len(stamped) != 2 || stamped[0] == "0" || stamped[0] != stamped[1] {
 			t.Fatalf("Python producer work_items rows / rows server-stamped at write = %v, want all, and at least one", stamped)

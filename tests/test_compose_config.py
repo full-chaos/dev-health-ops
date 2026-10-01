@@ -1716,7 +1716,11 @@ def test_helm_go_workers_wire_operational_ordering_contract() -> None:
     """
     template = (_HELM_DIR / "templates" / "go-workers.yaml").read_text(encoding="utf-8")
     assert "name: OPERATIONAL_ORDERING_CONTRACT" in template
-    assert ".Values.goWorkers.operationalOrderingContract" in template
+    # CHAOS-7421: the value is read through one helper (it falls back to 2 and refuses a
+    # contract other than 2), so the template names the helper and the helper names the knob.
+    assert 'include "dev-health.operationalOrderingContract"' in template
+    helpers = (_HELM_DIR / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
+    assert ".Values.goWorkers.operationalOrderingContract" in helpers
 
 
 def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
@@ -1744,8 +1748,12 @@ def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
         encoding="utf-8"
     )
     assert "name: OPERATIONAL_ORDERING_CONTRACT" in helm_migrate_template
-    assert ".Values.goWorkers.operationalOrderingContract" in helm_migrate_template, (
-        "helm migrate job should reuse goWorkers.operationalOrderingContract "
+    # CHAOS-7421: the migrate Job reads the SAME helper as every worker, so the one knob
+    # (goWorkers.operationalOrderingContract, read in the helper) moves both together.
+    helpers = (_HELM_DIR / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
+    assert ".Values.goWorkers.operationalOrderingContract" in helpers
+    assert 'include "dev-health.operationalOrderingContract"' in helm_migrate_template, (
+        "helm migrate job should reuse the one operational ordering contract helper "
         "(one knob for migrate + every worker), not a second, driftable value"
     )
 

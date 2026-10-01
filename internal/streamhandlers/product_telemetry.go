@@ -10,6 +10,7 @@
 package streamhandlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -92,16 +93,58 @@ func (e *eventTime) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// eventPayload is an event's payload object with its numbers kept as the text the producer wrote
+// (json.Number) instead of passing through float64: an integer above 2^53 would otherwise change
+// (CHAOS-7472), and Python stored the integer exactly. encoding/json's own rules for a map field are
+// kept: a second "payload" key merges into the first, and null leaves the payload absent. A number
+// written with a fraction or exponent that does not fit a float64 (1e999) is refused as it was when
+// the numbers were float64; an integer of any length is kept.
+type eventPayload map[string]any
+
+func (p *eventPayload) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*p = nil
+		return nil
+	}
+	merged := map[string]any(*p)
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&merged); err != nil {
+		return err
+	}
+	for _, value := range merged {
+		if err := checkNumbersFit(value); err != nil {
+			return err
+		}
+	}
+	*p = merged
+	return nil
+}
+
+// checkNumbersFit refuses a top-level number written as a float that does not fit a float64. A nested
+// value is refused later as an invalid payload whatever it holds.
+func checkNumbersFit(value any) error {
+	switch typed := value.(type) {
+	case json.Number:
+		if strings.ContainsAny(string(typed), ".eE") {
+			if _, err := typed.Float64(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 type productEvent struct {
-	Name            string         `json:"name"`
-	SchemaVersion   presentString  `json:"schemaVersion"`
-	EventID         presentString  `json:"eventId"`
-	Timestamp       eventTime      `json:"ts"`
-	SessionID       presentString  `json:"sessionId"`
-	AnonymousUserID presentString  `json:"anonymousUserId"`
-	OrgIDHash       string         `json:"orgIdHash"`
-	RoutePattern    *string        `json:"routePattern"`
-	Payload         map[string]any `json:"payload"`
+	Name            string        `json:"name"`
+	SchemaVersion   presentString `json:"schemaVersion"`
+	EventID         presentString `json:"eventId"`
+	Timestamp       eventTime     `json:"ts"`
+	SessionID       presentString `json:"sessionId"`
+	AnonymousUserID presentString `json:"anonymousUserId"`
+	OrgIDHash       string        `json:"orgIdHash"`
+	RoutePattern    *string       `json:"routePattern"`
+	Payload         eventPayload  `json:"payload"`
 }
 
 type productClickHouse interface {
@@ -193,7 +236,7 @@ func validateProductEvent(event productEvent) (string, error) {
 			return "", &streamrunner.PermanentError{Reason: "blocked_telemetry_payload"}
 		}
 		switch value.(type) {
-		case nil, string, bool, float64:
+		case nil, string, bool, json.Number:
 		default:
 			return "", &streamrunner.PermanentError{Reason: "invalid_telemetry_payload"}
 		}

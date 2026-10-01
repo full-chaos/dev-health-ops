@@ -395,6 +395,7 @@ func (o *teamsOracle) runGitHub(fake *fakeGitHub, orgID, owner, token string, pr
 	o.truncateAll()
 	if prepare != nil {
 		prepare()
+		o.requireSeedsOlderThanTheFrozenClock()
 	}
 	viaEnv := strings.HasPrefix(token, "env:")
 	token = strings.TrimPrefix(token, "env:")
@@ -445,12 +446,21 @@ func (o *teamsOracle) runGo(fake *fakeGitHub, orgID, owner, token string, sc *te
 	args = append(args, extra...)
 	var stdout, stderr strings.Builder
 	d := defaultDeps()
-	d.now = func() time.Time { return time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC) }
+	d.now = func() time.Time { return teamsFrozenNow }
 	d.doer = http.DefaultClient
 	d.openStore = func(context.Context, string) (driver.Conn, error) { return &keepOpen{o.goConn}, nil }
 	code := runTeams(o.ctx, cli.Env{Args: args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr}, d)
 	return code, stdout.String(), stderr.String()
 }
+
+// teamsFrozenNow is the clock the Go verb runs on. Every row a scenario seeds before the run must be
+// OLDER than it: `teams` is versioned by updated_at, so a seed stamped from the real clock (now64() - 1 day)
+// outranks the verb's write once the real date passes this instant plus the offset, and the sync then
+// "does not happen" in the readback. Seed from teamsSeedInstant instead.
+var teamsFrozenNow = time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+
+// teamsSeedInstant is the fixed instant pre-existing rows are stamped with: a day before the frozen clock.
+const teamsSeedInstant = "2026-09-25 12:00:00.000000"
 
 // keepOpen lets the verb close "its" connection without closing the test's.
 type keepOpen struct{ driver.Conn }
@@ -458,6 +468,22 @@ type keepOpen struct{ driver.Conn }
 func (keepOpen) Close() error { return nil }
 
 func strPtr(s string) *string { return &s }
+
+// requireSeedsOlderThanTheFrozenClock fails the scenario when a row it seeded in either database is newer
+// than the clock the Go verb runs on: that row would win the updated_at versioning over the verb's own write.
+func (o *teamsOracle) requireSeedsOlderThanTheFrozenClock() {
+	o.t.Helper()
+	for _, database := range []string{o.pythonDatabase, o.goDatabase} {
+		var newer uint64
+		query := fmt.Sprintf("SELECT count() FROM %s.teams WHERE updated_at > toDateTime64('%s', 6)", database, teamsFrozenNow.Format("2006-01-02 15:04:05.000000"))
+		if err := o.admin.QueryRow(o.ctx, query).Scan(&newer); err != nil {
+			o.t.Fatalf("check the seeded rows against the frozen clock: %v", err)
+		}
+		if newer != 0 {
+			o.t.Fatalf("%s: %d seeded teams rows are newer than the frozen clock %s: stamp seeds from teamsSeedInstant, not the real clock", database, newer, teamsFrozenNow.Format(time.RFC3339))
+		}
+	}
+}
 
 // seedSyncPolicy marks a team as not auto-applied (sync_policy 2) in both databases; the legacy verb
 // never read the policy.
@@ -875,7 +901,7 @@ func githubScenarios() []*teamsScenario {
 		{name: "an admin override survives", org: "acme", owner: "acme", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2,
 			prepare: func(o *teamsOracle, fake *fakeGitHub) {
 				for _, database := range []string{o.pythonDatabase, o.goDatabase} {
-					if err := o.admin.Exec(o.ctx, fmt.Sprintf(`INSERT INTO %s.teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider) VALUES ('gh:platform', generateUUIDv4(), 'Platform', 'old', ['old'], ['override@example.com'], [], [], 1, now64(6) - INTERVAL 1 DAY, now64(6) - INTERVAL 1 DAY, 'org-1', 'github')`, database)); err != nil {
+					if err := o.admin.Exec(o.ctx, fmt.Sprintf(`INSERT INTO %s.teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider) VALUES ('gh:platform', generateUUIDv4(), 'Platform', 'old', ['old'], ['override@example.com'], [], [], 1, toDateTime64('%s', 6), toDateTime64('%s', 6), 'org-1', 'github')`, database, teamsSeedInstant, teamsSeedInstant)); err != nil {
 						o.t.Fatal(err)
 					}
 				}

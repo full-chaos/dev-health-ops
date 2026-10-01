@@ -208,6 +208,23 @@ func readGraphQLReport(t *testing.T, path string) report {
 	if err := json.Unmarshal(raw, &r); err != nil {
 		t.Fatalf("decode report: %v (%s)", err, raw)
 	}
+	// Every report this package's tests read goes through here, so a
+	// report written with no mode, on any exit, fails the test that read it.
+	switch r.Summary.EdgeMode {
+	case goapiproof.EdgeModeGo, goapiproof.EdgeModePython, goapiproof.EdgeModeUndetermined:
+	default:
+		t.Fatalf("the report names no edge mode (summary.edge_mode = %q, exit_cause = %q): every exit must say which proof it is a report of\n%s", r.Summary.EdgeMode, r.ExitCause, raw)
+	}
+	return r
+}
+
+// readModeReport reads a report and requires the mode it names.
+func readModeReport(t *testing.T, path, mode string) report {
+	t.Helper()
+	r := readGraphQLReport(t, path)
+	if r.Summary.EdgeMode != mode {
+		t.Fatalf("report summary edge_mode = %q on exit_cause %q, want %q", r.Summary.EdgeMode, r.ExitCause, mode)
+	}
 	return r
 }
 
@@ -215,7 +232,8 @@ func readGraphQLReport(t *testing.T, path string) report {
 // way run() can end, from the code: flags refused, a refusal before
 // anything is measured, a completed run, a run whose measurement ends in
 // a run error, and a SIGTERM delivered mid-run. Every row writes -report
-// with its exit_cause.
+// with its exit_cause and with the mode the command line selected (none of
+// these rows passes -go-edge, and each command line parses: python).
 func TestEveryGraphQLExitPathWritesTheReportWithItsCause(t *testing.T) {
 	t.Run("flags refused", func(t *testing.T) {
 		reportPath := filepath.Join(t.TempDir(), "report.json")
@@ -223,7 +241,7 @@ func TestEveryGraphQLExitPathWritesTheReportWithItsCause(t *testing.T) {
 		if err == nil {
 			t.Fatal("want a flag refusal")
 		}
-		if r := readGraphQLReport(t, reportPath); r.ExitCause != exitRefusedBeforeMeasuring || r.ExitDetail == "" {
+		if r := readModeReport(t, reportPath, goapiproof.EdgeModePython); r.ExitCause != exitRefusedBeforeMeasuring || r.ExitDetail == "" {
 			t.Fatalf("report = %+v", r)
 		}
 	})
@@ -237,7 +255,7 @@ func TestEveryGraphQLExitPathWritesTheReportWithItsCause(t *testing.T) {
 		if err := runCLI(t, args); !errors.Is(err, goapiproof.ErrCredentialNamesAnotherOrg) {
 			t.Fatalf("err = %v", err)
 		}
-		if r := readGraphQLReport(t, reportPath); r.ExitCause != exitRefusedBeforeMeasuring || len(r.Outcomes) != 0 {
+		if r := readModeReport(t, reportPath, goapiproof.EdgeModePython); r.ExitCause != exitRefusedBeforeMeasuring || len(r.Outcomes) != 0 {
 			t.Fatalf("report = %+v", r)
 		}
 	})
@@ -248,7 +266,7 @@ func TestEveryGraphQLExitPathWritesTheReportWithItsCause(t *testing.T) {
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
-		if r := readGraphQLReport(t, reportPath); r.ExitCause != exitCompleted || r.Summary.Executed != 1 {
+		if r := readModeReport(t, reportPath, goapiproof.EdgeModePython); r.ExitCause != exitCompleted || r.Summary.Executed != 1 {
 			t.Fatalf("report exit_cause=%q executed=%d", r.ExitCause, r.Summary.Executed)
 		}
 	})
@@ -259,7 +277,7 @@ func TestEveryGraphQLExitPathWritesTheReportWithItsCause(t *testing.T) {
 		if err == nil {
 			t.Fatal("want the run error: nothing was executed")
 		}
-		r := readGraphQLReport(t, reportPath)
+		r := readModeReport(t, reportPath, goapiproof.EdgeModePython)
 		if r.ExitCause != exitCompletedWithRunError || r.ExitDetail == "" || len(r.Outcomes) == 0 {
 			t.Fatalf("report exit_cause=%q detail=%q outcomes=%d", r.ExitCause, r.ExitDetail, len(r.Outcomes))
 		}
@@ -278,7 +296,7 @@ func TestEveryGraphQLExitPathWritesTheReportWithItsCause(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want the run stopped by the signal", err)
 		}
-		if r := readGraphQLReport(t, reportPath); r.ExitCause != exitStoppedBySignal || len(r.Outcomes) == 0 {
+		if r := readModeReport(t, reportPath, goapiproof.EdgeModePython); r.ExitCause != exitStoppedBySignal || len(r.Outcomes) == 0 {
 			t.Fatalf("report exit_cause=%q outcomes=%d", r.ExitCause, len(r.Outcomes))
 		}
 	})

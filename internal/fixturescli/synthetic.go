@@ -273,6 +273,11 @@ func (target FrozenTarget) Load(ctx context.Context, conn driver.Conn, delta tim
 		if err != nil {
 			return counts, err
 		}
+		stamped, rows, err := stampLiveOrdering(ctx, conn, WorldTable{FrozenTable: table}, rows)
+		if err != nil {
+			return counts, err
+		}
+		table = stamped.FrozenTable
 		statement := "INSERT INTO `" + table.Name + "` (" + table.columnList() + ") SELECT " + table.columnList() +
 			" FROM format(JSONCompactEachRow, ?, ?)"
 		for start := 0; start < len(rows); start += insertChunk {

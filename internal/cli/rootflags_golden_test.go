@@ -39,7 +39,7 @@ func TestRootFlagsMatchThePythonRootParser(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/root_flags.json",
 		PythonBuild: rootFlagsPythonBuild,
-		SHA256:      "fd6ecd6e69cf993c63a4c06c7ea7acbaa65b4a26202f1489664b9dadf17b7345",
+		SHA256:      "798781695c44504d608e033719b09b904698bd83de3b1d252f36d63c22091ed2",
 		Recipe: "git worktree add --detach $DIR " + rootFlagsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/cli/ -test '^TestRootFlagsMatchThePythonRootParser$' -python-root $DIR",
 	})

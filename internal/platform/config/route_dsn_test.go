@@ -298,7 +298,7 @@ func TestRouteDSNMatchesTheFrozenPythonOutput(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/route_dsn.json",
 		PythonBuild: routeDSNPythonBuild,
-		SHA256:      "2d632296ebd9809f157dd4668fc9f9145fc934149e8e24a3aa878cd552dc21b6",
+		SHA256:      "91fa9f31450d55196bdcd0e915858c19116ea5a441e5e70b60c1ceb4004d10ad",
 		Recipe: "git worktree add --detach $DIR " + routeDSNPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/platform/config/ -test '^TestRouteDSNMatchesTheFrozenPythonOutput$' -python-root $DIR",
 	})

@@ -41,10 +41,14 @@ func TestEveryPagerDutySinkWritesAndReadsBackInBothTableShapes(t *testing.T) {
 					t.Errorf("terminate ClickHouse: %v", err)
 				}
 			})
-			// The migration chain builds the contract-2 tables only when the
-			// env asks for them (migration 067).
-			setProbeEnv(t, tableShape.migrate)
-			chschema.Apply(ctx, t, instance)
+			// The contract-2 head is the migrator's; the legacy tables are the
+			// recorded contract-1 shape.
+			if tableShape.contract == operationalLegacyContract {
+				chschema.ApplyOrderingContract1(ctx, t, instance)
+			} else {
+				setProbeEnv(t, tableShape.migrate)
+				chschema.Apply(ctx, t, instance)
+			}
 			conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
 			if err != nil {
 				t.Fatal(err)
@@ -183,24 +187,34 @@ func (conn *racedShapeConn) Query(ctx context.Context, query string, args ...any
 func TestPagerDutyRacedShapeIsRefusedAndTheNextCallSucceeds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
-	instance, err := containers.StartClickHouse(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer closeCancel()
-		if err := instance.Close(closeCtx); err != nil {
-			t.Errorf("terminate ClickHouse: %v", err)
+	// A table cannot be moved between shapes in place (the Go migrator
+	// refuses a database below the head), so each direction runs on its own
+	// instance built in the shape it names.
+	start := func(legacy bool) driver.Conn {
+		instance, err := containers.StartClickHouse(ctx)
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	setProbeEnv(t, "<unset>")
-	chschema.Apply(ctx, t, instance)
-	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
-	if err != nil {
-		t.Fatal(err)
+		t.Cleanup(func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer closeCancel()
+			if err := instance.Close(closeCtx); err != nil {
+				t.Errorf("terminate ClickHouse: %v", err)
+			}
+		})
+		if legacy {
+			chschema.ApplyOrderingContract1(ctx, t, instance)
+		} else {
+			setProbeEnv(t, "<unset>")
+			chschema.Apply(ctx, t, instance)
+		}
+		conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		return conn
 	}
-	t.Cleanup(func() { _ = conn.Close() })
 
 	for _, direction := range []struct {
 		name  string
@@ -210,10 +224,7 @@ func TestPagerDutyRacedShapeIsRefusedAndTheNextCallSucceeds(t *testing.T) {
 		{name: "table1-read2", table: probeTableLegacy, stale: probeTableCurrent},
 		{name: "table2-read1", table: probeTableCurrent, stale: probeTableLegacy},
 	} {
-		if direction.table == probeTableCurrent {
-			setProbeEnv(t, "2")
-			chschema.Apply(ctx, t, instance)
-		}
+		conn := start(direction.table == probeTableLegacy)
 		count := len(pagerDutyContractSinkCases(t, "org-count"))
 		for i := range count {
 			orgID := fmt.Sprintf("org-race-%s-%d", direction.name, i)

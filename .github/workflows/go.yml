@@ -152,6 +152,8 @@ on:
       - 'docs/go-migration-matrix.md'
       - 'ci/check_migration_matrix.sh'
       - 'ci/check_migration_matrix_test.sh'
+      - 'ci/go_worker_fixture_test.sh'
+      - 'ci/lib/go_worker_fixture.sh'
       - 'ci/check_river_compat_static.sh'
       # CHAOS-4915: the pinned linter, its self-test and its negative-control
       # fixture must trigger the job that validates them. A file that cannot
@@ -320,6 +322,8 @@ on:
       - 'docs/go-migration-matrix.md'
       - 'ci/check_migration_matrix.sh'
       - 'ci/check_migration_matrix_test.sh'
+      - 'ci/go_worker_fixture_test.sh'
+      - 'ci/lib/go_worker_fixture.sh'
       - 'ci/check_river_compat_static.sh'
       # CHAOS-4915: the pinned linter, its self-test and its negative-control
       # fixture must trigger the job that validates them. A file that cannot

@@ -42,6 +42,16 @@ var generateParameterSets = []struct {
 		Provider: "synthetic", RepoName: "acme/live-e2e", RepoCount: 1, Days: 14, CommitsPerDay: 6, PRCount: 24, TeamCount: 10,
 		Seed: 20260219, WithMetrics: true, WithWorkGraph: true,
 	}},
+	// ci/run_live_backend_e2e.sh: raw git/PR/team data only, github provider label.
+	{"11111111-2222-4333-8444-555555555555", GenerateParams{
+		Provider: "github", RepoName: "acme/live-e2e", RepoCount: 1, Days: 14, CommitsPerDay: 6, PRCount: 24, TeamCount: 10,
+		Seed: 20260219,
+	}},
+	// ci/run_metrics_executed_proof.sh: one repo with one team, so the repo stays single-owner.
+	{"11111111-2222-4333-8444-555555555555", GenerateParams{
+		Provider: "synthetic", RepoName: "ci-metrics-executed-proof/repo", RepoCount: 1, Days: 7, CommitsPerDay: 5, PRCount: 20, TeamCount: 1,
+		Seed: 4276,
+	}},
 }
 
 // pythonGenerate runs the real `dev-hops fixtures generate` against the ClickHouse at dsn as a caller
@@ -120,13 +130,56 @@ func dumpWorldTable(t *testing.T, dsn, table string) FrozenTable {
 			frozen.Rows = append(frozen.Rows, row)
 		}
 	}
-	frozen = frozen.WithoutServerStamped()
+	frozen = withoutOrdering(t, frozen.WithoutServerStamped())
 	sort.Slice(frozen.Rows, func(i, j int) bool {
 		left, _ := json.Marshal(frozen.Rows[i])
 		right, _ := json.Marshal(frozen.Rows[j])
 		return string(left) < string(right)
 	})
 	return frozen
+}
+
+// withoutOrdering drops the four contract-2 ordering columns of an operational
+// table from a dump, by name (migration 067 places them after source_version_at,
+// not at the end). The frozen worlds were written against the legacy shape; the
+// stamped values themselves are checked against the stored rows by
+// assertStoredStampMatchesStoredRow and TestOrderingStampMatchesThePythonProducer. A
+// table holding only some of the four columns is a broken schema and fails.
+func withoutOrdering(t *testing.T, table FrozenTable) FrozenTable {
+	t.Helper()
+	drop := map[int]bool{}
+	for position, column := range table.Columns {
+		for _, ordering := range orderingColumnDefs {
+			if column.Name == ordering.Name {
+				if column.Type != ordering.Type {
+					t.Fatalf("%s.%s is %s, want %s", table.Name, column.Name, column.Type, ordering.Type)
+				}
+				drop[position] = true
+			}
+		}
+	}
+	if len(drop) == 0 {
+		return table
+	}
+	if len(drop) != len(orderingColumnDefs) {
+		t.Fatalf("%s holds %d of the %d ordering columns", table.Name, len(drop), len(orderingColumnDefs))
+	}
+	out := FrozenTable{Name: table.Name}
+	for position, column := range table.Columns {
+		if !drop[position] {
+			out.Columns = append(out.Columns, column)
+		}
+	}
+	for _, row := range table.Rows {
+		kept := make([]any, 0, len(row)-len(drop))
+		for position, value := range row {
+			if !drop[position] {
+				kept = append(kept, value)
+			}
+		}
+		out.Rows = append(out.Rows, kept)
+	}
+	return out
 }
 
 // baseTables lists every table that is not a view.
@@ -665,6 +718,13 @@ func assertStoredStampMatchesStoredRow(t *testing.T, dsn string, world FrozenWor
 	if table.Name == "" {
 		t.Fatalf("the world holds no %s", name)
 	}
+	assertStoredStampOfTable(t, dsn, table)
+}
+
+// assertStoredStampOfTable is assertStoredStampMatchesStoredRow for a table the caller holds.
+func assertStoredStampOfTable(t *testing.T, dsn string, table WorldTable) {
+	t.Helper()
+	name := table.Name
 	names := make([]string, len(table.Columns))
 	for index, column := range table.Columns {
 		names[index] = "`" + column.Name + "`"

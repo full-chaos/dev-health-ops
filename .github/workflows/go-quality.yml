@@ -196,6 +196,7 @@ jobs:
           set -euo pipefail
           bash ci/check_migration_matrix.sh contract
           bash ci/check_migration_matrix_test.sh
+          bash ci/go_worker_fixture_test.sh
 
       - name: Check the gqlgen output has not drifted from its hand-edits
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'

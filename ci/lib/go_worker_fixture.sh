@@ -38,6 +38,51 @@
 # conservative convention; no longer load-bearing.
 
 # ---------------------------------------------------------------------------
+# clickhouse_http_sink URI -- prints the sink DSN `dho fixtures generate` takes
+# for a ClickHouse HTTP endpoint. dho reads a clickhouse:// DSN as the native
+# protocol except on port 8123, and the HTTP port a caller configures can be
+# anything, so the scheme is spelled out: clickhouse:// is rewritten to http://,
+# http:// and https:// pass through, and any other scheme is refused loudly
+# (exit 1, a message on stderr) instead of being guessed at. The DSN can hold a
+# password: a refusal names the variable (LABEL, the optional second argument)
+# and the reason, never the DSN or any part of it.
+# ---------------------------------------------------------------------------
+clickhouse_http_sink() {
+  local label="${2:-the ClickHouse DSN}"
+  case "${1:-}" in
+    clickhouse://*) printf 'http://%s\n' "${1#clickhouse://}" ;;
+    http://* | https://*) printf '%s\n' "$1" ;;
+    *)
+      echo "ERROR: ${label} must start with clickhouse://, http:// or https:// (value not shown: it can hold a password)" >&2
+      return 1
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# clickhouse_native_uri HTTP_URI NATIVE_PORT [LABEL] -- prints the native-protocol DSN of
+# the ClickHouse server whose HTTP endpoint is HTTP_URI: same credentials, host
+# and database, the native port in place of the HTTP port. The scheme becomes
+# clickhouse:// (clickhouses:// for https://). The HTTP DSN is the one source of
+# truth for the address, so the migrate target and the fixtures sink (see
+# clickhouse_http_sink) cannot name different servers or databases. A DSN it
+# cannot split (another scheme, no explicit port) or a non-numeric NATIVE_PORT is
+# refused loudly (exit 1) rather than guessed at; the message names LABEL (the
+# variable, optional) and the reason, never the DSN or any part of it.
+# ---------------------------------------------------------------------------
+clickhouse_native_uri() {
+  local uri="${1:-}" port="${2:-}" label="${3:-the ClickHouse DSN}" scheme
+  local re='^(clickhouse|http|https)://([^@/]*@)?([^:/@[]+|\[[^]]+\]):([0-9]+)(/.*)?$'
+  if [[ ! "${port}" =~ ^[0-9]+$ ]] || [[ ! "${uri}" =~ ${re} ]]; then
+    echo "ERROR: cannot derive a native ClickHouse DSN from ${label} (native port '${port}'): want clickhouse://, http:// or https:// with an explicit port and no unencoded @ or / in the password (value not shown)" >&2
+    return 1
+  fi
+  scheme="clickhouse"
+  [ "${BASH_REMATCH[1]}" = "https" ] && scheme="clickhouses"
+  printf '%s://%s%s:%s%s\n' "${scheme}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${port}" "${BASH_REMATCH[5]}"
+}
+
+# ---------------------------------------------------------------------------
 # build_go_binaries -- builds the three Go binaries this fixture needs into
 # BIN_DIR (caller-set global; created by the caller beforehand).
 # ---------------------------------------------------------------------------
@@ -54,6 +99,10 @@ build_go_binaries() {
 # to have run (BIN_DIR/dho).
 # ---------------------------------------------------------------------------
 migrate_and_assert_river() {
+  # dho applies only the head (ordering contract 2); the worker and reconciler
+  # the caller starts later must read the operational tables under the same
+  # contract or they refuse (ordering_contract_mismatch).
+  export OPERATIONAL_ORDERING_CONTRACT=2
   echo "==> applying Postgres (Alembic) migrations"
   # DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 is required here, not optional: a
   # plain `migrate postgres upgrade` targets ONLY the application_schema
@@ -102,18 +151,14 @@ migrate_and_assert_river() {
 # provision_river -- applies the ClickHouse migration, the three River
 # runtime roles, the pinned River schema, and the sync-orchestration
 # transport flip a fresh CI database needs before the Go worker can process
-# anything. Call AFTER migrate_and_assert_river. Reads: CLICKHOUSE_URI_HTTP,
+# anything. Call AFTER migrate_and_assert_river. Reads: CLICKHOUSE_URI_NATIVE,
 # POSTGRES_HOST/PORT/SUPERUSER/SUPERUSER_PASSWORD/DB, RIVER_DOMAIN_ROLE/
 # QUEUE_ROLE/COORDINATOR_ROLE (+ their _PASSWORD counterparts), BIN_DIR,
-# ROOT_DIR. Requires run_dev_hops() to already be defined by the caller and build_go_binaries to have run.
+# ROOT_DIR. Requires build_go_binaries to have run (BIN_DIR/dho) and CLICKHOUSE_URI_NATIVE.
 # ---------------------------------------------------------------------------
 provision_river() {
   echo "==> applying ClickHouse migrations"
-  # Stays on the Python chain (contract-1 schema) until CHAOS-7301 freezes the
-  # generate worlds: the Python `fixtures generate` writes contract-0 rows, which
-  # the head (contract 2) schema rejects, and dho refuses a contract-1 database.
-  CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" OTEL_ENABLED=false \
-    run_dev_hops migrate clickhouse upgrade
+  CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}" "${BIN_DIR}/dho" migrate clickhouse upgrade
 
   echo "==> provisioning the three River runtime roles (scripts/worker/provision_river_roles.sql)"
   PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \

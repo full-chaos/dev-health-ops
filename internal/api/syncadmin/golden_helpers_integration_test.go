@@ -19,10 +19,10 @@ const pythonBuild = "758a8d9fbb1f7548bef84df452597f9e7ddf145a"
 
 // goldenDigests pins each golden file (the digest its recording run printed).
 var goldenDigests = map[string]string{
-	"TestSyncConfigDeleteVenueOracle":       "3817745a64a0d6bd2509d285223e552a50932fd0c49c2e793e853e25c5c0ac9f",
-	"TestSyncAdminReadsVenueOracle":         "ad16abed4bb357eaa1053ba8ae196accd157c8022945d63449043cfc14eafbfc",
-	"TestSyncConfigCreateVenueOracle":       "207f1d6e166872a384300004bfdc862bf8a1e31429a0e047ebe4a8dc0785594c",
-	"TestSyncConfigBatchCreateVenueOracle":  "ae1d5921be48edb7d8493d3788290a97886c185bfebf92c786cb9eff586e8b0c",
+	"TestSyncConfigDeleteVenueOracle":       "38b332f2cfb6179a5ef7236adefa5d1220f98c27993812a5d1daa3be0e980408",
+	"TestSyncAdminReadsVenueOracle":         "56c8fede2fe164be0e885d550b43b4c5a0ded91b40a4f1be0cf80992739d4207",
+	"TestSyncConfigCreateVenueOracle":       "96c21372fc0cc0153411d7ab304670bcfc73bd461cda4d5d09938699c846de41",
+	"TestSyncConfigBatchCreateVenueOracle":  "d17c7a33c289eb6313a048e93580fee82bf66c43ab8d5b9166a810a68aa6a376",
 	"TestSyncConfigUpdateVenueOracle":       "8da3c94c28bb7ae4928cb0700fd5859930c0a9bb9fb1b3d626e9fec71c64c9b1",
 	"TestSyncConfigRepositoriesVenueOracle": "4856559d347fedbe7e4bf7f3072d3151fb88f5d2129dd0a4000d20b0e51e4288",
 }

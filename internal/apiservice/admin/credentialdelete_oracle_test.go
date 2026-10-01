@@ -46,6 +46,7 @@ func TestCredentialDeleteVenueOracle(t *testing.T) {
 	adminID, memberID := nextID(), nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{

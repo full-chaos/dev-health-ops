@@ -33,6 +33,7 @@ func TestPagerDutyStatusAndPreflightVenueOracle(t *testing.T) {
 	adminID, memberID, superID := uuid.MustParse(venueoracle.StableUUID("pd-status-admin")), uuid.MustParse(venueoracle.StableUUID("pd-status-member")), uuid.MustParse(venueoracle.StableUUID("pd-status-super"))
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {

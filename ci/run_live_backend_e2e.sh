@@ -579,7 +579,9 @@ echo "==> generating deterministic ClickHouse fixtures (raw git/PR/team data onl
 )
 
 echo "==> migrating PostgreSQL for internal credential lifecycle coverage"
-run_dev_hops --db "${POSTGRES_URI}" migrate postgres upgrade
+build_go_binaries
+MIGRATION_DATABASE_URI="${POSTGRES_URI}" DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 RIVER_DATABASE_SCHEMA=river \
+  "${BIN_DIR}/dho" migrate postgres upgrade
 
 echo "==> running service credential subprocess lifecycle against live PostgreSQL"
 DEV_HEALTH_POSTGRES_TEST_URI="${POSTGRES_URI}" \

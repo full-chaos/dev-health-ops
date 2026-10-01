@@ -2462,7 +2462,9 @@ func loadQueryRouteConfig(getenv getenvFunc) (queryRouteConfig, bool) {
 // second route because the fix lived on one call site instead of the
 // class. Callers may layer additional, route-specific options (e.g.
 // queryRouteMaxResultRows below) onto the returned value; none of them may
-// overwrite MaxBytesToRead.
+// overwrite MaxBytesToRead -- except the MCP caller class
+// (applyMCPClickHouseCeilings, CHAOS-7091), whose whole point is a read
+// ceiling, and which is served on its own listener to one caller class.
 //
 //   - MaxBytesToRead: RETIRED (CHAOS-4651, dev-health-go v0.6.1). This was
 //     never a capacity-boundable value -- it protects ClickHouse's OWN
@@ -2638,6 +2640,10 @@ type queryRouteHandlers struct {
 	// BuildInfo is GET /buildinfo -- which build this process is,
 	// authenticated with the same envelope verifier /query uses.
 	BuildInfo http.HandlerFunc
+	// MCP is POST /query of the MCP caller class (CHAOS-7085): its own gate,
+	// gqlgen server, ClickHouse client and routing rows. Mounted only on
+	// Plane.MCPHandler, which only the MCP listener serves.
+	MCP http.Handler
 	// Probes are /query's live dependency checks, one per dependency class, in the
 	// order readinessCheck runs them. dho query-api registers each as its own
 	// required readiness check, so the operator /readyz names the failing class
@@ -2722,12 +2728,22 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		pgPool.Close()
 		return queryRouteHandlers{}, nil, nil, err
 	}
+	// CHAOS-7085/CHAOS-7091: the MCP caller class gets its OWN ClickHouse
+	// client (a read-bytes ceiling, not the shared unrestricted setting) and
+	// its OWN routing rows (one class row per allowlisted root field).
+	mcpClient, err := newMCPClickHouseClient(cfg.ClickHouseURI)
+	if err != nil {
+		pgPool.Close()
+		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: build the MCP caller-class ClickHouse client: %w", err)
+	}
+	mcpHandler := newMCPHandler(mcpClient, pgPool, routeswitch.NewPostgresSwitch(pgPool, schemaDigest, mcpRoutingDigests()), getenv)
 	handlers := queryRouteHandlers{
 		Query:      handler,
 		Proof:      proofHandler,
 		ProofWrite: proofWriteHandler,
 		Registry:   registryHandler,
 		BuildInfo:  newBuildInfoHandler(verifier),
+		MCP:        mcpHandler,
 		Probes:     readinessProbes(chClient, pgPool, verifier, posture),
 	}
 	// The one registry pool, for Build's edge users check (CHAOS-6290). Set outside the

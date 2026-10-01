@@ -52,6 +52,9 @@ type AccessClaims struct {
 	Username     *string
 	FullName     *string
 	TokenVersion int64
+	// ImpersonatingUserID is the impersonating_user_id claim, written only
+	// when non-empty, after full_name, as the Python dict holds it.
+	ImpersonatingUserID *string
 }
 
 // RefreshClaims are create_refresh_token's (and
@@ -63,8 +66,8 @@ type RefreshClaims struct {
 }
 
 // Access mints create_access_token(...) at now with jti: the claims in
-// the order the Python dict holds them, username and full_name only when
-// non-empty.
+// the order the Python dict holds them, username, full_name and
+// impersonating_user_id only when non-empty.
 func (s *Signer) Access(claims AccessClaims, now time.Time, jti string) (string, error) {
 	var payload claimWriter
 	payload.str("sub", claims.UserID)
@@ -84,6 +87,9 @@ func (s *Signer) Access(claims AccessClaims, now time.Time, jti string) (string,
 	}
 	if claims.FullName != nil && *claims.FullName != "" {
 		payload.str("full_name", *claims.FullName)
+	}
+	if claims.ImpersonatingUserID != nil && *claims.ImpersonatingUserID != "" {
+		payload.str("impersonating_user_id", *claims.ImpersonatingUserID)
 	}
 	return s.sign(payload.close())
 }

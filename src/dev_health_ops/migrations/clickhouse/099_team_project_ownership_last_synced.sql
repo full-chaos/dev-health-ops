@@ -1,0 +1,32 @@
+-- team_project_ownership carries only updated_at, the ReplacingMergeTree
+-- version. Providers stamp it with their own time (and the Atlassian writer
+-- used one provider stamp for a whole write), so it is not monotonic across
+-- syncs: a row whose provider time is old can land after a consumer's cursor
+-- has already passed that time, and a cursor keyed on updated_at never sees it.
+--
+-- last_synced is the UTC time the ClickHouse server processed the INSERT. No
+-- writer sends a value: every writer names its columns and omits last_synced,
+-- so the server stamps the row when the insert runs. A client-side stamp would
+-- be taken before the lease check and the batch send, and a delayed write would
+-- then land behind a consumer cursor that had already moved past its stamp.
+-- updated_at keeps its meaning and its role as the version column, and
+-- last_synced is not part of the sorting key.
+--
+-- Reader contract (also the column COMMENT): last_synced = server insert time (DEFAULT now64(3), stamped when the server processes the insert). It is not commit order across concurrent inserts. A reader must re-read a window of at least 300 seconds behind its cursor (last_synced > cursor - 300s) and dedup by key with FINAL.
+-- Measured: a native batch is stamped when its data arrives, so the gap to
+-- visibility is milliseconds. An INSERT SELECT is stamped when the statement
+-- starts and is visible only when it ends (1.4 s in the slow-insert cell of
+-- team_project_ownership_last_synced_visibility_integration_test.go), so the
+-- 300 s window is a margin of over two orders of magnitude.
+--
+-- ADD COLUMN ... DEFAULT now64(3) alone would make every row that existed
+-- before this migration read the DEFAULT at QUERY time, so each read would
+-- return a different, current timestamp for old rows. MATERIALIZE COLUMN
+-- writes the DEFAULT into the existing parts once, so those rows keep one
+-- stable value: the time of this migration, the earliest ingest time that is
+-- known for them. The column is created with IF NOT EXISTS and the
+-- materialization runs synchronously, so a failed and repeated migration
+-- can only move a legacy row's last_synced forward, never lose the row.
+ALTER TABLE team_project_ownership ADD COLUMN IF NOT EXISTS last_synced DateTime64(3, 'UTC') DEFAULT now64(3) COMMENT 'last_synced = server insert time (DEFAULT now64(3), stamped when the server processes the insert). It is not commit order across concurrent inserts. A reader must re-read a window of at least 300 seconds behind its cursor (last_synced > cursor - 300s) and dedup by key with FINAL.';
+
+ALTER TABLE team_project_ownership MATERIALIZE COLUMN last_synced SETTINGS mutations_sync = 2;

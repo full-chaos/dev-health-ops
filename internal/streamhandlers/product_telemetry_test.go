@@ -90,13 +90,18 @@ func (r *productRows) Err() error                       { return nil }
 func (r *productRows) HasData() bool                    { return len(r.rows) > 0 }
 
 type productBatch struct {
-	rows    [][]any
-	sent    bool
-	sendErr error
+	rows      [][]any
+	sent      bool
+	sendErr   error
+	aborts    int
+	appendErr error
 }
 
-func (b *productBatch) Abort() error { return nil }
+func (b *productBatch) Abort() error { b.aborts++; return nil }
 func (b *productBatch) Append(v ...any) error {
+	if b.appendErr != nil {
+		return b.appendErr
+	}
 	b.rows = append(b.rows, append([]any(nil), v...))
 	return nil
 }

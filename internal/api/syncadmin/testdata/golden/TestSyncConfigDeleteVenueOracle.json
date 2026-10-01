@@ -23,7 +23,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7660e4fa-81b1-4bcd-9a6c-12cc7543b388"
+        "x-request-id": "db45c412-5e86-4e9a-8c3f-9a4d445e08e0"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     },
@@ -43,7 +43,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7290154f-b6c9-4aaa-8c38-28397a8f737c"
+        "x-request-id": "10257caf-bf01-46e9-9064-7c192e8b8a64"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -63,7 +63,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a5cbcd73-2b4f-43f5-9018-502e55866055"
+        "x-request-id": "33581aa7-50f6-4cdf-afa5-0f9ff5388a1c"
       },
       "body": "{\"detail\":\"Sync configuration not found\"}"
     },
@@ -83,7 +83,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3ce5d58d-4e8b-432d-ae1a-0b6eda4483a2"
+        "x-request-id": "eda11eed-444a-48dd-bcdf-e47fbed88d09"
       },
       "body": "{\"detail\":\"Sync configuration not found\"}"
     },
@@ -103,7 +103,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0c382f3d-8312-4715-a1ed-23e359e50004"
+        "x-request-id": "57d37cf3-0baa-4357-954d-b875ded3d04b"
       },
       "body": "{\"detail\":\"Sync configuration not found\"}"
     },
@@ -122,7 +122,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "87ecaeec-577b-4a62-9fc5-d71e0295664f"
+        "x-request-id": "eca210e6-e74d-43a2-8d13-2614ff544c24"
       },
       "body": ""
     },
@@ -142,7 +142,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9e3017a0-4743-4153-b389-743aed91f673"
+        "x-request-id": "301dd432-31b3-4371-9d70-967517e9520f"
       },
       "body": "{\"detail\":\"Sync configuration not found\"}"
     },
@@ -200,7 +200,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9db0921b-51b2-45ff-b03d-675bf687918b"
+        "x-request-id": "c968c36d-9dab-42ea-9eb3-20fb8d31f741"
       },
       "body": ""
     },
@@ -219,7 +219,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "4005b763-3e8b-4988-a6f7-5783dc8cdd3f"
+        "x-request-id": "23d9f004-e5aa-4f7e-a63b-f82bd983d8d5"
       },
       "body": ""
     },
@@ -238,7 +238,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "edbbe397-4ca0-4ade-92c6-5458f531701a"
+        "x-request-id": "1a1fe91b-ca20-4773-b044-fc8fbc06a931"
       },
       "body": ""
     },
@@ -257,7 +257,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "570dbf0c-d35f-4984-9f0f-79adc88cd66a"
+        "x-request-id": "9448a374-124b-4940-a9b0-5ae7aa22e0cc"
       },
       "body": ""
     },
@@ -276,7 +276,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6dfdec56-cb43-464c-bccc-1413e1c4f34e"
+        "x-request-id": "77447639-24f8-42cb-bbc1-62276948a211"
       },
       "body": ""
     },
@@ -295,7 +295,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6c78fbf2-fa30-4b38-a919-17ec4ba1aa0e"
+        "x-request-id": "9af31ae0-c5db-4a45-98e0-1de9c2d00671"
       },
       "body": ""
     },
@@ -315,9 +315,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "022635ab-b7c9-4712-ad46-558147879374"
+        "x-request-id": "3f9dfcb9-1e11-4f6f-85e1-5af978e60b20"
       },
-      "body": "[{\"id\":\"f2239d3a-8ca1-5e17-92ed-9c1c379268f8\",\"name\":\"cross-org\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":5,\"owner\":0,\"group\":\"g\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:13Z\",\"updated_at\":\"2026-01-01T01:00:13Z\"},{\"id\":\"cf93d692-4214-52f6-b902-228015e9f9b0\",\"name\":\"foreign-parent\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":1,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:31Z\",\"updated_at\":\"2026-01-01T00:00:31Z\"},{\"id\":\"076acab1-f2af-5186-a33c-c2b8837e88b0\",\"name\":\"no-sources\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":\"x/y\",\"owner\":\"ignored\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:12Z\",\"updated_at\":\"2026-01-01T01:00:12Z\"},{\"id\":\"ce653150-d53d-53a4-9403-df2f3d8c5957\",\"name\":\"child1\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":\"r1\",\"owner\":\"o1\"},\"is_active\":true,\"parent_id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:02Z\",\"updated_at\":\"2026-01-01T01:00:02Z\"},{\"id\":\"fce094b3-f244-5782-92ba-ba08f405eaf7\",\"name\":\"child3\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":\"a/b\",\"owner\":\"o\"},\"is_active\":true,\"parent_id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:04Z\",\"updated_at\":\"2026-01-01T01:00:04Z\"},{\"id\":\"a8050a0b-c46d-5619-b923-83c588ae682e\",\"name\":\"child4\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":\"\",\"project_id\":null},\"is_active\":false,\"parent_id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:05Z\",\"updated_at\":\"2026-01-01T01:00:05Z\"},{\"id\":\"c3289917-9e62-5915-bbbf-7c66c03d71dd\",\"name\":\"child5\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":0,\"project_id\":7,\"group\":1.5,\"owner\":\"\"},\"is_active\":true,\"parent_id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:06Z\",\"updated_at\":\"2026-01-01T01:00:06Z\"},{\"id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"name\":\"legacy\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"grp\",\"repo\":\"own\"},\"is_active\":true,\"parent_id\":null,\"children_count\":5,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:01Z\",\"updated_at\":\"2026-01-01T01:00:01Z\"},{\"id\":\"af4a9cd2-d154-5fe1-9204-81813c6a7975\",\"name\":\"same-name\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:41Z\",\"updated_at\":\"2026-01-01T00:00:41Z\"},{\"id\":\"96227c85-f8b5-5c89-a1f8-4a531379a183\",\"name\":\"dict-targets\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"z\",\"y\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":\"2026-02-02T02:02:02Z\",\"last_sync_success\":false,\"last_sync_error\":\"boom\",\"created_at\":\"2026-01-01T00:00:10Z\",\"updated_at\":\"2026-01-01T01:00:10Z\"},{\"id\":\"29d15a4a-d2cb-53c9-a375-192fc5e8de59\",\"name\":\"inactive\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"repo\":\"lonely\"},\"is_active\":false,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:11Z\",\"updated_at\":\"2026-01-01T01:00:11Z\"},{\"id\":\"bb625b32-dfb8-520b-b175-9bfe6b1b78fb\",\"name\":\"jobs-bad-list\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:14Z\",\"updated_at\":\"2026-01-01T01:00:14Z\"},{\"id\":\"99016da2-8629-535d-9348-9f37927389e8\",\"name\":\"jobs-inf\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:15Z\",\"updated_at\":\"2026-01-01T01:00:15Z\"},{\"id\":\"7bc98cc1-086c-5d60-9c1f-74955aeb125e\",\"name\":\"weird\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"a\",\"b\",\"c\"],\"sync_options\":{\"k\":3.5e-6,\"x\":\"y\",\"p\":\"q\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:09Z\",\"updated_at\":\"2026-01-01T01:00:09Z\"}]"
+      "body": "[{\"id\":\"076acab1-f2af-5186-a33c-c2b8837e88b0\",\"name\":\"no-sources\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":\"x/y\",\"owner\":\"ignored\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:12Z\",\"updated_at\":\"2026-01-01T01:00:12Z\"},{\"id\":\"f2239d3a-8ca1-5e17-92ed-9c1c379268f8\",\"name\":\"cross-org\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":5,\"owner\":0,\"group\":\"g\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:13Z\",\"updated_at\":\"2026-01-01T01:00:13Z\"},{\"id\":\"cf93d692-4214-52f6-b902-228015e9f9b0\",\"name\":\"foreign-parent\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":1,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:31Z\",\"updated_at\":\"2026-01-01T00:00:31Z\"},{\"id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"name\":\"legacy\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"grp\",\"repo\":\"own\"},\"is_active\":true,\"parent_id\":null,\"children_count\":5,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:01Z\",\"updated_at\":\"2026-01-01T01:00:01Z\"},{\"id\":\"ce653150-d53d-53a4-9403-df2f3d8c5957\",\"name\":\"child1\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":\"r1\",\"owner\":\"o1\"},\"is_active\":true,\"parent_id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:02Z\",\"updated_at\":\"2026-01-01T01:00:02Z\"},{\"id\":\"fce094b3-f244-5782-92ba-ba08f405eaf7\",\"name\":\"child3\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":\"a/b\",\"owner\":\"o\"},\"is_active\":true,\"parent_id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:04Z\",\"updated_at\":\"2026-01-01T01:00:04Z\"},{\"id\":\"a8050a0b-c46d-5619-b923-83c588ae682e\",\"name\":\"child4\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":\"\",\"project_id\":null},\"is_active\":false,\"parent_id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:05Z\",\"updated_at\":\"2026-01-01T01:00:05Z\"},{\"id\":\"c3289917-9e62-5915-bbbf-7c66c03d71dd\",\"name\":\"child5\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"repo\":0,\"project_id\":7,\"group\":1.5,\"owner\":\"\"},\"is_active\":true,\"parent_id\":\"4e3bbac8-22b8-57a6-9b5d-d430425833ae\",\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:06Z\",\"updated_at\":\"2026-01-01T01:00:06Z\"},{\"id\":\"af4a9cd2-d154-5fe1-9204-81813c6a7975\",\"name\":\"same-name\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:41Z\",\"updated_at\":\"2026-01-01T00:00:41Z\"},{\"id\":\"96227c85-f8b5-5c89-a1f8-4a531379a183\",\"name\":\"dict-targets\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"z\",\"y\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":\"2026-02-02T02:02:02Z\",\"last_sync_success\":false,\"last_sync_error\":\"boom\",\"created_at\":\"2026-01-01T00:00:10Z\",\"updated_at\":\"2026-01-01T01:00:10Z\"},{\"id\":\"29d15a4a-d2cb-53c9-a375-192fc5e8de59\",\"name\":\"inactive\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"repo\":\"lonely\"},\"is_active\":false,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:11Z\",\"updated_at\":\"2026-01-01T01:00:11Z\"},{\"id\":\"bb625b32-dfb8-520b-b175-9bfe6b1b78fb\",\"name\":\"jobs-bad-list\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:14Z\",\"updated_at\":\"2026-01-01T01:00:14Z\"},{\"id\":\"99016da2-8629-535d-9348-9f37927389e8\",\"name\":\"jobs-inf\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:15Z\",\"updated_at\":\"2026-01-01T01:00:15Z\"},{\"id\":\"7bc98cc1-086c-5d60-9c1f-74955aeb125e\",\"name\":\"weird\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"a\",\"b\",\"c\"],\"sync_options\":{\"k\":3.5e-6,\"x\":\"y\",\"p\":\"q\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-01-01T00:00:09Z\",\"updated_at\":\"2026-01-01T01:00:09Z\"}]"
     }
   ],
   "rows": {

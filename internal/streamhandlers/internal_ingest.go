@@ -61,14 +61,14 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 		for _, item := range envelope.Items {
 			author, ok := itemTime(item, "author_when")
 			if !ok || stringValue(item, "hash") == "" || stringValue(item, "message") == "" || stringValue(item, "author_name") == "" || stringValue(item, "author_email") == "" {
-				return &streamrunner.PermanentError{Reason: "invalid_commit"}
+				return abortUnsent(batch, &streamrunner.PermanentError{Reason: "invalid_commit"})
 			}
 			committer, _ := itemTime(item, "committer_when")
 			if committer.IsZero() {
 				committer = author
 			}
 			if err := batch.Append(envelope.OrgID, repoID, stringValue(item, "hash"), nullable(item, "message"), nullable(item, "author_name"), nullable(item, "author_email"), author, nullable(item, "committer_name"), nullable(item, "committer_email"), committer, uint32(number(item, "parents", 1)), now); err != nil {
-				return fmt.Errorf("append commit: %w", err)
+				return abortUnsent(batch, fmt.Errorf("append commit: %w", err))
 			}
 		}
 		return sendBatch(batch)
@@ -131,7 +131,7 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 		}
 		for _, review := range reviews {
 			if err := reviewBatch.Append(envelope.OrgID, repoID, review.number, review.reviewID, review.reviewer, review.state, review.submittedAt, now); err != nil {
-				return fmt.Errorf("append pull request review: %w", err)
+				return abortUnsent(reviewBatch, fmt.Errorf("append pull request review: %w", err))
 			}
 		}
 		return sendBatch(reviewBatch)
@@ -244,7 +244,7 @@ func (h *InternalIngestHandler) persistIncidents(ctx context.Context, orgID, rep
 		return fmt.Errorf("prepare operational service: %w", err)
 	}
 	if err := serviceBatch.Append(serviceValues...); err != nil {
-		return fmt.Errorf("append operational service: %w", err)
+		return abortUnsent(serviceBatch, fmt.Errorf("append operational service: %w", err))
 	}
 	if err := sendBatch(serviceBatch); err != nil {
 		return err
@@ -279,7 +279,7 @@ func (h *InternalIngestHandler) persistIncidents(ctx context.Context, orgID, rep
 		return fmt.Errorf("prepare operational service repository mapping: %w", err)
 	}
 	if err := mappingBatch.Append(mappingValues...); err != nil {
-		return fmt.Errorf("append operational service repository mapping: %w", err)
+		return abortUnsent(mappingBatch, fmt.Errorf("append operational service repository mapping: %w", err))
 	}
 	if err := sendBatch(mappingBatch); err != nil {
 		return err
@@ -303,10 +303,10 @@ func (h *InternalIngestHandler) persistIncidents(ctx context.Context, orgID, rep
 			{"resolved_at", nullableTimePointer(source.resolved)}, {"is_deleted", false}, {"deleted_at", nil},
 		})
 		if orderingErr != nil {
-			return &streamrunner.PermanentError{Reason: "invalid_incident_ordering"}
+			return abortUnsent(incidentBatch, &streamrunner.PermanentError{Reason: "invalid_incident_ordering"})
 		}
 		if err := incidentBatch.Append(incidentValues...); err != nil {
-			return fmt.Errorf("append operational incident: %w", err)
+			return abortUnsent(incidentBatch, fmt.Errorf("append operational incident: %w", err))
 		}
 	}
 	return sendBatch(incidentBatch)
@@ -343,9 +343,18 @@ func internalReleaseRef(item map[string]any) (string, float64) {
 
 func sendBatch(batch driver.Batch) error {
 	if err := batch.Send(); err != nil {
+		_ = batch.Abort()
 		return fmt.Errorf("persist ingest: %w", err)
 	}
 	return nil
+}
+
+// abortUnsent releases a batch that will not be sent and returns err: an opened batch holds
+// a ClickHouse connection until it is sent or aborted, so a refusal or append failure that
+// left it open would exhaust the shared pool.
+func abortUnsent(batch driver.Batch, err error) error {
+	_ = batch.Abort()
+	return err
 }
 func stringValue(item map[string]any, key string) string {
 	value, _ := item[key].(string)
@@ -527,7 +536,7 @@ func appendAndSend(ctx context.Context, conn productClickHouse, insert, noun str
 	}
 	for _, row := range rows {
 		if err := batch.Append(row.Values...); err != nil {
-			return fmt.Errorf("append %s: %w", noun, err)
+			return abortUnsent(batch, fmt.Errorf("append %s: %w", noun, err))
 		}
 	}
 	return sendBatch(batch)

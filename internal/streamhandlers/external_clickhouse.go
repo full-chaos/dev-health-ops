@@ -127,6 +127,7 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 			}
 		}
 		if err := batch.Send(); err != nil {
+			_ = batch.Abort()
 			return fmt.Errorf("persist external %s: %w", kind, err)
 		}
 		scope.RecordKinds = append(scope.RecordKinds, kind)

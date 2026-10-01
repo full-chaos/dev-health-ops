@@ -294,7 +294,8 @@ func runSpendVenue(t *testing.T, zone, mode, digest string) {
 	base := spendBase
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, JWTKey: jwtKey, PythonEnv: pythonEnv,
+		Golden: golden,
+		Root:   root, JWTKey: jwtKey, PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {
 				t.Helper()

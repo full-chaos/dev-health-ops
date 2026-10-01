@@ -202,6 +202,7 @@ func TestSetUserPasswordRateLimitWindowDoesNotRollOverEarly(t *testing.T) {
 	targetID := uuid.New()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		GoOnly: true,
 		Root:   root,
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {

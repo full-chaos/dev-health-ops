@@ -545,7 +545,8 @@ func TestVenueOracleCredentialConnectionTest(t *testing.T) {
 	rows := probeSeedRows(pemKey)
 	pythonRoot := golden.PythonRoot(t, venueRoot())
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: pythonRoot, JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden,
+		Root:   pythonRoot, JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey,
 			"VENUE_PROVIDER_STUB_PORT=" + stub.port(),

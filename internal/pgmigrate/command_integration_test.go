@@ -58,7 +58,10 @@ func TestCommandEndToEnd(t *testing.T) {
 		var out map[string]any
 		source := stdout.Bytes()
 		if code != cli.ExitOK {
-			source = stderr.Bytes()
+			// stderr is log lines (the final "migrate outcome" line among them) and then the
+			// error document: the error is the last line.
+			lines := bytes.Split(bytes.TrimRight(stderr.Bytes(), "\n"), []byte("\n"))
+			source = lines[len(lines)-1]
 		}
 		if err := json.Unmarshal(source, &out); err != nil {
 			t.Fatalf("%s: exit %d, output %q is not JSON: %v", name, code, source, err)

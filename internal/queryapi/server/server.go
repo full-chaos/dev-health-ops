@@ -85,6 +85,18 @@ func newListenerServers(publicAddr, internalAddr string, publicBase, internalBas
 	return public, internal
 }
 
+// newMCPListenerServer is the MCP caller-class listener's server
+// (CHAOS-7085). internalidentity.MCP marks the request as arriving there;
+// internalidentity.Internal is NOT applied, so no internal-listener route
+// could honour the identity headers even if one were mounted on base.
+func newMCPListenerServer(mcpAddr string, base http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              mcpAddr,
+		Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.MCP(base)),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+}
+
 // readyzTimeout bounds every dependency check readyzHandler runs. An
 // unbounded readiness probe hangs whatever polls it (an orchestrator, a
 // rollout gate, a load balancer health check) for as long as the
@@ -212,6 +224,12 @@ type Plane struct {
 	// behaviourally identical to Handler; the public listener never sees
 	// this value.
 	InternalHandler http.Handler
+	// MCPHandler serves the MCP caller-class listener ONLY (CHAOS-7085,
+	// QUERY_API_MCP_ADDR): POST /query of that class and nothing else -- no
+	// fallthrough to Handler, so no /registry, /buildinfo, /metrics or REST
+	// route answers there. Neither Handler nor InternalHandler can reach it.
+	// When /query is not configured it answers 404 to everything.
+	MCPHandler http.Handler
 	// Ready is nil when /query is not configured (nothing to check, see
 	// ReadinessCheck) and otherwise the live dependency check.
 	Ready func(context.Context) error
@@ -220,6 +238,57 @@ type Plane struct {
 	Probes []ReadinessProbe
 	// Close releases every route's dependencies, last opened first.
 	Close func()
+}
+
+// mountQueryRouteSets mounts the configured /query family on the three
+// route sets: the public set (mux, also reached by the internal listener
+// through its fallthrough), the internal-only set (internalMux) and the MCP
+// caller-class set (mcpMux, CHAOS-7085). One function, called by Build and
+// by the listener tests, so the test's route sets are Build's route sets.
+func mountQueryRouteSets(getenv getenvFunc, mux, internalMux, mcpMux *http.ServeMux, handlers queryRouteHandlers, edge graphQLEdgeDeps) {
+	// Wrapped, not raw. The provenance headers are what let a proof
+	// receipt be bound to the process that actually served the
+	// request, and until CHAOS-5479 only /query/proof carried them --
+	// so the Python edge's pass-through forwarded a header the normal
+	// route never set, and every canary/primary measurement was
+	// unbindable. A prover cannot certify what it cannot bind, so it
+	// downgraded all of them: the gate was correct and useless.
+	//
+	// The same wrapper as the proof route, deliberately: one
+	// implementation, so the two routes cannot drift into disagreeing
+	// about what they claim.
+	mountQueryRoute(mux, handlers.Query)
+	// /graphql, the product path, on the public set only (the internal
+	// listener reaches it through its fallthrough and refuses its own
+	// carriers there). Never on mcpMux: the MCP caller class has one route.
+	mountGraphQLRoute(mux, handlers.Query, edge)
+	// GET /registry: what THIS process registers, and the schema digest
+	// it computed. Mounted with /query, not beside /healthz, on purpose
+	// -- it describes /query's registration set, so an unconfigured
+	// environment where /query never mounted must 404 here too rather
+	// than answer for a route that does not exist. `dev-hops go-api
+	// routing enable` treats that 404 as a refusal, which is correct:
+	// there is nothing to enable into. See registry_route.go.
+	mux.HandleFunc("/registry", handlers.Registry)
+	// GET /buildinfo: which BUILD this process is. Separate from
+	// /registry on purpose (team-lead ruling R51, 2026-09-09):
+	// /registry's own doc comment states its body is exactly the
+	// schema digest and the operation map and is "not an invitation
+	// to add build paths, env, or pool state later", and that
+	// restriction is worth keeping. This route answers the different
+	// question CHAOS-5425 needs -- a proof receipt names the build
+	// that served it, and until now the only available answer was an
+	// operator-typed sha nothing verified. See buildinfo_route.go.
+	mux.HandleFunc("/buildinfo", handlers.BuildInfo)
+	mountProofRoute(getenv, mux, handlers.Proof)
+	// CHAOS-7096: mounted on internalMux ONLY -- never on mux, which the
+	// public listener is built from (CHAOS-7097's Listeners split).
+	// A test proves the public route
+	// set has no /query/proof-write.
+	mountProofWriteRoute(getenv, internalMux, handlers.ProofWrite)
+	// CHAOS-7085: on mcpMux ONLY. A test proves neither the public nor
+	// the internal route set reaches the MCP class.
+	mcpMux.Handle("/query", handlers.MCP)
 }
 
 // Build mounts the query plane. Every setting it, and every route builder, reads
@@ -273,6 +342,10 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// ("/" -> handler, registered at the very end of Build once handler --
 	// mux's final, wrapped form -- exists).
 	internalMux := http.NewServeMux()
+	// mcpMux (CHAOS-7085) is the MCP listener's whole route set: /query of
+	// the MCP caller class, mounted below when /query is configured, and
+	// nothing else. It never falls through to mux or internalMux.
+	mcpMux := http.NewServeMux()
 
 	// CHAOS-4367 Wave 1 / CHAOS-4368 Wave 2 / CHAOS-4369 Wave 3: mount the
 	// real featureFlags, reviewEdges, and cognitiveLoad routes when their
@@ -294,54 +367,18 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 			return fail(buildErr)
 		}
 		cleanups = append(cleanups, cleanup)
-		// Wrapped, not raw. The provenance headers are what let a proof
-		// receipt be bound to the process that actually served the
-		// request, and until CHAOS-5479 only /query/proof carried them --
-		// so the Python edge's pass-through forwarded a header the normal
-		// route never set, and every canary/primary measurement was
-		// unbindable. A prover cannot certify what it cannot bind, so it
-		// downgraded all of them: the gate was correct and useless.
-		//
-		// The same wrapper as the proof route, deliberately: one
-		// implementation, so the two routes cannot drift into disagreeing
-		// about what they claim.
-		mountQueryRoute(mux, handlers.Query)
 		// /graphql is the product path over the same handler (CHAOS-6263):
 		// see graphql_edge_route.go for what it adds and why.
 		edgeAuth, _, edgeErr := buildQueryEdgeAuthenticatorFromEnv(getenv, handlers.RegistryPool)
 		if edgeErr != nil {
 			return fail(edgeErr)
 		}
-		mountGraphQLRoute(mux, handlers.Query, graphQLEdgeDeps{
+		mountQueryRouteSets(getenv, mux, internalMux, mcpMux, handlers, graphQLEdgeDeps{
 			auth:        edgeAuth,
 			corsOrigins: corsAllowedOrigins(lookup),
 			maxBytes:    graphQLMaxQueryBytes(getenv),
 			logger:      slog.Default(),
 		})
-		// GET /registry: what THIS process registers, and the schema digest
-		// it computed. Mounted with /query, not beside /healthz, on purpose
-		// -- it describes /query's registration set, so an unconfigured
-		// environment where /query never mounted must 404 here too rather
-		// than answer for a route that does not exist. `dev-hops go-api
-		// routing enable` treats that 404 as a refusal, which is correct:
-		// there is nothing to enable into. See registry_route.go.
-		mux.HandleFunc("/registry", handlers.Registry)
-		// GET /buildinfo: which BUILD this process is. Separate from
-		// /registry on purpose (team-lead ruling R51, 2026-09-09):
-		// /registry's own doc comment states its body is exactly the
-		// schema digest and the operation map and is "not an invitation
-		// to add build paths, env, or pool state later", and that
-		// restriction is worth keeping. This route answers the different
-		// question CHAOS-5425 needs -- a proof receipt names the build
-		// that served it, and until now the only available answer was an
-		// operator-typed sha nothing verified. See buildinfo_route.go.
-		mux.HandleFunc("/buildinfo", handlers.BuildInfo)
-		mountProofRoute(getenv, mux, handlers.Proof)
-		// CHAOS-7096: mounted on internalMux ONLY -- never on mux, which the
-		// public listener is built from (CHAOS-7097's Listeners split).
-		// A test proves the public route
-		// set has no /query/proof-write.
-		mountProofWriteRoute(getenv, internalMux, handlers.ProofWrite)
 		ready = readyFn
 		probes = handlers.Probes
 		registryPool = handlers.RegistryPool
@@ -828,5 +865,5 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// reachable through the public listener, which is built from handler
 	// and never sees internalMux at all.
 	internalMux.Handle("/", handler)
-	return &Plane{Handler: handler, InternalHandler: internalMux, Ready: ready, Probes: probes, Close: closeAll}, nil
+	return &Plane{Handler: handler, InternalHandler: internalMux, MCPHandler: mcpMux, Ready: ready, Probes: probes, Close: closeAll}, nil
 }

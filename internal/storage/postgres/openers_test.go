@@ -60,6 +60,7 @@ var openers = map[string]struct {
 	"internal/goapicli/routing/main.go":                    {kindBoundary, "goapi routing: connectPostgres, the helper of status, enable, disable, repoint and carry"},
 	"internal/maintenancecli/maintenance.go":               {kindBoundary, "maintenance"},
 	"internal/pgmigrate/command.go":                        {kindBoundary, "migrate postgres upgrade, status, current"},
+	"internal/pgmigrate/downgrade.go":                      {kindBoundary, "migrate postgres downgrade: the connection is opened with pgx.Connect and every error goes through Boundary(dsn).Redact"},
 	"internal/pgmigrate/preflight.go":                      {kindBoundary, "migrate postgres preflight: the connection is opened with pgx.Connect and every error goes through Boundary(dsn).Redact"},
 	"internal/synccli/jira_stored_credential.go":           {kindBoundary, "sync teams --provider jira: resolves the org's stored jira credential from Postgres, the pool and the error redactor"},
 	"internal/goapicli/restprove/main.go":                  {kindGeneric, "a failed connect is the fixed message"},
@@ -76,6 +77,7 @@ var openers = map[string]struct {
 	"internal/testsupport/containers/remote.go":            {kindTest, "test containers"},
 	"internal/testsupport/pgschema/pgschema.go":            {kindTest, "test schema helper"},
 	"internal/testsupport/venueoracle/venueoracle.go":      {kindTest, "venue oracle harness"},
+	"internal/testsupport/venueoracle/gosubstrate.go":      {kindTest, "venue oracle harness: the Go-built schema of a frozen venue"},
 	"tests/compatibility/river/go/probe.go":                {kindTest, "compatibility probe"},
 	"tests/compatibility/river/nminus1/probe.go":           {kindTest, "compatibility probe"},
 }

@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -660,12 +659,10 @@ func (o Operator) DeleteLLMSettings(ctx context.Context, orgID string, config LL
 	h := o.llmHandlers(config)
 	refusal, err := h.byoLLMAccess(ctx, orgID, true)
 	if refusal == nil && err == nil {
-		var tag pgconn.CommandTag
-		tag, err = h.store.Pool.Exec(ctx,
-			`DELETE FROM settings WHERE org_id = $1 AND category = $2 AND key = ANY($3)`,
-			orgID, llmCategory, llmSettingKeys)
+		var credentials int
+		credentials, err = h.deleteLLMSettingsRows(ctx, orgID)
 		if err == nil {
-			if tag.RowsAffected() == 0 {
+			if credentials == 0 {
 				return refuse("LLM settings not found")
 			}
 			return nil

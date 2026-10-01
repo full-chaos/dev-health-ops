@@ -309,7 +309,7 @@ func TestSectionQueries_PinnedShape(t *testing.T) {
 			{"filters", filterChangesSQL(org), []string{"name = 'filter_changed'", "GROUP BY view, filter_key", "ORDER BY changes DESC", "avgIf(JSONExtractInt(payload_json, 'valueCount'), JSONType(payload_json, 'valueCount') != 'Null')"}},
 			{"charts", chartInteractionsSQL(org), []string{"name = 'chart_interacted'", "GROUP BY chart, action, surface", "ORDER BY interactions DESC"}},
 			{"errors", clientErrorsSQL(org), []string{"name = 'client_error'", "GROUP BY route_pattern, boundary, error_class", "ORDER BY errors DESC"}},
-			{"summary", sessionSummarySQL(org), []string{"name = 'session_ended'", "quantile(0.5)(", "quantile(0.75)(", "quantile(0.9)(", "quantile(0.95)(", "'pagesViewed'", "'interactions'"}},
+			{"summary", sessionSummarySQL(org), []string{"name = 'session_ended'", "quantileIf(0.5)(", "quantileIf(0.75)(", "quantileIf(0.9)(", "quantileIf(0.95)(", "JSONType(payload_json, 'durationMs') != 'Null'", "avgIf(JSONExtractInt(payload_json, 'pagesViewed'), JSONType(payload_json, 'pagesViewed') != 'Null')", "avgIf(JSONExtractInt(payload_json, 'interactions'), JSONType(payload_json, 'interactions') != 'Null')"}},
 		}
 		for _, c := range cases {
 			for _, w := range c.want {

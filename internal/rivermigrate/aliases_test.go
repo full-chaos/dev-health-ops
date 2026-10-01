@@ -44,8 +44,8 @@ func TestFlatAliasesAnswerWithoutADatabase(t *testing.T) {
 		t.Errorf("migrate heads %q differs from migrate postgres heads %q", heads.String(), postgresHeads.String())
 	}
 	var out strings.Builder
-	if code := run([]string{"migrate", "downgrade", "-1"}, &out); code != cli.ExitRefused {
-		t.Errorf("migrate downgrade -1: exit %d, want the refusal (3)", code)
+	if code := run([]string{"migrate", "downgrade", "base"}, &out); code != cli.ExitRefused {
+		t.Errorf("migrate downgrade base: exit %d, want the refusal (3)", code)
 	}
 	out.Reset()
 	if code := run([]string{"migrate", "status"}, &out); code != cli.ExitFailure || out.Len() != 0 {

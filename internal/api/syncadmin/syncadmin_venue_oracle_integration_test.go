@@ -94,6 +94,7 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 	t.Setenv("SYNC_WATERMARK_OVERLAP", "3600")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   golden.PythonRoot(t, root),
 		JWTKey: jwtKey,
 		PythonEnv: []string{"HIDE_MIGRATED_CHILD_CONFIGS= On ", "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS=5", "SYNC_WATERMARK_OVERLAP=3600",

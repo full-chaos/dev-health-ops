@@ -218,6 +218,12 @@ func TestBaselineIsTheExecutedPythonChain(t *testing.T) {
 		t.Fatalf("a refused upgrade left %d objects, want the 1 it found", count)
 	}
 
+	// The command reads the real chain, so the database it reports as at_head
+	// must have applied every chain file, not only the probe above.
+	if _, err := chmigrate.Upgrade(ctx, resumeStore, checkedIn, chain); err != nil {
+		t.Fatalf("apply the real chain to the resumed database: %v", err)
+	}
+
 	// `status --check`, the wait-for-migrations probe, through the command:
 	// exit 0 only at the head, 1 for anything else, the JSON printed either
 	// way, and nothing written.

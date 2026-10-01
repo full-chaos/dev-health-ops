@@ -88,12 +88,17 @@ func TestSignerMatchesLiveAuthService(t *testing.T) {
 			map[string]any{"user_id": "u-3", "email": "c@d.org", "org_id": "o-2", "role": "admin", "username": "", "full_name": "", "token_version": 2}},
 		{AccessClaims{UserID: "u-4", Email: "tab\t@x.com", OrgID: "o-3", Role: "viewer", Username: strPtr("\x7f\x00"), TokenVersion: -1},
 			map[string]any{"user_id": "u-4", "email": "tab\t@x.com", "org_id": "o-3", "role": "viewer", "username": "\x7f\x00", "token_version": -1}},
+		{AccessClaims{UserID: "u-5", Email: "e@f.io", OrgID: "o-4", Role: "admin", FullName: strPtr("F"), ImpersonatingUserID: strPtr("super-1")},
+			map[string]any{"user_id": "u-5", "email": "e@f.io", "org_id": "o-4", "role": "admin", "full_name": "F", "impersonating_user_id": "super-1"}},
+		{AccessClaims{UserID: "u-6", Email: "g@h.io", Role: "member", ImpersonatingUserID: strPtr("")},
+			map[string]any{"user_id": "u-6", "email": "g@h.io", "role": "member", "impersonating_user_id": ""}},
 	}
 	var cases []signerCase
 	var want []string
 	for index, c := range accessCases {
 		jti := []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222",
-			"33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"}[index]
+			"33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444",
+			"88888888-8888-4888-8888-888888888888", "99999999-9999-4999-8999-999999999999"}[index]
 		token, err := signer.Access(c.claims, now, jti)
 		if err != nil {
 			t.Fatal(err)

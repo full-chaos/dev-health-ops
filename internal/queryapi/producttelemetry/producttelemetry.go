@@ -149,12 +149,12 @@ ORDER BY errors DESC`
 
 func sessionSummarySQL(org bool) string {
 	return `SELECT
-    quantile(0.5)(JSONExtractInt(payload_json, 'durationMs')) AS p50_duration_ms,
-    quantile(0.75)(JSONExtractInt(payload_json, 'durationMs')) AS p75_duration_ms,
-    quantile(0.9)(JSONExtractInt(payload_json, 'durationMs')) AS p90_duration_ms,
-    quantile(0.95)(JSONExtractInt(payload_json, 'durationMs')) AS p95_duration_ms,
-    avg(JSONExtractInt(payload_json, 'pagesViewed')) AS avg_pages_viewed,
-    avg(JSONExtractInt(payload_json, 'interactions')) AS avg_interactions
+    quantileIf(0.5)(JSONExtractInt(payload_json, 'durationMs'), JSONType(payload_json, 'durationMs') != 'Null') AS p50_duration_ms,
+    quantileIf(0.75)(JSONExtractInt(payload_json, 'durationMs'), JSONType(payload_json, 'durationMs') != 'Null') AS p75_duration_ms,
+    quantileIf(0.9)(JSONExtractInt(payload_json, 'durationMs'), JSONType(payload_json, 'durationMs') != 'Null') AS p90_duration_ms,
+    quantileIf(0.95)(JSONExtractInt(payload_json, 'durationMs'), JSONType(payload_json, 'durationMs') != 'Null') AS p95_duration_ms,
+    avgIf(JSONExtractInt(payload_json, 'pagesViewed'), JSONType(payload_json, 'pagesViewed') != 'Null') AS avg_pages_viewed,
+    avgIf(JSONExtractInt(payload_json, 'interactions'), JSONType(payload_json, 'interactions') != 'Null') AS avg_interactions
 FROM product_telemetry_events
 ` + scoped(org, "session_ended")
 }

@@ -97,6 +97,8 @@ func TestEverySettingTheQueryRoutesReadIsDeclared(t *testing.T) {
 			return "127.0.0.1:1", true
 		case "QUERY_API_INTERNAL_ADDR":
 			return "127.0.0.1:2", true
+		case "QUERY_API_MCP_ADDR":
+			return "127.0.0.1:3", true
 		case "CLICKHOUSE_URI":
 			return "clickhouse://ch:ch@localhost:9000/default", true
 		case "RIVER_DATABASE_SCHEMA":

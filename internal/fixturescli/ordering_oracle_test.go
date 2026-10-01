@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // The Go stamp (ordering.go) is a second implementation of the Python producer's ordering derivation
@@ -96,14 +97,28 @@ func leafText(column FrozenColumn, cell any) oracleLeaf {
 	return oracleLeaf{T: column.Type, V: fmt.Sprint(cell)}
 }
 
-func TestOrderingStampMatchesTheLivePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+// orderingPythonBuild is the build whose ordering stamper answered the frozen
+// cases: a build that still carried the Python fixtures verb.
+const orderingPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// TestOrderingStampMatchesThePythonProducer compares stampOrdering with the Python
+// producer's ordering stamp for every operational row of the frozen live-e2e world and
+// its variants. The producer's stamps were executed once on orderingPythonBuild and are
+// frozen in testdata/golden/ordering.json (the recipe regenerates them by execution);
+// the cases and the program are part of the golden's key.
+func TestOrderingStampMatchesThePythonProducer(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
 	}
-	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/ordering.json",
+		PythonBuild: orderingPythonBuild,
+		SHA256:      "ecc1bb65a05531bddab29ba3d41623fc086240d9dd0f7b42910c0fd7c43fc882",
+		Recipe: "git worktree add --detach $DIR " + orderingPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/fixturescli/ -test '^TestOrderingStampMatchesThePythonProducer$' -python-root $DIR",
+	})
+	pythonRoot := golden.PythonRoot(t, repoRoot)
 	set := generateOracleWorld(t)
 
 	var cases []oracleCase
@@ -140,22 +155,24 @@ func TestOrderingStampMatchesTheLivePythonProducer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "-c", orderingOracleProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_ENABLED=false")
-	command.Stdin = bytes.NewReader(input)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("live Python producer: %v", pyoracle.RunError(python, err, stderr.Bytes()))
-	}
+	request := venueoracle.ProgramRequest("ordering cases", orderingOracleProgram, input, map[string]string{"OTEL_ENABLED": "false"})
+	answers := golden.Produce(t, pythonRoot, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		python := pyoracle.Resolve(t, root)
+		command := exec.Command(python, "-c", orderingOracleProgram)
+		command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"),
+			"PYTHONDONTWRITEBYTECODE=1", "OTEL_ENABLED=false"}
+		command.Stdin = bytes.NewReader(input)
+		var stderr bytes.Buffer
+		command.Stderr = &stderr
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("live Python producer: %v", pyoracle.RunError(python, err, stderr.Bytes()))
+		}
+		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}
+	})
+	golden.Consumed(t, answers...)
 	var want map[string]oracleStamp
-	if err := json.Unmarshal(output, &want); err != nil {
+	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &want); err != nil {
 		t.Fatalf("decode the producer output: %v", err)
 	}
 	if len(want) != len(cases) {
@@ -171,12 +188,11 @@ func TestOrderingStampMatchesTheLivePythonProducer(t *testing.T) {
 		}
 	}
 	if mismatches > 0 {
-		t.Fatalf("%d of %d stamped rows differ from the live producer", mismatches, len(cases))
+		t.Fatalf("%d of %d stamped rows differ from the Python producer", mismatches, len(cases))
 	}
-	if err := os.WriteFile(filepath.Join(proofDir, "fixturescli-ordering-oracle"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("%d rows agree with the live Python producer (%s)", len(cases), strings.Join(sortedKeys(seen), ", "))
+	t.Logf("%d rows agree with the Python producer's frozen stamps (%s)", len(cases), strings.Join(sortedKeys(seen), ", "))
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 func sortedKeys(counts map[string]int) []string {

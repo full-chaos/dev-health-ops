@@ -757,3 +757,441 @@ def test_every_emitted_router_file_loads(
     routed = yaml.safe_load(capsys.readouterr().out)
     assert _route(routed, "/a-b/1_y") == "http://go-api:8000"
     assert _route(routed, "/c-d") == "http://query-api:8090"
+
+
+# ---- an allow-list entry that names its backend (`service: query-api`) ----
+# Prod changes the backend of /graphql INSIDE the Ingress object that holds the path: the
+# allow-list entry gets `service: query-api`. The router must send that path to query-api,
+# take it out of the Python rule, and keep refusing half a change.
+
+_GRAPHQL_PYTHON = {"path": "/graphql$", "pathType": "ImplementationSpecific"}
+_GRAPHQL_QUERY = {**_GRAPHQL_PYTHON, "service": "query-api"}
+_METRICS = {"path": "/metrics$", "pathType": "ImplementationSpecific"}
+
+
+def _named_backend_values(shared: list[dict], own: list[dict] | None = None) -> dict:
+    """VALUES with a shared allow-list and, when `own` is given, one host with its own list."""
+    doc = yaml.safe_load(yaml.safe_dump(VALUES))
+    hosts = [{"host": "api.example", "pythonAllowList": True}]
+    if own is not None:
+        hosts.append({"host": "in-cluster.example", "pythonAllowList": own})
+    doc["ops"] = {"ingress": {"pythonAllowList": shared, "hosts": hosts}}
+    return doc
+
+
+def _emit(gen: ModuleType, doc: dict) -> dict:
+    go_paths, query_paths = gen.paths_from_doc(doc)
+    return yaml.safe_load(
+        gen.emit_dynamic_config(
+            gen.combined_regex(go_paths),
+            gen.combined_regex(query_paths),
+            gen.python_allow_list_from_doc(doc),
+        )
+    )
+
+
+def test_an_entry_that_names_query_api_is_routed_to_query_api(
+    gen: ModuleType, tmp_path: Path
+) -> None:
+    doc = _named_backend_values([_GRAPHQL_QUERY], [_GRAPHQL_QUERY, _METRICS])
+    assert gen.paths_on_two_planes(doc) == []
+    assert gen.query_api_paths_that_differ_by_host(doc) == []
+    assert gen.paths_in_two_objects(doc) == []
+    assert _run(gen, tmp_path, doc) == 0
+    routed = _emit(gen, doc)
+    assert _route(routed, "/graphql") == "http://query-api:8090"
+    for lookalike in ("/graphqlx", "/graphql/", "/graphql/x"):
+        assert _route(routed, lookalike) == "http://go-api:8000", lookalike
+    assert "graphql" not in routed["http"]["routers"]["python-allowlist"]["rule"]
+
+
+def test_an_entry_with_service_api_or_no_key_stays_on_python(gen: ModuleType) -> None:
+    for entry in (_GRAPHQL_PYTHON, {**_GRAPHQL_PYTHON, "service": "api"}):
+        routed = _emit(gen, _named_backend_values([entry], [entry, _METRICS]))
+        assert _route(routed, "/graphql") == "http://api:8000", entry
+
+
+def test_the_named_backend_gives_the_router_of_a_query_api_paths_entry(
+    gen: ModuleType,
+) -> None:
+    """Both ways of sending /graphql to query-api give bigboy the same router, so a proof on
+    bigboy holds for either."""
+    by_entry = _named_backend_values([_GRAPHQL_QUERY])
+    by_table = _named_backend_values([])
+    by_table["ingress"]["queryApiPaths"].append(
+        {"path": "/graphql", "pathType": "Exact"}
+    )
+    assert _emit(gen, by_entry) == _emit(gen, by_table)
+
+
+@pytest.mark.parametrize(
+    ("shared", "own", "python_list", "go_list"),
+    [
+        (
+            [_GRAPHQL_QUERY],
+            [_GRAPHQL_PYTHON, _METRICS],
+            "ops.ingress.hosts[in-cluster.example].pythonAllowList",
+            "ops.ingress.pythonAllowList (service: query-api)",
+        ),
+        (
+            [_GRAPHQL_PYTHON],
+            [_GRAPHQL_QUERY, _METRICS],
+            "ops.ingress.pythonAllowList",
+            "ops.ingress.hosts[in-cluster.example].pythonAllowList (service: query-api)",
+        ),
+    ],
+)
+def test_half_a_backend_change_is_refused(
+    gen: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    shared: list[dict],
+    own: list[dict],
+    python_list: str,
+    go_list: str,
+) -> None:
+    """/graphql on query-api on one list and on Python on the other is one path on two
+    backends: prod would serve it differently per host, and bigboy would prove one of them."""
+    values = tmp_path / "values.prod.yaml"
+    values.write_text(yaml.safe_dump(_named_backend_values(shared, own)))
+    assert gen.main([str(values), "--format", "dynamic"]) == 4
+    captured = capsys.readouterr()
+    assert captured.out == "" and "REFUSED: one path, two backends" in captured.err
+    assert f"{python_list} entry {{path: /graphql$" in captured.err
+    assert f"and {go_list} entry /graphql$" in captured.err
+
+
+_SHARED_LIST = "ops.ingress.pythonAllowList"
+_OWN_LIST = "ops.ingress.hosts[in-cluster.example].pythonAllowList"
+
+
+@pytest.mark.parametrize(
+    ("shared", "own", "has", "lacks", "host"),
+    [
+        ([], [_GRAPHQL_QUERY, _METRICS], _OWN_LIST, _SHARED_LIST, "api.example"),
+        ([_GRAPHQL_QUERY], [_METRICS], _SHARED_LIST, _OWN_LIST, "in-cluster.example"),
+        ([_GRAPHQL_QUERY], [], _SHARED_LIST, _OWN_LIST, "in-cluster.example"),
+    ],
+)
+def test_a_named_backend_that_differs_by_host_is_refused(
+    gen: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    shared: list[dict],
+    own: list[dict],
+    has: str,
+    lacks: str,
+    host: str,
+) -> None:
+    """/graphql on query-api on one list and not named on the other is query-api on one prod
+    host and the Go api's default on another. This router has one host: whichever of the two
+    it emitted, it would prove a route that one prod host does not have."""
+    assert _run(gen, tmp_path, _named_backend_values(shared, own)) == 4
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "REFUSED: one path, a backend that differs by host" in captured.err
+    assert (
+        f"/graphql$ is sent to query-api by {has} and not by {lacks} (host {host})\n"
+        in captured.err
+    )
+
+
+_GO_DEFAULT = [{"path": "/", "pathType": "Prefix", "service": "go-api"}]
+_WEB_HOST = {
+    "host": "www.example",
+    "paths": [{"path": "/", "pathType": "Prefix", "service": "web"}],
+}
+
+
+def _hosts_values(shared: list[dict] | None, hosts: list[dict] | None) -> dict:
+    """VALUES with exactly this shared allow-list and these hosts (None leaves the key out)."""
+    doc = yaml.safe_load(yaml.safe_dump(VALUES))
+    ops_ingress: dict = {}
+    if shared is not None:
+        ops_ingress["pythonAllowList"] = shared
+    if hosts is not None:
+        ops_ingress["hosts"] = hosts
+    doc["ops"] = {"ingress": ops_ingress}
+    return doc
+
+
+def test_the_shipped_host_shape_is_accepted(gen: ModuleType, tmp_path: Path) -> None:
+    """The shape the deployment ships: a public api host on the shared list, a web host with
+    no allow-list, an in-cluster api host with its own list. The web host does not serve the
+    api, so it does not have to carry the entry."""
+    doc = _hosts_values(
+        [_GRAPHQL_QUERY],
+        [
+            {"host": "api.example", "pythonAllowList": True, "paths": _GO_DEFAULT},
+            _WEB_HOST,
+            {
+                "host": "in-cluster.example",
+                "pythonAllowList": [_GRAPHQL_QUERY, _METRICS],
+                "paths": _GO_DEFAULT,
+            },
+        ],
+    )
+    assert gen.query_api_paths_that_differ_by_host(doc) == []
+    assert _run(gen, tmp_path, doc) == 0
+    assert _route(_emit(gen, doc), "/graphql") == "http://query-api:8090"
+    # Two lists carry the entry and the router has it once: the same router as for the path
+    # in ingress.queryApiPaths.
+    by_table = _hosts_values([], [_WEB_HOST])
+    by_table["ingress"]["queryApiPaths"].append(
+        {"path": "/graphql", "pathType": "Exact"}
+    )
+    assert _emit(gen, doc) == _emit(gen, by_table)
+
+
+@pytest.mark.parametrize(
+    ("other_host", "services"),
+    [
+        (
+            {
+                "host": "python.example",
+                "paths": [{"path": "/graphql", "pathType": "Exact", "service": "api"}],
+            },
+            "api",
+        ),
+        (
+            {
+                "host": "python.example",
+                "paths": [{"path": "/", "pathType": "Prefix", "service": "api"}],
+            },
+            "api",
+        ),
+        (
+            {
+                "host": "python.example",
+                "paths": [
+                    {"path": "/", "pathType": "Prefix", "service": "web"},
+                    {"path": "/graphql", "pathType": "Exact", "service": "api"},
+                ],
+            },
+            "api, web",
+        ),
+        ({"host": "python.example"}, "none"),
+        (
+            {"host": "python.example", "pythonAllowList": False, "paths": _GO_DEFAULT},
+            "go-api",
+        ),
+    ],
+)
+def test_a_host_with_no_allow_list_that_is_not_a_web_host_is_refused(
+    gen: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    other_host: dict,
+    services: str,
+) -> None:
+    """A host that carries no allow-list answers /graphql from its own paths: from the Python
+    api, from its default, or from nothing. The chart renders it beside a host that sends
+    /graphql to query-api; this router has one host and could prove only one of the two."""
+    doc = _hosts_values(
+        [_GRAPHQL_QUERY],
+        [
+            {"host": "api.example", "pythonAllowList": True, "paths": _GO_DEFAULT},
+            other_host,
+        ],
+    )
+    assert _run(gen, tmp_path, doc) == 4
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "REFUSED: one path, a backend that differs by host" in captured.err
+    assert (
+        "/graphql$ is sent to query-api by ops.ingress.pythonAllowList, and host python.example"
+        f" has no allow-list: its own paths answer it (services: {services})\n"
+        in captured.err
+    )
+
+
+@pytest.mark.parametrize(
+    "own_path",
+    [
+        {"path": "/graphql", "pathType": "Exact", "service": "api"},
+        {"path": "/graph", "pathType": "Prefix", "service": "web"},
+        {"path": "/api", "pathType": "Prefix", "service": "api"},
+    ],
+)
+def test_a_host_that_carries_the_entry_has_no_path_of_its_own_beside_the_default(
+    gen: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture, own_path: dict
+) -> None:
+    """A path of the host's own beside `/` is a second rule on the host: the chart refuses
+    one that repeats the entry's path, and a prefix of it matches the same request. This
+    router reads neither, so it does not read such a host."""
+    doc = _hosts_values(
+        [_GRAPHQL_QUERY],
+        [
+            {"host": "api.example", "pythonAllowList": True, "paths": _GO_DEFAULT},
+            {
+                "host": "in-cluster.example",
+                "pythonAllowList": [_GRAPHQL_QUERY, _METRICS],
+                "paths": _GO_DEFAULT + [own_path],
+            },
+        ],
+    )
+    assert _run(gen, tmp_path, doc) == 4
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert (
+        f"/graphql$ is sent to query-api by {_SHARED_LIST}, {_OWN_LIST}, and host in-cluster.example"
+        f" has paths of its own beside `/`: {own_path['path']}\n" in captured.err
+    )
+
+
+def test_a_list_that_no_host_uses_is_not_read(gen: ModuleType, tmp_path: Path) -> None:
+    """The chart renders rules from the shared list only for a host that opts into it. With
+    no such host, the shared list is not a list a path can be missing from, and an entry on
+    it routes nothing."""
+    own_only = _hosts_values(
+        [],
+        [
+            {
+                "host": "api.example",
+                "pythonAllowList": [_GRAPHQL_QUERY],
+                "paths": _GO_DEFAULT,
+            }
+        ],
+    )
+    assert _run(gen, tmp_path, own_only) == 0
+    assert _route(_emit(gen, own_only), "/graphql") == "http://query-api:8090"
+    unused_shared = _hosts_values(
+        [_GRAPHQL_QUERY],
+        [{"host": "api.example", "pythonAllowList": [_METRICS], "paths": _GO_DEFAULT}],
+    )
+    assert _run(gen, tmp_path, unused_shared) == 0
+    assert _route(_emit(gen, unused_shared), "/graphql") == "http://go-api:8000"
+
+
+def test_values_that_list_no_host_read_the_shared_list(
+    gen: ModuleType, tmp_path: Path
+) -> None:
+    doc = _hosts_values([_GRAPHQL_QUERY], None)
+    assert _run(gen, tmp_path, doc) == 0
+    assert _route(_emit(gen, doc), "/graphql") == "http://query-api:8090"
+
+
+def test_every_host_that_lacks_the_entry_is_named(
+    gen: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    doc = _hosts_values(
+        [],
+        [
+            {"host": "a.example", "pythonAllowList": True},
+            {"host": "b.example", "pythonAllowList": True},
+            {"host": "in-cluster.example", "pythonAllowList": [_GRAPHQL_QUERY]},
+        ],
+    )
+    assert _run(gen, tmp_path, doc) == 4
+    err = capsys.readouterr().err
+    for host in ("a.example", "b.example"):
+        line = f"/graphql$ is sent to query-api by {_OWN_LIST} and not by {_SHARED_LIST} (host {host})\n"
+        assert err.count(line) == 1, host
+    assert "(host in-cluster.example)" not in err
+
+
+@pytest.mark.parametrize(
+    "table_entry",
+    [
+        ("queryApiPaths", {"path": "/graphql", "pathType": "Exact"}),
+        ("goApiPaths", {"path": "/graphql"}),
+        (
+            "queryApiPaths",
+            {"path": "/graph[^/]+", "pathType": "ImplementationSpecific"},
+        ),
+    ],
+)
+def test_a_named_backend_and_a_path_table_for_one_path_are_refused(
+    gen: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    table_entry: tuple[str, dict],
+) -> None:
+    """The allow-list is one Ingress object on prod and each path table is another; two live
+    objects for one host and path are denied by the ingress admission webhook."""
+    table, entry = table_entry
+    doc = _named_backend_values([_GRAPHQL_QUERY])
+    doc["ingress"][table].append(entry)
+    values = tmp_path / "values.prod.yaml"
+    values.write_text(yaml.safe_dump(doc))
+    assert gen.main([str(values), "--format", "dynamic"]) == 4
+    captured = capsys.readouterr()
+    assert (
+        captured.out == "" and "REFUSED: one path, two Ingress objects" in captured.err
+    )
+    assert "service: query-api} and ingress." + table in captured.err
+
+
+@pytest.mark.parametrize(
+    ("entry", "reason"),
+    [
+        (
+            {"path": "/graphql", "pathType": "Prefix", "service": "query-api"},
+            "is not an anchored entry",
+        ),
+        (
+            {"path": "/graphql", "pathType": "Exact", "service": "query-api"},
+            "is not an anchored entry",
+        ),
+        (
+            {
+                "path": "/graphql[^/]+",
+                "pathType": "ImplementationSpecific",
+                "service": "query-api",
+            },
+            "is not an anchored entry",
+        ),
+        (
+            {**_GRAPHQL_PYTHON, "service": "go-api"},
+            "routes to api (the Python api, the default) or to query-api",
+        ),
+        (
+            {**_GRAPHQL_PYTHON, "service": None},
+            "routes to api (the Python api, the default) or to query-api",
+        ),
+        (
+            {**_GRAPHQL_PYTHON, "service": ""},
+            "routes to api (the Python api, the default) or to query-api",
+        ),
+        # An Exact entry of any spelling is refused before its path is read.
+        *[
+            (
+                {"path": path, "pathType": "Exact", "service": "query-api"},
+                "is not an anchored entry",
+            )
+            for path in ("/", "", "/a/../graphql", "//graphql", "graphql")
+        ],
+        # The anchored spelling under another pathType is not an anchored entry either.
+        *[
+            (
+                {"path": "/graphql$", "pathType": path_type, "service": "query-api"},
+                "is not an anchored entry",
+            )
+            for path_type in ("Exact", "Prefix")
+        ],
+        # What the ops chart refuses to render and an anchored entry can still spell.
+        *[
+            (
+                {
+                    "path": path,
+                    "pathType": "ImplementationSpecific",
+                    "service": "query-api",
+                },
+                "has a `.` or `..` segment",
+            )
+            for path in ("/a/\\.\\./graphql$", "/\\./graphql$", "/graphql/\\.\\.$")
+        ],
+    ],
+)
+def test_a_named_backend_this_router_cannot_route_is_refused(
+    gen: ModuleType, tmp_path: Path, entry: dict, reason: str
+) -> None:
+    for doc in (
+        _named_backend_values([entry]),
+        _named_backend_values([], [entry]),
+    ):
+        values = tmp_path / "values.prod.yaml"
+        values.write_text(yaml.safe_dump(doc))
+        with pytest.raises(SystemExit) as refused:
+            gen.main([str(values), "--format", "dynamic"])
+        assert reason in str(refused.value), refused.value

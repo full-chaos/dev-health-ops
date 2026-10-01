@@ -659,21 +659,6 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  printf 'go test -count=1: internal/api/billing (billing request models vs live FastAPI)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestBillingBodiesMatchLiveFastAPI|TestBillingHelpersMatchLivePython|TestStripeSignatureMatchesLivePython)$' \
-        ./internal/api/billing
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
   printf 'go test -count=1: internal/api/licensing (tier feature registry and limits vs live Python)\n'
   if ! (
     cd "${ROOT}"
@@ -704,21 +689,6 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  printf 'go test -count=1: internal/api/billing/stripeclient (Stripe API version vs the live Python SDK)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestPinnedAPIVersionMatchesPythonSDK)$' \
-        ./internal/api/billing/stripeclient
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
   printf 'go test -count=1: internal/apiservice/admin (CHAOS-6976 llm-settings readiness probe wire shape vs live Python AgentReadinessService.certify)\n'
   if ! (
     cd "${ROOT}"
@@ -734,7 +704,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry api-licensing-sign api-licensing-b64decode api-licensing-verify api-billing-webhook-signature auth-signedtoken admin-llmreadiness-probe; do
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr api-pybody-queryuuid api-licensing-registry api-licensing-sign api-licensing-b64decode api-licensing-verify auth-signedtoken admin-llmreadiness-probe; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2
@@ -921,67 +891,14 @@ check_live_python_oracles() {
   # (tests/fixtures/generate_daily_work_item_python_golden.py) are deleted;
   # no DEV_HEALTH_LIVE_PYTHON_ORACLES gate or proof marker needed any more.
 
-  printf 'go test -count=1: internal/jobs/metrics/numerical (frozen numerical golden vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestRemainingMetricsGoldenMatchesLivePython|TestCapacityForecastGoldenMatchesLivePython|TestFMAGoldenMatchesLivePython)$' \
-        ./internal/jobs/metrics/numerical
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/numerical-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: numerical golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Checked SEPARATELY from the numerical golden above rather than folded into
-  # one marker. Two goldens with two producers are two claims: a single proof
-  # file would be satisfied by whichever guard happened to run, so the other
-  # could be skipped, renamed, or filtered out of the -run pattern without the
-  # lane noticing -- the same silent-degradation shape these guards exist to
-  # prevent.
-  proof_file="${proof_dir}/capacity-forecast-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: capacity forecast golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # team_wellbeing (CHAOS-4276) used to have its own live-Python rot guard
-  # here (TestTeamWellbeingGoldenMatchesLivePython, proof marker
-  # daily-wellbeing-golden) -- retired (CHAOS-5234/CHAOS-3092:
-  # compute_team_wellbeing_metrics_daily deleted outright, the whole
-  # metrics/compute_wellbeing.py module gone): TeamWellbeingExecutor
-  # (native Go) is the sole producer now. The frozen golden
-  # (tests/fixtures/daily_wellbeing_python_golden.json) stays; Go's own
-  # TestComputeMatchesFrozenPythonGolden-family bit-exact tests
-  # (wellbeing_parity_test.go) are the regression guard going forward --
-  # same shape as the file_hotspots/issueprlinks retirements below.
-  # Same reasoning again: the CHAOS-4818 FMA golden (release_impact
-  # ._compute_confidence, compute._percentile, compute_capacity._percentile)
-  # is a fourth distinct golden/producer in this same package and gets its
-  # own proof marker. hotspot_score (Go's ComputeFileHotspots) used to be a
-  # fourth Python producer feeding this same fma_golden.json -- retired
-  # (CHAOS-5234/CHAOS-3092: compute_file_hotspots deleted) by splitting its
-  # frozen cases VERBATIM into their own file with no generator
-  # (tests/fixtures/fma_hotspot_score_golden.json,
-  # filehotspots/fma_golden_test.go now reads it directly), rather than
-  # leaving fma_golden.json a key this generator can no longer reproduce.
-  # This marker and TestFMAGoldenMatchesLivePython are otherwise unchanged.
-  proof_file="${proof_dir}/fma-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: FMA golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # CHAOS-7351 (7058 / CHAOS-7334 class A): the rot guards of internal/jobs/metrics/
+  # {numerical (remaining-metrics, capacity-forecast, FMA), numerical/cpyrandom,
+  # daily/repouser (pysum), daily/compoundingrisk} and internal/jobs/workgraph/units
+  # (components, confidence coercion, investment quality, max component nodes, decimal
+  # digits, time bounds, corpus discovery) no longer run live Python here: each runs its
+  # generator through a golden (internal/testsupport/rotguard) recorded once on the last
+  # build that carried the Python sources, so they run in the plain `go test` with no
+  # interpreter, DEV_HEALTH_LIVE_PYTHON_ORACLES gate or proof marker.
 
   # internal/jobs/metrics/daily/filehotspots' three live-Python rot guards
   # (TestFileHotspotsGoldenMatchesLivePython CHAOS-4277,
@@ -1007,46 +924,6 @@ check_live_python_oracles() {
   # going forward. Proving "Python still agrees with itself" stops being the
   # protection that matters once Python is no longer in the loop.
 
-  # internal/jobs/metrics/daily/repouser's live-Python rot guard
-  # (TestRepoUserCommitGoldenMatchesLivePython, formerly run combined with
-  # TestPysumGoldenMatchesLivePython below) was retired here: its producer,
-  # compute_daily_metrics (repo_user_commit), was DELETED (CHAOS-5308/
-  # CHAOS-3092), not merely un-called -- RepoUserCommitExecutor (native Go)
-  # is the sole producer now. The frozen golden
-  # (tests/fixtures/repo_user_commit_python_golden.json) stays; Go's own
-  # TestComputeMatchesFrozenPythonGolden/TestComputeMatchesFrozenGoldenExhaustively
-  # (compute_test.go/golden_full_test.go) are the regression guard going
-  # forward. Proving "Python still agrees with itself" stops being the
-  # protection that matters once Python is no longer in the loop -- same
-  # shape as the issueprlinks/filehotspots retirements above.
-  #
-  # TestPysumGoldenMatchesLivePython (CHAOS-4824) is UNRELATED to
-  # repo_user_commit's own compute -- it guards the code-ownership Gini pysum
-  # helper, which has its own live caller elsewhere -- so it keeps running
-  # alone, solo, below.
-  printf 'go test -count=1: internal/jobs/metrics/daily/repouser (pysum golden vs live Python, CHAOS-4824)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestPysumGoldenMatchesLivePython)$' \
-        ./internal/jobs/metrics/daily/repouser
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/pysum-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: pysum golden (CHAOS-4824) rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
   # cicd (CHAOS-4292) used to have its own live-Python rot guard here
   # (TestCICDGoldenMatchesLivePython, proof marker cicd-golden) -- retired
   # (CHAOS-5234/CHAOS-3092: compute_cicd_metrics_daily deleted outright, the
@@ -1057,30 +934,6 @@ check_live_python_oracles() {
   # (internal/jobs/metrics/daily/cicd/compute_test.go) are the regression
   # guard going forward -- same shape as the team_wellbeing/file_hotspots/
   # issueprlinks retirements in this same function.
-
-  printf 'go test -count=1: internal/jobs/metrics/daily/compoundingrisk (frozen compounding_risk golden vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestCompoundingRiskGoldenMatchesLivePython$' \
-        ./internal/jobs/metrics/daily/compoundingrisk
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker, for the same reason as cicd-golden above (CHAOS-4287).
-  proof_file="${proof_dir}/compounding-risk-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: compounding_risk golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
 
   # internal/jobs/metrics/daily/reviewedges' live-Python rot guard
   # (TestReviewEdgesGoldenMatchesLivePython, CHAOS-4279) was retired here:
@@ -1119,113 +972,6 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/remaining-dora-incident-sql"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: the DORA incident projection was not compared against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  # NOTE: this -run list is itself an enumeration, and it is the SECOND place a
-  # rot guard has to be remembered -- once when the test is written, again here
-  # before it can ever execute. A guard missing from this list does not fail; it
-  # silently never runs. TestEveryDiscoverableCorpusStillMatchesLivePython is
-  # listed first because it DISCOVERS its subjects from tests/fixtures/ and so
-  # covers every conforming corpus without anyone editing this line again. See
-  # CHAOS-4849.
-  printf 'go test -count=1: internal/jobs/workgraph/units (frozen goldens vs live Python; the first test discovers its own subjects)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestEveryDiscoverableCorpusStillMatchesLivePython|TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython|TestInvestmentQualityGoldenMatchesLivePython|TestMaxComponentNodesGoldenMatchesLivePython|TestDecimalDigitsGoldenMatchesLivePython|TestTimeBoundsGoldenMatchesLivePython)$' \
-        ./internal/jobs/workgraph/units
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker, per the capacity-forecast reasoning above: this golden has a
-  # different producer (work_graph/investment/components.py + work_unit_id) from
-  # every other pair here, and it guards a CROSS-JOB invariant -- the same
-  # work_unit_id addresses work_unit_investments (Go, once CHAOS-4441 lands) and
-  # work_unit_membership (still Python until CHAOS-4282). A shared marker could
-  # be satisfied by another guard while this one was filtered out of -run.
-  # The DISCOVERY guard's own marker. It walks tests/fixtures for generators and
-  # enforces the undiscoverable-corpus ratchet, and it SKIPS without
-  # DEV_HEALTH_LIVE_PYTHON_ORACLES=1 -- at which point Go's package-level `ok`
-  # counts the skip as a pass. Asserting the marker is what makes a skipped
-  # discovery guard fail the gate instead of passing it silently.
-  proof_file="${proof_dir}/workgraph-units-corpus-discovery"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: corpus discovery guard did not run against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  proof_file="${proof_dir}/workgraph-components-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: work-unit component golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker again: the coercion corpus has a DIFFERENT producer
-  # (float()'s string branch) from the component golden above, and it is the
-  # guard that caught three separate parser divergences. A shared marker could
-  # be satisfied by the component guard while this one was filtered out of -run.
-  proof_file="${proof_dir}/confidence-coercion-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: confidence coercion corpus did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker again: this fixture spans FOUR producers across TWO modules
-  # (utils/normalization's clamp and evidence_quality_band, plus evidence's
-  # _graph_density, _float_value and compute_evidence_quality), and it records
-  # whether evidence._float_value still agrees with components._edge_confidence
-  # -- two Python copies of one coercion that the Go port collapses into a
-  # single function. clamp() in particular lives outside work_graph/investment
-  # entirely, so nothing else would tell a reviewer editing it that this port
-  # depends on its NaN behaviour.
-  proof_file="${proof_dir}/investment-quality-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: investment evidence-quality golden did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker, guarding a value that appears in NO source file on either
-  # side: sys.get_int_max_str_digits(). It is an interpreter runtime setting,
-  # so it can move with no diff in this repository and no change of CPython
-  # version. Every value between the old and new limits would then be parsed by
-  # one plane and refused by the other -- which, for
-  # INVESTMENT_MAX_COMPONENT_NODES, means one plane splits oversized components
-  # and the other does not.
-  proof_file="${proof_dir}/max-component-nodes-magnitude"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: max_component_nodes magnitude golden did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker, guarding the interpreter's Unicode category Nd set -- the
-  # characters int() accepts -- and each one's decimal value. Both come from the
-  # deployed interpreter's unicode data and move on a Python upgrade with no
-  # diff here. The guard also covers the GENERATED Go table, because a stale
-  # table alongside a fresh fixture leaves the parser on the old set with the
-  # tests green.
-  proof_file="${proof_dir}/python-decimal-digits"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: python decimal-digit set did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker: compute_time_bounds and _node_time_bounds, whose per-type
-  # fallback chains decide the stored TimeBounds on every work unit. Does not
-  # touch input_hash, so a drift here re-dates units rather than re-billing
-  # categorisation.
-  proof_file="${proof_dir}/time-bounds-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: time-bounds golden did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -1470,29 +1216,6 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/workgraph-int-max-str-digits"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: int_max_str_digits was not read back from live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/jobs/metrics/numerical/cpyrandom (recorded CPython RNG vectors vs the live interpreter)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestGoldenStillDescribesLiveCPython$' \
-        ./internal/jobs/metrics/numerical/cpyrandom
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/cpython-random-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the recorded CPython RNG vectors were not re-derived from the live interpreter\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

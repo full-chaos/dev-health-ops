@@ -49,6 +49,8 @@ type MCPClassRootStatus struct {
 	ProofExecuted  int
 	ProofMatched   int
 	ProofExcluded  []string
+	// ProofStochastic names the shapes proven under the stochastic leaf class (CHAOS-5901): counted, never matched.
+	ProofStochastic []string
 }
 
 // MCPClassStatusRows reports every allowlisted root at liveSchemaDigest.
@@ -148,6 +150,7 @@ func MCPClassStatusRows(ctx context.Context, db Querier, liveSchemaDigest string
 			status.Proven = proven[operation]
 			if p := provenance[operation]; p != nil {
 				status.ProofReference, status.ProofExecuted, status.ProofMatched, status.ProofExcluded = p.Reference, p.Executed, p.Matched, p.Excluded
+				status.ProofStochastic = p.Stochastic
 			}
 		} else if len(status.StaleDigests) > 0 {
 			status.DigestState = DigestStale

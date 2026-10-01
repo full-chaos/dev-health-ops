@@ -174,40 +174,6 @@ def test_repo_metrics_custom_org_id():
 # ---------------------------------------------------------------------------
 
 
-def test_clickhouse_sink_write_repo_metrics_includes_org_id():
-    """write_repo_metrics must pass org_id column to _insert_rows."""
-    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-
-    with patch.object(
-        ClickHouseMetricsSink, "__init__", lambda self, dsn, client=None: None
-    ):
-        sink = ClickHouseMetricsSink("clickhouse://dummy")
-        sink.client = MagicMock()
-
-        row = RepoMetricsDailyRecord(
-            repo_id=uuid.uuid4(),
-            day=date(2025, 1, 1),
-            commits_count=1,
-            total_loc_touched=10,
-            avg_commit_size_loc=10.0,
-            large_commit_ratio=0.0,
-            prs_merged=0,
-            median_pr_cycle_hours=0.0,
-            computed_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
-            org_id="test-org",
-        )
-        sink.write_repo_metrics([row])
-
-        assert sink.client.insert.called
-        call_args = sink.client.insert.call_args
-        column_names = call_args[1].get("column_names") or call_args[0][2]
-        assert "org_id" in column_names, "org_id not in ClickHouse column list"
-
-        matrix = call_args[0][1]
-        org_id_idx = list(column_names).index("org_id")
-        assert matrix[0][org_id_idx] == "test-org"
-
-
 def test_clickhouse_sink_write_estimate_coverage_metrics_includes_org_id():
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 

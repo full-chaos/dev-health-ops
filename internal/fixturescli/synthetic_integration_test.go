@@ -409,12 +409,8 @@ func TestLoadSyntheticVenueOracleMatchesThePythonProducer(t *testing.T) {
 			loadThroughTheNativeClient(t, loader, set.Org, set.Repo, set.Days, target, time.Now().UTC())
 			for _, liveTable := range live.Tables {
 				loaded := dumpTable(t, loader.httpDSN, liveTable.Name)
-				if !reflect.DeepEqual(loaded.Columns, liveTable.Columns) {
-					t.Fatalf("%s: columns differ", liveTable.Name)
-				}
-				if diff := rowsDiff(maskTimes(liveTable), maskTimes(loaded)); diff != "" {
-					t.Fatalf("%s / %s / %s / %s: the loader's rows differ from the live Python producer's (timestamps masked):\n%s",
-						set.Org[:8], set.Repo, target, liveTable.Name, diff)
+				if problem := oracleTableProblem(t, liveTable, loaded); problem != "" {
+					t.Fatalf("%s / %s / %s / %s: %s", set.Org[:8], set.Repo, target, liveTable.Name, problem)
 				}
 				if len(liveTable.Rows) == 0 {
 					t.Fatalf("%s wrote no rows on the live producer: the comparison would measure nothing", liveTable.Name)

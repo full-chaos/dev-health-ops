@@ -3,7 +3,6 @@ package secrets
 import (
 	"flag"
 	"fmt"
-	"os"
 )
 
 // BindFlag registers a string flag whose value may fall back to an
@@ -43,7 +42,7 @@ func ResolveFlag(set *flag.FlagSet, p *string, name, envVar string) {
 	if explicit {
 		return
 	}
-	*p = os.Getenv(envVar)
+	*p = GetenvNamed(envVar)
 }
 
 // RedactedConnectError reports a failed attempt to open a Postgres

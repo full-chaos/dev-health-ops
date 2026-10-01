@@ -313,7 +313,10 @@ func (g *Golden) project(text string) (string, error) {
 // volatileHeaderValue is what a golden stores for the value of a Volatile header.
 const volatileHeaderValue = "<volatile>"
 
-// projectResponse is response with every header value and the body projected.
+// projectResponse is response in the form a golden stores and compares: the
+// body and every header value projected, a Volatile header's value replaced
+// by a placeholder, and an Allow header in the comparison's order. These are
+// the two rules that make a header's stored text independent of the run.
 func (g *Golden) projectResponse(response Response) (Response, error) {
 	out := clone(response)
 	var err error
@@ -326,6 +329,15 @@ func (g *Golden) projectResponse(response Response) (Response, error) {
 			// stored as a placeholder, so no two recordings differ by it. The
 			// name stays, so a response that lacks or gains it is still seen.
 			out.Headers[name] = volatileHeaderValue
+			continue
+		}
+		if strings.ToLower(name) == "allow" {
+			// A set of methods (Compare): a Python route keeps its methods in a
+			// set whose order follows the hash seed, so the header's text is
+			// another one in every run of the producer. It is stored in the one
+			// order Compare gives both planes, so two recordings of the same
+			// answers are the same bytes; another set of methods still differs.
+			out.Headers[name] = sortedAllow(value)
 			continue
 		}
 		if out.Headers[name], err = g.project(value); err != nil {

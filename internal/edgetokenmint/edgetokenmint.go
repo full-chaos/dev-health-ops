@@ -46,6 +46,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"os"
 	"strings"
 	"time"
@@ -179,7 +180,7 @@ func LoadSigningKey(raw string) ([]byte, error) {
 // LoadSigningKeyFromEnv reads SigningKeyEnvVar by name. The key is never a
 // flag value, so it never reaches argv or the process table.
 func LoadSigningKeyFromEnv() ([]byte, error) {
-	return LoadSigningKey(os.Getenv(SigningKeyEnvVar))
+	return LoadSigningKey(envsecrets.GetenvSecret(SigningKeyEnvVar))
 }
 
 // Principal is what a minted token claims. Build it with LookupPrincipal,

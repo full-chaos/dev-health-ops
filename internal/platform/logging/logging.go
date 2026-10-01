@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"unicode/utf8"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 const (
@@ -69,7 +71,10 @@ func InstallDefault(logger *slog.Logger) func() {
 	previousFlags := log.Flags()
 	previousPrefix := log.Prefix()
 	slog.SetDefault(logger)
+	// The secret registry reports (setting names only) through the same logger.
+	previousWarner := secrets.SetWarner(func(msg string, args ...any) { logger.Warn(msg, args...) })
 	return func() {
+		secrets.SetWarner(previousWarner)
 		slog.SetDefault(previous)
 		log.SetOutput(previousWriter)
 		log.SetFlags(previousFlags)
@@ -93,7 +98,10 @@ func RedactText(value string) (result string) {
 	// Percent-encoded text is read (and logged) decoded, so an encoded key,
 	// separator or quote is seen as what it stands for; the key/value scan
 	// runs first, while it still knows which bytes were encoded.
+	value = secrets.RedactRegistered(value)
 	value, escaped := percentDecoded(value)
+	// The decoded text can hold a registered secret its encoded form hid.
+	value = secrets.RedactRegistered(value)
 	value = redactKeyValues(value, escaped)
 	// Each pattern runs only when the literal it cannot match without is in
 	// the text: the skip never changes the result, it keeps the common

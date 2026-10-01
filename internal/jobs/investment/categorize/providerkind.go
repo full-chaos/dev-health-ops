@@ -3,8 +3,8 @@ package categorize
 import (
 	"context"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log"
-	"os"
 	"sort"
 	"strings"
 )
@@ -64,7 +64,7 @@ func normalizeProviderKind(name string) ProviderKind {
 // ever read from or compared against ops/.env.
 func firstNonEmptyEnv(names ...string) string {
 	for _, name := range names {
-		if value := os.Getenv(name); value != "" {
+		if value := envsecrets.GetenvNamed(name); value != "" {
 			return value
 		}
 	}
@@ -76,17 +76,17 @@ func firstNonEmptyEnv(names ...string) string {
 // order of env KEY NAMES (never their values beyond a non-empty check).
 func detectConfiguredProviderKind() (ProviderKind, bool) {
 	switch {
-	case os.Getenv("OPENAI_API_KEY") != "":
+	case envsecrets.GetenvNamed("OPENAI_API_KEY") != "":
 		return ProviderKindOpenAI, true
-	case os.Getenv("ANTHROPIC_API_KEY") != "":
+	case envsecrets.GetenvNamed("ANTHROPIC_API_KEY") != "":
 		return ProviderKindAnthropic, true
-	case os.Getenv("GEMINI_API_KEY") != "":
+	case envsecrets.GetenvNamed("GEMINI_API_KEY") != "":
 		return ProviderKindGemini, true
-	case os.Getenv("LOCAL_LLM_BASE_URL") != "":
+	case envsecrets.GetenvNamed("LOCAL_LLM_BASE_URL") != "":
 		return ProviderKindLocal, true
-	case os.Getenv("DASHSCOPE_API_KEY") != "" || os.Getenv("QWEN_API_KEY") != "":
+	case envsecrets.GetenvNamed("DASHSCOPE_API_KEY") != "" || envsecrets.GetenvNamed("QWEN_API_KEY") != "":
 		return ProviderKindQwen, true
-	case os.Getenv("OLLAMA_MODEL") != "" || os.Getenv("OLLAMA_BASE_URL") != "":
+	case envsecrets.GetenvNamed("OLLAMA_MODEL") != "" || envsecrets.GetenvNamed("OLLAMA_BASE_URL") != "":
 		return ProviderKindOllama, true
 	}
 	return "", false
@@ -142,7 +142,7 @@ func ResolveProviderKindForOrg(
 		return normalized, nil
 	}
 
-	envKind := normalizeProviderKind(os.Getenv("LLM_PROVIDER"))
+	envKind := normalizeProviderKind(envsecrets.GetenvNamed("LLM_PROVIDER"))
 	// Operator kill-switch / explicit disable: LLM_PROVIDER=none or mock
 	// must not be overridden by auto-detection OR by org BYO.
 	if envKind == ProviderKindNone || envKind == ProviderKindMock {

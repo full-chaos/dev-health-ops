@@ -3,8 +3,12 @@ package fixturescli
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +33,7 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 	if len(entries) != len(frozenWorldDigests) {
 		t.Fatalf("testdata/generate holds %d file(s), the digest table pins %d: a frozen file was added or removed without its digest", len(entries), len(frozenWorldDigests))
 	}
+	unpinnedSeen := map[string]bool{}
 	for path, want := range frozenWorldDigests {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -57,6 +62,19 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 		if at, err := time.Parse(producerClockLayout, world.FrozenAt); err != nil || at.UTC().Format(producerClockLayout) != world.FrozenAt {
 			t.Fatalf("%s: frozen_at %q is not a pinned producer instant (%s, UTC): re-freeze the world with TestFreezeGenerateWorlds", path, world.FrozenAt, producerClockLayout)
 		}
+		at, _ := time.Parse(producerClockLayout, world.FrozenAt)
+		// The unpinned columns of the frozen rows hold what their class allows: a stamp of the freeze
+		// run, an id.
+		if _, problems := worldContent(world.Tables, at, at.Add(frozenStampWindow)); len(problems) > 0 {
+			t.Fatalf("%s: unpinned columns break their class:\n%s", path, strings.Join(problems, "\n"))
+		}
+		for _, table := range world.Tables {
+			for _, column := range table.Columns {
+				if _, listed := unpinnedColumns[table.Name][column.Name]; listed {
+					unpinnedSeen[table.Name+"."+column.Name] = true
+				}
+			}
+		}
 		if _, err := world.WholeDays(time.Now()); err != nil {
 			t.Fatal(err)
 		}
@@ -80,6 +98,14 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 		}
 		if derived != 1 || len(world.Tables) < minTables || rows < minRows {
 			t.Fatalf("%s: %d table(s), %d derived, %d row(s): the world is not what its callers write", path, len(world.Tables), derived, rows)
+		}
+	}
+	// The set is closed in both directions: an entry no world holds has gone stale.
+	for table, columns := range unpinnedColumns {
+		for column := range columns {
+			if !unpinnedSeen[table+"."+column] {
+				t.Errorf("unpinnedColumns lists %s.%s, which no frozen world holds: remove the entry", table, column)
+			}
 		}
 	}
 }
@@ -317,6 +343,222 @@ func TestNormalizeSinkReadsAnHTTPPortDSNAsHTTP(t *testing.T) {
 	} {
 		if got := normalizeSink(in); got != want {
 			t.Errorf("normalizeSink(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A column the harness cannot pin, by class.
+const (
+	// serverStamp: the ClickHouse server stamps the value (a DEFAULT or a materialized view's
+	// now64()); the producer's clock cannot reach it.
+	serverStamp = "server-stamp"
+	// pythonStamp: the producer reads the real clock through a function-local import of datetime,
+	// which the module swap of _frozen_clock cannot replace.
+	pythonStamp = "python-stamp"
+	// randomID: the producer draws the value from uuid4, not from its seed.
+	randomID = "random-id"
+)
+
+type unpinnedColumn struct{ class, source string }
+
+// unpinnedColumns is the closed set of columns whose values two runs of the producer pinned to one
+// instant do not share: table -> column -> class and source. Every other column of every table is
+// compared by value, so a new column that moves fails the freeze and the oracle until it is pinned
+// or classified here. A listed column is still checked: it must exist with its frozen type, a stamp
+// must lie inside the real-clock window of its run, an id must have an id's shape, and the number of
+// distinct ids (for a stamp: of rows that carry one) must agree.
+var unpinnedColumns = map[string]map[string]unpinnedColumn{
+	"git_blame_dirty_paths": {
+		"marked_at": {serverStamp, "the materialized view writes now64(3, 'UTC'): migrations/clickhouse/095_git_blame_file_ownership.sql:44"},
+	},
+	"ai_attribution": {
+		"computed_at": {pythonStamp, "metrics/sinks/clickhouse/ai_attribution.py:76-79: datetime imported inside the function, then datetime.now()"},
+		"record_id":   {randomID, "models/ai_attribution.py:133: default_factory=uuid4"},
+	},
+	"work_unit_membership_runs": {
+		"completed_at": {pythonStamp, "fixtures/runner.py:1675,1699: datetime imported inside the function as _dt, then _dt.now()"},
+		"run_id":       {randomID, "fixtures/runner.py:1682: uuid4().hex"},
+	},
+	"work_unit_membership":        {"run_id": {randomID, "fixtures/runner.py:1682: uuid4().hex"}},
+	"work_unit_investments":       {"categorization_run_id": {randomID, "work_graph/investment/materialize.py:1292: uuid.uuid4().hex"}},
+	"work_unit_investment_quotes": {"categorization_run_id": {randomID, "work_graph/investment/materialize.py:1292: uuid.uuid4().hex"}},
+	"work_unit_repo_effort":       {"categorization_run_id": {randomID, "work_graph/investment/materialize.py:1292: uuid.uuid4().hex"}},
+	"llm_token_usage":             {"run_id": {randomID, "work_graph/investment/materialize.py:1292: uuid.uuid4().hex"}},
+	"teams":                       {"team_uuid": {randomID, "models/teams.py:50: uuid.uuid4()"}},
+}
+
+// frozenStampWindow is how long after its frozen_at a world's unpinned stamps may lie: the freezer
+// pins the producer to the instant it starts at and produces every world twice before it writes.
+const frozenStampWindow = 30 * time.Minute
+
+var randomIDText = regexp.MustCompile(`^([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
+
+// worldContent is what two runs of the producer pinned to one instant must agree on, and what the
+// oracle compares a fresh run with the frozen world on. Per table: "#rows", "#columns", and one entry
+// per column: the digest of its values for a pinned column; for an unpinned one its class and the
+// number of distinct ids, or of rows that carry a stamp. problems lists every value of an unpinned column that breaks its
+// class: a stamp outside [from, to] (the real-clock window of the run that wrote it), an id that
+// is not an id, a value of another JSON type.
+func worldContent(tables []WorldTable, from, to time.Time) (content map[string]map[string]string, problems []string) {
+	content = map[string]map[string]string{}
+	for _, table := range tables {
+		columns, _ := json.Marshal(table.Columns)
+		entry := map[string]string{"#rows": fmt.Sprint(len(table.Rows)), "#columns": string(columns)}
+		for index, column := range table.Columns {
+			values := make([]string, 0, len(table.Rows))
+			for _, row := range table.Rows {
+				raw, _ := json.Marshal(row[index])
+				values = append(values, string(raw))
+			}
+			sort.Strings(values)
+			unpinned, listed := unpinnedColumns[table.Name][column.Name]
+			if !listed {
+				sum := sha256.Sum256([]byte(strings.Join(values, "\n")))
+				entry[column.Name] = "values " + hex.EncodeToString(sum[:])
+				continue
+			}
+			distinct, present := map[string]bool{}, 0
+			for _, raw := range values {
+				distinct[raw] = true
+				if raw == "null" {
+					continue
+				}
+				present++
+				var text string
+				if err := json.Unmarshal([]byte(raw), &text); err != nil {
+					problems = append(problems, fmt.Sprintf("%s.%s (%s): value %s is not a string", table.Name, column.Name, unpinned.class, raw))
+					continue
+				}
+				switch unpinned.class {
+				case randomID:
+					if !randomIDText.MatchString(text) {
+						problems = append(problems, fmt.Sprintf("%s.%s (%s): %q is not an id", table.Name, column.Name, unpinned.class, text))
+					}
+				default:
+					stamp, err := time.Parse("2006-01-02 15:04:05.999999999", text)
+					if err != nil || !strings.Contains(column.Type, "DateTime") {
+						problems = append(problems, fmt.Sprintf("%s.%s (%s, type %s): %q is not a DateTime value", table.Name, column.Name, unpinned.class, column.Type, text))
+					} else if stamp.Before(from.Add(-time.Second)) || stamp.After(to.Add(time.Second)) {
+						problems = append(problems, fmt.Sprintf("%s.%s (%s): %s is outside the run's clock window %s .. %s", table.Name, column.Name, unpinned.class, text,
+							from.Format(producerClockLayout), to.Format(producerClockLayout)))
+					}
+				}
+			}
+			// An id is drawn once per row or once per run, so the number of distinct ids is the
+			// producer's and must agree. A stamp is a clock read to the millisecond: how many
+			// distinct values a run holds depends on how fast it wrote, so only how many rows
+			// carry one is compared.
+			if unpinned.class == randomID {
+				entry[column.Name] = fmt.Sprintf("%s distinct=%d", unpinned.class, len(distinct))
+			} else {
+				entry[column.Name] = fmt.Sprintf("%s non-null=%d", unpinned.class, present)
+			}
+		}
+		content[table.Name] = entry
+	}
+	sort.Strings(problems)
+	return content, problems
+}
+
+// contentDiff lists every table.column whose content differs between got and want.
+func contentDiff(got, want map[string]map[string]string) []string {
+	var out []string
+	tables := map[string]bool{}
+	for name := range got {
+		tables[name] = true
+	}
+	for name := range want {
+		tables[name] = true
+	}
+	for table := range tables {
+		keys := map[string]bool{}
+		for key := range got[table] {
+			keys[key] = true
+		}
+		for key := range want[table] {
+			keys[key] = true
+		}
+		for key := range keys {
+			if got[table][key] != want[table][key] {
+				out = append(out, fmt.Sprintf("%s.%s: got %q, want %q", table, key, got[table][key], want[table][key]))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// worldContent compares every column by value and holds each unpinned column to its class: the
+// cases are the ways a producer run can differ from a frozen world.
+func TestWorldContentComparesValuesAndHoldsUnpinnedColumnsToTheirClass(t *testing.T) {
+	from := time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)
+	to := from.Add(time.Minute)
+	world := func(edit func(tables []WorldTable)) []WorldTable {
+		tables := []WorldTable{
+			{FrozenTable: FrozenTable{Name: "git_commits",
+				Columns: []FrozenColumn{{"hash", "String"}, {"committer_when", "DateTime64(3, 'UTC')"}},
+				Rows:    [][]any{{"a1", "2026-09-30 10:00:00.000"}, {"b2", "2026-09-29 10:00:00.000"}}}},
+			{FrozenTable: FrozenTable{Name: "git_blame_dirty_paths",
+				Columns: []FrozenColumn{{"path", "String"}, {"marked_at", "DateTime64(3, 'UTC')"}},
+				Rows:    [][]any{{"main.go", "2026-10-01 02:00:10.000"}, {"b.go", "2026-10-01 02:00:11.000"}}}},
+			{FrozenTable: FrozenTable{Name: "teams",
+				Columns: []FrozenColumn{{"id", "String"}, {"team_uuid", "UUID"}},
+				Rows:    [][]any{{"t1", "0f8fad5b-d9cb-469f-a165-70867728950e"}, {"t2", "7c9e6679-7425-40de-944b-e07fc1f90ae7"}}}},
+		}
+		if edit != nil {
+			edit(tables)
+		}
+		return tables
+	}
+	want, problems := worldContent(world(nil), from, to)
+	if len(problems) != 0 {
+		t.Fatalf("the base world breaks a class: %v", problems)
+	}
+	// Two runs: other stamps inside the window, other ids, the same pinned values: no difference.
+	same, problems := worldContent(world(func(tables []WorldTable) {
+		tables[1].Rows[0][1] = "2026-10-01 02:00:30.000"
+		tables[1].Rows[1][1] = "2026-10-01 02:00:30.000" // both rows in one millisecond: still no difference
+		tables[2].Rows[0][1] = "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+	}), from, to)
+	if diff := contentDiff(same, want); len(diff) != 0 || len(problems) != 0 {
+		t.Fatalf("a run that differs only in unpinned values is reported: %v %v", diff, problems)
+	}
+	for name, c := range map[string]struct {
+		edit    func(tables []WorldTable)
+		diff    string // a contentDiff line must hold it
+		problem string // or a problem must
+	}{
+		"a value changed in a pinned column": {func(tables []WorldTable) { tables[0].Rows[0][0] = "a9" }, "git_commits.hash", ""},
+		"a date moved in a pinned column":    {func(tables []WorldTable) { tables[0].Rows[1][1] = "2026-09-30 10:00:00.000" }, "git_commits.committer_when", ""},
+		"a row more": {func(tables []WorldTable) {
+			tables[0].Rows = append(tables[0].Rows, []any{"c3", "2026-09-28 10:00:00.000"})
+		}, "git_commits.#rows", ""},
+		"a column's type changed":                 {func(tables []WorldTable) { tables[0].Columns[1].Type = "DateTime" }, "git_commits.#columns", ""},
+		"a listed stamp with another type":        {func(tables []WorldTable) { tables[1].Columns[1].Type = "String" }, "git_blame_dirty_paths.#columns", "is not a DateTime value"},
+		"a listed stamp outside the run's window": {func(tables []WorldTable) { tables[1].Rows[0][1] = "2026-10-01 03:00:00.000" }, "", "outside the run's clock window"},
+		"a listed stamp before the run's window":  {func(tables []WorldTable) { tables[1].Rows[0][1] = "2020-01-01 00:00:00.000" }, "", "outside the run's clock window"},
+		"a listed stamp that is not a time":       {func(tables []WorldTable) { tables[1].Rows[0][1] = "yesterday" }, "", "is not a DateTime value"},
+		"a listed stamp that is a number":         {func(tables []WorldTable) { tables[1].Rows[0][1] = json.Number("1") }, "", "is not a string"},
+		"a listed id that is not an id":           {func(tables []WorldTable) { tables[2].Rows[0][1] = "team-1" }, "", "is not an id"},
+		"a listed stamp missing in one row":       {func(tables []WorldTable) { tables[1].Rows[0][1] = nil }, "git_blame_dirty_paths.marked_at", ""},
+		"two rows sharing one listed id":          {func(tables []WorldTable) { tables[2].Rows[1][1] = tables[2].Rows[0][1] }, "teams.team_uuid", ""},
+		"a new column nobody classified": {func(tables []WorldTable) {
+			tables[0].Columns = append(tables[0].Columns, FrozenColumn{"synced_at", "DateTime64(3, 'UTC')"})
+			tables[0].Rows[0] = append(tables[0].Rows[0], "2026-10-01 02:00:10.000")
+			tables[0].Rows[1] = append(tables[0].Rows[1], "2026-10-01 02:00:10.000")
+		}, "git_commits.synced_at", ""},
+		"a table more": {func(tables []WorldTable) { tables[0].Name = "git_commits_2" }, "git_commits_2.#rows", ""},
+	} {
+		got, problems := worldContent(world(c.edit), from, to)
+		diff := strings.Join(contentDiff(got, want), "\n")
+		if c.diff != "" && !strings.Contains(diff, c.diff) {
+			t.Errorf("%s: no difference at %s:\n%s", name, c.diff, diff)
+		}
+		if c.problem != "" && !strings.Contains(strings.Join(problems, "\n"), c.problem) {
+			t.Errorf("%s: no problem %q: %v", name, c.problem, problems)
+		}
+		if c.diff == "" && c.problem == "" {
+			t.Errorf("%s: the case names nothing to see", name)
 		}
 	}
 }

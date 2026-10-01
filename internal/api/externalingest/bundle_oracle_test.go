@@ -32,7 +32,7 @@ import (
 // this package's Go-side merge (schemaDocument) + ETag computation
 // (computeETag) agree with Python's on the full document, not just a hash.
 func TestSchemaBundleMatchesFrozenPython(t *testing.T) {
-	frozen := venueoracle.OpenGolden(t, programGolden("schema-bundle", t.Name(), "4f8becb453d86d0da1730fa7767f89c28a0247b8dc071d33b90bc3039539673a"))
+	frozen := venueoracle.OpenGolden(t, programGolden("schema-bundle", t.Name(), "c96c4a203c46909b88988216a290c0af91c10a03b07ae87559a77fdc21ebde0b"))
 	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -42,12 +42,12 @@ func TestSchemaBundleMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("schema bundle producer", string(program), nil, nil)
+	request := venueoracle.ProgramRequest("schema bundle producer", string(program), nil, producerEnv)
 	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		command := exec.Command(python, "testdata/python_schema_bundle_oracle.py")
 		command.Dir = filepath.Join(root, "internal", "api", "externalingest")
-		command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
+		command.Env = producerCommandEnv(root)
 		var stdout, stderr bytes.Buffer
 		command.Stdout = &stdout
 		command.Stderr = &stderr
@@ -55,7 +55,7 @@ func TestSchemaBundleMatchesFrozenPython(t *testing.T) {
 			t.Fatalf("execute production Python schema-bundle oracle: %v\nstdout:\n%s",
 				pyoracle.RunError(python, err, stderr.Bytes()), stdout.Bytes())
 		}
-		return []venueoracle.Response{{Status: 0, Body: stdout.String()}}
+		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(stdout.Bytes())}}
 	})
 	frozen.Consumed(t, answers...)
 	stdout := bytes.NewBufferString(answers[0].Body)

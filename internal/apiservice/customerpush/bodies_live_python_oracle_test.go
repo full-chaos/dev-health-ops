@@ -5,7 +5,6 @@ import (
 	"maps"
 	"math/rand"
 	"net/http/httptest"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -211,22 +210,22 @@ func goBodyAnswer(model, body string) (int, string) {
 // TestCustomerPushBodiesMatchLiveFastAPI compares the write routes' body
 // validation with FastAPI's on the real request models.
 func TestCustomerPushBodiesMatchFrozenFastAPI(t *testing.T) {
-	frozen := venueoracle.OpenGolden(t, programGolden("bodies", t.Name(), "8ecade0e6c647ae0a5ced9c2746b4bcfebdaa105ccbd89cc46a8a7a8062265a4"))
+	frozen := venueoracle.OpenGolden(t, programGolden("bodies", t.Name(), "f94d527b161e5ac97fb0131f67e9d77b7670f0fc2b74379868148e3d3ad8b495"))
 	_, file, _, _ := runtime.Caller(0)
 	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
 	corpus := bodiesCorpus()
 	input, _ := json.Marshal(corpus)
-	request := venueoracle.ProgramRequest("request model corpus", pythonBodiesProgram, input, nil)
+	request := venueoracle.ProgramRequest("request model corpus", pythonBodiesProgram, input, producerEnv)
 	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		command := exec.Command(python, "-c", pythonBodiesProgram)
-		command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
+		command.Env = producerCommandEnv(root)
 		command.Stdin = strings.NewReader(string(input))
 		output, err := command.CombinedOutput()
 		if err != nil {
 			t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
 		}
-		return []venueoracle.Response{{Status: 0, Body: string(output)}}
+		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
 	})
 	frozen.Consumed(t, answers...)
 	output := []byte(answers[0].Body)

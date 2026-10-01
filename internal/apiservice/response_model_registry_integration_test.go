@@ -11,7 +11,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -98,19 +97,19 @@ func routeShape(method, path string) string {
 // fail on a WriteJSON success body there), every other route must not be,
 // and each named exception must still be what it says.
 func TestRouteResponseModelsMatchTheFrozenFastAPITable(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, programGolden("route-response-models", t.Name(), "6806567feee12e2a02ce18a65f02151fc2aa0f544ee49275e753b3711c9db9e5"))
+	golden := venueoracle.OpenGolden(t, programGolden("route-response-models", t.Name(), "cdd360911251cf04b25a7adff727ac6a4a09639f64f94470bf16e0d0a7fcdd31"))
 	_, file, _, _ := runtime.Caller(0)
 	root := golden.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")))
-	request := venueoracle.ProgramRequest("fastapi route table", pythonRouteTableProgram, nil, nil)
+	request := venueoracle.ProgramRequest("fastapi route table", pythonRouteTableProgram, nil, producerEnv)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		command := exec.Command(python, "-c", pythonRouteTableProgram)
-		command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
+		command.Env = producerCommandEnv(root)
 		output, err := command.Output()
 		if err != nil {
 			t.Fatalf("live FastAPI route table: %v", pyoracle.RunError(python, err, output))
 		}
-		return []venueoracle.Response{{Status: 0, Body: string(output)}}
+		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
 	})
 	golden.Consumed(t, answers...)
 	output := []byte(answers[0].Body)

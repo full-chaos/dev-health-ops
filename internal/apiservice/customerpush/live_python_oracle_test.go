@@ -2,7 +2,6 @@ package customerpush
 
 import (
 	"bytes"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -26,19 +25,19 @@ print(json.dumps({
 // TestAdminSchemaMatchesLivePython executes the real producer and compares
 // it, key order included, with the embedded golden the route serves.
 func TestAdminSchemaMatchesFrozenPython(t *testing.T) {
-	frozen := venueoracle.OpenGolden(t, programGolden("admin-schema", t.Name(), "6e83e97258cb27a644a42908ee3f8143a2ef80d9d5cc90fdd7878eff45d176cd"))
+	frozen := venueoracle.OpenGolden(t, programGolden("admin-schema", t.Name(), "7b52180f1fc40527c46e2effb07a579610d496f9a6486c5d4fecd6acf1b7533c"))
 	_, file, _, _ := runtime.Caller(0)
 	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
-	request := venueoracle.ProgramRequest("admin schema producer", pythonAdminSchemaProgram, nil, nil)
+	request := venueoracle.ProgramRequest("admin schema producer", pythonAdminSchemaProgram, nil, producerEnv)
 	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		command := exec.Command(python, "-c", pythonAdminSchemaProgram)
-		command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
+		command.Env = producerCommandEnv(root)
 		output, err := command.Output()
 		if err != nil {
 			t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
 		}
-		return []venueoracle.Response{{Status: 0, Body: string(output)}}
+		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
 	})
 	frozen.Consumed(t, answers...)
 	output := []byte(answers[0].Body)

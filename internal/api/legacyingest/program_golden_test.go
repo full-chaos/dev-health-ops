@@ -2,6 +2,11 @@ package legacyingest
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -26,3 +31,46 @@ func programGolden(file, test, digest string) venueoracle.GoldenSpec {
 			programPythonBuild, test),
 	}
 }
+
+// producerEnv is the environment entries that shape a producer's answer. They
+// are part of the program's request, and with PATH, HOME, the pinned sources on
+// PYTHONPATH and no bytecode they are the whole environment the producer gets:
+// nothing is inherited from the process that records.
+var producerEnv = map[string]string{"PYTHONHASHSEED": "0", "PYTHONUTF8": "1"}
+
+// producerCommandEnv is the environment a recording gives the producer's child.
+func producerCommandEnv(pinnedRoot string) []string {
+	environment := []string{
+		"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"),
+		"PYTHONPATH=" + filepath.Join(pinnedRoot, "src"), "PYTHONDONTWRITEBYTECODE=1",
+	}
+	names := make([]string, 0, len(producerEnv))
+	for name := range producerEnv {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		environment = append(environment, name+"="+producerEnv[name])
+	}
+	return environment
+}
+
+// withoutLogLines drops the structured log lines the Python process writes on
+// start-up ({"timestamp": ...}): they carry the clock, so they would make two
+// recordings differ, and no test reads them.
+func withoutLogLines(output []byte) string {
+	var kept []string
+	for _, line := range strings.SplitAfter(string(output), "\n") {
+		if !strings.HasPrefix(line, `{"timestamp": "`) {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "")
+}
+
+// generatedID is a random (version 4) UUID, such as the ingestion id each
+// accepted request is given: a different value in every run.
+var generatedID = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
+
+// scrubGeneratedIDs turns each generated id into a placeholder, on both planes.
+func scrubGeneratedIDs(text string) string { return generatedID.ReplaceAllString(text, "<id>") }

@@ -73,6 +73,10 @@ route prod may not have. The check is on the paths the rules match, not on the t
 - An allow-list entry of a shape the ops chart does not accept (an unanchored
   `ImplementationSpecific`, an unknown `pathType`) is refused too, not read as a literal.
 
+A Go plane path with a character that needs a regex escape (a dot, for one) is refused as well
+(exit 5): its rule cannot be written in the router file, the file would not load, and traefik would
+keep the old router with no failing step.
+
 The refusal names the list, the entry and the Go plane path. A values change that moves a path
 to a Go plane takes it off every Python list in the same commit. A local-only path that a Go
 plane starts to serve is removed from `BIGBOY_LOCAL_PYTHON_PATHS` in this repo first.

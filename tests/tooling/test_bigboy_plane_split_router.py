@@ -710,3 +710,50 @@ def test_an_exact_go_plane_path_is_literal_even_where_it_looks_like_a_wildcard(
     assert not gen.python_entry_overlaps("/lit/x", "Exact", segments)
     wild = gen._queryapi_entry_segments("/lit/[^/]+", "ImplementationSpecific")
     assert gen.python_entry_overlaps("/lit/x", "Exact", wild)
+
+
+@pytest.mark.parametrize("fmt", ["dynamic", "labels"])
+@pytest.mark.parametrize(
+    ("spec", "named"),
+    [
+        ({"go": ["/.well-known/x"]}, "ingress.goApiPaths entry /.well-known/x"),
+        (
+            {"query": [("/openapi.json", "Exact")]},
+            "ingress.queryApiPaths entry /openapi.json",
+        ),
+        (
+            {"query": [("/a+b/[^/]+", "ImplementationSpecific")]},
+            "ingress.queryApiPaths entry /a+b/[^/]+",
+        ),
+    ],
+)
+def test_a_path_whose_rule_cannot_be_written_is_refused_not_emitted(
+    gen: ModuleType,
+    tmp_path: Path,
+    spec: dict[str, Any],
+    named: str,
+    fmt: str,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """A Go plane path with a character that needs a regex escape would be emitted as a rule the
+    router file cannot carry; the file would not load and the old router would stay, silently.
+    The generator refuses (exit 5, nothing emitted) and names the path."""
+    values = tmp_path / "values.prod.yaml"
+    values.write_text(yaml.safe_dump(_values(**spec)), encoding="utf-8")
+    assert gen.main([str(values), "--format", fmt]) == 5
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "REFUSED: no valid rule can be emitted for " + named in captured.err
+
+
+def test_every_emitted_router_file_loads(
+    gen: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """What is emitted for accepted values is a file the router can load, hyphens included."""
+    doc = _values(go=["/a-b/{x}_y"], query=[("/c-d", "Exact")])
+    values = tmp_path / "values.prod.yaml"
+    values.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    assert gen.main([str(values), "--format", "dynamic"]) == 0
+    routed = yaml.safe_load(capsys.readouterr().out)
+    assert _route(routed, "/a-b/1_y") == "http://go-api:8000"
+    assert _route(routed, "/c-d") == "http://query-api:8090"

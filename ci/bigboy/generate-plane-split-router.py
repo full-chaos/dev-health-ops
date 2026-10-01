@@ -463,6 +463,22 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(__doc__, file=sys.stderr)
         return 2
+    # The rule is written inside a double-quoted YAML scalar, which cannot carry a regex escape
+    # (`\.` is not a YAML escape): the file would not load, and traefik would keep its old
+    # router with no failing step. Refuse instead of emitting it.
+    if unwritable := [
+        f"{plane} entry {path}"
+        for plane, path, segments in go_plane_paths(doc)
+        if "\\" in _segments_regex(segments)
+    ]:
+        print(
+            "REFUSED: no valid rule can be emitted for "
+            + ", ".join(unwritable)
+            + ": the path has a character that needs a regex escape (a dot, for one), and the"
+            " emitted rule cannot carry an escape. This generator does not support such a path yet.",
+            file=sys.stderr,
+        )
+        return 5
     go_regex = combined_regex(go_paths)
     query_regex = combined_regex(query_paths)
     if both := paths_on_two_planes(doc):

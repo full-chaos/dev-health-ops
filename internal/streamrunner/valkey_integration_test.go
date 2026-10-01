@@ -138,3 +138,42 @@ func TestExternalQuarantineIsIdempotentAndRepairsTrimmedRow(t *testing.T) {
 		t.Fatalf("trimmed DLQ row not repaired: %#v", entries)
 	}
 }
+
+// The Valkey transport writes the product-telemetry dead-letter row with the
+// payload, and the row read back from Valkey rebuilds the original entry.
+func TestProductTelemetryQuarantineRowIsReplayableFromValkey(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartValkey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate Valkey: %v", err)
+		}
+	})
+	client, err := valkeystore.Open(ctx, valkeystore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	transport, err := NewValkeyTransport(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := telemetryMessage(`[{"name":"page_viewed","eventId":"e1"}]`)
+	if err := transport.Quarantine(ctx, message, "invalid_telemetry_event"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := client.Do(ctx, client.B().Xrange().Key("product-telemetry:dlq").Start("-").End("+").Build()).AsXRange()
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("dead-letter rows = %d, err %v", len(entries), err)
+	}
+	replay, ok := MessageFromDeadLetter(entries[0].FieldValues)
+	if !ok || replay.Fields[eventsField] != message.Fields[eventsField] || replay.Stream != telemetryStream {
+		t.Fatalf("replay from Valkey row = %#v ok=%v", replay, ok)
+	}
+}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -53,12 +52,12 @@ import (
 // the request, and a seed value that differs changes the answers or the
 // frozen rows.
 
-// pythonPlaneLookup is the Python plane's environment as its process would see it:
-// the test process's environment, then the venue's own entries, later entries
-// winning.
+// pythonPlaneLookup is the Python plane's environment as its process sees it:
+// what test code set in the process, then the venue's own entries, later
+// entries winning (pythonChildEnv).
 func (v *Venue) pythonPlaneLookup(name string) (string, bool) {
-	value, found := os.LookupEnv(name)
-	for _, entry := range v.pythonEnv {
+	value, found := "", false
+	for _, entry := range v.pythonChildEnv() {
 		key, rest, ok := strings.Cut(entry, "=")
 		if ok && key == name {
 			value, found = rest, true

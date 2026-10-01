@@ -399,7 +399,22 @@ VALUES ('00000000-0000-4000-8000-0000000000da',$1,$2,'github','commits',
 func TestNativeFinalizeSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, domain, denials, _ := startDomainRoleHarness(t, ctx, createFinalizeTablesProbe)
+	// Finalize also reads the reference-discovery ledger (the degraded legs, CHAOS-7132); the probe
+	// schema every other privilege test shares does not carry that table, so this test adds it.
+	withDiscoveryLedger := func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+		t.Helper()
+		createFinalizeTablesProbe(t, ctx, pool)
+		if _, err := pool.Exec(ctx, `CREATE TABLE sync_run_reference_discoveries (
+ id uuid PRIMARY KEY, sync_run_id uuid NOT NULL UNIQUE, org_id text NOT NULL,
+ status text NOT NULL, attempts int NOT NULL DEFAULT 0, available_at timestamptz NOT NULL,
+ lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
+ completed_at timestamptz NULL, error text NULL, result json NULL,
+ created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+)`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admin, domain, denials, _ := startDomainRoleHarness(t, ctx, withDiscoveryLedger)
 	seedFinalizeRouteProbe(t, ctx, admin)
 
 	jobRunID := "00000000-0000-4000-8000-0000000000f8"

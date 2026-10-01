@@ -757,6 +757,8 @@ func buildSyncCoordinatorWorker(
 			selections: teamCatalogSelections,
 			sources:    teamCatalogSources,
 			observer:   teamCatalogObserver,
+			// The post-sync seam runs after finalize: record a degraded leg on the run's result itself.
+			recordDegraded: recordSyncRunDegradedLegs(postgresDatabase.pools.Domain),
 		}
 		if err := syncdispatchruntime.RegisterTeamAutoimportWorker(
 			workers, teamAutoimportDispatcher, syncdispatchruntime.WithHandlerObserver(observer),

@@ -13,7 +13,7 @@
       "body_sha256": "c2424dc3e78b42e61bfcce74df695d16fa06687c959a921db3b40b055f4305d9",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"provider_defaults\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"path\": {\"t\": \"str\", \"v\": \"README.md\"}, \"line_no\": {\"t\": \"int\", \"v\": \"1\"}, \"author_email\": {\"t\": \"str\", \"v\": \"\"}, \"author_name\": {\"t\": \"str\", \"v\": \"Unknown\"}, \"author_when\": null, \"commit_hash\": {\"t\": \"str\", \"v\": \"\"}, \"line\": {\"t\": \"str\", \"v\": \"readme\"}}}], \"excluded_fields\": {\"last_synced\": \"ClickHouseStore.insert_blame_data stamps persistence time after the live producer boundary\"}}\n"
     }
   ]

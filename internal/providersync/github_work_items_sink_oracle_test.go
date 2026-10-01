@@ -234,20 +234,18 @@ func compareSinkRow(
 		if err != nil {
 			t.Fatalf("row %d column %q: %v", rowIndex, column, err)
 		}
-		pythonRendered := renderPythonSinkValue(t, pythonValue)
 		// last_synced on the two shape-A destinations is the one column Python
 		// stamps from wall-clock inside the writer, so its value is
-		// unreproducible by construction. Everything about it except the
-		// instant is still compared: it must be present, in this position, and
-		// a datetime on both sides.
-		if column == "last_synced" && (strings.HasPrefix(caseID, "work_items") || caseID == "work_item_transitions") {
-			if !strings.HasPrefix(pythonRendered, "datetime:") ||
-				!strings.HasPrefix(goRendered, "datetime:") {
-				t.Fatalf("row %d column %q: expected a datetime on both sides, python=%s go=%s",
-					rowIndex, column, pythonRendered, goRendered)
+		// unreproducible by construction and the golden stores a placeholder
+		// for it. Everything about it except the instant is still compared: it
+		// must be present, in this position, and a datetime on both sides.
+		if sinkPerRunColumn(caseID, column) {
+			if err := perRunSinkValueErr(pythonValue, goRendered); err != nil {
+				t.Fatalf("row %d column %q: %v", rowIndex, column, err)
 			}
 			continue
 		}
+		pythonRendered := renderPythonSinkValue(t, pythonValue)
 		if pythonRendered != goRendered {
 			t.Fatalf("row %d column %q diverges\npython=%s\ngo    =%s",
 				rowIndex, column, pythonRendered, goRendered)

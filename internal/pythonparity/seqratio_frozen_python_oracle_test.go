@@ -1,16 +1,13 @@
-package pythonparity
+package pythonparity_test
 
 import (
 	"encoding/json"
 	"math/rand"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 const pythonSequenceRatioProgram = `
@@ -54,27 +51,19 @@ func sequenceRatioCorpus() [][2]string {
 	return pairs
 }
 
-// TestSequenceRatioMatchesLivePython compares SequenceRatio with
-// difflib.SequenceMatcher(a, b).ratio() over the corpus above, exact float
-// equality.
-func TestSequenceRatioMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	python := pyoracle.Resolve(t, root)
+// TestSequenceRatioMatchesFrozenPython compares SequenceRatio with what
+// difflib.SequenceMatcher(a, b).ratio() answered over the corpus above,
+// executed once on the pinned build and frozen. Each ratio is compared by its
+// literal text (Python's float repr), never through a decoded float.
+func TestSequenceRatioMatchesFrozenPython(t *testing.T) {
 	corpus := sequenceRatioCorpus()
 	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonSequenceRatioProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	var want []float64
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+	output := frozenPython(t, "seqratio.golden.json",
+		programoracle.Program{Name: "sequence ratio", Text: pythonSequenceRatioProgram, Stdin: input})[0]
+	decoder := json.NewDecoder(strings.NewReader(output))
+	decoder.UseNumber()
+	var want []json.Number
+	if err := decoder.Decode(&want); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(want) != len(corpus) {
@@ -82,19 +71,12 @@ func TestSequenceRatioMatchesLivePython(t *testing.T) {
 	}
 	mismatches := 0
 	for index, pair := range corpus {
-		if got := SequenceRatio(pair[0], pair[1]); got != want[index] {
+		if got := pythonparity.Repr(pythonparity.SequenceRatio(pair[0], pair[1])); got != want[index].String() {
 			mismatches++
 			if mismatches <= 10 {
-				t.Errorf("SequenceRatio(%q, %q) = %v, python %v", pair[0], pair[1], got, want[index])
+				t.Errorf("pythonparity.SequenceRatio(%q, %q) = %s, python %s", pair[0], pair[1], got, want[index])
 			}
 		}
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "pythonparity-seqratio"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	t.Logf("%d pairs compared, %d mismatches", len(corpus), mismatches)
 }

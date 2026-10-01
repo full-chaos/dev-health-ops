@@ -13,7 +13,7 @@
       "body_sha256": "82bd84d498c7943e36b84b8159b68883453740bc4b34713c42194ef62b9d2480",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"retry_after_qualified_403\", \"row\": {\"is_rate_limit\": {\"t\": \"bool\", \"v\": \"true\"}, \"reason\": {\"t\": \"str\", \"v\": \"secondary\"}, \"retry_after_seconds\": {\"t\": \"float\", \"v\": \"2.0\"}}}, {\"id\": \"remaining_zero_qualified_403\", \"row\": {\"is_rate_limit\": {\"t\": \"bool\", \"v\": \"true\"}, \"reason\": {\"t\": \"str\", \"v\": \"secondary\"}, \"retry_after_seconds\": null}}, {\"id\": \"plain_403_is_authentication\", \"row\": {\"is_rate_limit\": {\"t\": \"bool\", \"v\": \"false\"}, \"reason\": null, \"retry_after_seconds\": null}}, {\"id\": \"remaining_nonzero_is_authentication\", \"row\": {\"is_rate_limit\": {\"t\": \"bool\", \"v\": \"false\"}, \"reason\": null, \"retry_after_seconds\": null}}, {\"id\": \"429_is_primary_rate_limit\", \"row\": {\"is_rate_limit\": {\"t\": \"bool\", \"v\": \"true\"}, \"reason\": {\"t\": \"str\", \"v\": \"primary\"}, \"retry_after_seconds\": {\"t\": \"float\", \"v\": \"2.0\"}}}], \"excluded_fields\": {\"reason\": \"Go's shared ProviderError exposes the stable rate-limit class but not GitLab's provider-local primary/secondary reason\", \"retry_after_seconds\": \"Go's shared ProviderError stores retry delay as a duration and this oracle pins classification, not provider-specific delay serialization\"}}\n"
     }
   ]

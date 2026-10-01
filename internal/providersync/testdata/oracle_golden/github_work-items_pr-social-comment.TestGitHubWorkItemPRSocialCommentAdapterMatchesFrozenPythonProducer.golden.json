@@ -13,7 +13,7 @@
       "body_sha256": "c63b55b958d7dc84642790e553a06508156f312c6109c0bde82bbdf852bdee96",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"database_id_unicode_body\", \"row\": {\"id\": {\"t\": \"int\", \"v\": \"9007199254740993\"}, \"created_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T08:30:00.123456Z\"}, \"user\": {\"login\": {\"t\": \"str\", \"v\": \"reviewer\"}, \"email\": null, \"name\": null}, \"body\": {\"t\": \"str\", \"v\": \"Looks good \\ud83d\\udc4b\"}}}, {\"id\": \"full_database_id_fallback\", \"row\": {\"id\": {\"t\": \"str\", \"v\": \"9223372036854775808\"}, \"created_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T08:31:00Z\"}, \"user\": {\"login\": {\"t\": \"str\", \"v\": \"reviewer\"}, \"email\": null, \"name\": null}, \"body\": {\"t\": \"str\", \"v\": \"Full database ID\"}}}, {\"id\": \"node_id_fallback\", \"row\": {\"id\": {\"t\": \"str\", \"v\": \"IC_kwfinal\"}, \"created_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T08:32:00Z\"}, \"user\": {\"login\": {\"t\": \"str\", \"v\": \"reviewer\"}, \"email\": null, \"name\": null}, \"body\": {\"t\": \"str\", \"v\": \"Node ID\"}}}], \"excluded_fields\": {}}\n"
     }
   ]

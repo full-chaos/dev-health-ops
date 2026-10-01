@@ -1,0 +1,201 @@
+{
+  "header": {
+    "test": "TestResendSenderMatchesFrozenPythonResendProvider",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/mail/ -test '^TestResendSenderMatchesFrozenPythonResendProvider$' -python-root $DIR",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 fef5bb7ebe19f057e38a4a17a8e3eb689074e8bcd2d1cfc79a97a838556a0650 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\nrequests 2.34.2\nresend 2.47.0\n"
+    },
+    {
+      "name": "request: ascii",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "24862eccb8a724c15d3e70a92b0167a5d59bd5a3f809bc2e51ef579b97676836",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003eHi there\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "request: non-ascii",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "c3d96559f8bad57cef93e006b2cf44ab8ab38f56f5664e7246a2a5fc3acafcf0",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003eCafé 日本語\\u003c/p\\u003e\\n\\u003cp\\u003etail\\u003c/p\\u003e\",\"subject\":\"Café ☃ 🎉\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "request: markup and quotes",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "0c68a0a535ea05f02a56edc887ec581d8cf9ef0daf889a283cee36aa3f5d4a7e",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003ca href=\\\"x?a=1\\u0026b=2\\\"\\u003e'q'\\u003c/a\\u003e\",\"subject\":\"He said \\\"hi\\\" \\u0026 \\u003cleft\\u003e\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "request: empty subject and body",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "c8006ed8015b01cee3028426d51da6449e33a5c6e53f88a4662d4a338f6c063b",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\",\"subject\":\"\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: accepted",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "cc5547c280af2c132bea2a33b05e8e2c8e4c6b68ad995d751bae46783f4556ba",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":true,\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: validation error",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "4dc3a23380e386da1411e14e0d015849c7a5641faba78dfa50d80460561f7bbb",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"ValidationError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: invalid api key",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "401f1a13be1e9d73b4bdd59cbc0e7810f5a4a481980477495996110ac74aba03",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"ResendError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: forbidden",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "da772ade725ed63bdb78804712a82953940d278af60a0edfeaead745a60e8507",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"ResendError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: rate limited",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "481869ff074467582e2f24ab2bf6e2255a49dbfe66609cc5a6ac2464bd5c11ab",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"RateLimitError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: server error",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "f04cd469e70e46d84f68d16fa6d1c1bec82d22fdbc0a1959969ac392c4827f62",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"ApplicationError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: 200 wrapping an error object",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "c169b3cb320df36ac4fae9f1c06dcef96975f8a0eede8e258b8a334e070fba8b",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"RuntimeError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: 200 with a null error key",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "80869796a45712de5e72c01446d47917dacd5ee6de44d84a67fd4edd1137f8ff",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"RuntimeError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: 200 wrapping an error status",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "20baf8bbb571fee7936a6d61d9e555ff7b257f5e204e1ae660bbbcf4fc7a2cfc",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"ValidationError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: 200 with a non-JSON content type",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "58f37f9cced88d0206c647199703306c5105125ad88c2a161af0d8b77eb5d62e",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"ApplicationError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: 200 with an undecodable body",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "de20141aad63d8f68ab9dea44b6c987861437d2ce6170d2e3d49253dd8aa3cc8",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"ApplicationError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: 200 with an empty body",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "4401363b785a942ea04b3e16cc91cb478bebad18be194682751f363b301e41c6",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"ApplicationError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: non-JSON 500",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e4d7dbf36fd48483baff1819912c9bc401ffcffa861c505bb11c97c6046daa1f",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"ApplicationError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    },
+    {
+      "name": "outcome: JSON 500 with no statusCode field",
+      "method": "PYTHON",
+      "path": "program sha256 c80dfb46e2a2f83a82dcfe977b7d9ea2fe91ed918a06d36b963889bed75ee86f env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "c18f42ca8f1e78abcc85c3ddbe0485e0f3bd101b6459abe6ef47affdb2f3086f",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"sent\":false,\"error\":\"ResendError\",\"request\":{\"method\":\"POST\",\"path\":\"/emails\",\"authorization\":{\"sha256\":\"c72c68c9501ca6adf3cae9b9fc0883ef09a80bf5b6a58471d1c3a109ba1cfa7e\",\"length\":18},\"accept\":\"application/json\",\"user_agent\":\"resend-python:2.47.0\",\"content_type\":\"application/json\",\"body\":{\"from\":\"Dev Health \\u003cdev-health@example.com\\u003e\",\"html\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"subject\":\"Hello\",\"to\":[\"owner@example.test\"]}}}"
+    }
+  ]
+}

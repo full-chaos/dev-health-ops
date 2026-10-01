@@ -51,13 +51,21 @@ type Program struct {
 	// (PATH, HOME, the pinned sources on PYTHONPATH, no bytecode).
 	Env map[string]string
 	// PerRun gives the entries of one run only, such as the address of a
-	// database that exists for this run. It is called at a recording, the
-	// entries are set for the program by name, and they are not part of the
-	// request: a value that differs from run to run cannot be in a key. A
-	// recording fails when the program's answer holds such a value or a part
-	// of an address in it (perRunParts), and what the program wrote to
-	// stderr is logged with those parts replaced.
+	// database that exists for this run. It is called at a recording, once,
+	// just before the program starts; the entries are set for the program by
+	// name, and they are not part of the request: a value that differs from
+	// run to run cannot be in a key. A recording fails when the program's
+	// answer holds such a value or a part of an address in it (perRunParts),
+	// and what the program wrote to stderr is logged with those parts
+	// replaced.
 	PerRun func() map[string]string
+	// Answer makes the recorded answer from what the program printed, for a
+	// program whose effect is seen outside it: it sent a request to a server
+	// of the test, and the answer is what that server received. It is called
+	// at a recording, once, after the program exited with status 0, and what
+	// it returns is recorded in place of the program's stdout. The same rule
+	// holds for it as for stdout: no value of one run.
+	Answer func(stdout []byte) ([]byte, error)
 }
 
 // Answer is what one program gave: its exit code and its stdout. A program
@@ -396,6 +404,13 @@ func executeErr(pinnedRoot string, program Program) (executed, error) {
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	stdout, err := command.Output()
+	if err == nil && program.Answer != nil {
+		answer, answerErr := program.Answer(stdout)
+		if answerErr != nil {
+			return executed{}, fmt.Errorf("programoracle: program %q: the answer could not be made: %w", program.Name, answerErr)
+		}
+		stdout = answer
+	}
 	result := executed{stdout: stdout, stderr: withoutPerRun(stderr.String(), perRun)}
 	if leak := perRunErr(program.Name, string(stdout), perRun); leak != nil {
 		return executed{}, leak

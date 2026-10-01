@@ -1,3 +1,3 @@
 # Every file under internal/streamhandlers/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: b6c3880bf69411934b7768c043a5b5e3348c7e52c821480406124558619ac05d (1 files)
-62eb11a4b38e1ec4ab7eb7e144eb7edd9d805162701264f8297109f7f42fc544	python-recorded	product_telemetry_python_stored.json
+# python-recorded set: c6b3525ad368e6f664779ca0af3b25bb9ae08ba8586308795e0cd3b96e90f569 (1 files)
+f7b08e902830a5b458851cf3c15df2d85b6d08873766c7cff50e9abe93fe9f9e	python-recorded	product_telemetry_python_stored.json

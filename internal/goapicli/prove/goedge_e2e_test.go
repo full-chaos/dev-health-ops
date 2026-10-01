@@ -229,3 +229,44 @@ func TestEdgeModeLinesNameTheMode(t *testing.T) {
 		t.Errorf("go-edge go-only line %q", goLine)
 	}
 }
+
+// TestAPythonReferenceRunIsUnchangedExceptForItsModeLine: without -go-edge
+// the command is the run it always was. It still asks the Python app who
+// the caller is and proves the same two operations with the same verdicts
+// and receipts; no receipt mentions an edge mode (the field is written only
+// by a Go-edge run). The only additions are the mode line on stdout and the
+// summary's edge_mode, both saying python.
+func TestAPythonReferenceRunIsUnchangedExceptForItsModeLine(t *testing.T) {
+	withProverCommit(t, e2eBuildSHA)
+	stdout, runErr, reportPath, pool := runTwoOperationsEndToEnd(t)
+	if runErr != nil {
+		t.Fatalf("run(): %v\nstdout:\n%s", runErr, stdout)
+	}
+	assertTwoOperationsProven(t, stdout, reportPath, pool)
+	if !strings.Contains(stdout, "go-api-prove: edge_mode=python (Python-reference:") || strings.Contains(stdout, "go-edge") {
+		t.Errorf("a Python-reference run must say edge_mode=python and never go-edge:\n%s", stdout)
+	}
+	for _, insert := range pool.proofRunInserts() {
+		if strings.Contains(fmt.Sprint(insert.args...), "edge_mode") {
+			t.Errorf("a Python-reference receipt mentions an edge mode: %v", insert.args)
+		}
+	}
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report struct {
+		Summary struct {
+			EdgeMode string `json:"edge_mode"`
+		} `json:"summary"`
+		Outcomes []map[string]any `json:"outcomes"`
+	}
+	if err := json.Unmarshal(raw, &report); err != nil || report.Summary.EdgeMode != goapiproof.EdgeModePython {
+		t.Fatalf("report summary edge_mode %q (err %v), want python", report.Summary.EdgeMode, err)
+	}
+	for _, outcome := range report.Outcomes {
+		if _, present := outcome["edge_mode"]; present {
+			t.Errorf("a Python-reference outcome carries edge_mode: %v", outcome)
+		}
+	}
+}

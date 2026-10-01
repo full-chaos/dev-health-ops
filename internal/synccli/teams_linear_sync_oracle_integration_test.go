@@ -545,6 +545,15 @@ func linearScenarios() []*linearScenario {
 				if strings.Join(goLogins, ",") != "alice@example.com" {
 					t.Errorf("go members = %v, want only alice (the catalog always excludes inactive members)", goLogins)
 				}
+				// The membership rows are the other place an inactive member could land: only alice has one.
+				var membershipUsers []string
+				for _, row := range o.rows(o.goDatabase, "team_memberships", "org-1") {
+					membershipUsers = append(membershipUsers, row["member_id"])
+				}
+				sort.Strings(membershipUsers)
+				if strings.Join(membershipUsers, ",") != "linear:alice@example.com" {
+					t.Errorf("go wrote team_memberships for %v, want only linear:alice@example.com (an inactive member has no membership)", membershipUsers)
+				}
 			}},
 		// codex r1 relaunch, CHAOS-6908 (P2): NOT a divergence, corrected from
 		// an earlier draft that claimed one. providers/teams.py's `archivedAt`
@@ -588,7 +597,7 @@ func linearCorpusKey() []byte {
 // and, column by column, the `teams` rows it wrote. Executed once on teamsPythonBuild and frozen in
 // testdata/golden/teams_linear.json.
 func TestSyncTeamsLinearMatchesFrozenPython(t *testing.T) {
-	frozen, golden := openTeamsGolden(t, "linear", "TestSyncTeamsLinearMatchesFrozenPython", "PIN:teams_linear", teamsSyncOracleLinearProgram, linearCorpusKey(),
+	frozen, golden := openTeamsGolden(t, "linear", "TestSyncTeamsLinearMatchesFrozenPython", "21feb5507e43b5772634d53fd9eeb7b2f42a9d76a9c98d40b2e0ce58c08c1f30", teamsSyncOracleLinearProgram, linearCorpusKey(),
 		func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen {
 			o := newTeamsOracle(t)
 			o.startPython(producer, teamsSyncOracleLinearProgram)

@@ -1,0 +1,22 @@
+{
+  "header": {
+    "test": "TestSyncTeamsLinearMatchesFrozenPython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestSyncTeamsLinearMatchesFrozenPython$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "teams linear corpus",
+      "method": "PYTHON",
+      "path": "program sha256 ab989c430232b6c2f3e2c806120ef7a65af5e08917abf5ed35a71fe67b4a44ef env sha256 6d559f8ad37593c5e087cdf9b2c0c3a4423cf5c9f84ed3ebf7d062a7c71f8bf4",
+      "body_sha256": "e34b2bb00cc32e9aaea5af6dd1dd7b7427dbe879a9c6e6760136777a50fcf771",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "gzip+base64:H4sIAAAAAAAC/+xW0W/TPhD+V0730t9PSqdN8JQnhqjQRLVNAx7QqKKLfSQmjm1sp1007X9HTteyTq1ASIOh9i323dnf3Xf5fNe3aKhlzDEuLESmNmRgDUPLbckeFirWtotABrglpTHDEKlKAbbBDIWV6fsYM4xUag6Y36Lz9iuLGDA3ndYZpmOL5YGhVm5z/965sAuzNG9YPTu73RQwv75FyUF45aKyBnP8UDOwqYY8MEMlMUetDJPPJ+dv004oSEQ1T5hPMENNIRahN4KT6+fu+PiFiKrl4Ysxw5ZMR3oFHnO8nqXdH8sRaSX4Fd9Q6zQfCduOstFrW46S331pJ6ZShtkrUw2bCUAxpNdwv773/ON0ur7X+qoY4FtfjRNSR55NXEYpuT1oVcqG+zVU5+1cSfaYI2Y4lNNRjOzN2iXYzgveeepwZdc9MKfFy7W9c5Iiy4LithLeZY9J2nLFQ6IuLt8/DVGCvNWPiJI03+TuAWsXjj0lzGH/SJvdJd5WylAzRNuwgS/etjA9O5+cXhWnl2fFu8mngyAcBOEgCPslCASeE0SWS13YoQEnf0UD0mIDbJpcXOxhYX0THAkGFYZ5xnvr/zXoaR6D8Zi0tovxYHxWArwlA2WW/+39RJmD5opEDw2zC6AiKJN+9AxkbUcBBEXStgK+EbqTnDye9xPzE/X6o89Mactd4rXXT87sUU+mhMiLWs2ThDG1SRKUGTpOQtlDaWMNTpPhAP8NzB+5fhRgFXQaQdQsmhQnmSSkngSqSJkQIQ1MnknDt459//+hf3+tfw/d+psD0vTN01DEu2ehK47Ks9xLKZl9HwC7ZArGNREAAA=="
+    }
+  ]
+}

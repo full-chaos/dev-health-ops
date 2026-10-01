@@ -544,7 +544,7 @@ func gitlabCorpusKey() []byte {
 // ended and, column by column, the `teams` rows it wrote. Executed once on teamsPythonBuild and frozen in
 // testdata/golden/teams_gitlab.json.
 func TestSyncTeamsGitLabMatchesFrozenPython(t *testing.T) {
-	frozen, golden := openTeamsGolden(t, "gitlab", "TestSyncTeamsGitLabMatchesFrozenPython", "PIN:teams_gitlab", teamsSyncOracleGitLabProgram, gitlabCorpusKey(),
+	frozen, golden := openTeamsGolden(t, "gitlab", "TestSyncTeamsGitLabMatchesFrozenPython", "78c396caa59aa1df63e1db3be3b54b118518d469446b3e6543ff7bf5b0c96861", teamsSyncOracleGitLabProgram, gitlabCorpusKey(),
 		func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen {
 			o := newTeamsOracle(t)
 			o.startPython(producer, teamsSyncOracleGitLabProgram)

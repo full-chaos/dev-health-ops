@@ -197,17 +197,25 @@ func TestAFrozenPairAnswerRefusesAnUntaggedLeaf(t *testing.T) {
 	}
 }
 
-// TestAPairGoldenAnswersOneComparison pins that a golden is opened once per
-// process: the second comparison of the same pair in the same test is refused,
-// a comparison of another pair or in another test is not.
+// TestAPairGoldenAnswersOneComparison pins that one run of a test opens a
+// golden once: the second comparison of the same pair in the same run is
+// refused; another pair, another test, and the same test executed again
+// (go test -count=2) are not.
 func TestAPairGoldenAnswersOneComparison(t *testing.T) {
 	var opened sync.Map
+	firstRun, secondRun := new(int), new(int)
 	first := oraclePairGoldenName("github/prs/row", "TestA")
-	if err := claimOraclePairGolden(&opened, first, "github/prs/row", "TestA"); err != nil {
+	if err := claimOraclePairGolden(&opened, first, firstRun, "github/prs/row", "TestA"); err != nil {
 		t.Fatalf("the first comparison was refused: %v", err)
 	}
-	if err := claimOraclePairGolden(&opened, first, "github/prs/row", "TestA"); err == nil {
-		t.Error("the second comparison of the same pair in the same test was accepted")
+	if err := claimOraclePairGolden(&opened, first, firstRun, "github/prs/row", "TestA"); err == nil {
+		t.Error("the second comparison of the same pair in the same run was accepted")
+	}
+	if err := claimOraclePairGolden(&opened, first, secondRun, "github/prs/row", "TestA"); err != nil {
+		t.Errorf("the same test executed again was refused: %v", err)
+	}
+	if err := claimOraclePairGolden(&opened, first, secondRun, "github/prs/row", "TestA"); err == nil {
+		t.Error("the second comparison in the second run was accepted")
 	}
 	for _, other := range []string{
 		oraclePairGoldenName("github/prs/window", "TestA"),
@@ -217,7 +225,7 @@ func TestAPairGoldenAnswersOneComparison(t *testing.T) {
 		if other == first {
 			t.Fatalf("golden name %s is not unique to its pair and test", other)
 		}
-		if err := claimOraclePairGolden(&opened, other, "pair", "test"); err != nil {
+		if err := claimOraclePairGolden(&opened, other, firstRun, "pair", "test"); err != nil {
 			t.Errorf("%s was refused: %v", other, err)
 		}
 	}

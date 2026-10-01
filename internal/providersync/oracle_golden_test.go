@@ -45,8 +45,8 @@ var oraclePairFileEnv = []string{"IDENTITY_MAPPING_PATH"}
 // the request too.
 var oraclePairConfigDirs = []string{"testdata/investment_configs", "testdata/status_mapping_configs"}
 
-// oraclePairGoldensOpened records each golden a comparison opened in this
-// process: one frozen answer stands in for one comparison.
+// oraclePairGoldensOpened records, per golden, the test run that last opened
+// it: one frozen answer stands in for one comparison of that run.
 var oraclePairGoldensOpened sync.Map
 
 // frozenPairAnswer returns what python_generic_row_oracle.py printed for pairID
@@ -66,7 +66,7 @@ func frozenPairAnswer(t *testing.T, pairID string, encodedCases []byte) []byte {
 	repoRoot := filepath.Dir(filepath.Dir(packageDir))
 
 	name := oraclePairGoldenName(pairID, t.Name())
-	if err := claimOraclePairGolden(&oraclePairGoldensOpened, name, pairID, t.Name()); err != nil {
+	if err := claimOraclePairGolden(&oraclePairGoldensOpened, name, t, pairID, t.Name()); err != nil {
 		t.Fatal(err)
 	}
 	recipe := fmt.Sprintf("pair %s: git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); "+
@@ -135,11 +135,13 @@ func oraclePairEnvironment(t *testing.T, pairID string) (keyed map[string]string
 	return keyed, passed
 }
 
-// claimOraclePairGolden is an error when the golden name was already opened in
-// this process: a test that compares one pair twice would read the same answer
-// for both comparisons.
-func claimOraclePairGolden(opened *sync.Map, name, pairID, testName string) error {
-	if _, asked := opened.LoadOrStore(name, true); asked {
+// claimOraclePairGolden is an error when run already opened the golden name: a
+// test that compares one pair twice would read the same answer for both
+// comparisons. run identifies one execution of a test (its *testing.T), so the
+// same test executed again in the process (go test -count=2) opens its golden
+// again.
+func claimOraclePairGolden(opened *sync.Map, name string, run any, pairID, testName string) error {
+	if previous, _ := opened.Swap(name, run); previous == run {
 		return fmt.Errorf("pair %q is asked twice by test %s: one frozen answer stands in for one "+
 			"comparison, so give each comparison of a pair its own subtest", pairID, testName)
 	}

@@ -284,6 +284,57 @@ def test_a_package_level_failure_with_no_output_says_where_to_look(
     assert "holds no output for this package" in result.stderr
 
 
+def _block(stderr: str, package: str) -> list[str]:
+    return _failure_blocks(stderr)[package].splitlines()
+
+
+def test_a_long_output_keeps_its_first_and_its_last_lines_and_counts_what_it_cut(
+    tmp_path: Path,
+) -> None:
+    # The cause can be the first line (a TestMain says why, then prints a long cleanup) or the last (the
+    # assertion after a long log). Both ends stay, and the cut is counted and says where the rest is.
+    package_stream = _events(
+        ("output", "", "CAUSE: required migration version is unsupported\n", ""),
+        *[("output", "", f"cleanup diagnostic {i:03d}\n", "") for i in range(100)],
+        ("output", "", "FAIL\tgithub.com/x/y/internal/p\t0.1s\n", ""),
+        ("fail", "", "", ""),
+    )
+    result, _ = _classify(tmp_path, package_stream)
+    lines = _block(result.stderr, PKG)
+    assert lines[0] == "CAUSE: required migration version is unsupported", result.stderr
+    assert lines[-1].startswith("FAIL\t")
+    assert len(lines) == 40 + 1 + 60
+    assert (
+        lines[40].startswith("... (2 lines left out here;")
+        and "python-free-stream-" in lines[40]
+    )
+    assert (
+        lines[39] == "cleanup diagnostic 038" and lines[41] == "cleanup diagnostic 041"
+    )
+
+    test_stream = _events(
+        ("output", "TestLong", "FIRST: the request that was sent\n", ""),
+        *[("output", "TestLong", f"progress {i:03d}\n", "") for i in range(150)],
+        ("output", "TestLong", "LAST: the assertion that failed\n", ""),
+        ("fail", "TestLong", "", ""),
+    )
+    result, _ = _classify(tmp_path, test_stream)
+    lines = _block(result.stderr, PKG)
+    assert lines[0] == "FIRST: the request that was sent", result.stderr
+    assert lines[-1] == "LAST: the assertion that failed"
+    assert lines[40].startswith("... (52 lines left out here;")
+    assert len(lines) == 101
+
+    # An output that fits is printed whole, with no cut line.
+    fits = _events(
+        *[("output", "", f"line {i:03d}\n", "") for i in range(100)],
+        ("fail", "", "", ""),
+    )
+    result, _ = _classify(tmp_path, fits)
+    lines = _block(result.stderr, PKG)
+    assert lines == [f"line {i:03d}" for i in range(100)], result.stderr
+
+
 def test_the_workflow_keeps_each_shard_stream_apart_from_the_hits() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text())
     for job, label in (
@@ -298,8 +349,22 @@ def test_the_workflow_keeps_each_shard_stream_apart_from_the_hits() -> None:
         streams = [u for u in uploads if u["path"].endswith("/python-free/*.json")]
         assert len(streams) == 1, (job, uploads)
         assert streams[0]["name"] == "python-free-stream-" + label
+        # The run step always writes its stream: none is a measurement that did not happen.
+        assert streams[0]["if-no-files-found"] == "error"
         hits = [u for u in uploads if u["path"].endswith("/python-free/*.hits")]
         assert len(hits) == 1 and hits[0]["name"] == "python-free-hits-" + label
+        # An upload keeps something only when it runs after the step that writes it, and when that step
+        # failed too: a red shard is the one whose stream is read.
+        steps = workflow["jobs"][job]["steps"]
+        ran = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("env", {}).get("GO_PYTHON_FREE") == "1"
+        )
+        for index, step in enumerate(steps):
+            if "upload-artifact" in str(step.get("uses", "")):
+                assert index > ran, step["name"]
+                assert step.get("if") == "always()", step["name"]
     # The ratchet compares the hits only: a stream must never land in its download.
     download = next(
         step["with"]

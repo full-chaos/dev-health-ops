@@ -140,7 +140,8 @@ jobs:
         with:
           name: python-free-stream-${{ matrix.target }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/python-free/*.json
-          if-no-files-found: warn
+          # The run step always writes its stream: a shard with none did not measure anything.
+          if-no-files-found: error
 
   # The untagged unit set under the same tripwire (CHAOS-7384, lead's ruling): a unit test can start Python too,
   # through PATH, and a test that SKIPS because Python is missing is how it hides. No Docker, no shards.
@@ -192,7 +193,7 @@ jobs:
         with:
           name: python-free-stream-unit
           path: ${{ runner.temp }}/python-free/*.json
-          if-no-files-found: warn
+          if-no-files-found: error
 
   ratchet:
     name: go-python-free

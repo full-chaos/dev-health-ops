@@ -141,6 +141,31 @@ func TestChunkedContinuationIsAttemptNeutral(t *testing.T) {
 	_ = context.Background()
 }
 
+// TestChunkContinuationNamesTheBoundThatStoppedTheAttempt pins the closed
+// vocabulary the provider-unit log relies on: the chunk-count bound wins when
+// both are reached, and the wall bound is reported only when the count was not.
+func TestChunkContinuationNamesTheBoundThatStoppedTheAttempt(t *testing.T) {
+	t.Parallel()
+	policy := ChunkPolicy{MaxChunksPerAttempt: 8, MaxWallTime: 45 * time.Second}
+	next := time.Date(2026, 10, 1, 12, 0, 1, 0, time.UTC)
+	cases := []struct {
+		name    string
+		chunks  int
+		elapsed time.Duration
+		want    string
+	}{
+		{"count bound reached", 8, 5 * time.Second, ChunkStopChunkBound},
+		{"both bounds reached", 8, 46 * time.Second, ChunkStopChunkBound},
+		{"wall bound reached first", 3, 46 * time.Second, ChunkStopWallTime},
+	}
+	for _, tc := range cases {
+		got := newChunkContinuation(policy, next, tc.chunks, tc.elapsed)
+		if got.Reason != tc.want || got.Chunks != tc.chunks || got.Elapsed != tc.elapsed || !got.Next.Equal(next) {
+			t.Fatalf("%s: got %+v want reason %q chunks %d elapsed %s", tc.name, got, tc.want, tc.chunks, tc.elapsed)
+		}
+	}
+}
+
 func TestChunkedExecutorResumesPreparedChunksWithoutRecollection(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
@@ -166,6 +191,15 @@ func TestChunkedExecutorResumesPreparedChunksWithoutRecollection(t *testing.T) {
 	}
 	if handler.calls != 1 {
 		t.Fatalf("first collection calls=%d want 1", handler.calls)
+	}
+	// CHAOS-7692: the continuation says why the attempt stopped and what it did.
+	var stopped ChunkContinuationError
+	if !errors.As(err, &stopped) {
+		t.Fatalf("first execution error=%v carries no ChunkContinuationError", err)
+	}
+	if stopped.Reason != ChunkStopChunkBound || stopped.Chunks != 1 {
+		t.Fatalf("stop signal reason=%q chunks=%d want %q and 1 (MaxChunksPerAttempt=1)",
+			stopped.Reason, stopped.Chunks, ChunkStopChunkBound)
 	}
 	checkpoint, err := store.LoadChunkCheckpoint(context.Background(), claim, now)
 	if err != nil {
@@ -219,6 +253,13 @@ func TestChunkedExecutorStreamsPagesAndResumesCursor(t *testing.T) {
 	_, err := executor.Execute(context.Background(), session, descriptor)
 	if !errors.Is(err, ErrChunkContinuation) {
 		t.Fatalf("first execution error=%v", err)
+	}
+	// CHAOS-7692: the streaming path (the one large GitHub units run) reports
+	// the bound that stopped the attempt and the chunks it committed.
+	var stopped ChunkContinuationError
+	if !errors.As(err, &stopped) || stopped.Reason != ChunkStopChunkBound || stopped.Chunks != 2 {
+		t.Fatalf("streaming stop signal=%+v err=%v want reason %q and 2 chunks (MaxChunksPerAttempt=2)",
+			stopped, err, ChunkStopChunkBound)
 	}
 	checkpoint, checkpointErr := store.LoadChunkCheckpoint(context.Background(), claim, now)
 	if handler.calls != 1 || checkpointErr != nil || checkpoint.NextCursor != `{"page":1}` {

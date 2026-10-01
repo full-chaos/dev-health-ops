@@ -32,6 +32,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -75,7 +76,7 @@ func ApplyOrderingContract1(ctx context.Context, t *testing.T, instance *contain
 // checkContractEnv refuses an environment that names a contract Apply does not
 // build. Unset is accepted: it names nothing, and Apply builds contract 2.
 func checkContractEnv(value string, set bool) error {
-	if set && value != "2" {
+	if _, err := operationalordering.ResolveValue(value, set); err != nil {
 		return fmt.Errorf("%s=%q, but Apply builds production's contract 2; use ApplyOrderingContract1 for the legacy shape",
 			chmigrate.OrderingContractEnv, value)
 	}

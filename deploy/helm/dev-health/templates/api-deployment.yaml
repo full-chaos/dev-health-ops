@@ -70,11 +70,20 @@ spec:
           envFrom:
             {{- toYaml $apiEnvFrom | nindent 12 }}
           {{- $apiEnv := list }}
+          {{- /*
+          CHAOS-7421: the Python api reads the ordering contract through the same
+          variable (storage/operational_ordering_guard.py), and an unset value
+          is contract 1 THERE: against the contract-2 tables it would return the
+          older live row after a tombstone. Export the one value every Go process
+          carries (contract 1 is unsupported). An operator's extraEnv entry of the
+          same name is ignored, as for EXPECTED_WORKER_GROUPS.
+          */}}
+          {{- $apiEnv = append $apiEnv (dict "name" "OPERATIONAL_ORDERING_CONTRACT" "value" (include "dev-health.operationalOrderingContract" .)) }}
           {{- if .Values.goWorkers.enabled }}
           {{- $apiEnv = append $apiEnv (dict "name" "EXPECTED_WORKER_GROUPS" "value" (.Values.goWorkers.expectedWorkerGroups | join ",")) }}
           {{- end }}
           {{- range (.Values.api.extraEnv | default (list)) }}
-          {{- if ne .name "EXPECTED_WORKER_GROUPS" }}
+          {{- if and (ne .name "EXPECTED_WORKER_GROUPS") (ne .name "OPERATIONAL_ORDERING_CONTRACT") }}
           {{- $apiEnv = append $apiEnv . }}
           {{- end }}
           {{- end }}

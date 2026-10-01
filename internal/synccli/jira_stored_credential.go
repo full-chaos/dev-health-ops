@@ -64,12 +64,25 @@ func resolveJiraStoredSettings(
 	if pool == nil {
 		return settings{}, errors.New(PostgresURIKey + " is not set: required to resolve the org's stored jira credential")
 	}
+	// A process with no encryption key cannot open ANY stored credential; say so up front instead of
+	// failing the first resolve with a bare "credential is invalid" (CHAOS-7132).
+	if keyed, ok := decryptor.(interface{ Configured() bool }); ok && !keyed.Configured() {
+		return settings{}, errors.New("encryption_key_not_configured: SETTINGS_ENCRYPTION_KEY is not set, so the org's stored jira credential cannot be opened")
+	}
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
 	resolver := providerfoundation.CredentialResolver{
 		Repository: providerfoundation.PostgresCredentialRepository{Pool: pool},
 		Decryptor:  decryptor,
 	}
 	scope := providerfoundation.TenantScope{OrgID: orgID, Provider: "jira", IntegrationID: jiraTeamsScopeIntegrationID}
+	// The credential is the one the org's jira integration points at -- the credential every sync
+	// of the org resolves -- not "the one named default, else the first" (CHAOS-7132: with two jira
+	// credentials the verb picked one no sync uses). No integration row keeps the by-name lookup.
+	credentialID, err := jiraIntegrationCredentialID(ctx, pool, orgID)
+	if err != nil {
+		return settings{}, err
+	}
+	scope.CredentialID = credentialID
 	credential, err := resolver.Resolve(ctx, lease, scope)
 	if err != nil {
 		return settings{}, fmt.Errorf("resolve the org's stored jira credential: %w", err)
@@ -170,4 +183,49 @@ func openPostgresPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 func pgxDSN(dsn string) string {
 	dsn = strings.Replace(dsn, "postgresql+asyncpg://", "postgresql://", 1)
 	return strings.Replace(dsn, "postgres+asyncpg://", "postgresql://", 1)
+}
+
+// jiraIntegrationCredentialID returns the credential id of the org's active jira integration(s): "" when
+// there is none or its only one has no stored credential (the by-name lookup then applies), the id when
+// every integration shares one credential, and a loud refusal when they differ (an integration without a
+// stored credential counts as different) -- the verb must not guess.
+func jiraIntegrationCredentialID(ctx context.Context, pool *pgxpool.Pool, orgID string) (string, error) {
+	rows, err := pool.Query(ctx,
+		`SELECT DISTINCT COALESCE(credential_id::text, '') FROM integrations
+		 WHERE org_id = $1 AND lower(provider) = 'jira' AND is_active = TRUE
+		 ORDER BY 1`, orgID)
+	if err != nil {
+		return "", fmt.Errorf("read the org's jira integrations: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", fmt.Errorf("read the org's jira integrations: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("read the org's jira integrations: %w", err)
+	}
+	switch len(ids) {
+	case 0:
+		return "", nil
+	case 1:
+		// "" is the one integration that has no stored credential (environment-authenticated): the
+		// by-name lookup applies, as before.
+		return ids[0], nil
+	}
+	// An integration with no stored credential counts as a different candidate: skipping it would pick
+	// the other one silently (r2, CHAOS-7132).
+	shown := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			id = "<no stored credential>"
+		}
+		shown = append(shown, id)
+	}
+	return "", fmt.Errorf("the org has %d active jira integrations with different credentials (%s); this verb cannot choose one",
+		len(ids), strings.Join(shown, ", "))
 }

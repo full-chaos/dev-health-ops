@@ -344,3 +344,20 @@ func TestUnrenderableRunShapesAreLogged500s(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-7132: a run whose additive leg failed carries `degraded` in its stored result. The sync-run
+// response must pass it through unchanged: dropping or rejecting the key would hide the one place the
+// failure is recorded.
+func TestSyncRunResponsePassesTheDegradedLegsThrough(t *testing.T) {
+	result := `{"completed_units": 14, "failed_units": 0, "degraded": [{"dataset": "teams", "leg": "jira_atlassian_teams", "outcome": "failed", "reason": "unclassified", "detail": "Invalid Organization Ari"}]}`
+	body, err := syncRunResponse(&syncRun{ID: uuid.Nil, Status: "success", Result: &result})
+	if err != nil {
+		t.Fatalf("syncRunResponse: %v", err)
+	}
+	text := marshal(t, body)
+	for _, want := range []string{`"degraded"`, `"leg":"jira_atlassian_teams"`, `"outcome":"failed"`, `"dataset":"teams"`, `"status":"success"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the response dropped %s: %s", want, text)
+		}
+	}
+}

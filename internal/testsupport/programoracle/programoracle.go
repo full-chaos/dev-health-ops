@@ -233,28 +233,20 @@ func keyedEnv(program Program) map[string]string {
 }
 
 // interpreterEnv is the whole environment a recording gives the interpreter:
-// PATH and HOME of the recording process, the pinned sources first on the
-// module path, no bytecode written, the keyed entries, and the program's
-// entries of this run. Nothing else of the recording process's environment
-// reaches the program.
+// the closed environment every recording of the repository uses
+// (pyoracle.ClosedEnv), then the keyed entries, then the program's entries of
+// this run. Nothing of the recording process's environment reaches the
+// program.
 func interpreterEnv(pinnedRoot string, program Program, perRun map[string]string) []string {
-	environment := []string{
-		"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"),
-		"PYTHONPATH=" + filepath.Join(pinnedRoot, "src"), "PYTHONDONTWRITEBYTECODE=1",
-	}
 	keyed := keyedEnv(program)
-	names := make([]string, 0, len(keyed))
-	for name := range keyed {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		environment = append(environment, name+"="+keyed[name])
+	extra := make([]string, 0, len(keyed)+len(perRun))
+	for _, name := range sortedNames(keyed) {
+		extra = append(extra, name+"="+keyed[name])
 	}
 	for _, name := range sortedNames(perRun) {
-		environment = append(environment, name+"="+perRun[name])
+		extra = append(extra, name+"="+perRun[name])
 	}
-	return environment
+	return pyoracle.ClosedEnv(pinnedRoot, extra...)
 }
 
 func sortedNames(entries map[string]string) []string {

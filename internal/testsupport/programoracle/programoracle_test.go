@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -133,22 +134,28 @@ func TestTheKeyedEnvironmentHoldsTheDefaultsAndTheProgramsOwn(t *testing.T) {
 }
 
 // TestTheInterpreterGetsNothingOfTheProcessEnvironment pins the recording
-// environment: only PATH and HOME come from the process; the pinned sources,
-// the bytecode switch and the keyed entries are set; an ambient variable does
-// not reach the program.
+// environment: the repository's closed environment for the pinned sources and
+// then the keyed entries. No variable of the process reaches the program, its
+// PATH and HOME included.
 func TestTheInterpreterGetsNothingOfTheProcessEnvironment(t *testing.T) {
-	t.Setenv("PROGRAMORACLE_AMBIENT", "must not reach the program")
-	t.Setenv("PYTHONPATH", "/ambient/path")
-	t.Setenv("PATH", "/bin-of-the-test")
-	t.Setenv("HOME", "/home-of-the-test")
+	ambient := []string{"must not reach the program", "/ambient/path", "/bin-of-the-test", "/home-of-the-test"}
+	t.Setenv("PROGRAMORACLE_AMBIENT", ambient[0])
+	t.Setenv("PYTHONPATH", ambient[1])
+	t.Setenv("PATH", ambient[2])
+	t.Setenv("HOME", ambient[3])
 	environment := interpreterEnv("/pinned", Program{Env: map[string]string{"TZ": "UTC"}}, nil)
-	want := []string{
-		"PATH=/bin-of-the-test", "HOME=/home-of-the-test",
-		"PYTHONPATH=" + filepath.Join("/pinned", "src"), "PYTHONDONTWRITEBYTECODE=1",
-		"PYTHONHASHSEED=0", "PYTHONUTF8=1", "TZ=UTC",
-	}
+	want := append(pyoracle.ClosedEnv("/pinned"), "PYTHONHASHSEED=0", "PYTHONUTF8=1", "TZ=UTC")
 	if strings.Join(environment, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("interpreter environment =\n%s\nwant\n%s", strings.Join(environment, "\n"), strings.Join(want, "\n"))
+	}
+	text := strings.Join(environment, "\n")
+	for _, value := range ambient {
+		if strings.Contains(text, value) {
+			t.Errorf("the interpreter environment holds %q of the process environment", value)
+		}
+	}
+	if !slices.Contains(environment, "PYTHONPATH="+filepath.Join("/pinned", "src")) {
+		t.Errorf("the pinned sources are not on the module path: %v", environment)
 	}
 }
 

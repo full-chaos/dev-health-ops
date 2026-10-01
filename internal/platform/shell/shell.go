@@ -13,12 +13,14 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/otlpmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
@@ -332,7 +334,15 @@ func Execute(
 	// reconciler or stream runner process was dropped. Fails soft like
 	// tracing: a broken exporter leaves the instruments unexported, it never
 	// stops the process.
-	if err := apimetrics.Register(registry); err != nil {
+	// The same instruments and the registered fragments are also pushed over
+	// OTLP to the collector the traces use (OTEL_EXPORTER_OTLP_ENDPOINT); the
+	// pull endpoint is unchanged. OTEL_METRICS_ENABLED=false turns the push off.
+	pushOptions, pushErr := otlpmetrics.OptionsFromEnv(spec.TraceServiceName, nil)
+	if pushErr != nil {
+		logger.Warn("otlp metrics push disabled", "error", pushErr)
+	}
+	metricsSource, err := apimetrics.RegisterWithPush(registry, pushOptions, cfg.Service, build.Version, logger)
+	if err != nil {
 		logger.Warn("register OTel instruments on the operator /metrics", "error", err)
 	}
 	operatorHTTP, err := health.NewServer(health.ServerOptions{
@@ -351,7 +361,7 @@ func Execute(
 	// tracingComponent starts first and, by lifecycle.Runtime's reverse
 	// shutdown order, stops last -- so buffered spans from every other
 	// component's work flush before the exporter shuts down.
-	components := []lifecycle.Component{tracingComponent, operatorHTTP}
+	components := []lifecycle.Component{tracingComponent, metricsFlush{source: metricsSource, logger: logger}, operatorHTTP}
 	if spec.ConfigureDependencies != nil && spec.ConfigureDependenciesWithLogger != nil {
 		logger.ErrorContext(
 			ctx,
@@ -418,3 +428,39 @@ func Execute(
 	logger.InfoContext(context.Background(), "service stopped")
 	return 0
 }
+
+// metricsFlush stops the OTLP metric push on shutdown, after every component
+// registered after it has stopped producing, so the last interval is flushed.
+// It is a no-op without a push. A flush that cannot reach the collector is
+// logged and bounded, never a shutdown failure: the process stopped cleanly.
+type metricsFlush struct {
+	source *apimetrics.Source
+	logger *slog.Logger
+}
+
+func (metricsFlush) Name() string { return "otlp-metrics" }
+
+func (metricsFlush) Start(context.Context) error { return nil }
+
+func (m metricsFlush) Shutdown(ctx context.Context) error {
+	// Half of what is left of the shutdown budget, at most metricsFlushTimeout:
+	// the components that stop after this one still need theirs.
+	budget := metricsFlushTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if half := time.Until(deadline) / 2; half < budget {
+			budget = half
+		}
+	}
+	if budget <= 0 {
+		return nil
+	}
+	flushCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	if err := m.source.Shutdown(flushCtx); err != nil {
+		m.logger.Warn("otlp metrics final flush failed", "error", err)
+	}
+	return nil
+}
+
+// metricsFlushTimeout bounds the final OTLP flush.
+const metricsFlushTimeout = 2 * time.Second

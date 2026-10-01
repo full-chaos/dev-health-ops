@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -149,19 +150,43 @@ func (s *Server) handleMetrics(response http.ResponseWriter, request *http.Reque
 	if !allowRead(response, request) {
 		return
 	}
-	readiness := s.registry.Readiness(request.Context())
+	var output bytes.Buffer
+	s.registry.WriteRuntimeMetrics(request.Context(), s.service, s.version, &output)
+	// Degrade rather than fail: a source whose dependency is unreachable must
+	// not take the process-level gauges above down with it, since live/ready/
+	// uptime matter most while the process is unready. The per-source failure
+	// gauge keeps that honest — a scraper can tell partial data from complete
+	// data, and alert on the failure series, instead of silently reading a
+	// short scrape as healthy.
+	outcomes, err := s.registry.WriteMetricsPartial(&output)
+	if err != nil {
+		writeJSON(response, http.StatusServiceUnavailable, map[string]any{"status": "metrics_unavailable"})
+		return
+	}
+	WriteSourceFailedMetrics(&output, outcomes)
+
+	response.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(output.Bytes())
+}
+
+// WriteRuntimeMetrics writes the process-level block of /metrics: liveness,
+// readiness, uptime, the required-check count, build info and one gauge per
+// required readiness check. It is shared by the scrape handler and the OTLP
+// bridge, so the two cannot disagree about what the process reports.
+func (r *Registry) WriteRuntimeMetrics(ctx context.Context, service, version string, output io.Writer) {
+	readiness := r.Readiness(ctx)
 	ready := 0
 	if readiness.Ready {
 		ready = 1
 	}
 	live := 0
-	if s.registry.Live() {
+	if r.Live() {
 		live = 1
 	}
 
-	var output bytes.Buffer
 	_, _ = fmt.Fprintf(
-		&output,
+		output,
 		"# HELP dev_health_runtime_live Whether the process is live.\n"+
 			"# TYPE dev_health_runtime_live gauge\n"+
 			"dev_health_runtime_live %d\n"+
@@ -179,10 +204,10 @@ func (s *Server) handleMetrics(response http.ResponseWriter, request *http.Reque
 			"dev_health_runtime_info{service=%s,version=%s} 1\n",
 		live,
 		ready,
-		strconv.FormatFloat(s.registry.Uptime().Seconds(), 'f', 3, 64),
-		s.registry.RequiredCount(),
-		strconv.Quote(s.service),
-		strconv.Quote(s.version),
+		strconv.FormatFloat(r.Uptime().Seconds(), 'f', 3, 64),
+		r.RequiredCount(),
+		strconv.Quote(service),
+		strconv.Quote(version),
 	)
 	// dev_health_runtime_ready collapses every required check into one bit, so
 	// an alert fired from it cannot say which dependency is down — and a
@@ -195,7 +220,7 @@ func (s *Server) handleMetrics(response http.ResponseWriter, request *http.Reque
 	// so the label ordering is stable scrape to scrape.
 	if len(readiness.Checks) > 0 {
 		_, _ = fmt.Fprint(
-			&output,
+			output,
 			"# HELP dev_health_runtime_check_failed Whether a required readiness check is currently failing.\n"+
 				"# TYPE dev_health_runtime_check_failed gauge\n",
 		)
@@ -211,49 +236,67 @@ func (s *Server) handleMetrics(response http.ResponseWriter, request *http.Reque
 			// its source label below — reusing an already-reviewed pattern
 			// rather than a new one.
 			_, _ = fmt.Fprintf(
-				&output,
+				output,
 				"dev_health_runtime_check_failed{check=%s} %d\n",
 				strconv.Quote(check.Name), failed,
 			)
 		}
 	}
-	// Degrade rather than fail: a source whose dependency is unreachable must
-	// not take the process-level gauges above down with it, since live/ready/
-	// uptime matter most while the process is unready. The per-source failure
-	// gauge keeps that honest — a scraper can tell partial data from complete
-	// data, and alert on the failure series, instead of silently reading a
-	// short scrape as healthy.
-	outcomes, err := s.registry.WriteMetricsPartial(&output)
-	if err != nil {
-		writeJSON(response, http.StatusServiceUnavailable, map[string]any{"status": "metrics_unavailable"})
+}
+
+// WriteSourceFailedMetrics writes the per-source failure gauge for the given
+// outcomes (nothing when there are none).
+func WriteSourceFailedMetrics(output io.Writer, outcomes []MetricsSourceOutcome) {
+	if len(outcomes) == 0 {
 		return
 	}
-	if len(outcomes) > 0 {
-		_, _ = fmt.Fprint(
-			&output,
-			"# HELP dev_health_runtime_metrics_source_failed Whether a registered metrics source failed to write its fragment for this scrape.\n"+
-				"# TYPE dev_health_runtime_metrics_source_failed gauge\n",
-		)
-		for _, outcome := range outcomes {
-			failed := 0
-			if outcome.Err != nil {
-				failed = 1
-			}
-			// The source NAME only. Outcome.Err is arbitrary dependency text
-			// and has been observed to contain a database DSN, so it must never
-			// reach this response; names are pre-registered and match
-			// checkNamePattern, so they are safe as a label value unquoted.
-			_, _ = fmt.Fprintf(
-				&output,
-				"dev_health_runtime_metrics_source_failed{source=%s} %d\n",
-				strconv.Quote(outcome.Source), failed,
-			)
+	_, _ = fmt.Fprint(
+		output,
+		"# HELP dev_health_runtime_metrics_source_failed Whether a registered metrics source failed to write its fragment for this scrape.\n"+
+			"# TYPE dev_health_runtime_metrics_source_failed gauge\n",
+	)
+	for _, outcome := range outcomes {
+		failed := 0
+		if outcome.Err != nil {
+			failed = 1
 		}
+		// The source NAME only. Outcome.Err is arbitrary dependency text
+		// and has been observed to contain a database DSN, so it must never
+		// reach this response; names are pre-registered and match
+		// checkNamePattern, so they are safe as a label value unquoted.
+		_, _ = fmt.Fprintf(
+			output,
+			"dev_health_runtime_metrics_source_failed{source=%s} %d\n",
+			strconv.Quote(outcome.Source), failed,
+		)
 	}
+}
 
-	response.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	response.WriteHeader(http.StatusOK)
-	_, _ = response.Write(output.Bytes())
+// Scrape is the whole /metrics body of one process as fragments: the runtime
+// block, every registered source, and the source-failure gauge. It is what the
+// OTLP bridge reads, so everything a scrape sees is pushed.
+type Scrape struct {
+	Registry *Registry
+	Service  string
+	Version  string
+}
+
+// EachMetricsFragment yields the runtime fragment, then each registered source
+// except those in skip, then the source-failure fragment.
+func (s Scrape) EachMetricsFragment(skip map[string]bool, fn func(source string, fragment []byte, err error)) {
+	var runtime bytes.Buffer
+	s.Registry.WriteRuntimeMetrics(context.Background(), s.Service, s.Version, &runtime)
+	fn("runtime", runtime.Bytes(), nil)
+	var outcomes []MetricsSourceOutcome
+	s.Registry.EachMetricsFragment(skip, func(source string, fragment []byte, err error) {
+		outcomes = append(outcomes, MetricsSourceOutcome{Source: source, Err: err})
+		fn(source, fragment, err)
+	})
+	var failed bytes.Buffer
+	WriteSourceFailedMetrics(&failed, outcomes)
+	if failed.Len() > 0 {
+		fn("runtime_source_failed", failed.Bytes(), nil)
+	}
 }
 
 func allowRead(response http.ResponseWriter, request *http.Request) bool {

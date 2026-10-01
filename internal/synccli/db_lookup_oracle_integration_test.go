@@ -117,6 +117,10 @@ func dbScenarios(keyFile string) []dbScenario {
 		{Name: "non-string beside a token", Orgs: twoOrgs(), Creds: cred(`{"token": "t", "installation_id": 5}`), Args: withOrg, Env: encEnv},
 		{Name: "token and a partial app", Orgs: twoOrgs(), Creds: cred(`{"token": "t", "app_id": "1"}`), Args: withOrg, Env: encEnv},
 		{Name: "empty token and a full app", Orgs: twoOrgs(), Creds: cred(`{"token": "", "app_id": "1", "private_key": "k", "installation_id": "2"}`), Args: withOrg, Env: encEnv},
+		{Name: "token and an installation id", Orgs: twoOrgs(), Creds: cred(`{"token": "t", "installation_id": "2"}`), Args: withOrg, Env: encEnv},
+		{Name: "token and a private key", Orgs: twoOrgs(), Creds: cred(`{"token": "t", "private_key": "k"}`), Args: withOrg, Env: encEnv},
+		{Name: "app without an app id", Orgs: twoOrgs(), Creds: cred(`{"private_key": "k", "installation_id": "2"}`), Args: withOrg, Env: encEnv},
+		{Name: "app without a private key", Orgs: twoOrgs(), Creds: cred(`{"app_id": "1", "installation_id": "2"}`), Args: withOrg, Env: encEnv},
 		{Name: "partial app", Orgs: twoOrgs(), Creds: cred(`{"app_id": "1", "private_key": "k"}`), Args: withOrg, Env: encEnv},
 		{Name: "empty token", Orgs: twoOrgs(), Creds: cred(`{"token": ""}`), Args: withOrg, Env: encEnv},
 		{Name: "empty object", Orgs: twoOrgs(), Creds: cred(`{}`), Args: withOrg, Env: encEnv},
@@ -263,7 +267,7 @@ func TestDBLookupsMatchFrozenPython(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/db_lookup.json",
 		PythonBuild: dbLookupPythonBuild,
-		SHA256:      "14e80709091558deb9714f6bcda0b63a034a6ac988b88ec0141b29608d6237e6",
+		SHA256:      "PIN:db_lookup",
 		Recipe: "git worktree add --detach $DIR " + dbLookupPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestDBLookupsMatchFrozenPython$' -python-root $DIR",
 	})

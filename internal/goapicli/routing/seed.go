@@ -55,14 +55,28 @@ func runSeed(argv []string) error {
 	if err != nil {
 		return err
 	}
-	catalog, err := goapiproof.LoadOperationCatalog(common.catalogPath)
+	scope, isClass, err := resolveClassScope(common.operations)
 	if err != nil {
-		return refuse("%v -- refusing to seed anything on a catalog this process cannot read", err)
+		return err
 	}
+	var catalog map[string]string
 	var named []string
-	if !allUnrouted {
-		if named, err = goapiproof.ResolveOperations(common.operations, catalog); err != nil {
-			return refuse("%v", err)
+	if isClass {
+		// MCP class rows (CHAOS-7214): no catalog, no registered document. The
+		// class digest and the root-field checks stand in for them.
+		if err := requireClassRootsServed(scope.Operations); err != nil {
+			return err
+		}
+		named = scope.Operations
+	} else {
+		catalog, err = goapiproof.LoadOperationCatalog(common.catalogPath)
+		if err != nil {
+			return refuse("%v -- refusing to seed anything on a catalog this process cannot read", err)
+		}
+		if !allUnrouted {
+			if named, err = goapiproof.ResolveOperations(common.operations, catalog); err != nil {
+				return refuse("%v", err)
+			}
 		}
 	}
 
@@ -131,8 +145,16 @@ func runSeed(argv []string) error {
 	}
 
 	// Registered + catalog-agreeing, for every operation, before ANY write.
+	// (Class rows have neither; their digest map is the class's own.)
+	documentDigests := registry.DocumentDigest
+	if isClass {
+		documentDigests = scope.Digests
+	}
 	var notRegistered, divergent []string
 	for _, operation := range operations {
+		if isClass {
+			break
+		}
 		registered, ok := registry.DocumentDigest[operation]
 		switch {
 		case !ok:
@@ -152,7 +174,7 @@ func runSeed(argv []string) error {
 		SchemaDigest:   registry.SchemaDigest,
 		RunningBuild:   running,
 		Operations:     operations,
-		DocumentDigest: registry.DocumentDigest,
+		DocumentDigest: documentDigests,
 		RecordedBy:     common.recordedBy,
 		ReviewEvidence: common.reviewEvidence,
 		PrincipalID:    principalID,

@@ -136,3 +136,20 @@ func TestMCPListenerRefusesAnUnclassifiedPositionAtRuntime(t *testing.T) {
 	rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, query, nil))
 	assertMCPRefused(t, rec, ch, http.StatusForbidden, mcpReasonUnclassifiedInput)
 }
+
+// A selected field the validator left without its definitions cannot be
+// classified; it is refused, never skipped.
+func TestMCPCheckRequestInputsRefusesAFieldWithoutDefinitions(t *testing.T) {
+	es := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{}})
+	op := &ast.OperationDefinition{
+		Operation: ast.Query,
+		SelectionSet: ast.SelectionSet{&ast.Field{
+			Name:      "catalog",
+			Arguments: ast.ArgumentList{{Name: "orgId", Value: &ast.Value{Kind: ast.StringValue, Raw: mcpTestOrg}}},
+		}},
+	}
+	status, reason := mcpCheckRequestInputs(es.Schema(), op, nil, nil, nil, mcpTestOrg)
+	if status != http.StatusForbidden || reason != mcpReasonUnclassifiedInput {
+		t.Fatalf("status %d reason %q, want 403 %s", status, reason, mcpReasonUnclassifiedInput)
+	}
+}

@@ -1021,7 +1021,11 @@ func mcpCheckRequestInputs(schema *ast.Schema, op *ast.OperationDefinition, frag
 				fail(http.StatusForbidden, mcpReasonInvalidOrgArgument)
 				return
 			}
-			if field.Definition != nil && field.ObjectDefinition != nil {
+			if field.Definition == nil || field.ObjectDefinition == nil {
+				// Validation sets both for every real field; a field without them
+				// cannot be classified, so it is refused (fail closed).
+				fail(http.StatusForbidden, mcpReasonUnclassifiedInput)
+			} else {
 				switch mcpClassifyArgument(schema, field.ObjectDefinition.Name, field.Name, field.Definition.Arguments.ForName(argument.Name), value) {
 				case mcpInputPerson:
 					fail(http.StatusForbidden, mcpReasonPersonScope)

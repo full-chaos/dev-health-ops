@@ -57,8 +57,7 @@ func withoutCreationRow(t *testing.T, effects []EffectBatch, created time.Time) 
 	out := make([]EffectBatch, 0, len(effects))
 	for _, effect := range effects {
 		if effect.Destination == "project_membership_transitions" {
-			kept := effect
-			kept.Rows = nil
+			rows := []json.RawMessage{}
 			for _, raw := range effect.Rows {
 				var row projectmembership.Row
 				if err := json.Unmarshal(raw, &row); err != nil {
@@ -67,9 +66,15 @@ func withoutCreationRow(t *testing.T, effects []EffectBatch, created time.Time) 
 				if row.FromProjectID == "" && row.OccurredAt.Equal(created) {
 					continue
 				}
-				kept.Rows = append(kept.Rows, raw)
+				rows = append(rows, raw)
 			}
-			effect = kept
+			// Rebuild so ContentDigest/PayloadBytes match the filtered rows:
+			// the sinks refuse an effect whose digest does not match its rows.
+			rebuilt, err := BuildEffectBatch(effect.Destination, effect.Recovery, rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			effect = rebuilt
 		}
 		out = append(out, effect)
 	}

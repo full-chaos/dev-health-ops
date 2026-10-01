@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"sort"
 	"strings"
 	"time"
@@ -121,7 +121,7 @@ func NewMembershipExecutor(
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMembershipUnavailable, err)
 	}
-	markerLagAlertBound, err := resolveMembershipMarkerLagAlertBound(os.LookupEnv)
+	markerLagAlertBound, err := resolveMembershipMarkerLagAlertBound(envsecrets.ProcessLookup)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMembershipMarkerLagAlertBoundInvalid, err)
 	}

@@ -28,6 +28,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"os"
 	"os/exec"
@@ -110,7 +111,7 @@ type matrixFlags struct {
 
 // registerFlags binds every flag this command accepts on set. -dsn is
 // registered through secrets.BindFlag: an EMPTY default, never
-// os.Getenv(postgresURIEnvVar), so `flag`'s usage text (printed on -h or
+// envsecrets.GetenvNamed(postgresURIEnvVar), so `flag`'s usage text (printed on -h or
 // any parse error) never carries the DSN's value. Call
 // secrets.ResolveFlag(set, f.dsn, "dsn", postgresURIEnvVar) after set.Parse to apply
 // the environment fallback.
@@ -144,7 +145,7 @@ func main() {
 
 	explicit := map[string]bool{}
 	flag.Visit(func(fl *flag.Flag) { explicit[fl.Name] = true })
-	notice, err := checkFlagCombination(explicit, *f.printSQL, *f.render, *f.check, *f.fleet, os.Getenv(postgresURIEnvVar) != "")
+	notice, err := checkFlagCombination(explicit, *f.printSQL, *f.render, *f.check, *f.fleet, envsecrets.GetenvNamed(postgresURIEnvVar) != "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", boundary.Redact(err))
 		os.Exit(2)

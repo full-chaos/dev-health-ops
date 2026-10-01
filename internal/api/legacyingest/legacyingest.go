@@ -18,10 +18,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -106,7 +106,7 @@ var routes = []route{
 func Routes(deps Deps) []httpapi.Route {
 	getenv := deps.Getenv
 	if getenv == nil {
-		getenv = os.Getenv
+		getenv = envsecrets.ProcessGetenv
 	}
 	logger := deps.Logger
 	if logger == nil {

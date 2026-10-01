@@ -5,8 +5,6 @@ package pushcli
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -360,26 +358,6 @@ func corpus(t *testing.T) []pushCase {
 
 func mustKinds() []string { return recordKinds() }
 
-const pushGolden = "testdata/push_golden.json"
-
-// pushGoldenSHA256 pins testdata/push_golden.json (R24): what the real
-// `dev-hops push validate|sample|export` printed for every case of the corpus. The
-// producer is deleted with the Python CLI, so this is a rot guard: the file is
-// only rewritten by TestPushVenueOracleMatchesThePythonProducer with DHO_PUSH_GOLDEN_UPDATE=1,
-// then this digest is updated.
-const pushGoldenSHA256 = "d9d41796b23ebbe1301a9f841006a7268fa142d6acfc5387985cf5d62aabe4ab"
-
-func TestPushGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile(pushGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != pushGoldenSHA256 {
-		t.Fatalf("%s digest = %s, want %s: the golden changed without its digest", pushGolden, got, pushGoldenSHA256)
-	}
-}
-
 // namedDivergences are corpus cases where the two sides differ by a named limit
 // (in the PR body), not compared.
 var namedDivergences = map[string]string{
@@ -474,90 +452,75 @@ func substituteDir(c pushCase, dir string) pushCase {
 	return c
 }
 
-func TestPushMatchesTheFrozenPythonOutput(t *testing.T) {
-	raw, err := os.ReadFile(pushGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var frozen struct {
-		Cases   []pushCase   `json:"cases"`
-		Results []pushResult `json:"results"`
-	}
-	if err := json.Unmarshal(raw, &frozen); err != nil {
-		t.Fatal(err)
-	}
-	cases := corpus(t)
-	if len(cases) != len(frozen.Cases) {
-		t.Fatalf("the corpus has %d cases, the golden %d", len(cases), len(frozen.Cases))
-	}
-	dir := t.TempDir()
-	failures, validated, rejected := 0, 0, 0
-	for index, c := range cases {
-		if c.Name != frozen.Cases[index].Name {
-			t.Fatalf("case %d is %q, the golden has %q", index, c.Name, frozen.Cases[index].Name)
-		}
-		got := runGo(t, substituteDir(c, dir), dir)
-		if strings.HasPrefix(c.Name, "sample") {
-			got.Stdout = maskProducerVersion(got.Stdout)
-		}
-		if !compareResults(t, c, got, frozen.Results[index], "frozen Python") {
-			failures++
-		}
-		if strings.HasPrefix(frozen.Results[index].Stdout, "valid:") || strings.Contains(frozen.Results[index].Stdout, `"valid": true`) {
-			validated++
-		}
-		if strings.Contains(frozen.Results[index].Stdout, "error(s):") {
-			rejected++
-		}
-	}
-	if validated < 20 || rejected < 200 {
-		t.Fatalf("the golden has %d accepted and %d rejected payloads: it measures too little", validated, rejected)
-	}
-	_ = failures
-}
+// pushPythonBuild is the build whose Python `dev-hops push` verbs answered the corpus: a build that
+// still carried the Python CLI.
+const pushPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
-// TestPushVenueOracleMatchesThePythonProducer runs the corpus through the real Python verbs
-// and through dho. With DHO_PUSH_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestPushVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
+// pushOracleDir stands for the directory the corpus runs in: the golden's key must not hold a per-run
+// temporary path, so the producer swaps it for a fresh directory and the answers are stored with <dir>.
+const pushOracleDir = "/tmp/dho-push-oracle-dir"
+
+// TestPushMatchesTheFrozenPythonOutput runs the corpus through dho and compares every case with what the
+// REAL `dev-hops push validate|sample|export` printed. The answers were executed once on pushPythonBuild and
+// are frozen in testdata/golden/push.json (the recipe regenerates them by execution); the corpus and the
+// program are part of the golden's key.
+func TestPushMatchesTheFrozenPythonOutput(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	python := pyoracle.Resolve(t, root)
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/push.json",
+		PythonBuild: pushPythonBuild,
+		SHA256:      "ae2f1c0fa3b03d26f69b7368c0f1047aa3365a04aa589a8a046045231d3c6839",
+		Recipe: "git worktree add --detach $DIR " + pushPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pushcli/ -test '^TestPushMatchesTheFrozenPythonOutput$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+
 	cases := corpus(t)
-	dir := t.TempDir()
 	pythonCases := make([]pushCase, len(cases))
 	for index, c := range cases {
-		pythonCases[index] = substituteDir(c, dir)
+		pythonCases[index] = substituteDir(c, pushOracleDir)
 	}
-	stdin, _ := json.Marshal(map[string]any{"dir": dir, "cases": pythonCases})
-	command := exec.Command(python, "-c", pythonPushProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_ENABLED=false")
-	command.Stdin = bytes.NewReader(stdin)
-	output, err := command.CombinedOutput()
+	input, err := json.Marshal(map[string]any{"dir": pushOracleDir, "cases": pythonCases})
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
-	marker := strings.LastIndex(string(output), "RESULT")
-	if marker < 0 {
-		t.Fatalf("no result from python: %.400s", output)
-	}
+	env := map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
+	request := venueoracle.ProgramRequest("push corpus", pythonPushProgram, input, env)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		python := pyoracle.Resolve(t, root)
+		dir := t.TempDir()
+		command := exec.Command(python, "-c", pythonPushProgram)
+		command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1")
+		for key, value := range env {
+			command.Env = append(command.Env, key+"="+value)
+		}
+		command.Stdin = bytes.NewReader(bytes.ReplaceAll(input, []byte(pushOracleDir), []byte(dir)))
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		}
+		marker := strings.LastIndex(string(output), "RESULT")
+		if marker < 0 {
+			t.Fatalf("no result from python: %.400s", output)
+		}
+		results := output[marker+len("RESULT"):]
+		return []venueoracle.Response{{Status: 0, Body: normalize(strings.TrimSpace(string(results)), dir)}}
+	})
+	golden.Consumed(t, answers...)
 	var want []pushResult
-	if err := json.Unmarshal(output[marker+len("RESULT"):], &want); err != nil {
+	if err := json.Unmarshal([]byte(answers[0].Body), &want); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(want) != len(cases) {
 		t.Fatalf("python answered %d of %d cases", len(want), len(cases))
 	}
-	mismatches := 0
-	frozen := make([]pushResult, len(cases))
+	dir := t.TempDir()
+	mismatches, validated, rejected := 0, 0, 0
 	for index, c := range cases {
 		expected := want[index]
-		expected.Stdout = normalize(expected.Stdout, dir)
-		expected.Stderr = normalize(expected.Stderr, dir)
-		// A sample's producerVersion is the distribution's version in Python and this
-		// binary's here; everything else must match.
+		// A sample's producerVersion is the distribution's version in Python and this binary's here;
+		// everything else must match.
 		if strings.HasPrefix(c.Name, "sample") {
 			expected.Stdout = maskProducerVersion(expected.Stdout)
 		}
@@ -568,27 +531,25 @@ func TestPushVenueOracleMatchesThePythonProducer(t *testing.T) {
 		if strings.HasPrefix(c.Name, "sample") {
 			got.Stdout = maskProducerVersion(got.Stdout)
 		}
-		if !compareResults(t, c, got, expected, "python") {
+		if !compareResults(t, c, got, expected, "frozen Python") {
 			mismatches++
 		}
-		frozen[index] = expected
+		if strings.HasPrefix(expected.Stdout, "valid:") || strings.Contains(expected.Stdout, `"valid": true`) {
+			validated++
+		}
+		if strings.Contains(expected.Stdout, "error(s):") {
+			rejected++
+		}
 	}
 	t.Logf("%d cases, %d mismatches", len(cases), mismatches)
-	if os.Getenv("DHO_PUSH_GOLDEN_UPDATE") == "1" {
-		raw, err := json.MarshalIndent(map[string]any{"cases": cases, "results": frozen}, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(pushGolden, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if validated < 20 || rejected < 200 {
+		t.Fatalf("the golden has %d accepted and %d rejected payloads: it measures too little", validated, rejected)
 	}
-	if mismatches == 0 {
-		venueoracle.WriteProof(t)
+	if mismatches > 0 {
+		t.Fatalf("%d of %d cases differ", mismatches, len(cases))
 	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 func maskProducerVersion(text string) string {

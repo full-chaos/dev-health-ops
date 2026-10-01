@@ -177,7 +177,7 @@ func rolesOptionsFromEnvironment(lookup platformsecrets.LookupEnv, stderr io.Wri
 		return roleprovision.Options{}, false
 	}
 	password := func(key string) (string, error) {
-		value, _, err := platformsecrets.Resolve(key, lookup)
+		value, _, err := platformsecrets.ResolveSecret(key, lookup)
 		if err != nil {
 			return "", err
 		}

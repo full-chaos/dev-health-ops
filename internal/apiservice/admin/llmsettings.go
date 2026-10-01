@@ -3,9 +3,9 @@ package admin
 import (
 	"context"
 	"errors"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"math/big"
 	"net/http"
-	"os"
 	"slices"
 
 	"github.com/google/uuid"
@@ -38,7 +38,7 @@ const llmRoleCertificationPrefix = "ask_dev_role_certification_profile:"
 
 // lookupEnv reads the process environment; a variable so a test can point
 // the budget ceiling at a fixed value without touching the real one.
-var lookupEnv = os.LookupEnv
+var lookupEnv = envsecrets.ProcessLookup
 
 func (h *handlers) llmSettingsRoutes() []httpapi.Route {
 	return []httpapi.Route{

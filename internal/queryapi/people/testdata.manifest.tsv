@@ -1,0 +1,8 @@
+# Every file under internal/queryapi/people/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: 996a8f3c32afb1db5aa7c43c39cbf598eeff25481d88c1346c11b817c41376c2 (4 files)
+851b2493c46a6f7f323518eab9f96cd7a4c6a3ae05ac47f35b5f91d47f9f4964	unclassified	alias_mapping.json
+9eb3213a60f2f47535acc25666b660b497ccd3eb91cb5e58591897b3e5e37f82	python-recorded	drilldown_issues_golden.json
+45d1a213b0c4df993440921c917f93535229ce163f32560265d2f37522202475	python-recorded	drilldown_prs_golden.json
+ef0d75c3c7db7680885ad39cd40396df0ccebe0459605036811a188a53830e23	python-recorded	metric_golden.json
+1a620ab8f84f9d3012a8be091723ff85e5ef84f193b3912151570cbd2406fe4d	unclassified	no_alias_mapping.json
+3fd26aa195937fcb18fea26bd1de29f20eb32c2c3fe1920f8d45b0c4fe6aa4f5	python-recorded	summary_golden.json

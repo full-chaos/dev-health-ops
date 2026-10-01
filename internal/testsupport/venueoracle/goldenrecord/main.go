@@ -44,6 +44,10 @@ import (
 
 const candidateSuffix = ".recording"
 
+// scrubSidecarSuffix is appended to a candidate for the digests of the raw
+// values its Scrub blanked (venueoracle writes it; no raw value is in it).
+const scrubSidecarSuffix = ".raw"
+
 // Config is one recording.
 type Config struct {
 	// Root is the repository root: go test runs there and Package is relative to it.
@@ -183,7 +187,15 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 	// timestamp, a minted token) the golden would pin to one run. It needs a
 	// pin in the test or a typed placeholder (GoldenSpec.Scrub), and the
 	// candidates are compared as written, after projection and scrub.
+	firstScrubs := map[string]map[string]string{}
 	for _, candidate := range found {
+		scrubs, err := readScrubSidecar(candidate)
+		if err != nil {
+			discard()
+			return Result{}, err
+		}
+		firstScrubs[candidate] = scrubs
+		_ = os.Remove(candidate + scrubSidecarSuffix)
 		if err := os.Remove(candidate); err != nil {
 			discard()
 			return Result{}, err
@@ -201,6 +213,18 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 	if err := compareRuns(replayed, second); err != nil {
 		discard()
 		return Result{}, err
+	}
+	for _, candidate := range found {
+		secondScrubs, err := readScrubSidecar(candidate)
+		if err != nil {
+			discard()
+			return Result{}, err
+		}
+		if err := compareScrubs(candidate, firstScrubs[candidate], secondScrubs); err != nil {
+			discard()
+			return Result{}, err
+		}
+		_ = os.Remove(candidate + scrubSidecarSuffix)
 	}
 	for _, candidate := range found {
 		if err := os.WriteFile(candidate, replayed[candidate], 0o644); err != nil {
@@ -231,6 +255,7 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 	}
 	for _, candidate := range found {
 		_ = os.Remove(candidate)
+		_ = os.Remove(candidate + scrubSidecarSuffix)
 	}
 	return result, nil
 }
@@ -384,6 +409,7 @@ func removeAll(dir string) {
 	found, _ := candidates(dir)
 	for _, path := range found {
 		_ = os.Remove(path)
+		_ = os.Remove(path + scrubSidecarSuffix)
 	}
 }
 
@@ -764,4 +790,50 @@ func describe(text string) string {
 func keyDigest(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])[:8]
+}
+
+// readScrubSidecar reads the digests of the raw values a recording's Scrub
+// blanked, by "request|pattern|n". A missing file is none.
+func readScrubSidecar(candidate string) (map[string]string, error) {
+	raw, err := os.ReadFile(candidate + scrubSidecarSuffix)
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	entries := map[string]string{}
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, fmt.Errorf("%s%s: %w", candidate, scrubSidecarSuffix, err)
+	}
+	return entries, nil
+}
+
+// compareScrubs is an error when a leaf the Scrub blanked held the same raw
+// value in both recordings: a value that does not change between runs is
+// deterministic (a seeded time inside the scrub's window, a seeded id of the
+// shape of a random one), and blanking it silently stops comparing it. It names
+// the request and the pattern, never the value; a test keeps such a value
+// compared by naming it in the scrub's keep list.
+func compareScrubs(candidate string, first, second map[string]string) error {
+	var same []string
+	for key, digest := range first {
+		if other, ok := second[key]; ok && other == digest {
+			same = append(same, key)
+		}
+	}
+	if len(same) == 0 {
+		return nil
+	}
+	sort.Strings(same)
+	shown := same[:min(len(same), maxReported)]
+	labels := make([]string, len(shown))
+	for i, key := range shown {
+		labels[i] = key[:strings.LastIndex(key, "|")]
+	}
+	more := ""
+	if len(same) > maxReported {
+		more = fmt.Sprintf("; and %d more", len(same)-maxReported)
+	}
+	return fmt.Errorf("%s: the scrub blanked a leaf whose raw value is the same in both recordings (request|pattern: %s%s): a value that does not change is deterministic, and blanking it stops comparing it; name it in the scrub's keep list (venueoracle.ScrubRunValues) or pin its source", candidate, strings.Join(labels, "; "), more)
 }

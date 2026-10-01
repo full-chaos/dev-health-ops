@@ -30,12 +30,14 @@ type fakeOracle struct {
 	pythonRoot string
 	// perRun, when set, makes each record run write another body (a per-run
 	// value); records counts them.
-	perRun            func(run int) string
-	records           int
-	dropSecond        bool
-	extraSecond       bool
-	recordEnvs        [][]string
-	failSecond        bool
+	perRun      func(run int) string
+	records     int
+	dropSecond  bool
+	extraSecond bool
+	recordEnvs  [][]string
+	failSecond  bool
+	// sidecar, when set, writes the candidate's raw-digest sidecar for each record run.
+	sidecar           func(run int) string
 	bytecodeAtRecord  bool
 	dontWriteBytecode bool
 }
@@ -75,6 +77,11 @@ func (f *fakeOracle) run(cfg Config, env []string) error {
 		}
 		if f.failSecond && f.records == 2 {
 			return errors.New("boom")
+		}
+		if f.sidecar != nil && f.recordWrites {
+			if err := os.WriteFile(filepath.Join(f.dir, "testdata", "g.json.recording.raw"), []byte(f.sidecar(f.records)), 0o644); err != nil {
+				return err
+			}
 		}
 		return f.recordErr
 	case has("DHO_VENUE_GOLDEN_CANDIDATE"):
@@ -556,5 +563,32 @@ func TestAJSONKeyIsNeverPrintedInARefusal(t *testing.T) {
 	_, err := Record(context.Background(), cfg)
 	if err == nil || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "request login body $.<key sha256 ") {
 		t.Fatalf("a JSON key was printed or the refusal lost its path: %v", err)
+	}
+}
+
+func TestAScrubbedLeafWithTheSameRawValueInBothRecordingsIsRefusedNamingThePathNotTheValue(t *testing.T) {
+	cfg, fake, dir := fixture(t, "")
+	fake.sidecar = func(run int) string {
+		return `{"login|body $.at|1":"aaaa","login|body $.id|1":"` + fmt.Sprintf("%064d", run) + `"}`
+	}
+	_, err := Record(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "login|body $.at") || strings.Contains(err.Error(), "aaaa") || strings.Contains(err.Error(), "body $.id") {
+		t.Fatalf("a deterministic blanked leaf was not refused by path only: %v", err)
+	}
+	for _, name := range []string{"g.json", "g.json.recording", "g.json.recording.raw"} {
+		if exists(filepath.Join(dir, "testdata", name)) {
+			t.Fatalf("%s is left after a refusal", name)
+		}
+	}
+}
+
+func TestScrubbedLeavesThatDifferBetweenRecordingsPromoteAndLeaveNoSidecar(t *testing.T) {
+	cfg, fake, dir := fixture(t, "")
+	fake.sidecar = func(run int) string { return `{"login|body $.id|1":"` + fmt.Sprintf("%064d", run) + `"}` }
+	if _, err := Record(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(filepath.Join(dir, "testdata", "g.json")) || exists(filepath.Join(dir, "testdata", "g.json.recording.raw")) {
+		t.Fatal("the golden was not promoted, or the sidecar was left on disk")
 	}
 }

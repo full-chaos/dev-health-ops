@@ -17,7 +17,7 @@ var nonTransactionalStatements = []struct {
 	pattern *regexp.Regexp
 }{
 	{"CREATE/DROP INDEX CONCURRENTLY", regexp.MustCompile(`(?i)\b(?:CREATE|DROP)\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\b`)},
-	{"REINDEX (CONCURRENTLY, DATABASE, SYSTEM)", regexp.MustCompile(`(?i)\bREINDEX\s+(?:\(.*?\)\s*)?(?:CONCURRENTLY|DATABASE|SYSTEM)\b`)},
+	{"REINDEX (CONCURRENTLY, DATABASE, SYSTEM)", regexp.MustCompile(`(?i)\bREINDEX\b[^;]*\bCONCURRENTLY\b|\bREINDEX\s+(?:\([^)]*\)\s*)?(?:DATABASE|SYSTEM)\b`)},
 	{"VACUUM", regexp.MustCompile(`(?i)(?:^|;)\s*VACUUM\b`)},
 	{"ALTER TYPE ... ADD VALUE", regexp.MustCompile(`(?i)\bALTER\s+TYPE\b[^;]*\bADD\s+VALUE\b`)},
 	{"ALTER SYSTEM", regexp.MustCompile(`(?i)\bALTER\s+SYSTEM\b`)},
@@ -110,6 +110,21 @@ func TestTheTransactionGuardReportsEveryClassAndOnlyStatements(t *testing.T) {
 	if len(plants) != len(nonTransactionalStatements) {
 		t.Fatalf("%d plants for %d classes: every class needs one", len(plants), len(nonTransactionalStatements))
 	}
+	// Every other spelling of a concurrent reindex (r1: REINDEX (CONCURRENTLY) TABLE ran on a server outside a
+	// transaction and failed inside one while the guard reported nothing).
+	for _, sql := range []string{
+		"REINDEX (CONCURRENTLY) TABLE refunds;",
+		"REINDEX (VERBOSE, CONCURRENTLY) INDEX ix_refunds;",
+		"REINDEX TABLE CONCURRENTLY refunds;",
+		"REINDEX INDEX CONCURRENTLY ix_refunds;",
+		"REINDEX SCHEMA CONCURRENTLY public;",
+		"reindex (concurrently true) table refunds;",
+		"REINDEX (VERBOSE) SYSTEM app;",
+	} {
+		if found := statementsThatCannotShareATransaction(sql); !contains(found, "REINDEX (CONCURRENTLY, DATABASE, SYSTEM)") {
+			t.Errorf("the REINDEX spelling %q was reported as %v", sql, found)
+		}
+	}
 	for class, sql := range plants {
 		found := statementsThatCannotShareATransaction(sql)
 		if len(found) == 0 || found[0] != class && !contains(found, class) {
@@ -122,6 +137,7 @@ func TestTheTransactionGuardReportsEveryClassAndOnlyStatements(t *testing.T) {
 		"CREATE FUNCTION f() RETURNS void AS $body$ BEGIN PERFORM 1; END; $body$ LANGUAGE plpgsql;",
 		"CREATE INDEX ix ON t (a); CREATE UNIQUE INDEX uq ON t (b) WHERE b IS NOT NULL;",
 		"ALTER TABLE t ADD COLUMN vacuum_count int; CREATE TABLE commits (id int);",
+		"REINDEX TABLE refunds; REINDEX INDEX ix_refunds;",
 	} {
 		if found := statementsThatCannotShareATransaction(benign); len(found) != 0 {
 			t.Errorf("a benign statement was reported as %v: %q", found, benign)

@@ -62,7 +62,6 @@ func (component Component) Shutdown(ctx context.Context) error {
 	if component.provider == nil {
 		return nil
 	}
-	clearLocalRate()
 	return component.provider.Shutdown(ctx)
 }
 
@@ -114,7 +113,6 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 
 	otel.SetTracerProvider(provider)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
-	recordLocalRate(sampleRate)
 	logger.Info("OpenTelemetry tracing initialised",
 		"otlp_endpoint", endpoint,
 		"service_name", serviceName,

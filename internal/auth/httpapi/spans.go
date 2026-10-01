@@ -9,8 +9,6 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
-
-	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
 )
 
 // ProbePaths are the exact request paths every listener of this package
@@ -45,11 +43,13 @@ const (
 // attribute.
 type spanObserver struct {
 	listener string
-	// trustRemoteSampling honours an incoming traceparent's sampled flag (the
-	// internal listener: in-cluster callers). Off, the caller keeps its trace
-	// id but the sampled flag is replaced by this process's own root-sampler
-	// decision for that trace id, so a client on the public or billing-edge
-	// listener cannot force recording.
+	// trustRemoteSampling extracts and honours an incoming traceparent (the
+	// internal listener: its callers are in-cluster). Off, the incoming
+	// traceparent is ignored entirely and every request starts a new root span
+	// with a locally made trace id, decided by the root sampler: a caller on the
+	// public or billing-edge listener chooses neither the trace id nor the
+	// sampling decision, so it can neither force recording nor write spans into
+	// a trace it names.
 	trustRemoteSampling bool
 }
 
@@ -60,28 +60,20 @@ func (s spanObserver) start(r *http.Request) (context.Context, trace.Span) {
 	if isProbePath(r.URL.Path) {
 		return ctx, nil
 	}
-	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
-	if remote := trace.SpanContextFromContext(ctx); remote.IsValid() {
-		if s.trustRemoteSampling {
-			ctx = trace.ContextWithRemoteSpanContext(ctx, remote)
-		} else {
-			// Rebuilt from the ids and the local decision only: the caller's
-			// tracestate is dropped with the caller's sampled flag.
-			ctx = trace.ContextWithRemoteSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
-				TraceID:    remote.TraceID(),
-				SpanID:     remote.SpanID(),
-				TraceFlags: remote.TraceFlags().WithSampled(tracing.LocalSamplingDecision(remote.TraceID())),
-				Remote:     true,
-			}))
-		}
+	options := []trace.SpanStartOption{
+		trace.WithSpanKind(trace.SpanKindServer),
+	}
+	if s.trustRemoteSampling {
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
+	} else {
+		options = append(options, trace.WithNewRoot())
 	}
 	method := boundedMethod(r.Method)
-	return otel.Tracer(spanTracerName).Start(ctx, method+" "+UnmatchedRoute,
-		trace.WithSpanKind(trace.SpanKindServer),
-		trace.WithAttributes(
-			attribute.String("http.request.method", method),
-			attribute.String(listenerAttribute, s.listener),
-		))
+	options = append(options, trace.WithAttributes(
+		attribute.String("http.request.method", method),
+		attribute.String(listenerAttribute, s.listener),
+	))
+	return otel.Tracer(spanTracerName).Start(ctx, method+" "+UnmatchedRoute, options...)
 }
 
 // finish names and ends the span. status is 0 for an aborted handler.

@@ -233,11 +233,11 @@ func TestA5xxResponseIsAnErrorSpanAnd4xxIsNot(t *testing.T) {
 	}
 }
 
-// TestACallerCannotForceRecordingOnAnOuterListener is the traceparent rule:
-// on the public and billing-edge listeners (TrustRemoteSampling off) the
-// caller keeps its trace id but its sampled flag is replaced by this process's
-// own root-sampler decision.
-func TestACallerCannotForceRecordingOnAnOuterListener(t *testing.T) {
+// TestAnOuterListenerIgnoresAnIncomingTraceparent is the traceparent rule: on
+// the public and billing-edge listeners (TrustRemoteSampling off) the incoming
+// traceparent is not extracted at all, so a caller chooses neither the trace id
+// nor the sampling decision.
+func TestAnOuterListenerIgnoresAnIncomingTraceparent(t *testing.T) {
 	for _, listener := range []string{"public", "billing-edge"} {
 		t.Run(listener+"/ratio 0 records nothing for N sampled parents", func(t *testing.T) {
 			read := tracedEnv(t, "0")
@@ -250,23 +250,29 @@ func TestACallerCannotForceRecordingOnAnOuterListener(t *testing.T) {
 				t.Fatalf("%d spans recorded at ratio 0 for sampled traceparents: the caller forced recording", len(spans))
 			}
 		})
-		t.Run(listener+"/ratio 1 records and keeps the caller's trace id", func(t *testing.T) {
+		t.Run(listener+"/ratio 1 records roots under a local trace id, never the caller's", func(t *testing.T) {
 			read := tracedEnv(t, "1")
 			handler := spanHandler(t, listener, false, itemsRoute())
-			const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
-			get(handler, "/v1/items/1", map[string]string{"traceparent": sampledParent(traceID, "00f067aa0ba902b7"), "tracestate": "vendor=forced"})
+			callerIDs := map[string]bool{}
+			for index := 0; index < 10; index++ {
+				traceID := fmt.Sprintf("%032x", 0x4bf92f3577b34da6+index)
+				callerIDs[traceID] = true
+				get(handler, "/v1/items/1", map[string]string{"traceparent": sampledParent(traceID, "00f067aa0ba902b7"), "tracestate": "vendor=forced"})
+			}
 			spans := read()
-			if len(spans) != 1 {
-				t.Fatalf("got %d spans, want 1", len(spans))
+			if len(spans) != 10 {
+				t.Fatalf("got %d spans, want 10 roots", len(spans))
 			}
-			if got := hex.EncodeToString(spans[0].GetTraceId()); got != traceID {
-				t.Errorf("trace id = %s, want the caller's %s", got, traceID)
-			}
-			if got := hex.EncodeToString(spans[0].GetParentSpanId()); got != "00f067aa0ba902b7" {
-				t.Errorf("parent span id = %s, want the caller's span", got)
-			}
-			if spans[0].GetTraceState() != "" {
-				t.Errorf("trace state = %q: the caller's tracestate must not be carried on an outer listener", spans[0].GetTraceState())
+			for _, span := range spans {
+				if callerIDs[hex.EncodeToString(span.GetTraceId())] {
+					t.Errorf("span joined the caller's trace %x: a caller can write spans into a trace id it names", span.GetTraceId())
+				}
+				if len(span.GetParentSpanId()) != 0 {
+					t.Errorf("span has parent %x, want a root", span.GetParentSpanId())
+				}
+				if span.GetTraceState() != "" {
+					t.Errorf("trace state = %q, want none", span.GetTraceState())
+				}
 			}
 		})
 	}

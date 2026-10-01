@@ -96,6 +96,12 @@ on:
       - 'src/dev_health_ops/work_graph/**'
       - 'tests/fixtures/**'
       - '**/testdata/**'
+      # The manifests of the recordedfiles guard sit BESIDE their directory
+      # (internal/x/testdata.manifest.tsv, tests/fixtures.manifest.tsv), and
+      # the guard's day-one list is a .txt file of its package: a change to
+      # one of them alone must run the guard (internal/testsupport/recordedfiles).
+      - '**/*.manifest.tsv'
+      - 'internal/testsupport/recordedfiles/unclassified_day_one.txt'
       # Go tests read these directly (contracts/*.json via os.ReadFile,
       # internal/**/families.json via filepath.Join). Not under testdata/
       # or fixtures/, so the shared glob above does not reach them.
@@ -266,6 +272,12 @@ on:
       - 'src/dev_health_ops/work_graph/**'
       - 'tests/fixtures/**'
       - '**/testdata/**'
+      # The manifests of the recordedfiles guard sit BESIDE their directory
+      # (internal/x/testdata.manifest.tsv, tests/fixtures.manifest.tsv), and
+      # the guard's day-one list is a .txt file of its package: a change to
+      # one of them alone must run the guard (internal/testsupport/recordedfiles).
+      - '**/*.manifest.tsv'
+      - 'internal/testsupport/recordedfiles/unclassified_day_one.txt'
       # Go tests read these directly (contracts/*.json via os.ReadFile,
       # internal/**/families.json via filepath.Join). Not under testdata/
       # or fixtures/, so the shared glob above does not reach them.

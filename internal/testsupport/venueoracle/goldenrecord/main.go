@@ -140,7 +140,9 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 		defer os.RemoveAll(dir)
 		proofDir = dir
 	}
-	base := []string{"DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=" + proofDir}
+	passed := append([]string{}, cfg.PassEnv...)
+	sort.Strings(passed)
+	base := []string{"DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=" + proofDir, passedEnvName + "=" + strings.Join(passed, ",")}
 	discard := func() { removeAll(packageDir) }
 
 	// A bytecode cache in the pinned checkout can run code older than its source:
@@ -345,12 +347,15 @@ func removeAll(dir string) {
 	}
 }
 
-// passedNames are the ambient variables a recording and its replay run under:
-// what the Go toolchain, the container runtime and the network need, and the
-// test harness's own switches. Nothing else of the ambient environment reaches
-// the tests, so no ambient variable can shape a producer's answers unseen; a
-// producer's own configuration is set by its test, where the request key or
-// the test text holds it.
+// passedNames are the ambient variables a recording and its replay run under,
+// by exact name: what the Go toolchain, the container runtime and the network
+// need. Nothing else of the ambient environment reaches the tests (no family
+// is passed by prefix), so no ambient variable can shape a producer's answers
+// unseen: a producer's configuration is set by its test, where the request key
+// or the test text holds it; a credential is passed by name with -pass-env and
+// must be declared by the golden (GoldenSpec.PassEnv), which records the name.
+// The interpreter is the pinned checkout's own (DEV_HEALTH_PYTHON is not
+// passed), and the harness switches are set by the verb itself.
 var passedNames = map[string]bool{
 	"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "TMPDIR": true, "XDG_RUNTIME_DIR": true,
 	"GOPATH": true, "GOROOT": true, "GOCACHE": true, "GOMODCACHE": true, "GOFLAGS": true, "GOPROXY": true,
@@ -358,14 +363,18 @@ var passedNames = map[string]bool{
 	"GOWORK": true, "GOTOOLCHAIN": true, "GOMAXPROCS": true, "GOENV": true, "GOEXPERIMENT": true, "CGO_ENABLED": true,
 	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
 	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true,
+	"DOCKER_HOST": true, "DOCKER_CONFIG": true, "DOCKER_CERT_PATH": true, "DOCKER_TLS_VERIFY": true,
+	"DOCKER_API_VERSION": true, "DOCKER_CONTEXT": true,
+	"TESTCONTAINERS_RYUK_DISABLED": true, "TESTCONTAINERS_HOST_OVERRIDE": true,
+	"TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE": true, "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX": true,
 }
 
-// passedPrefixes are the families passed whole: the container runtime's and
-// the test harness's (DEV_HEALTH_PYTHON, the proof directory, a test-mode switch).
-var passedPrefixes = []string{"DOCKER_", "TESTCONTAINERS_", "DEV_HEALTH_", "DHO_VENUE_GOLDEN_"}
+// passedEnvName tells the recording which names -pass-env passed, so each
+// golden can require exactly the names it declares.
+const passedEnvName = "DHO_VENUE_GOLDEN_PASSED_ENV"
 
-// recordingEnv is ambient reduced to the passed variables and the names in
-// extra, with a fixed UTF-8 locale.
+// recordingEnv is ambient reduced to the passed names and the names in extra,
+// with a fixed UTF-8 locale. The verb's own variables are added by its caller.
 func recordingEnv(ambient, extra []string) []string {
 	named := map[string]bool{}
 	for _, name := range extra {
@@ -374,11 +383,7 @@ func recordingEnv(ambient, extra []string) []string {
 	var out []string
 	for _, entry := range ambient {
 		name, _, _ := strings.Cut(entry, "=")
-		passed := passedNames[name] || named[name]
-		for _, prefix := range passedPrefixes {
-			passed = passed || strings.HasPrefix(name, prefix)
-		}
-		if passed {
+		if passedNames[name] || named[name] {
 			out = append(out, entry)
 		}
 	}

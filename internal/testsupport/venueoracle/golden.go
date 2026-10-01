@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -71,6 +72,13 @@ type GoldenSpec struct {
 	// Recipe is one line naming how to regenerate the file; it is printed by
 	// every failure that asks for a regeneration.
 	Recipe string
+	// PassEnv names the ambient variables the recording needs beyond the
+	// recorder's fixed set (goldenrecord -pass-env): a credential the producer
+	// reads and whose value cannot be written down. Names only. The list is
+	// part of the golden: the recorder must pass exactly these names, the
+	// header holds them, and a frozen run refuses a header that differs. A
+	// variable whose value shapes an answer is not passed: the test sets it.
+	PassEnv []string
 }
 
 // Golden is an opened GoldenSpec.
@@ -150,6 +158,38 @@ type goldenHeader struct {
 	// checkout, by git blob id.
 	ProducerDigest string `json:"producer_digest"`
 	Recipe         string `json:"recipe"`
+	// PassedEnv is the sorted names of the ambient variables the recorder
+	// passed to the recording beyond its fixed set (GoldenSpec.PassEnv).
+	PassedEnv []string `json:"passed_env,omitempty"`
+}
+
+// goldenPassedEnv is how the recorder tells a recording which ambient
+// variables it passed by name (comma-separated).
+const goldenPassedEnv = "DHO_VENUE_GOLDEN_PASSED_ENV"
+
+// envNames is names sorted, without blanks and duplicates.
+func envNames(names []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// passedEnvErr is an error unless the recorder passed exactly the names the
+// spec declares: a variable passed but not declared would shape the recording
+// unseen, one declared but not passed would be missing from the producer.
+func passedEnvErr(spec GoldenSpec, passed string) error {
+	want, got := envNames(spec.PassEnv), envNames(strings.Split(passed, ","))
+	if !reflect.DeepEqual(want, got) {
+		return fmt.Errorf("golden %s: the recorder passed the ambient variables %q (goldenrecord -pass-env), the test's GoldenSpec.PassEnv declares %q: a passed variable is part of the golden, so the two must be the same names", spec.Path, got, want)
+	}
+	return nil
 }
 
 type goldenRequest struct {
@@ -208,7 +248,10 @@ func openGolden(spec GoldenSpec, test string, recording bool) (*Golden, error) {
 	}
 	g := &Golden{spec: spec, recording: recording, rowsUsed: map[string]bool{}, rowsFetched: map[string]bool{}}
 	if recording {
-		g.recorded = goldenFile{Header: goldenHeader{Test: test, PythonBuild: spec.PythonBuild, Recipe: spec.Recipe}, Rows: map[string]goldenRows{}}
+		if err := passedEnvErr(spec, os.Getenv(goldenPassedEnv)); err != nil {
+			return nil, err
+		}
+		g.recorded = goldenFile{Header: goldenHeader{Test: test, PythonBuild: spec.PythonBuild, Recipe: spec.Recipe, PassedEnv: envNames(spec.PassEnv)}, Rows: map[string]goldenRows{}}
 		return g, nil
 	}
 	raw, err := os.ReadFile(spec.Path)
@@ -230,6 +273,9 @@ func openGolden(spec GoldenSpec, test string, recording bool) (*Golden, error) {
 	}
 	if g.loaded.Header.PythonBuild != spec.PythonBuild {
 		return nil, fmt.Errorf("golden %s was executed on build %s, the test names %s; regenerate: %s", spec.Path, g.loaded.Header.PythonBuild, spec.PythonBuild, spec.Recipe)
+	}
+	if want := envNames(spec.PassEnv); !reflect.DeepEqual(envNames(g.loaded.Header.PassedEnv), want) {
+		return nil, fmt.Errorf("golden %s was recorded with the ambient variables %q passed, the test declares %q (GoldenSpec.PassEnv); regenerate: %s", spec.Path, g.loaded.Header.PassedEnv, want, spec.Recipe)
 	}
 	if len(g.loaded.Header.ProducerDigest) != 64 {
 		return nil, fmt.Errorf("golden %s names no producer digest: it was not recorded by this harness; regenerate: %s", spec.Path, spec.Recipe)

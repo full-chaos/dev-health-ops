@@ -211,4 +211,5 @@ func textrefsProgram(t *testing.T, slug, test, name, text string) string {
 var textrefsGoldenPins = map[string]string{
 	"charclass_allrunes": "6fca1b168d90373b1953e42aff8c7cbdab500e98655bc210ba07ca6e2f230875",
 	"number_allrunes":    "b04a33e7e6c192c47e38a2169c66561eb95ac0a7863deadca66d63ab60628402",
+	"atoi_boundary":      "1236eeefb4cc3075408df9b62e5e1443ba2e63b973f7fdc8c711f386abef7193",
 }

@@ -45,3 +45,27 @@ func TestAggregateFinalizeUnitsCarriesTheFirstFailedUnitsReason(t *testing.T) {
 		t.Errorf("aggregate = %+v, want the first failed unit's category and reason", aggregate)
 	}
 }
+
+// r2: the stored unit result carries a reason for the credential refusals that used to leave none.
+func TestUnitDiscoveryFailureResultHasAReasonForAmbiguityAndAMissingToken(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"ambiguous credentials":               {&providerfoundation.CredentialAmbiguousError{Provider: "jira", Names: []string{"alpha", "bravo"}}, "credential_ambiguous"},
+		"a gitlab credential without a token": {providerfoundation.ValidateCredentialShape(providerfoundation.NewCredential("gitlab", "id", nil, nil)), "missing_fields:token"},
+		"a bare wrapped sentinel":             {fmt.Errorf("resolve: %w", providerfoundation.ErrCredentialInvalid), "credential_invalid"},
+	} {
+		raw, err := unitDiscoveryFailureResultJSON(tc.err)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := decoded["reason"].(string); got != tc.want {
+			t.Errorf("%s: reason %q, want %q (%s)", name, got, tc.want, raw)
+		}
+	}
+}

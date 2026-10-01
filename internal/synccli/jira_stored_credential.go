@@ -186,12 +186,13 @@ func pgxDSN(dsn string) string {
 }
 
 // jiraIntegrationCredentialID returns the credential id of the org's active jira integration(s): "" when
-// there is none (the by-name lookup then applies), the id when every integration shares one credential,
-// and a loud refusal when integrations point at different credentials -- the verb must not guess.
+// there is none or its only one has no stored credential (the by-name lookup then applies), the id when
+// every integration shares one credential, and a loud refusal when they differ (an integration without a
+// stored credential counts as different) -- the verb must not guess.
 func jiraIntegrationCredentialID(ctx context.Context, pool *pgxpool.Pool, orgID string) (string, error) {
 	rows, err := pool.Query(ctx,
-		`SELECT DISTINCT credential_id::text FROM integrations
-		 WHERE org_id = $1 AND lower(provider) = 'jira' AND is_active = TRUE AND credential_id IS NOT NULL
+		`SELECT DISTINCT COALESCE(credential_id::text, '') FROM integrations
+		 WHERE org_id = $1 AND lower(provider) = 'jira' AND is_active = TRUE
 		 ORDER BY 1`, orgID)
 	if err != nil {
 		return "", fmt.Errorf("read the org's jira integrations: %w", err)
@@ -212,8 +213,19 @@ func jiraIntegrationCredentialID(ctx context.Context, pool *pgxpool.Pool, orgID 
 	case 0:
 		return "", nil
 	case 1:
+		// "" is the one integration that has no stored credential (environment-authenticated): the
+		// by-name lookup applies, as before.
 		return ids[0], nil
 	}
+	// An integration with no stored credential counts as a different candidate: skipping it would pick
+	// the other one silently (r2, CHAOS-7132).
+	shown := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			id = "<no stored credential>"
+		}
+		shown = append(shown, id)
+	}
 	return "", fmt.Errorf("the org has %d active jira integrations with different credentials (%s); this verb cannot choose one",
-		len(ids), strings.Join(ids, ", "))
+		len(ids), strings.Join(shown, ", "))
 }

@@ -45,6 +45,15 @@ func seedNamedJiraCredential(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	return id
 }
 
+func seedJiraIntegrationWithoutCredential(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, name string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
+		 VALUES ($1, $2, 'jira', NULL, $3, '{}'::json, true, now(), now())`, uuid.New(), orgID, name); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func seedJiraIntegration(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, name string, credentialID uuid.UUID) {
 	t.Helper()
 	if _, err := pool.Exec(ctx,
@@ -110,6 +119,24 @@ func TestResolveJiraStoredSettingsRefusesTwoIntegrationsWithDifferentCredentials
 	_, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, nil, orgID, envOverrides{})
 	if err == nil {
 		t.Fatal("two jira integrations with different credentials must be refused, not resolved by a name default")
+	}
+	if text := err.Error(); !strings.Contains(text, "2 active jira integrations") || strings.Contains(text, "tok-") {
+		t.Errorf("the refusal must name the count and carry no secret: %q", text)
+	}
+}
+
+// r2: an active integration with NO stored credential (environment-authenticated) is a candidate too:
+// ignoring it would silently pick the other integration's credential.
+func TestResolveJiraStoredSettingsRefusesAnIntegrationWithoutAStoredCredentialBesideOneWithIt(t *testing.T) {
+	ctx, pool := scopeTestPool(t)
+	const orgID = "org-null-and-stored"
+	stored := seedNamedJiraCredential(t, ctx, pool, orgID, "default", map[string]string{"base_url": "https://a.example.test"}, map[string]string{"email": "default@example.test", "api_token": "tok-a"})
+	seedJiraIntegration(t, ctx, pool, orgID, "stored", stored)
+	seedJiraIntegrationWithoutCredential(t, ctx, pool, orgID, "env authenticated")
+
+	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, nil, orgID, envOverrides{})
+	if err == nil {
+		t.Fatalf("the verb silently selected stored settings for %q although another active integration has no stored credential", settings.email)
 	}
 	if text := err.Error(); !strings.Contains(text, "2 active jira integrations") || strings.Contains(text, "tok-") {
 		t.Errorf("the refusal must name the count and carry no secret: %q", text)

@@ -3,6 +3,7 @@ package providerfoundation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -81,5 +82,34 @@ func TestFailureReasonIsFixedVocabularyAndValueFree(t *testing.T) {
 	}
 	if _, err := NewFernetDecryptor(secrets.Value{}, ""); FailureReason(err) != "encryption_key_not_configured" {
 		t.Errorf("NewFernetDecryptor without a key: reason %q, want encryption_key_not_configured", FailureReason(err))
+	}
+}
+
+// r2 (CHAOS-7132): no ErrCredentialInvalid-derived refusal may end without a reason: the ambiguity error,
+// a missing token of every provider's shape check, an unknown provider and a bare sentinel all carry one.
+func TestEveryCredentialInvalidRefusalHasAReason(t *testing.T) {
+	t.Parallel()
+	for _, provider := range []string{"github", "gitlab", "jira", "linear", "launchdarkly", "pagerduty", "bitbucket", ""} {
+		err := ValidateCredentialShape(testCredential(provider, map[string]string{}))
+		if err == nil {
+			t.Errorf("%q: an empty credential was accepted", provider)
+			continue
+		}
+		if !errors.Is(err, ErrCredentialInvalid) || FailureReason(err) == "" {
+			t.Errorf("%q: refusal %v has no reason (%q)", provider, err, FailureReason(err))
+		}
+	}
+	if got := FailureReason(ValidateCredentialShape(testCredential("gitlab", map[string]string{}))); got != "missing_fields:token" {
+		t.Errorf("gitlab without a token: reason %q, want missing_fields:token", got)
+	}
+	ambiguous := &CredentialAmbiguousError{Provider: "jira", Names: []string{"alpha", "bravo"}}
+	if got := FailureReason(ambiguous); got != "credential_ambiguous" {
+		t.Errorf("ambiguity: reason %q", got)
+	}
+	if got := FailureReason(fmt.Errorf("wrapped: %w", ErrCredentialInvalid)); got != "credential_invalid" {
+		t.Errorf("a bare wrapped sentinel: reason %q, want credential_invalid", got)
+	}
+	if FailureReason(errors.New("unrelated")) != "" {
+		t.Error("an unrelated error must carry no reason")
 	}
 }

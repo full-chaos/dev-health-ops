@@ -242,6 +242,10 @@ func FailureReason(err error) string {
 	if errors.As(err, &shape) {
 		return "missing_fields:" + strings.Join(shape.missing, ",")
 	}
+	var ambiguous *CredentialAmbiguousError
+	if errors.As(err, &ambiguous) {
+		return "credential_ambiguous"
+	}
 	var provider *ProviderError
 	if errors.As(err, &provider) {
 		reason := string(provider.Class)
@@ -249,6 +253,10 @@ func FailureReason(err error) string {
 			reason += ":" + strconv.Itoa(provider.StatusCode)
 		}
 		return reason
+	}
+	// Any other refusal that wraps the sentinel still says it is a credential refusal, never nothing.
+	if errors.Is(err, ErrCredentialInvalid) {
+		return "credential_invalid"
 	}
 	return ""
 }

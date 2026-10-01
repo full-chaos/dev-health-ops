@@ -1,6 +1,7 @@
 # Every file under internal/fixturesgen/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: a807a460af43a464a9b51c8d5b19ae02ff5e571486411a30f8bf28e8a8fce72d (3 files)
 4cd8598eb414771f326067797525c01d85ead4462a006f3ddd6b87c42bc5742f	unclassified	generators_oracle.py
--	header	golden/product_telemetry.json
--	header	golden/pyrand.json
--	header	golden/synthetic_orgs.json
+92e09ff4abde267db4e929ab8149ae720cb45ea37c01be2fc08d825f76fa1bcb	header-before-stamp	golden/product_telemetry.json
+374d1a8c9e5dbf6dc032ed91dd4e857cb13e5fbbcf9253b50fc7d3515aa6c365	header-before-stamp	golden/pyrand.json
+f58597fdb836189f8f3f725245be08ab6a09166e63365232f42b43a490505505	header-before-stamp	golden/synthetic_orgs.json

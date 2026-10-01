@@ -195,9 +195,9 @@ func TestARunRetractsWhatTheSnapshotNoLongerHas(t *testing.T) {
 		switch req.Operation {
 		case "TeamSearchV2":
 			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"), teamNode(teamB, "Old", "ARCHIVED"))
-		case "TeamworkGraph_teamUsers":
+		case "TeamworkGraphTeamUsers":
 			return 200, connection("teamworkGraph_teamUsers", "", userEdge(teamA, "bob-2"))
-		case "TeamworkGraph_teamActiveProjects":
+		case "TeamworkGraphTeamActiveProjects":
 			return 200, connection("teamworkGraph_teamActiveProjects", "")
 		}
 		return 500, nil
@@ -307,7 +307,7 @@ func TestOwnershipLastSyncedIsTheIngestTimeNotTheProviderTime(t *testing.T) {
 
 	// The closing row a later run writes for a retracted link is a write too.
 	g.respond = func(req request) (int, any) {
-		if req.Operation == "TeamworkGraph_teamActiveProjects" {
+		if req.Operation == "TeamworkGraphTeamActiveProjects" {
 			return 200, connection("teamworkGraph_teamActiveProjects", "")
 		}
 		return standard(req)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -492,6 +493,14 @@ func (dispatcher *nativeTeamAutoimportDispatcher) observeDispatch(provider strin
 	_ = dispatcher.observer.ObserveTeamCatalogDispatch(provider, jobruntime.TeamCatalogEntryPointPostSync, outcome)
 }
 
+// warnDropped leaves the cause of an error the non-strict post-sync seam degrades to a counter
+// outcome (CHAOS-7132): which stage failed and the error text. The errors on this path name fields
+// and classes, never a credential value.
+func (dispatcher *nativeTeamAutoimportDispatcher) warnDropped(ctx context.Context, orgID, runID, provider, stage string, err error) {
+	slog.Default().WarnContext(ctx, "team_catalog_dispatch_error_dropped",
+		"org_id", orgID, "sync_run_id", runID, "provider", provider, "stage", stage, "error", err)
+}
+
 func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 	ctx context.Context, reference syncdispatchruntime.DomainReference,
 ) error {
@@ -530,6 +539,7 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 	// decorator and keeps propagating every one of these.
 	selections, syncOptions, selectionsErr := dispatcher.selections.ResolveSelections(ctx, orgID, runID, provider, false)
 	if selectionsErr != nil {
+		dispatcher.warnDropped(ctx, orgID, runID, provider, "selections", selectionsErr)
 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
 		return nil
 	}
@@ -539,6 +549,7 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 	}
 	credential, client, integrationID, clientErr := dispatcher.clients.ResolveClient(ctx, orgID, runID, provider)
 	if clientErr != nil {
+		dispatcher.warnDropped(ctx, orgID, runID, provider, "client", clientErr)
 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
 		return nil
 	}
@@ -547,6 +558,7 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 		var sourcesErr error
 		sourceExternalIDs, sourcesErr = dispatcher.sources.ResolveSourceExternalIDs(ctx, orgID, runID)
 		if sourcesErr != nil {
+			dispatcher.warnDropped(ctx, orgID, runID, provider, "sources", sourcesErr)
 			dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
 			return nil
 		}
@@ -557,7 +569,8 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 	}, credential, client, selections, dispatcher.nowUTC())
 	if collectErr != nil {
 		// The failure is still visible via the dedicated nonfatal outcome,
-		// not silently dropped.
+		// not silently dropped; the log line carries the cause (CHAOS-7132).
+		dispatcher.warnDropped(ctx, orgID, runID, provider, "collect", collectErr)
 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
 		return nil
 	}
@@ -585,6 +598,9 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 		// exists so that choice, if any collector ever makes it, is visible
 		// in telemetry rather than indistinguishable from a clean run.
 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeRosterPreservationFailed)
+	} else if len(result.DegradedLegs) > 0 {
+		// An additive leg failed in an otherwise successful collection: not a clean "native" (CHAOS-7132).
+		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
 	} else {
 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNative)
 	}

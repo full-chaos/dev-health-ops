@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -216,6 +217,42 @@ type EncryptedCredential struct {
 	RawConfig []byte
 }
 
+// credentialInvalidError is ErrCredentialInvalid with a fixed reason word (never a value), so the
+// refusal says WHY (CHAOS-7132). errors.Is(err, ErrCredentialInvalid) still holds.
+type credentialInvalidError struct{ reason string }
+
+func (e *credentialInvalidError) Error() string {
+	return ErrCredentialInvalid.Error() + ": " + e.reason
+}
+
+func (e *credentialInvalidError) Unwrap() error { return ErrCredentialInvalid }
+
+func credentialInvalid(reason string) error { return &credentialInvalidError{reason: reason} }
+
+// FailureReason is a short, fixed-vocabulary, VALUE-FREE reason for an error, safe to store in a
+// durable row (CHAOS-7132): why a credential was invalid (decrypt_failed, ciphertext_missing, ...,
+// missing_fields:api_token,email), or the class and status of a provider failure
+// (authentication:401). "" when the error carries neither.
+func FailureReason(err error) string {
+	var invalid *credentialInvalidError
+	if errors.As(err, &invalid) {
+		return invalid.reason
+	}
+	var shape *credentialShapeError
+	if errors.As(err, &shape) {
+		return "missing_fields:" + strings.Join(shape.missing, ",")
+	}
+	var provider *ProviderError
+	if errors.As(err, &provider) {
+		reason := string(provider.Class)
+		if provider.StatusCode != 0 {
+			reason += ":" + strconv.Itoa(provider.StatusCode)
+		}
+		return reason
+	}
+	return ""
+}
+
 type CredentialRepository interface {
 	ResolveEncrypted(context.Context, TenantScope) (EncryptedCredential, error)
 }
@@ -265,20 +302,29 @@ func (r CredentialResolver) Resolve(ctx context.Context, lease LeaseGuard, scope
 	if !record.Active {
 		return Credential{}, ErrCredentialInactive
 	}
-	if record.Provider != scope.Provider || !record.Ciphertext.Configured() ||
-		(scope.CredentialID != "" && record.ID != scope.CredentialID) {
-		return Credential{}, ErrCredentialInvalid
+	switch {
+	case record.Provider != scope.Provider:
+		return Credential{}, credentialInvalid("provider_mismatch")
+	case !record.Ciphertext.Configured():
+		return Credential{}, credentialInvalid("ciphertext_missing")
+	case scope.CredentialID != "" && record.ID != scope.CredentialID:
+		return Credential{}, credentialInvalid("credential_id_mismatch")
 	}
 	if err := lease.Assert(ctx); err != nil {
 		return Credential{}, err
 	}
 	plain, err := r.Decryptor.Decrypt(record.Ciphertext)
 	if err != nil {
-		return Credential{}, ErrCredentialInvalid
+		// A process with no encryption key and a key that does not open the ciphertext are different
+		// problems with different fixes; both used to read "provider credential is invalid".
+		if keyed, ok := r.Decryptor.(interface{ Configured() bool }); ok && !keyed.Configured() {
+			return Credential{}, credentialInvalid("encryption_key_not_configured")
+		}
+		return Credential{}, credentialInvalid("decrypt_failed")
 	}
 	credential, err := decodeCredential(record, plain)
 	if err != nil {
-		return Credential{}, err
+		return Credential{}, credentialInvalid("payload_not_a_json_object")
 	}
 	if err := lease.Assert(ctx); err != nil {
 		return Credential{}, err

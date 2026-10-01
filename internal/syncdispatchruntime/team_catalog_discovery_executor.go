@@ -216,6 +216,11 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 		// future one's deliberate soft-fail is never silently indistinguishable
 		// from a clean run.
 		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeRosterPreservationFailed)
+	} else if len(result.DegradedLegs) > 0 {
+		// An additive leg failed while the rest of the collection succeeded (CHAOS-7132): never a
+		// clean "native" success. The dedicated nonfatal outcome says so; the ledger result below
+		// names the leg and its reason.
+		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
 	} else {
 		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeNative)
 	}
@@ -239,9 +244,14 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 			_ = executor.Observer.ObserveTeamCatalogRowsWritten(normalizedProvider, jobruntime.TeamCatalogTable(row.table), row.count)
 		}
 	}
+	outcome := "native"
+	if len(result.DegradedLegs) > 0 {
+		outcome = "native_degraded"
+	}
 	return map[string]any{
 		"provider":             normalizedProvider,
-		"outcome":              "native",
+		"outcome":              outcome,
+		"degraded":             degradedLegsPayload(result.DegradedLegs),
 		"reference_team_keys":  result.TeamKeys,
 		"reference_sprint_ids": result.SprintIDs,
 		"rows_written": map[string]int{
@@ -262,3 +272,23 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 }
 
 var _ DiscoveryExecutor = &TeamCatalogDiscoveryExecutor{}
+
+// degradedLegsPayload is the stored form of the failed additive legs: the dataset, the leg, a fixed
+// reason and the error text bounded and sanitized (CHAOS-7132). nil when nothing degraded, so a clean
+// run's result is unchanged.
+func degradedLegsPayload(legs []providersync.DegradedLeg) []map[string]string {
+	if len(legs) == 0 {
+		return nil
+	}
+	out := make([]map[string]string, 0, len(legs))
+	for _, leg := range legs {
+		detail := sanitizeErrorText(leg.Detail)
+		if len(detail) > 500 {
+			detail = detail[:500]
+		}
+		out = append(out, map[string]string{
+			"dataset": leg.Dataset, "leg": leg.Leg, "outcome": leg.Outcome, "reason": leg.Reason, "detail": detail,
+		})
+	}
+	return out
+}

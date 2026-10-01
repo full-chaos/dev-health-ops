@@ -2,6 +2,7 @@ package workerservice
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -113,19 +114,23 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 		return result, nil
 	}
 	if client == nil || client.BaseURL == nil {
+		// A skipped Atlassian Teams leg must say so (CHAOS-7132): this return used to leave no line,
+		// so an org with no real Atlassian Teams rows could not be told from one with none to write.
+		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID, "reason", "no_base_url")
 		return result, nil
 	}
 	atlassianResult, err := collector.collectAtlassianTeams(ctx, ref, credential, client, selections, normalizedAt)
 	if err != nil {
-		if ref.Strict {
-			return result, err
-		}
-		// Non-strict (post-sync dispatch): the project-as-team write above
-		// already succeeded (or was itself skipped) and must not be undone
-		// by an Atlassian Teams failure -- log and keep that result,
-		// mirroring every other collector's non-strict walk-failure
-		// discipline in this package.
-		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "error", err)
+		// The Atlassian Teams leg is ADDITIVE and independent (D2778): its failure must neither fail
+		// reference discovery (strict) nor undo the project-as-team write above. It is never silent
+		// and never a clean success (CHAOS-7132): a Warn line and a degraded leg that the discovery
+		// ledger and the run's result carry, with a value-free reason.
+		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID,
+			"strict", ref.Strict, "reason", atlassianLegReason(err), "error", err)
+		result.DegradedLegs = append(result.DegradedLegs, providersync.DegradedLeg{
+			Dataset: "teams", Leg: "jira_atlassian_teams", Outcome: "failed",
+			Reason: atlassianLegReason(err), Detail: err.Error(),
+		})
 		return result, nil
 	}
 	// Every count/key below comes from atlassianteams.Write's own Result --
@@ -138,6 +143,22 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 	result.MembersWritten += atlassianResult.MembersWritten
 	result.TeamKeys = append(result.TeamKeys, atlassianResult.TeamKeys...)
 	return result, nil
+}
+
+// atlassianLegReason is the fixed-vocabulary, value-free reason an Atlassian Teams leg failed.
+func atlassianLegReason(err error) string {
+	switch {
+	case errors.Is(err, atlassianteams.ErrOrganizationPermission):
+		return "organization_permission"
+	case errors.Is(err, atlassianteams.ErrOrganizationNotFound):
+		return "organization_not_found"
+	case errors.Is(err, atlassianteams.ErrConfiguration), errors.Is(err, providersync.ErrInvalidConfiguration):
+		return "configuration"
+	}
+	if reason := providerfoundation.FailureReason(err); reason != "" {
+		return reason
+	}
+	return "unclassified"
 }
 
 func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(

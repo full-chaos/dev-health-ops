@@ -130,6 +130,10 @@ func TestAFrozenGoldenIsBoundToTheVenuesDeclaredPythonSettings(t *testing.T) {
 	if err := golden.pythonEnvUnboundErr(); err != nil {
 		t.Fatalf("a bound golden was refused: %v", err)
 	}
+	// A second venue of the same test with the same settings uses the same golden.
+	if err := golden.bindPythonEnv([]string{declared[1], declared[0]}); err != nil {
+		t.Fatalf("a second venue with the same settings was refused: %v", err)
+	}
 }
 
 func TestTheBackfillAddsOnlyTheKeyToTheHeader(t *testing.T) {

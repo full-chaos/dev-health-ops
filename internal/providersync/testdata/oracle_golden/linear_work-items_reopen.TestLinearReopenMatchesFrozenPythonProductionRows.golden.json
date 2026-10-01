@@ -14,7 +14,7 @@
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
-      "body": "{\"cases\": [{\"id\": \"completed_to_started\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"linear:ENG-42\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-07-27T11:00:00Z\"}, \"from_status\": {\"t\": \"str\", \"v\": \"done\"}, \"to_status\": {\"t\": \"str\", \"v\": \"in_progress\"}, \"from_status_raw\": {\"t\": \"str\", \"v\": \"Done\"}, \"to_status_raw\": {\"t\": \"str\", \"v\": \"In Progress\"}, \"actor\": {\"t\": \"str\", \"v\": \"bob@example.com\"}, \"last_synced\": {\"t\": \"datetime\", \"v\": \"2026-10-01T02:13:42.116416Z\"}, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}], \"excluded_fields\": {\"last_synced\": \"Python's reopen constructor stamps wall-clock time; Go uses the unit normalizedAt for retry-stable effects.\"}}\n"
+      "body": "{\"cases\": [{\"id\": \"completed_to_started\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"linear:ENG-42\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-07-27T11:00:00Z\"}, \"from_status\": {\"t\": \"str\", \"v\": \"done\"}, \"to_status\": {\"t\": \"str\", \"v\": \"in_progress\"}, \"from_status_raw\": {\"t\": \"str\", \"v\": \"Done\"}, \"to_status_raw\": {\"t\": \"str\", \"v\": \"In Progress\"}, \"actor\": {\"t\": \"str\", \"v\": \"bob@example.com\"}, \"last_synced\": {\"t\": \"datetime\", \"v\": \"2026-10-01T03:59:14.568875Z\"}, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}], \"excluded_fields\": {\"last_synced\": \"Python's reopen constructor stamps wall-clock time; Go uses the unit normalizedAt for retry-stable effects.\"}}\n"
     }
   ]
 }

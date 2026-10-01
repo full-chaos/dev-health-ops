@@ -14,7 +14,7 @@
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
-      "body": "{\"cases\": [{\"id\": \"dependency_mapping\", \"row\": {\"alert_id\": {\"t\": \"str\", \"v\": \"gitlab_dep:303\"}, \"source\": {\"t\": \"str\", \"v\": \"gitlab_dependency\"}, \"severity\": {\"t\": \"str\", \"v\": \"critical\"}, \"state\": null, \"package_name\": {\"t\": \"str\", \"v\": \"lodash\"}, \"cve_id\": null, \"url\": {\"t\": \"str\", \"v\": \"https://gitlab.example/vuln/303\"}, \"title\": {\"t\": \"str\", \"v\": \"Prototype Pollution\"}, \"description\": null, \"created_at\": {\"t\": \"datetime\", \"v\": \"2026-10-01T02:13:27.672295Z\"}, \"fixed_at\": null, \"dismissed_at\": null}}], \"excluded_fields\": {\"created_at\": \"the Python dependency mapper uses wall-clock now while Go uses the executor normalized instant\"}}\n"
+      "body": "{\"cases\": [{\"id\": \"dependency_mapping\", \"row\": {\"alert_id\": {\"t\": \"str\", \"v\": \"gitlab_dep:303\"}, \"source\": {\"t\": \"str\", \"v\": \"gitlab_dependency\"}, \"severity\": {\"t\": \"str\", \"v\": \"critical\"}, \"state\": null, \"package_name\": {\"t\": \"str\", \"v\": \"lodash\"}, \"cve_id\": null, \"url\": {\"t\": \"str\", \"v\": \"https://gitlab.example/vuln/303\"}, \"title\": {\"t\": \"str\", \"v\": \"Prototype Pollution\"}, \"description\": null, \"created_at\": {\"t\": \"datetime\", \"v\": \"2026-10-01T03:58:59.715551Z\"}, \"fixed_at\": null, \"dismissed_at\": null}}], \"excluded_fields\": {\"created_at\": \"the Python dependency mapper uses wall-clock now while Go uses the executor normalized instant\"}}\n"
     }
   ]
 }

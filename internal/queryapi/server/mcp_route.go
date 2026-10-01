@@ -52,7 +52,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"io"
 	"log"
 	"log/slog"
@@ -81,6 +80,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"

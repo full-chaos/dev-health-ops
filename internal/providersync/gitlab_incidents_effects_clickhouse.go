@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -320,7 +321,7 @@ func (sink GitLabIncidentsClickHouseEffects) inspectServices(
 	ctx context.Context, expected []gitLabOperationalServiceRow,
 ) (EffectInspection, error) {
 	return inspectGitLabOperationalRows(ctx, expected, func(ctx context.Context, row gitLabOperationalServiceRow) (gitLabOperationalServiceRow, bool, error) {
-		rows, err := sink.Conn.Query(ctx, "SELECT "+gitLabOperationalServiceColumns+" FROM operational_services FINAL WHERE org_id = ? AND id = ? LIMIT 1", row.OrgID, row.ID)
+		rows, err := sink.Conn.Query(ctx, operationalordering.LatestRevisionRow(gitLabOperationalServiceColumns, "operational_services", "org_id = ? AND id = ?"), row.OrgID, row.ID)
 		if err != nil {
 			return gitLabOperationalServiceRow{}, false, err
 		}
@@ -346,7 +347,7 @@ func (sink GitLabIncidentsClickHouseEffects) inspectMappings(
 	ctx context.Context, expected []gitLabServiceRepositoryMappingRow,
 ) (EffectInspection, error) {
 	return inspectGitLabOperationalRows(ctx, expected, func(ctx context.Context, row gitLabServiceRepositoryMappingRow) (gitLabServiceRepositoryMappingRow, bool, error) {
-		rows, err := sink.Conn.Query(ctx, "SELECT "+gitLabServiceMappingColumns+" FROM operational_service_repository_mappings FINAL WHERE org_id = ? AND id = ? LIMIT 1", row.OrgID, row.ID)
+		rows, err := sink.Conn.Query(ctx, operationalordering.LatestRevisionRow(gitLabServiceMappingColumns, "operational_service_repository_mappings", "org_id = ? AND id = ?"), row.OrgID, row.ID)
 		if err != nil {
 			return gitLabServiceRepositoryMappingRow{}, false, err
 		}
@@ -372,7 +373,7 @@ func (sink GitLabIncidentsClickHouseEffects) inspectIncidents(
 	ctx context.Context, expected []jiraIncidentRow,
 ) (EffectInspection, error) {
 	return inspectGitLabOperationalRows(ctx, expected, func(ctx context.Context, row jiraIncidentRow) (jiraIncidentRow, bool, error) {
-		rows, err := sink.Conn.Query(ctx, "SELECT "+jiraIncidentColumns+" FROM operational_incidents FINAL WHERE org_id = ? AND id = ? LIMIT 1", row.OrgID, row.ID)
+		rows, err := sink.Conn.Query(ctx, operationalordering.LatestRevisionRow(jiraIncidentColumns, "operational_incidents", "org_id = ? AND id = ?"), row.OrgID, row.ID)
 		if err != nil {
 			return jiraIncidentRow{}, false, err
 		}

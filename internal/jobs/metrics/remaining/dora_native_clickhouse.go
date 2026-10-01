@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 )
 
 // OperationalOrderingContract selects how a "current" row is resolved out of
@@ -127,17 +128,7 @@ func currentOperationalRowsSQL(
 		outer = "WHERE " + strings.Join(postSelectionFilters, " AND ")
 	}
 	if contract == OperationalOrderingRevision {
-		return fmt.Sprintf(`(
-        SELECT *
-        FROM (
-            SELECT *
-            FROM %s
-            WHERE org_id = {org_id:String}
-            ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC
-            LIMIT 1 BY org_id, id
-        )
-        %s
-    )`, table, outer)
+		return operationalordering.RevisionCurrentRows(table, "org_id = {org_id:String}", postSelectionFilters)
 	}
 	return fmt.Sprintf(`(
         SELECT *

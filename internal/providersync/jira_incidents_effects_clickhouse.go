@@ -7,6 +7,7 @@ import (
 	"math/big"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -182,7 +183,7 @@ func (readback JiraIncidentClickHouseReadback) inspectIncident(
 	ctx context.Context, expected jiraIncidentRow,
 ) (EffectInspection, error) {
 	rows, err := readback.Conn.Query(
-		ctx, "SELECT "+jiraIncidentColumns+" FROM operational_incidents FINAL WHERE org_id = ? AND id = ? LIMIT 1",
+		ctx, operationalordering.LatestRevisionRow(jiraIncidentColumns, "operational_incidents", "org_id = ? AND id = ?"),
 		expected.OrgID, expected.ID,
 	)
 	if err != nil {

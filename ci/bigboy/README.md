@@ -56,6 +56,27 @@ python3 ci/bigboy/generate-plane-split-router.py <deploy-repo>/values.prod.yaml 
 then recreate ONLY `traefik` (file-provider watch picks it up live, no restart strictly required,
 but a clean recreate after a real deploy-repo change is the safe default).
 
+### One path, one backend
+
+The generator REFUSES (exit 4, nothing emitted) a values file in which a path the Python api is
+given and a path a Go plane is given can match the same request. On bigboy the Go plane would win
+by priority while prod's ingress controller picks by its own rule order, so bigboy would prove a
+route prod may not have. The check is on the paths the rules match, not on the text of an entry:
+
+- It reads every Python source: `ops.ingress.pythonAllowList`, each host's own `pythonAllowList`
+  list (prod's in-cluster host carries one; only prod routes it, and a flip that forgets it is
+  half a flip), and the local-only paths this router adds (`BIGBOY_LOCAL_PYTHON_PATHS`).
+- A `Prefix` is read at its widest: every path that starts with its text. That is what
+  ingress-nginx renders for a Prefix on a host in regex mode, and it contains this router's own
+  reading (the path, or anything under it).
+- A Go plane wildcard (`{param}`, `[^/]+`) never crosses a `/`, so the answer is exact.
+- An allow-list entry of a shape the ops chart does not accept (an unanchored
+  `ImplementationSpecific`, an unknown `pathType`) is refused too, not read as a literal.
+
+The refusal names the list, the entry and the Go plane path. A values change that moves a path
+to a Go plane takes it off every Python list in the same commit. A local-only path that a Go
+plane starts to serve is removed from `BIGBOY_LOCAL_PYTHON_PATHS` in this repo first.
+
 ### D2733 regression + fix: `go-api-paths`/`query-api-paths` must match `Host(traefik)` ONLY
 
 The first version of this router matched `Host(commanderkeen.dev) || Host(www.commanderkeen.dev)
@@ -243,6 +264,8 @@ still answers the routed `/graphql`. The steps:
 5. `dho goapi routing enable` for each `KNOWN-MISSING` op in `routing-ops.txt`, then the parity check.
 
 Full output names the org and stays under the devhealth-root `_records/bigboy-<sha8>/graphql-prove-<ts>/`.
+`BIGBOY_ROOT` (default `/home/ubuntu/devhealth`) is the running tree the harness works in, the same
+parameter `bigboy-cut.sh` reads.
 
 First live run (4f014a9d): repoint 49 rows (47 changed), prove attempted=250 executed=183
 PROVEN_GO_ONLY=178. **testopsRisk is still not provable here**: it has no routing row, so prove

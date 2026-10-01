@@ -39,7 +39,9 @@ case "${2:-}" in
   --go-edge) EDGE_ARGS="-go-edge -edge-url http://traefik:3000/graphql"; EDGE_NOTE="the routed /graphql in Go-edge mode" ;;
   *) echo "usage: bigboy-graphql-prove.sh <full ops sha> [--go-edge]" >&2; exit 2 ;;
 esac
-R=/home/ubuntu/devhealth; HERE=$(cd "$(dirname "$0")" && pwd)
+# BIGBOY_ROOT is the running tree (compose files, _records, ops/.env): the same root parameter
+# the bigboy-cut.sh family reads, with the same default.
+R=${BIGBOY_ROOT:-/home/ubuntu/devhealth}; HERE=$(cd "$(dirname "$0")" && pwd)
 TS=$(date -u +%Y%m%dT%H%M%SZ); OUT=$R/_records/bigboy-$N8/graphql-prove-$TS
 LOCAL_ADMIN_EMAIL=${LOCAL_ADMIN_EMAIL:-admin@test.com}
 KEY_ID=${PROVE_KEY_ID:-local-dev-20260906}  # D2726: the kid bigboy's query-api JWKS trusts

@@ -65,19 +65,45 @@ def _unescape_hyphen(escaped: str) -> str:
     return escaped.replace("\\-", "-")
 
 
+# A Go plane path is literal text plus wildcards that each stand for one or more characters of
+# ONE segment (never a "/"). That is the whole language: a goApiPaths {param}, a queryApiPaths
+# ImplementationSpecific `[^/]+`. A path is kept as its segments, each segment as the literal
+# parts around its wildcards, and BOTH the emitted regex and the two-backends check are derived
+# from that one form, so the check decides on exactly the paths the emitted rule matches.
+_WILDCARD = "\x00"
+_WILDCARD_REGEX = "[^/]+"
+Segments = list[list[str]]
+
+
+def _segments(text: str) -> Segments:
+    return [segment.split(_WILDCARD) for segment in text.split("/")]
+
+
+def _goapi_path_segments(path: str) -> Segments:
+    return _segments(re.sub(r"\{[a-zA-Z0-9_]+\}", _WILDCARD, path))
+
+
+def _queryapi_entry_segments(path: str, path_type: str) -> Segments:
+    if path_type == "Exact":
+        return _segments(path)
+    # ImplementationSpecific: literal text with the `[^/]+` placeholder inline (e.g.
+    # "/api/v1/people/[^/]+/metric"); everything except that placeholder is literal.
+    return _segments(path.replace(_WILDCARD_REGEX, _WILDCARD))
+
+
+def _segments_regex(segments: Segments) -> str:
+    return "/".join(
+        _WILDCARD_REGEX.join(_unescape_hyphen(re.escape(part)) for part in segment)
+        for segment in segments
+    )
+
+
 def _goapi_path_to_regex(path: str) -> str:
-    escaped = _unescape_hyphen(re.escape(path))
-    # re.escape turns "{" into "\{" -- match that escaped form.
-    return re.sub(r"\\\{[a-zA-Z0-9_]+\\\}", "[^/]+", escaped)
+    return _segments_regex(_goapi_path_segments(path))
 
 
 def _queryapi_entry_to_regex(path: str, path_type: str) -> str:
-    if path_type == "Exact":
-        return _unescape_hyphen(re.escape(path))
-    # ImplementationSpecific: already contains a literal [^/]+ regex placeholder inline (e.g.
-    # "/api/v1/people/[^/]+/metric") -- escape everything EXCEPT that literal placeholder.
-    parts = path.split("[^/]+")
-    return "[^/]+".join(_unescape_hyphen(re.escape(p)) for p in parts)
+    return _segments_regex(_queryapi_entry_segments(path, path_type))
 
 
 class PinError(Exception):
@@ -194,22 +220,126 @@ def allow_list_literal(path: str, path_type: str) -> str:
     return path
 
 
-def paths_on_two_planes(
-    go_regex: str, query_regex: str, python_allow: list[tuple[str, str]]
-) -> list[str]:
-    """Python allow-list paths that a Go plane's path list ALSO claims.
+def routed_python_entries(
+    python_allow: list[tuple[str, str]] | None,
+) -> list[tuple[str, str]]:
+    """Every entry this router sends to the Python api: the allow-list plus the local-only paths."""
+    allow = python_allow if python_allow is not None else DEFAULT_PYTHON_ALLOW_LIST
+    return list(allow) + list(BIGBOY_LOCAL_PYTHON_PATHS)
+
+
+BIGBOY_LOCAL_SOURCE = (
+    "the bigboy-local Python paths (BIGBOY_LOCAL_PYTHON_PATHS in this script)"
+)
+# The anchored shape the ops chart accepts (deploy/helm/dev-health/templates/ingress.yaml):
+# literal segments, `\.` for a dot, exactly one trailing `$`.
+_ANCHORED_ENTRY = re.compile(r"(/([A-Za-z0-9_-]|\\\.)+)+\$")
+
+
+def python_sources(doc: dict) -> list[tuple[str, list[tuple[str, str]]]]:
+    """Every list that puts a path on the Python api, by the name a values author knows it by.
+
+    The shared allow-list and the local-only paths are what THIS router routes. A host's own
+    list is what prod's ingress routes on that host (the in-cluster host, which web's
+    server-side calls use, carries one), so it is checked too: a flip that takes a path off the
+    shared list and leaves it on a host's list is half a flip.
+    """
+    ingress = (doc.get("ops") or {}).get("ingress") or {}
+    sources = [("ops.ingress.pythonAllowList", python_allow_list_from_doc(doc))]
+    for host in ingress.get("hosts") or []:
+        own = host.get("pythonAllowList") if isinstance(host, dict) else None
+        if isinstance(own, list):
+            sources.append(
+                (
+                    f"ops.ingress.hosts[{host.get('host')}].pythonAllowList",
+                    [(e["path"], e["pathType"]) for e in own],
+                )
+            )
+    sources.append((BIGBOY_LOCAL_SOURCE, list(BIGBOY_LOCAL_PYTHON_PATHS)))
+    return sources
+
+
+def go_plane_paths(doc: dict) -> list[tuple[str, str, Segments]]:
+    """(values key, path as written, segments) for every path a Go plane claims."""
+    ingress = doc["ingress"]
+    claimed = [
+        ("ingress.goApiPaths", e["path"], _goapi_path_segments(e["path"]))
+        for e in ingress["goApiPaths"]
+    ]
+    claimed += [
+        (
+            "ingress.queryApiPaths",
+            e["path"],
+            _queryapi_entry_segments(e["path"], e["pathType"]),
+        )
+        for e in ingress["queryApiPaths"]
+    ]
+    return claimed
+
+
+def _segment_is(parts: list[str], text: str) -> bool:
+    """A Go plane segment matches exactly this text."""
+    pattern = _WILDCARD_REGEX.join(re.escape(part) for part in parts)
+    return re.fullmatch(pattern, text) is not None
+
+
+def _segment_can_start_with(parts: list[str], head: str) -> bool:
+    """A Go plane segment matches some text that starts with head."""
+    if parts[0].startswith(head):
+        return True
+    # A wildcard follows the first literal part: it takes the rest of head and more.
+    return len(parts) > 1 and head.startswith(parts[0])
+
+
+def python_entry_overlaps(path: str, path_type: str, segments: Segments) -> bool:
+    """Whether some request path is matched by BOTH this Python entry and this Go plane path.
+
+    Exact, and an anchored entry, match one path. A Prefix is taken at its widest reading,
+    every path that starts with its text: that is what ingress-nginx renders for a Prefix on
+    a host in regex mode (a host with an anchored entry), and it contains this router's own
+    reading (the path, or anything under it). A Go plane wildcard never crosses a "/", so the
+    answer is exact, segment by segment.
+    """
+    if path_type == "Prefix":
+        want = path.split("/")
+        if len(segments) < len(want):
+            return False
+        return all(
+            _segment_is(segments[i], want[i]) for i in range(len(want) - 1)
+        ) and _segment_can_start_with(segments[len(want) - 1], want[-1])
+    want = allow_list_literal(path, path_type).split("/")
+    return len(segments) == len(want) and all(
+        _segment_is(parts, text) for parts, text in zip(segments, want)
+    )
+
+
+def paths_on_two_planes(doc: dict) -> list[str]:
+    """One line for each Python entry that a Go plane path overlaps, and for each entry of a
+    shape that cannot be checked.
 
     One path on two backends is not a route, it is a tie-break: this router would send it to
     the Go plane (priority 1000 over 500) while prod's ingress controller picks by its own
     rule order, so bigboy would prove a route prod may not have. A values file that moves a
-    path to a Go plane must also take it off the Python allow-list; the caller refuses.
+    path to a Go plane must also take it off every Python list; the caller refuses.
     """
-    both = []
-    for path, path_type in python_allow:
-        literal = allow_list_literal(path, path_type)
-        if re.match(go_regex, literal) or re.match(query_regex, literal):
-            both.append(literal)
-    return both
+    claimed = go_plane_paths(doc)
+    found = []
+    for source, entries in python_sources(doc):
+        for path, path_type in entries:
+            entry = f"{source} entry {{path: {path}, pathType: {path_type}}}"
+            if path_type not in ("Prefix", "Exact", "ImplementationSpecific") or (
+                path_type == "ImplementationSpecific"
+                and not _ANCHORED_ENTRY.fullmatch(path)
+            ):
+                found.append(
+                    f"{entry} is not a shape the ops chart accepts (Prefix, Exact, or an anchored"
+                    " ImplementationSpecific `/literal$`), so it cannot be checked against the Go planes"
+                )
+                continue
+            for plane, go_path, segments in claimed:
+                if python_entry_overlaps(path, path_type, segments):
+                    found.append(f"{entry} and {plane} entry {go_path}")
+    return found
 
 
 def _traefik_path_rule(entries: list[tuple[str, str]]) -> str:
@@ -232,10 +362,7 @@ def emit_dynamic_config(
     query_regex: str,
     python_allow: list[tuple[str, str]] | None = None,
 ) -> str:
-    python_rule = _traefik_path_rule(
-        (python_allow if python_allow is not None else DEFAULT_PYTHON_ALLOW_LIST)
-        + BIGBOY_LOCAL_PYTHON_PATHS
-    )
+    python_rule = _traefik_path_rule(routed_python_entries(python_allow))
     """Traefik FILE-PROVIDER dynamic config (not docker labels): go-api/query-api/api are named
     by address only (http://go-api:8000 etc) -- this file is the only thing that needs to change
     to add/adjust routing, so applying it only touches traefik (which reloads the file live) and
@@ -314,9 +441,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     if a.values:
-        go_paths, query_paths = load_paths(a.values)
         with open(a.values) as f:
-            python_allow = python_allow_list_from_doc(yaml.safe_load(f))
+            doc = yaml.safe_load(f)
+        go_paths, query_paths = paths_from_doc(doc)
+        python_allow = python_allow_list_from_doc(doc)
     elif all(pinned):
         try:
             full, vendored, text = values_at_sha(
@@ -337,11 +465,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     go_regex = combined_regex(go_paths)
     query_regex = combined_regex(query_paths)
-    if both := paths_on_two_planes(go_regex, query_regex, python_allow):
+    if both := paths_on_two_planes(doc):
         print(
-            f"REFUSED: {', '.join(both)} is on the Python allow-list (ops.ingress.pythonAllowList) AND in"
-            " ingress.goApiPaths/queryApiPaths: one path, two backends. Take it off the allow-list in the"
-            " same values change that moves it to the Go plane.",
+            "REFUSED: one path, two backends. A path the Python api is given and a path a Go plane is"
+            " given can match the same request. Take the path off every Python list in the same values"
+            " change that moves it to the Go plane:\n  " + "\n  ".join(both),
             file=sys.stderr,
         )
         return 4

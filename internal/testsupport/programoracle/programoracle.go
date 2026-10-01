@@ -19,6 +19,7 @@ package programoracle
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -36,8 +37,9 @@ import (
 type Program struct {
 	// Name identifies the run in the golden. Names are unique within one call.
 	Name string
-	// Text is the program, run as `python -c Text`. Its digest is part of the
-	// request, so a changed program is another request.
+	// Text is the program, run as `python -c Text` with the pinned checkout
+	// as its working directory. Its digest is part of the request, so a
+	// changed program is another request.
 	Text string
 	// Stdin is the program's input. Its digest is part of the request.
 	Stdin []byte
@@ -53,6 +55,30 @@ type Program struct {
 type Answer struct {
 	ExitCode int
 	Stdout   string
+}
+
+// Script is the program that runs a script of this repository as its file
+// would run. path is the script's place under the repository root and text is
+// its source. The script sees __name__ "__main__" and, as __file__, its place
+// in the checkout the interpreter runs in: a script that finds the repository
+// from its own location finds the pinned checkout, and the source that runs is
+// the test's own, which is part of the request.
+func Script(name, path, text string, stdin []byte) Program {
+	return Program{Name: name, Stdin: stdin, Text: "import os\n" +
+		"path = os.path.join(os.getcwd(), " + pythonString(path) + ")\n" +
+		"exec(compile(" + pythonString(text) + ", path, \"exec\"), {\"__name__\": \"__main__\", \"__file__\": path})\n"}
+}
+
+// pythonString is value as a Python string literal. A JSON string is one:
+// every escape the encoder writes means the same in Python.
+func pythonString(value string) string {
+	var literal bytes.Buffer
+	encoder := json.NewEncoder(&literal)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		panic(err)
+	}
+	return strings.TrimSuffix(literal.String(), "\n")
 }
 
 // DefaultEnv is in every program's environment and request: a fixed hash seed
@@ -206,6 +232,17 @@ func interpreterEnv(pinnedRoot string, program Program) []string {
 	return environment
 }
 
+// interpreterCommand is the command a recording runs for program: the
+// interpreter with the program as its -c text, in the pinned checkout, with
+// the program's input and the interpreter environment.
+func interpreterCommand(python, pinnedRoot string, program Program) *exec.Cmd {
+	command := exec.Command(python, "-c", program.Text)
+	command.Dir = pinnedRoot
+	command.Stdin = bytes.NewReader(program.Stdin)
+	command.Env = interpreterEnv(pinnedRoot, program)
+	return command
+}
+
 // execute runs program with the interpreter of the pinned checkout and returns
 // its exit code and stdout. An interpreter that cannot be started, or that is
 // older than the deployed release, fails the test.
@@ -214,9 +251,7 @@ func execute(t *testing.T, pinnedRoot string, program Program) (int, []byte) {
 	python := pyoracle.Resolve(t, pinnedRoot)
 	probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
 	pyoracle.RequireDeployed(t, python, probe, probeErr)
-	command := exec.Command(python, "-c", program.Text)
-	command.Stdin = bytes.NewReader(program.Stdin)
-	command.Env = interpreterEnv(pinnedRoot, program)
+	command := interpreterCommand(python, pinnedRoot, program)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	stdout, err := command.Output()

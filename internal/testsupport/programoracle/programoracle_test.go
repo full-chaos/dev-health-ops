@@ -1,8 +1,10 @@
 package programoracle
 
 import (
+	"io"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -40,6 +42,59 @@ func TestRunAnswersFromTheGolden(t *testing.T) {
 		if answers[index] != want[index] {
 			t.Errorf("answer %d = %+v, want %+v", index, answers[index], want[index])
 		}
+	}
+}
+
+// TestAScriptRunsAsItsFileInThePinnedCheckout runs Script frozen: the script
+// starts with a __future__ import, which only the head of a file may hold, and
+// prints where it believes it is, its module name and its input.
+func TestAScriptRunsAsItsFileInThePinnedCheckout(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	spec := venueoracle.GoldenSpec{
+		Path:        "testdata/golden/script.golden.json",
+		PythonBuild: runGoldenPythonBuild,
+		SHA256:      "d0884e9313816f8f0771546274d5d950cde05fc31606301cb9af9f70de142c88",
+		Recipe: "git worktree add --detach $DIR " + runGoldenPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/testsupport/programoracle/ -test '^TestAScriptRunsAsItsFileInThePinnedCheckout$' -python-root $DIR",
+	}
+	const script = "from __future__ import annotations\n" +
+		"import os, sys\n" +
+		"from pathlib import Path\n" +
+		"root = Path(__file__).resolve().parents[2]\n" +
+		"print(os.path.relpath(__file__, root), root == Path.cwd().resolve(), (root / \"go.mod\").is_file(), __name__, sys.stdin.read())\n"
+	answers := Run(t, spec, root, []Program{Script("script", "some/place/oracle.py", script, []byte("input"))})
+	if want := (Answer{0, "some/place/oracle.py True True __main__ input\n"}); answers[0] != want {
+		t.Fatalf("answer = %+v, want %+v", answers[0], want)
+	}
+}
+
+// TestAPythonStringLiteralKeepsEveryCharacter pins pythonString on the
+// characters a script holds: quotes, backslashes, line breaks, HTML
+// characters and text outside ASCII.
+func TestAPythonStringLiteralKeepsEveryCharacter(t *testing.T) {
+	got := pythonString("a\"b'c\\d\n<&>\u00e9\t")
+	if want := `"a\"b'c\\d\n<&>` + "\u00e9" + `\t"`; got != want {
+		t.Fatalf("pythonString = %s, want %s", got, want)
+	}
+}
+
+// TestTheInterpreterRunsInThePinnedCheckout pins the command of a recording:
+// the program as -c text, the pinned checkout as working directory, the
+// program's input, and the interpreter environment.
+func TestTheInterpreterRunsInThePinnedCheckout(t *testing.T) {
+	command := interpreterCommand("/pinned/.venv/bin/python", "/pinned", Program{Text: "print(1)", Stdin: []byte("in")})
+	if command.Dir != "/pinned" {
+		t.Errorf("working directory = %q", command.Dir)
+	}
+	if strings.Join(command.Args, " ") != "/pinned/.venv/bin/python -c print(1)" {
+		t.Errorf("arguments = %q", command.Args)
+	}
+	if input, err := io.ReadAll(command.Stdin); err != nil || string(input) != "in" {
+		t.Errorf("input = %q, %v", input, err)
+	}
+	if !slices.Contains(command.Env, "PYTHONPATH="+filepath.Join("/pinned", "src")) {
+		t.Errorf("environment = %q", command.Env)
 	}
 }
 

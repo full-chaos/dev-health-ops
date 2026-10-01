@@ -774,19 +774,15 @@ var localPythonSettings = map[string]string{
 }
 
 // startPython starts the real Python verb in a long-lived child with a closed environment (the producer only).
-func (o *localOracle) startPython(root string) {
+func (o *localOracle) startPython(producer *venueoracle.Producer) {
 	t := o.t
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "-c", localSyncOracleProgram)
-	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src")}
-	names := make([]string, 0, len(localPythonSettings))
-	for name := range localPythonSettings {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		command.Env = append(command.Env, name+"="+localPythonSettings[name])
+	producer.RequireDeployed()
+	// The launcher's closed environment: its fixed set and the declared constants (localPythonSettings, in the
+	// golden's key); nothing of the test process's environment.
+	command, err := producer.Command(context.Background(), localPythonSettings, nil, "-c", localSyncOracleProgram)
+	if err != nil {
+		t.Fatal(err)
 	}
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -997,10 +993,10 @@ func localCorpusKey() []byte {
 }
 
 // produceLocal runs every scenario against the REAL Python verb and records how each run ended and what it wrote.
-func produceLocal(t *testing.T, root string) []localRecorded {
+func produceLocal(t *testing.T, producer *venueoracle.Producer) []localRecorded {
 	t.Helper()
 	oracle := newLocalOracle(t)
-	oracle.startPython(root)
+	oracle.startPython(producer)
 	var recorded []localRecorded
 	for _, scenario := range append(localScenarios(), generatedScenarios()...) {
 		f := newFixture(t, localFixtureName(scenario))
@@ -1038,8 +1034,7 @@ func TestLocalSyncMatchesFrozenPython(t *testing.T) {
 	root := golden.PythonRoot(t, repoRoot)
 	request := venueoracle.ProgramRequest("local sync corpus", localSyncOracleProgram, localCorpusKey(), localPythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		root := producer.Root
-		body, err := json.Marshal(produceLocal(t, root))
+		body, err := json.Marshal(produceLocal(t, producer))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1250,9 +1245,8 @@ func TestLocalSyncRerunKeepsHeldColumnsUnlikePythonFrozen(t *testing.T) {
 	root := golden.PythonRoot(t, repoRoot)
 	request := venueoracle.ProgramRequest("local sync rerun over a held row", localSyncOracleProgram, []byte("held pull request 5; prs rerun"), localPythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		root := producer.Root
 		oracle := newLocalOracle(t)
-		oracle.startPython(root)
+		oracle.startPython(producer)
 		f, id := rerunFixture(oracle.ctx, t)
 		seedHeldPullRequest(oracle.ctx, t, oracle, oracle.pythonDatabase, id)
 		base := []string{"--provider", "local", "--repo-path", f.dir, "--org", "oracle-org"}

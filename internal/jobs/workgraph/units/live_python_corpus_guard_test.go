@@ -2,12 +2,13 @@ package units
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
 // A rot guard that DISCOVERS the corpora it guards instead of listing them.
@@ -297,31 +298,16 @@ func TestLiveDataGeneratorsGenuinelyNeedClickHouse(t *testing.T) {
 	}
 }
 
+// TestEveryDiscoverableCorpusStillMatchesLivePython discovers every generator of
+// tests/fixtures that can be guarded and asserts the fixture it declares is still
+// what the Python producer renders. The renders were executed once, all in one
+// golden (testdata/golden/corpus_discovery_rot_guard.json), on the last build that
+// carried the Python sources; a frozen run compares the recorded renders with the
+// checked-in fixtures and runs no Python. The set of programs is the set discovered
+// now: a generator added or edited since the recording is another request and the
+// golden is refused until it is recorded again, so a new corpus is still guarded
+// the day it lands.
 func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	// A PROOF MARKER, because Go's package-level `ok` counts a SKIPPED test as
-	// passing. Without one, a skip and a run are indistinguishable in the only
-	// output most readers see -- which is not hypothetical: this guard skipped
-	// in my own local verification and reported `ok` while the ratchet was
-	// failing, and a codex round found what my green had hidden.
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	defer func() {
-		if t.Failed() {
-			return
-		}
-		if err := os.WriteFile(
-			filepath.Join(proofDirectory, "workgraph-units-corpus-discovery"),
-			[]byte("executed"), 0o644,
-		); err != nil {
-			t.Fatalf("write proof marker: %v", err)
-		}
-	}()
-
 	repoRoot := repositoryRootPath(t)
 	fixturesDirectory := filepath.Join(repoRoot, "tests", "fixtures")
 
@@ -338,11 +324,11 @@ func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
 	}
 	sort.Strings(generators)
 
-	python := workgraphComponentsLivePython(t, repoRoot)
-
+	type corpusJob struct{ name, fixture string }
 	var (
 		guarded     []string
 		unguardable []string
+		jobs        []corpusJob
 	)
 
 	for _, generator := range generators {
@@ -369,46 +355,51 @@ func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
 			continue
 		}
 
-		t.Run(name, func(t *testing.T) {
-			command := exec.Command(python, generator, "--stdout")
-			command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-			rendered, err := command.Output()
-			if err != nil {
-				var stderr []byte
-				if exitError, ok := err.(*exec.ExitError); ok {
-					stderr = exitError.Stderr
-				}
-				t.Fatalf("run %s against live Python: %v: %s", name, err, stderr)
-			}
+		jobs = append(jobs, corpusJob{name: name, fixture: fixtureName})
+		guarded = append(guarded, name)
+	}
 
+	generatorsToRun := make([]rotguard.Generator, len(jobs))
+	for index, job := range jobs {
+		generatorsToRun[index] = rotguard.Generator{
+			Name: job.name,
+			Path: "tests/fixtures/" + job.name,
+			Args: []string{"--stdout"},
+		}
+	}
+	spec := rotguard.Spec("testdata/golden/corpus_discovery_rot_guard.json", "899cf483964e63531298b171f569cdb4ffb49e6976c9c4c7bca8611904ee4955",
+		"./internal/jobs/workgraph/units/", "^TestEveryDiscoverableCorpusStillMatchesLivePython$")
+	renders := rotguard.Run(t, spec, repoRoot, generatorsToRun...)
+	for index, job := range jobs {
+		name, fixtureName, rendered := job.name, job.fixture, renders[index]
+		t.Run(name, func(t *testing.T) {
 			frozen, err := os.ReadFile(filepath.Join(fixturesDirectory, fixtureName))
 			if err != nil {
 				t.Fatalf("read the frozen fixture %s: %v", fixtureName, err)
 			}
 
-			if string(rendered) != string(frozen) {
+			if rendered != string(frozen) {
 				// A byte diff is the right comparison: both sides are the same
 				// Python-rendered JSON text from the same generator, so any
 				// difference is a real change in what the interpreter produces --
 				// not a formatting artefact.
 				t.Errorf(
 					"%s has ROTTED: the frozen fixture no longer matches what the "+
-						"deployed interpreter produces.\n"+
+						"recorded interpreter produced.\n"+
 						"  fixture:   tests/fixtures/%s\n"+
 						"  generator: tests/fixtures/%s\n"+
 						"  frozen:    %d bytes\n"+
-						"  live:      %d bytes\n"+
+						"  recorded:  %d bytes\n"+
 						"This is NOT fixed by regenerating without reading the diff. The "+
 						"frozen file records the behaviour the Go port was written "+
 						"against, so a change here means the port may now be wrong -- "+
 						"read what moved, decide whether the Go side must follow, THEN "+
-						"regenerate.\n%s",
+						"regenerate and record the producer again (the golden's recipe).\n%s",
 					name, fixtureName, name, len(frozen), len(rendered),
-					firstDifference(string(frozen), string(rendered)),
+					firstDifference(string(frozen), rendered),
 				)
 			}
 		})
-		guarded = append(guarded, name)
 	}
 
 	t.Logf("guarded %d corpora by discovery", len(guarded))

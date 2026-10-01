@@ -26,9 +26,11 @@ package goapiproof
 //   - nothing failed unexplained.
 //
 // A shape the MCP class refuses BY POLICY (HTTP 400/403/422 from the
-// listener's own gate while Python served it: a person selector, a depth or
-// complexity limit, a ClickHouse budget) cannot be a served shape, so it is
-// EXCLUDED, never silently: it is counted and named on the receipt. Every
+// listener's own gate, with a typed reason from the closed policy set, while the
+// reference served it: a person selector, a size or cost limit, a ClickHouse budget)
+// cannot be a served shape, so it is EXCLUDED, never silently: it is counted and
+// named on the receipt with its reason. A refusal for any other reason (an identity
+// or document-validity one) blocks the root. Every
 // other non-executed shape (a 404 root_field_not_enabled, a 5xx, a transport
 // failure, an admission refusal) is a failure and blocks the match. A cited
 // baseline-defect mismatch is NOT admitted for the class: the class has no
@@ -127,14 +129,44 @@ func MCPClassSourceOperations(classOperations []string, documents map[string]str
 	return out, nil
 }
 
-// policyRefusalStatuses are the listener's own refusals of a shape it will
-// never serve: 400 (a limit or validation), 403 (person scope, org, a root or
-// claim) and 422 (a ClickHouse read budget). 404 is deliberately absent: it is
+// policyRefusalStatuses are the HTTP statuses of the listener's own refusals of a shape it
+// will never serve: 400 (a limit or validation), 403 (person scope, org, a root or claim)
+// and 422 (a ClickHouse read budget). 404 is deliberately absent: it is
 // root_field_not_enabled, and a root that cannot be reached is a failure.
-var policyRefusalStatuses = map[int]string{
-	http.StatusBadRequest:          "listener_limit_or_validation",
-	http.StatusForbidden:           "listener_policy",
-	http.StatusUnprocessableEntity: "listener_read_budget",
+var policyRefusalStatuses = map[int]bool{
+	http.StatusBadRequest:          true,
+	http.StatusForbidden:           true,
+	http.StatusUnprocessableEntity: true,
+}
+
+// mcpPolicyRefusalReasons is the CLOSED set of listener refusal reasons that mean "this
+// shape is outside what the MCP class serves, by policy": a person selector, an input or
+// size limit, a cost cap, a read budget. A shape refused for one of them is excluded and
+// named. Every other reason blocks the root, notably the identity ones (org_mismatch,
+// invalid_org_argument, elevated_claim, no_carrier, authorization_header, invalid_org):
+// the proof's org is the header org, so one of those firing is the identity mapping
+// diverging from the document route, which is exactly what this proof exists to catch,
+// and so are the document-validity reasons (the registered documents validate on both).
+var mcpPolicyRefusalReasons = map[string]bool{
+	"person_scope": true, "input_limit": true, "unclassified_input": true,
+	"depth_limit": true, "alias_limit": true, "complexity_limit": true,
+	"bytes_ceiling": true, "rows_ceiling": true, "time_ceiling": true,
+}
+
+// mcpRefusalReason reads the listener's typed refusal reason out of a response body
+// (errors[0].extensions.reason), "" when the body is not one.
+func mcpRefusalReason(body []byte) string {
+	var parsed struct {
+		Errors []struct {
+			Extensions struct {
+				Reason string `json:"reason"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &parsed) != nil || len(parsed.Errors) != 1 {
+		return ""
+	}
+	return parsed.Errors[0].Extensions.Reason
 }
 
 // classifyMCPOutcome says what one measured shape is to its root's proof:
@@ -148,9 +180,9 @@ func classifyMCPOutcome(o Outcome) (state, reason string) {
 	case o.RefusalReason == RefusalNeedsInstanceID:
 		return "excluded", "needs_instance_identifier"
 	case o.RefusalReason == RefusalNonSuccessStatus && o.Candidate != nil && o.Baseline != nil:
-		if why, ok := policyRefusalStatuses[o.Candidate.StatusCode]; ok &&
+		if reason := mcpRefusalReason(o.Candidate.Body); policyRefusalStatuses[o.Candidate.StatusCode] && mcpPolicyRefusalReasons[reason] &&
 			o.Baseline.StatusCode >= http.StatusOK && o.Baseline.StatusCode < http.StatusMultipleChoices {
-			return "excluded", why
+			return "excluded", "listener_policy:" + reason
 		}
 	}
 	return "failed", o.RefusalReason

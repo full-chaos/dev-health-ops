@@ -153,7 +153,7 @@ func (p *Producer) Command(ctx context.Context, declared map[string]string, extr
 
 // RequireDeployed fails the test when the producer's interpreter is older than
 // the deployed release or does not start. The probe runs in the closed
-// environment (pyoracle.ProbeDeployed), as every child the producer starts.
+// environment (pyoracle.RequireDeployed), as every child the producer starts.
 func (p *Producer) RequireDeployed() {
 	p.t.Helper()
 	if err := p.activate(); err != nil {

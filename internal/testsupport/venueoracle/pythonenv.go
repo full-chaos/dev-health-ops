@@ -24,6 +24,12 @@ import (
 //   - a live venue test that silently relied on an ambient variable of the
 //     shell or the CI job loses it; only a run of the gated venue tests shows
 //     that. Such a test declares the variable (t.Setenv or PythonEnv).
+//
+// NOT covered at all: a Golden.Produce oracle. Its Python child is started by
+// the test's own function, this package sets no environment there, and a
+// Produce golden holds no key of one. A producer must set a closed
+// environment itself and put what shapes its answer into the request
+// (ProgramRequest's env).
 
 // processEnvAtInit is the test process's environment when this package was
 // initialised, before TestMain and before any test ran: what the shell, the

@@ -7,15 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonSignatureProgram classifies each [payload b64, header b64] with the
@@ -49,18 +45,17 @@ func sign(secret, timestamp string, payload []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// TestStripeSignatureMatchesLivePython holds verifyStripeSignature to
-// stripe-python's verify_header over header shapes, timestamp spellings,
-// signature lists and bodies.
-func TestStripeSignatureMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+// signatureInstant is the whole second both planes judge the tolerance from.
+// It is fixed: the timestamps and signatures of the cases are the program's
+// input, and an input is the same in every run.
+const signatureInstant int64 = 1_790_000_000
+
+// TestStripeSignatureMatchesFrozenPython holds verifyStripeSignature to the
+// frozen verdicts of stripe-python's verify_header over header shapes,
+// timestamp spellings, signature lists and bodies.
+func TestStripeSignatureMatchesFrozenPython(t *testing.T) {
 	const secret = "whsec_venue_oracle"
-	now := time.Now().Unix()
+	now := signatureInstant
 	// The reference instant both planes judge the tolerance at, half a
 	// second past a whole second: t = now-300 is then too old (the float
 	// comparison), t = now-299 is not.
@@ -111,17 +106,15 @@ func TestStripeSignatureMatchesLivePython(t *testing.T) {
 	for index, c := range cases {
 		encoded[index] = [2]string{base64.StdEncoding.EncodeToString(c.payload), base64.StdEncoding.EncodeToString([]byte(c.header))}
 	}
-	input, _ := json.Marshal(map[string]any{"cases": encoded, "secret": secret, "now": float64(now) + 0.5})
-	command := exec.Command(python, "-c", pythonSignatureProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
+	input, err := json.Marshal(map[string]any{"cases": encoded, "secret": secret, "now": float64(now) + 0.5})
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	output := frozenPython(t, "stripe-signature.golden.json", programoracle.Program{
+		Name: "stripe signature", Text: pythonSignatureProgram, Stdin: input,
+	})[0]
 	var want []string
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+	if err := json.Unmarshal([]byte(output), &want); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(want) != len(cases) {
@@ -152,9 +145,4 @@ func TestStripeSignatureMatchesLivePython(t *testing.T) {
 		}
 	}
 	t.Logf("%d cases: %v", len(cases), verdicts)
-	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" {
-		if err := os.WriteFile(filepath.Join(proof, "api-billing-webhook-signature"), []byte("executed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
 }

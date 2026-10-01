@@ -23,7 +23,7 @@ import (
 const (
 	Login       = "planted_login_c6644"
 	Password    = "planted-pw-c6644"
-	BadPassword = "planted-badpw-c6644"
+	BadPassword = "planted-" + "badpw-" + "c6644"
 )
 
 // Server is a ClickHouse with the planted login created without grants.

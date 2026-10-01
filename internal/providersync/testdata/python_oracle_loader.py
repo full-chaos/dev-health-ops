@@ -169,6 +169,7 @@ _CLICKHOUSE_MIXIN_SOURCES: tuple[tuple[str, Path], ...] = tuple(
         "investment",
         "llm_tokens",
         "recommendations",
+        "wellbeing",
         "work_graph",
     )
 )

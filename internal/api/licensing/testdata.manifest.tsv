@@ -1,9 +1,9 @@
 # Every file under internal/api/licensing/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-# header-before-stamp set: 5c0bc28069ff3676abd68f2942a04d0e9ccf9c05b4490c13a268be40b4bb5244 (6 files)
-7b19340f33067eccb9f67e8b15124aa3426021a777a3eb717bfb82c4fd1669f5	header-before-stamp	golden/b64decode.golden.json
-cdecd4e9d9adcdf905d477a134779d63cc86d9942b5a44138b579d780f1bbfc0	header-before-stamp	golden/big-duration-license.golden.json
-db4500a13c5840437a90b9a997aff9b93f15a4b646afe0728ae5e6f4e13b590e	header-before-stamp	golden/org-feature.golden.json
-7bc841f0200f457a23473a8fbecb5590035e652e766d1b6006e3b55c022af0ef	header-before-stamp	golden/sign-license.golden.json
-c759763a56dd38395987d00db987966985265f0055a36f66891c123dcec6456b	header-before-stamp	golden/tier-limits.golden.json
-4557cdc49449cc6ee4bae33c7f78d08d533aad9e45caefa4a1f9f9c9ca45cafc	header-before-stamp	golden/tier-registry.golden.json
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/b64decode.golden.json
+-	header	golden/big-duration-license.golden.json
+-	header	golden/org-feature.golden.json
+-	header	golden/sign-license.golden.json
+-	header	golden/tier-limits.golden.json
+-	header	golden/tier-registry.golden.json

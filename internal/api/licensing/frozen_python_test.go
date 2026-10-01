@@ -22,12 +22,12 @@ var licensingGoldens = programoracle.Set{
 	// The goldenrecord verb writes each digest when it promotes a recording; a
 	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
-		"b64decode.golden.json":            "7b19340f33067eccb9f67e8b15124aa3426021a777a3eb717bfb82c4fd1669f5",
-		"big-duration-license.golden.json": "cdecd4e9d9adcdf905d477a134779d63cc86d9942b5a44138b579d780f1bbfc0",
-		"org-feature.golden.json":          "db4500a13c5840437a90b9a997aff9b93f15a4b646afe0728ae5e6f4e13b590e",
-		"sign-license.golden.json":         "7bc841f0200f457a23473a8fbecb5590035e652e766d1b6006e3b55c022af0ef",
-		"tier-limits.golden.json":          "c759763a56dd38395987d00db987966985265f0055a36f66891c123dcec6456b",
-		"tier-registry.golden.json":        "4557cdc49449cc6ee4bae33c7f78d08d533aad9e45caefa4a1f9f9c9ca45cafc",
+		"b64decode.golden.json":            "ec9a87b95fddd902cb8b6802a28eb871a7225bfde5d155ef1aa21e460cb3f6d1",
+		"big-duration-license.golden.json": "53934760650929148fc7cf8513ef280ac23e7cae7cf9ac72612188cb4db93312",
+		"org-feature.golden.json":          "41cac2835fc8c9c20e39c81321ebdcb8d83aeaa083f20783e0b0384a5cec37ba",
+		"sign-license.golden.json":         "d10a1aa7bb67cdf71ecf95f3ecb9d2ccf677d7a9c22096211317c204f5178cbb",
+		"tier-limits.golden.json":          "3042497569e646a6aaae28badc61fc6a4743f055779a9eb786f3732f646211ce",
+		"tier-registry.golden.json":        "7ce637acde684f7fcd3a14324c69a01edd70dc1134c0889e38693443f8ff8c42",
 	},
 }
 

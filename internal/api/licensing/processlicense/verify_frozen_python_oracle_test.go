@@ -359,7 +359,7 @@ var verifierGoldens = programoracle.Set{
 	// The goldenrecord verb writes each digest when it promotes a recording; a
 	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
-		"license-verifier.golden.json": "25c843bc72fdcf01f38e74e208b479dacd3f9c303eb30b3dad0bd49414dda4c7",
+		"license-verifier.golden.json": "ef24930f4da7843b34874367780476a43350c2f7df1442641e766f2921fe6d69",
 	},
 }
 

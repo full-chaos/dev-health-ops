@@ -21,9 +21,9 @@ const venueGoldenPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // The goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var venueGoldenPins = map[string]string{
-	"venue-credential-fingerprint.golden.json": "efafacab543ade87a3fc83cfbb734bc742936b76f9bf6f84eecbb1b3ba764950",
-	"venue-jira-rename.golden.json":            "d0529447da14641f8440b910602a8e68eb69617baa446a8f367ea21ee05ed71f",
-	"venue-zero-unit-stamp.golden.json":        "5778cee9d818365f9764416ebd7940c7b6b812f7972eb0f7147346d0e99a8c48",
+	"venue-credential-fingerprint.golden.json": "67963ce17c50b5eb1fbb39eb27f0d2ce49fcb4a891fcd7584acbf83133563b86",
+	"venue-jira-rename.golden.json":            "22b43a994e50a89dd84cea75cbf0e455d7e4ebd78c4c156af09e188fc31410d0",
+	"venue-zero-unit-stamp.golden.json":        "b0f1bad3d0c7c695ef6362ef05a66ee754703194388c1de1227fca8c3f7abdea",
 }
 
 // oracleDatabaseEnv names the variable that hands a program the address of the

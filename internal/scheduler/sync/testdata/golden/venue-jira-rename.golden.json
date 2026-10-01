@@ -4,7 +4,8 @@
     "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
     "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
     "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/scheduler/sync/ -test '^TestJiraRenameVenueOracleMatchesFrozenPython$' -python-root $DIR",
-    "python_env": "efd8fc4fa010c7252554e8cd5721d50d0c67efd2483628b544db44f04ec3147b"
+    "python_env": "dcad7815282bb1f86b2a7d0025447672a4f8597815ee6bc618d8d4aafead5cff",
+    "python_env_version": 2
   },
   "requests": [
     {

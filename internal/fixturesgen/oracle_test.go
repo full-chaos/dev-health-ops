@@ -67,12 +67,7 @@ func askPython(t *testing.T, golden *venueoracle.Golden, root string, requests [
 	request := venueoracle.ProgramRequest("generators", generatorsOracleProgram, []byte(input.String()), env)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		ctx := context.Background()
-		version, err := producer.Command(ctx, nil, nil, pyoracle.VersionProbeArgs...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		probe, probeErr := version.Output()
-		pyoracle.RequireDeployed(t, version.Path, probe, probeErr)
+		producer.RequireDeployed()
 		command, err := producer.Command(ctx, env, nil, "-c", generatorsOracleProgram)
 		if err != nil {
 			t.Fatal(err)

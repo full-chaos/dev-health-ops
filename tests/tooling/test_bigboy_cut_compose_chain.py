@@ -43,6 +43,10 @@ def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -
     (tools / "compose.bigboy.clickhouse-users.yml").write_text(
         users_overlay.read_text()
     )
+    # CHAOS-7055: the billing override is part of the chain too.
+    (tools / "compose.bigboy.billing-edge.yml").write_text(
+        (ROUTER.parent / "compose.bigboy.billing-edge.yml").read_text()
+    )
     users_file = tmp_path / "dho_api_ch.xml"
     users_file.write_text("<clickhouse/>")
     chain = [entry.replace("$HERE", str(tools)) for entry in _chain()]
@@ -57,6 +61,8 @@ def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -
                 "  web:\n    image: web:test\n    environment:\n      BACKEND_URL: http://api:8000\n"
                 "  traefik:\n    image: traefik:test\n"
                 "  clickhouse:\n    image: clickhouse:test\n"
+                "  go-api:\n    image: go-api:test\n"
+                "  billing-edge:\n    image: billing-edge:test\n"
             )
         else:
             target.write_text("services: {}\n")

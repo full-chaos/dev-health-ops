@@ -1,5 +1,6 @@
 # Every file under internal/queryapi/quadrant/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 ebd5e6b2ebaac74e29f10b811155690d462afcb70d4a604822e4d5ed8a4c2a84	unclassified	churn_throughput_team_forces_repo.json
 67dbacdfbd6cf9375dc918cb0a8e96afdc79b9719b3dd4e1b60db0416c2b08b2	unclassified	cycle_throughput_team.json
 466c8cb5588822bf1891290593d69c79ef13a5f6bd28a36a3b6acc5354054092	unclassified	generate_quadrant_golden.py

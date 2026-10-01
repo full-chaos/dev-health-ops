@@ -1,5 +1,6 @@
 # Every file under internal/queryapi/investmentexplain/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: 8ac9a2fa1d546602acfdd1ea57c9a709888a68af65c4461ebae54fe93fce4d5e (1 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 2e5b623693388513ada002f564d52b795bb9295be62f41e886b2d71dbafd7dfa	unclassified	build_prompt__empty_payload.json
 c48a4224e8ec28bffb64e250c50c3aa264945d1ff119f2b20362052a81238412	unclassified	build_prompt__nested_with_whole_number_floats_and_unicode.json
 e056d7eae66f2139f1b1b631033c837f0b63b1b88ca85c8cceece4e5cfe83669	unclassified	build_prompt__simple_shares.json

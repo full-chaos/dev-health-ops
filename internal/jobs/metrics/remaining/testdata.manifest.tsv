@@ -1,5 +1,6 @@
 # Every file under internal/jobs/metrics/remaining/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: 7597cfec5671f8fb629c16197139117bfb1ff5ff3694f19da3862ed4157bf498 (6 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 2dfc2a0e58da6717151bee3eb8006c0fa149aae97d2fc2d37a2cfdd9313ef4d5	python-recorded	complexity_python_golden.json
 ec8a179dcc3e51ba63e95eb474887d639a3c74e4a791a1624a4a126d080f9cfe	unclassified	generate_recommendations_engine_golden.py
 d8d70374716c7daec9b88aa837f0e7d2f2ec9ee3a413cb64e8b3484fef6ed5ab	unclassified	generate_recommendations_loader_golden.py

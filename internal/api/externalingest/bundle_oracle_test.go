@@ -43,7 +43,7 @@ func TestSchemaBundleMatchesFrozenPython(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("schema bundle producer", string(program), nil, producerEnv)
-	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		command := exec.Command(python, "testdata/python_schema_bundle_oracle.py")
 		command.Dir = filepath.Join(root, "internal", "api", "externalingest")

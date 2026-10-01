@@ -29,7 +29,7 @@ func run(args []string) int {
 	recordedAgain := flags.Bool("recorded-again", false, "allow a python-recorded row to change or to go: the file was recorded again, or replaced on purpose")
 	sync := flags.Bool("sync", false, "drop the rows of deleted files and write every manifest again")
 	check := flags.Bool("check", false, "print what the guard refuses; write nothing")
-	dayOne := flags.Bool("day-one", false, "first manifests only: allow -kind unclassified and write the day-one list")
+	dayOne := flags.Bool("day-one", false, "first manifests only: allow -kind unclassified and write the day-one list; give a golden with no stamp of the record verb the kind header-before-stamp")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}

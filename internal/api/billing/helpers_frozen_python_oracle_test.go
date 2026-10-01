@@ -2,20 +2,16 @@ package billing
 
 import (
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonHelpersProgram runs the REAL Python helpers the routes decide
-// with, over the same inputs the Go side sees.
+// with, over the same inputs the Go side sees. It sets the two settings the
+// checkout check reads itself, from its input.
 const pythonHelpersProgram = `
 import json, os, sys
 from fastapi import HTTPException
@@ -36,13 +32,10 @@ for value in cases["url"]:
 print(json.dumps(out))
 `
 
-func TestBillingHelpersMatchLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+// TestBillingHelpersMatchFrozenPython holds the tier normalizer, the slug
+// maker and the checkout address check to the frozen answers of the Python
+// helpers the billing routes decide with.
+func TestBillingHelpersMatchFrozenPython(t *testing.T) {
 	tiers := []string{"team", " Team ", "ENTERPRISE", "community\n", "gold", "", "\u00a0team\u00a0", "TEAM\u200b", "İ", "Community"}
 	slugs := []string{"Team Plan", "  --Pro!!  ", "Ünïcode Pro!", "İstanbul", "a__b", "", "___", "ẞig", "K\u212aelvin", "tab\tsep"}
 	urls := []string{"/ok", "//evil.test/x", "https://app.venue.test/x", "https://app.venue.test", "https://app.venue.testing/x",
@@ -50,18 +43,19 @@ func TestBillingHelpersMatchLivePython(t *testing.T) {
 		"https://alt.venue.test", "https://x.test/pathz", "https://x.test/pat", "HTTPS://APP.VENUE.TEST/x", "1http://a.b/", "h:tp://a/",
 		"http://a", "a+b-c.d://host/p", "https://app.venue.test\n/x", "", "x", "https:app.venue.test/x", "https://?q", "https://#f"}
 	appBase, allowed := " https://app.venue.test/ ", " https://alt.venue.test , ,https://x.test/path"
-	input, _ := json.Marshal(map[string]any{"tier": tiers, "slug": slugs, "url": urls, "app_base_url": appBase, "allowed": allowed})
-	command := exec.Command(python, "-c", pythonHelpersProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
+	input, err := json.Marshal(map[string]any{"tier": tiers, "slug": slugs, "url": urls, "app_base_url": appBase, "allowed": allowed})
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	output := frozenPython(t, "billing-helpers.golden.json", programoracle.Program{
+		Name: "billing helpers", Text: pythonHelpersProgram, Stdin: input,
+	})[0]
 	var want struct{ Tier, Slug, URL []string }
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+	if err := json.Unmarshal([]byte(output), &want); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+	if len(want.Tier) != len(tiers) || len(want.Slug) != len(slugs) || len(want.URL) != len(urls) {
+		t.Fatalf("the frozen answer holds %d tiers, %d slugs, %d addresses, want %d, %d, %d", len(want.Tier), len(want.Slug), len(want.URL), len(tiers), len(slugs), len(urls))
 	}
 	for index, value := range tiers {
 		if got := normalizeTier(value); got != want.Tier[index] {
@@ -99,12 +93,5 @@ func TestBillingHelpersMatchLivePython(t *testing.T) {
 		if got != want.URL[index] {
 			t.Errorf("validateCheckoutURL(%q) = %q, python %q", value, got, want.URL[index])
 		}
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "api-billing-helpers"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }

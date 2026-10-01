@@ -1,5 +1,6 @@
 # Every file under internal/scheduler/fixed/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: 1ff28546622ef6812baf6e3cd477b1b788f5e96cd44b334f98fa374b3d567645 (1 files)
--	header	golden/ask-dev-feature.golden.json
+# header-before-stamp set: bd7ef1693bb81f0f0ddf02a16d33d3113161f765ff89964c0f302c64cac5356f (1 files)
+7dd05eafb04ce9c1af287720dcd4986d1c3fdbc56276466b97fd303a243e96e7	header-before-stamp	golden/ask-dev-feature.golden.json
 e099651b9d8ae5b848f9887f54c556b2a1e88434b04782273c8518fb434abe16	unclassified	python_ask_dev_feature_oracle.py
 77a187438915a5d7f5e7500824147b9b2eefe8d4ab776a26c0e6fba0cd71e637	python-recorded	python_scheduled_report_oracle.json

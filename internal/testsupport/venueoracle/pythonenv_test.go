@@ -918,3 +918,28 @@ func TestTheKeyVersionRatchetNamesEachBreach(t *testing.T) {
 		t.Errorf("a golden of an unknown key version: %q", problems)
 	}
 }
+
+// TestAKeyGeneratedForTheRunIsKeyedByNameWhateverItsValue pins the one name the
+// GitHub App venue sets to a new RSA key in every run: two different keys under
+// it are one Python environment, and the same variable set by the harness (not
+// the test) would still be keyed by value.
+func TestAKeyGeneratedForTheRunIsKeyedByNameWhateverItsValue(t *testing.T) {
+	first, err := pythonEnvKey(fromTest("GITHUB_APP_PRIVATE_KEY=generated-one", "GITHUB_APP_ID=12345"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := pythonEnvKey(fromTest("GITHUB_APP_PRIVATE_KEY=generated-two", "GITHUB_APP_ID=12345"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatal("a private key generated for the run changes the Python environment key")
+	}
+	other, err := pythonEnvKey(fromTest("GITHUB_APP_PRIVATE_KEY=generated-one", "GITHUB_APP_ID=99999"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other == first {
+		t.Fatal("a changed GITHUB_APP_ID no longer changes the key: the whole environment became per-run")
+	}
+}

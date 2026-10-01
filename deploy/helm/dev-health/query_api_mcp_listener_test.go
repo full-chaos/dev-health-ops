@@ -188,3 +188,52 @@ func TestQueryAPIMCPListenerChart(t *testing.T) {
 		}
 	}
 }
+
+// Post-merge review of #3425: QUERY_API_MCP_ADDR in queryApi.extraEnv must
+// fail the render whether or not queryApi.mcp.enabled is set. With it off there
+// is no MCP Service and no MCP NetworkPolicy, so the env var would start the
+// listener with no boundary at all (the release-wide policy admits every pod).
+func TestQueryAPIMCPAddrInExtraEnvFailsTheRenderEvenWhenMCPIsDisabled(t *testing.T) {
+	envs := `queryApi.extraEnv=[{"name":"QUERY_API_MCP_ADDR","value":":8092"}]`
+	marker := `queryApi.extraEnv=[{"name":"QUERY_API_MCP_BOUNDARY","value":"networkpolicy"}]`
+	for _, args := range [][]string{
+		{"--set", "queryApi.enabled=true", "--set-json", marker},
+		{"--set", "queryApi.enabled=true", "--set", "queryApi.mcp.enabled=true", "--set-json", marker},
+	} {
+		out, err := exec.Command("helm", append([]string{"template", "b", "."}, args...)...).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "must not set QUERY_API_MCP_BOUNDARY") {
+			t.Errorf("extraEnv QUERY_API_MCP_BOUNDARY must fail the render: err=%v\n%s", err, out)
+		}
+	}
+	for name, args := range map[string][]string{
+		"mcp disabled":                 {"--set", "queryApi.enabled=true", "--set-json", envs},
+		"mcp disabled, release policy": {"--set", "queryApi.enabled=true", "--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", envs},
+		"mcp enabled":                  {"--set", "queryApi.enabled=true", "--set", "queryApi.mcp.enabled=true", "--set-json", envs},
+	} {
+		out, err := exec.Command("helm", append([]string{"template", "b", "."}, args...)...).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "must not set QUERY_API_MCP_ADDR") {
+			t.Errorf("%s: extraEnv QUERY_API_MCP_ADDR must fail the render: err=%v\n%s", name, err, out)
+		}
+	}
+}
+
+// The binary refuses an MCP address without its boundary marker, and the chart
+// is the one place that sets the marker: only inside queryApi.mcp.enabled, next
+// to the MCP Service and NetworkPolicy. Disabled renders carry neither.
+func TestQueryAPIMCPBoundaryMarkerRendersOnlyWithTheMCPBoundary(t *testing.T) {
+	render := func(args ...string) string {
+		out, err := exec.Command("helm", append([]string{"template", "b", ".", "--set", "queryApi.enabled=true"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("render failed: %v\n%s", err, out)
+		}
+		return string(out)
+	}
+	enabled := render("--set", "queryApi.mcp.enabled=true")
+	if !strings.Contains(enabled, "name: QUERY_API_MCP_ADDR") || !strings.Contains(enabled, "name: QUERY_API_MCP_BOUNDARY") {
+		t.Errorf("an enabled MCP listener must render the address and its boundary marker together")
+	}
+	disabled := render()
+	if strings.Contains(disabled, "QUERY_API_MCP_ADDR") || strings.Contains(disabled, "QUERY_API_MCP_BOUNDARY") {
+		t.Errorf("a disabled MCP listener rendered MCP env")
+	}
+}

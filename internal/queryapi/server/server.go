@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -244,7 +245,7 @@ type Plane struct {
 // through its fallthrough), the internal-only set (internalMux) and the MCP
 // caller-class set (mcpMux, CHAOS-7085). One function, called by Build and
 // by the listener tests, so the test's route sets are Build's route sets.
-func mountQueryRouteSets(getenv getenvFunc, mux, internalMux, mcpMux *http.ServeMux, handlers queryRouteHandlers) {
+func mountQueryRouteSets(getenv getenvFunc, mux, internalMux, mcpMux *http.ServeMux, handlers queryRouteHandlers, edge graphQLEdgeDeps) {
 	// Wrapped, not raw. The provenance headers are what let a proof
 	// receipt be bound to the process that actually served the
 	// request, and until CHAOS-5479 only /query/proof carried them --
@@ -257,6 +258,10 @@ func mountQueryRouteSets(getenv getenvFunc, mux, internalMux, mcpMux *http.Serve
 	// implementation, so the two routes cannot drift into disagreeing
 	// about what they claim.
 	mountQueryRoute(mux, handlers.Query)
+	// /graphql, the product path, on the public set only (the internal
+	// listener reaches it through its fallthrough and refuses its own
+	// carriers there). Never on mcpMux: the MCP caller class has one route.
+	mountGraphQLRoute(mux, handlers.Query, edge)
 	// GET /registry: what THIS process registers, and the schema digest
 	// it computed. Mounted with /query, not beside /healthz, on purpose
 	// -- it describes /query's registration set, so an unconfigured
@@ -289,9 +294,29 @@ func mountQueryRouteSets(getenv getenvFunc, mux, internalMux, mcpMux *http.Serve
 // Build mounts the query plane. Every setting it, and every route builder, reads
 // comes from get (the declared-settings reader of dho query-api); a route whose
 // settings are absent stays unmounted, and a route that cannot be built is an error
-// and nothing stays open.
+// and nothing stays open. A setting read with get is absent when empty; use
+// BuildWithLookup where an empty value must differ from an absent one.
 func Build(get func(string) string) (*Plane, error) {
-	getenv := getenvFunc(get)
+	return BuildWithLookup(presentWhenSet(get))
+}
+
+// presentWhenSet reads get as a lookup whose empty value is absent.
+func presentWhenSet(get func(string) string) func(string) (string, bool) {
+	return func(name string) (string, bool) {
+		value := get(name)
+		return value, value != ""
+	}
+}
+
+// BuildWithLookup is Build over a reader that tells an absent setting from an
+// empty one (config.Config.Setting). Only CORS_ALLOWED_ORIGINS reads the
+// difference: the Python api's os.getenv default applies when the variable is
+// absent, and a present empty value is an empty allow-list.
+func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
+	getenv := getenvFunc(func(name string) string {
+		value, _ := lookup(name)
+		return value
+	})
 	var cleanups []func()
 	closeAll := func() {
 		for i := len(cleanups) - 1; i >= 0; i-- {
@@ -342,7 +367,18 @@ func Build(get func(string) string) (*Plane, error) {
 			return fail(buildErr)
 		}
 		cleanups = append(cleanups, cleanup)
-		mountQueryRouteSets(getenv, mux, internalMux, mcpMux, handlers)
+		// /graphql is the product path over the same handler (CHAOS-6263):
+		// see graphql_edge_route.go for what it adds and why.
+		edgeAuth, _, edgeErr := buildQueryEdgeAuthenticatorFromEnv(getenv, handlers.RegistryPool)
+		if edgeErr != nil {
+			return fail(edgeErr)
+		}
+		mountQueryRouteSets(getenv, mux, internalMux, mcpMux, handlers, graphQLEdgeDeps{
+			auth:        edgeAuth,
+			corsOrigins: corsAllowedOrigins(lookup),
+			maxBytes:    graphQLMaxQueryBytes(getenv),
+			logger:      slog.Default(),
+		})
 		ready = readyFn
 		probes = handlers.Probes
 		registryPool = handlers.RegistryPool

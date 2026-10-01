@@ -320,17 +320,9 @@ func LoadWorld(ctx context.Context, conn driver.Conn, world FrozenWorld, org str
 		if err != nil {
 			return counts, err
 		}
-		if _, operational := operationalFamilies[table.Name]; operational {
-			contractTwo, err := liveHasOrderingColumns(ctx, conn, table.Name)
-			if err != nil {
-				return counts, err
-			}
-			if contractTwo {
-				table, rows, err = stampOrdering(table, rows)
-				if err != nil {
-					return counts, err
-				}
-			}
+		table, rows, err = stampLiveOrdering(ctx, conn, table, rows)
+		if err != nil {
+			return counts, err
 		}
 		statement := "INSERT INTO `" + table.Name + "` (" + table.columnList() + ") SELECT " + table.columnList() +
 			" FROM format(JSONCompactEachRow, ?, ?)"

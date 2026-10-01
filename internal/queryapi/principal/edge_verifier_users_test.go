@@ -30,8 +30,8 @@ func (f *fakeUsers) UserState(_ context.Context, id uuid.UUID) (policy.UserState
 	return f.state, f.found, f.err
 }
 
-func (f *fakeUsers) IsMember(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
-	return false, errors.New("fakeUsers: IsMember must not be read by the edge verifier")
+func (f *fakeUsers) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
+	return "", false, errors.New("fakeUsers: Membership must not be read by the edge verifier")
 }
 
 func (f *fakeUsers) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impersonation, error) {

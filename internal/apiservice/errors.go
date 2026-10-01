@@ -62,7 +62,7 @@ func WriteError(w http.ResponseWriter, _ *http.Request, code httpapi.Code) {
 }
 
 // writeFixedBody writes one of this package's own fixed bodies: the JSON
-// error bodies above and the CORS preflight text. None carries request data,
+// error bodies above (the CORS preflight text is internal/api/pyheaders'). None carries request data,
 // each response declares its Content-Type (application/json or text/plain)
 // and every api response carries X-Content-Type-Options: nosniff, so there is
 // nothing for an HTML escape to protect. The copy through io.Copy keeps the

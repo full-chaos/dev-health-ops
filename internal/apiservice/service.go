@@ -49,6 +49,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyheaders"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
 	"github.com/full-chaos/dev-health-ops/internal/api/syncadmin"
@@ -459,7 +460,7 @@ func NewInternalServer(cfg config.Config, logger *slog.Logger, routes []httpapi.
 		IdleTimeout:         idleTimeout,
 		ExplicitHead:        true,
 		ForwardedAllowIPs:   forwardedAllowIPs(),
-		Middleware:          []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), UnhandledErrorShape, CloseHTTP10, DecodedPathRouting},
+		Middleware:          []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, DecodedPathRouting},
 	})
 }
 
@@ -519,8 +520,8 @@ func NewServer(
 	routes []httpapi.Route,
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
-	middleware := append([]func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
-	middleware = append(middleware, NewOriginValidation(cfg.CORSAllowedOrigins).Wrap, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
+	middleware := append([]func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
+	middleware = append(middleware, NewOriginValidation(cfg.CORSAllowedOrigins).Wrap, pyheaders.SecurityHeaders, pyheaders.NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",
 		Listener:       "public",

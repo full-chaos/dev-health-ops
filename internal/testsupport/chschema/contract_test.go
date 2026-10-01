@@ -3,13 +3,10 @@ package chschema
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"go/build"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -207,25 +204,27 @@ func TestChschemaStartsNoProcess(t *testing.T) {
 	}
 }
 
+// contract1HeadBuild is the 40-hex commit of the Python build whose chain
+// (run with OPERATIONAL_ORDERING_CONTRACT=1 and =2) produced
+// testdata/contract1_head.json, and contract1HeadSHA256 its pinned digest.
+// Recipe: run the chain on a fresh database under each contract, capture every
+// object (name, engine, CREATE without the database name) and the recorded
+// versions, keep the objects whose CREATE differs and the version only
+// contract 2 records, re-pin the digest here. Frozen: the Python producer is
+// deleted with the Python CLI.
+const (
+	contract1HeadBuild  = "acd02fb0a61f2d8648d3dee4e22534c426b00cc4"
+	contract1HeadSHA256 = "f1c2b819ce356a6358c1d625ffc4e885b157580618f5c907c13fec3b1b60faa5"
+)
+
 // TestContract1HeadMatchesItsPin fails when the recorded contract-1 overlay is
-// edited without its pin (the Python build it was recorded on and its sha256).
+// edited or replaced without its pin.
 func TestContract1HeadMatchesItsPin(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("testdata", "contract1_head.pin.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var pin struct {
-		PythonBuild string            `json:"python_build"`
-		SHA256      map[string]string `json:"sha256"`
-	}
-	if err := json.Unmarshal(data, &pin); err != nil {
-		t.Fatal(err)
-	}
-	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(pin.PythonBuild) {
-		t.Fatalf("python_build %q is not a 40-hex commit", pin.PythonBuild)
+	if len(contract1HeadBuild) != 40 || strings.Trim(contract1HeadBuild, "0123456789abcdef") != "" {
+		t.Fatalf("contract1HeadBuild %q is not a 40-hex commit", contract1HeadBuild)
 	}
 	sum := sha256.Sum256(contract1Head)
-	if got := hex.EncodeToString(sum[:]); got != pin.SHA256["contract1_head.json"] {
-		t.Errorf("contract1_head.json sha256 %s, pinned %s: re-record it and update the pin together", got, pin.SHA256["contract1_head.json"])
+	if got := hex.EncodeToString(sum[:]); got != contract1HeadSHA256 {
+		t.Errorf("contract1_head.json sha256 %s, pinned %s: re-record it from the Python build and re-pin it", got, contract1HeadSHA256)
 	}
 }

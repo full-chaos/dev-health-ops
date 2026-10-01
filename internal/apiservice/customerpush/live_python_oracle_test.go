@@ -2,7 +2,6 @@ package customerpush
 
 import (
 	"bytes"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // The producer admin_get_schema serves, minus the live limits.
@@ -24,19 +24,23 @@ print(json.dumps({
 
 // TestAdminSchemaMatchesLivePython executes the real producer and compares
 // it, key order included, with the embedded golden the route serves.
-func TestAdminSchemaMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
+func TestAdminSchemaMatchesFrozenPython(t *testing.T) {
+	frozen := venueoracle.OpenGolden(t, programGolden("admin-schema", t.Name(), "7b52180f1fc40527c46e2effb07a579610d496f9a6486c5d4fecd6acf1b7533c"))
 	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "-c", pythonAdminSchemaProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
+	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
+	request := venueoracle.ProgramRequest("admin schema producer", pythonAdminSchemaProgram, nil, producerEnv)
+	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		python := pyoracle.Resolve(t, root)
+		command := exec.Command(python, "-c", pythonAdminSchemaProgram)
+		command.Env = producerCommandEnv(root)
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		}
+		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
+	})
+	frozen.Consumed(t, answers...)
+	output := []byte(answers[0].Body)
 	lines := bytes.Split(bytes.TrimSpace(output), []byte("\n"))
 	live, err := pyjson.Decode(lines[len(lines)-1])
 	if err != nil {
@@ -51,11 +55,6 @@ func TestAdminSchemaMatchesLivePython(t *testing.T) {
 	if !bytes.Equal(liveText, goldenText) {
 		t.Fatalf("testdata/admin_schema.v1.json is stale: regenerate it from the producer in pythonAdminSchemaProgram")
 	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "api-customerpush-schema"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	frozen.SkipDiff(t)
+	frozen.Finish(t)
 }

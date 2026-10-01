@@ -164,3 +164,53 @@ func TestDeployedVersionError(t *testing.T) {
 		})
 	}
 }
+
+// A recording must not depend on the day's shell: ClosedEnv names its variables and inherits none
+// (CHAOS-7471; an inherited AUTO_RUN_MIGRATIONS, SERVICE_NAME or OPERATIONAL_ORDERING_CONTRACT can change a
+// recorded answer under the same header).
+func TestClosedEnvInheritsNothingAndCarriesTheExtras(t *testing.T) {
+	for _, name := range []string{"AUTO_RUN_MIGRATIONS", "SERVICE_NAME", "SERVICE_VERSION", "OPERATIONAL_ORDERING_CONTRACT", "LOG_LEVEL"} {
+		t.Setenv(name, "ambient-value")
+	}
+	env := ClosedEnv("/repo", "CLICKHOUSE_URI=dsn", "OPERATIONAL_ORDERING_CONTRACT=2")
+	got := map[string]string{}
+	for _, entry := range env {
+		name, value, _ := strings.Cut(entry, "=")
+		if _, dup := got[name]; dup {
+			t.Fatalf("%s is set twice in the closed environment", name)
+		}
+		got[name] = value
+	}
+	for _, name := range []string{"AUTO_RUN_MIGRATIONS", "SERVICE_NAME", "SERVICE_VERSION", "LOG_LEVEL"} {
+		if _, inherited := got[name]; inherited {
+			t.Errorf("the closed environment inherited %s", name)
+		}
+	}
+	if got["OPERATIONAL_ORDERING_CONTRACT"] != "2" || got["CLICKHOUSE_URI"] != "dsn" || got["PYTHONPATH"] != filepath.Join("/repo", "src") || got["PYTHONHASHSEED"] != "0" {
+		t.Errorf("the closed environment lost a named variable: %v", got)
+	}
+}
+
+// The recorders of the goldens that were hand-recorded with the whole shell environment run Python
+// through ClosedEnv and never inherit it: a closed list of the test files, each of which must call
+// ClosedEnv and must not call os.Environ().
+func TestTheClosedEnvironmentRecordersDoNotInheritTheEnvironment(t *testing.T) {
+	for _, file := range []string{
+		"../../chmigrate/migrate_venue_oracle_integration_test.go",
+		"../../chmigrate/repair_integration_test.go",
+		"../../chmigrate/chain_record_integration_test.go",
+		"../../operationalbackfill/backfill_integration_test.go",
+	} {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(raw)
+		if strings.Contains(text, "os.Environ()") {
+			t.Errorf("%s inherits the environment (os.Environ()): a recording must run in pyoracle.ClosedEnv", file)
+		}
+		if !strings.Contains(text, "pyoracle.ClosedEnv(") {
+			t.Errorf("%s does not run Python through pyoracle.ClosedEnv", file)
+		}
+	}
+}

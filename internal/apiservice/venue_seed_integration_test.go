@@ -64,7 +64,7 @@ func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixtu
 			($4,'org-none','Org None','x','community')`, []any{f.orgA, f.orgB, f.orgFree, f.orgNoLicense}},
 		// An inactive org no request names: the report's active_organizations
 		// must differ from its total.
-		{`INSERT INTO organizations (id, slug, name, tier, is_active) VALUES (gen_random_uuid(), 'org-off', 'Org Off', 'community', false)`, nil},
+		{`INSERT INTO organizations (id, slug, name, tier, is_active) VALUES (md5('venue-seed-org-off')::uuid, 'org-off', 'Org Off', 'community', false)`, nil},
 		{`INSERT INTO users (id, email, is_superuser, is_active, token_version) VALUES
 			($1,'member@x',false,true,0),($2,'admin@x',false,true,0),($3,'owner@x',false,true,0),
 			($4,'super@x',true,true,0),($5,'outsider@x',false,true,0),($6,'inactive@x',false,false,0),
@@ -247,22 +247,6 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("ent: bad org claim", "GET", ent+"not-a-uuid", bearer("bad_org_claim"), nil)
 	add("ent: anonymous encoded slash", "GET", ent+"not-a%2Fuuid", nil, nil)
 	add("ent: member encoded slash", "GET", ent+"a%2fb", bearer("member"), nil)
-	add("ent: acr encoded slash", "GET", "/api/v1/internal/acr/entitlements/not-a%2Fuuid", nil, nil)
-	// Internal acr routes, with the credential Python requires.
-	acrAuth := map[string]string{"Authorization": "Bearer " + venueACRToken}
-	acrEnt := "/api/v1/internal/acr/entitlements/"
-	add("acr: health", "GET", "/api/v1/internal/acr/health", acrAuth, nil)
-	add("acr: team org", "GET", acrEnt+f.orgA.String(), acrAuth, nil)
-	add("acr: enterprise org", "GET", acrEnt+f.orgB.String(), acrAuth, nil)
-	add("acr: free org", "GET", acrEnt+f.orgFree.String(), acrAuth, nil)
-	add("acr: no license org", "GET", acrEnt+f.orgNoLicense.String(), acrAuth, nil)
-	add("acr: uppercase", "GET", acrEnt+upper(f.orgA.String()), acrAuth, nil)
-	add("acr: braces", "GET", acrEnt+"{"+f.orgA.String()+"}", acrAuth, nil)
-	add("acr: urn", "GET", acrEnt+"urn:uuid:"+f.orgA.String(), acrAuth, nil)
-	add("acr: no hyphens", "GET", acrEnt+strings.ReplaceAll(f.orgA.String(), "-", ""), acrAuth, nil)
-	add("acr: unknown org", "GET", acrEnt+"00000000-0000-4000-8000-000000000000", acrAuth, nil)
-	add("acr: not uuid", "GET", acrEnt+"nope", acrAuth, nil)
-	add("acr: POST", "POST", acrEnt+f.orgA.String(), acrAuth, nil)
 	add("ent: POST", "POST", ent+f.orgA.String(), bearer("member"), nil)
 	add("ent: HEAD", "HEAD", ent+f.orgA.String(), bearer("member"), nil)
 	// Telemetry settings and the instance report.

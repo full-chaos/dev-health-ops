@@ -404,19 +404,25 @@ smoke_migrate_river() {
 }
 
 # smoke_migrate_clickhouse runs `dho migrate clickhouse status` from the
-# image: without production's ordering contract it must refuse before
-# connecting and name the mismatch; with contract 2 and no database configured
-# it must reach the DSN check and fail closed (exit 1) with the JSON
-# configuration error naming CLICKHOUSE_URI -- never an unknown command
-# (exit 2) or a missing baseline.
+# image: with contract 1 (unsupported) it must refuse before connecting and
+# say that only contract 2 is supported; with the contract unset (which is
+# contract 2) and with contract 2 and no database configured it must reach the
+# DSN check and fail closed (exit 1) with the JSON configuration error naming
+# CLICKHOUSE_URI -- never an unknown command (exit 2) or a missing baseline.
 smoke_migrate_clickhouse() {
   local tag="$1" output code
+  set +e
+  output="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --env OPERATIONAL_ORDERING_CONTRACT=1 "${tag}" migrate clickhouse status 2>&1 >/dev/null)"
+  code=$?
+  set -e
+  [ "${code}" = "1" ] && printf '%s' "${output}" | grep -F 'only contract 2 is supported' >/dev/null \
+    || die "${tag}: dho migrate clickhouse status with contract 1 did not refuse it as unsupported (exit ${code}): ${output}"
   set +e
   output="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" migrate clickhouse status 2>&1 >/dev/null)"
   code=$?
   set -e
-  [ "${code}" = "1" ] && printf '%s' "${output}" | grep -F 'operational ordering contract 2 expected' >/dev/null \
-    || die "${tag}: dho migrate clickhouse status without the contract did not name the mismatch (exit ${code}): ${output}"
+  [ "${code}" = "1" ] && printf '%s' "${output}" | grep -F 'CLICKHOUSE_URI' >/dev/null \
+    || die "${tag}: dho migrate clickhouse status with the contract unset did not reach the DSN check (exit ${code}): ${output}"
   set +e
   output="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --env OPERATIONAL_ORDERING_CONTRACT=2 "${tag}" migrate clickhouse status 2>&1 >/dev/null)"
   code=$?

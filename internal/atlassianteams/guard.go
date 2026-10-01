@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
@@ -88,4 +89,15 @@ func incompletePage(value any, path string) string {
 		}
 	}
 	return ""
+}
+
+// RefuseRedirects is an http.Client CheckRedirect that never follows one: the stored credential rides every
+// request to the gateway and the tenant, and must not be replayed to another host (a redirect to a sibling
+// or nested host keeps the Authorization header under Go's own rules).
+func RefuseRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// GatewayHTTPClient is the HTTP client every Atlassian gateway read uses: complete pages only, a bounded
+// wait, and no redirect followed.
+func GatewayHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: CompletePagesOnly(nil), CheckRedirect: RefuseRedirects}
 }

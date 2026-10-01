@@ -122,3 +122,20 @@ func TestPrintMCPClassStatusNamesTheStochasticShapes(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-7512: -allow-excluded takes operation NAMES only (never a pattern), and it is listed in the verb's usage.
+func TestEnableAllowExcludedTakesOperationNamesOnly(t *testing.T) {
+	_, errOut, err := captureVerb(t, "enable", "-h")
+	if err != nil || !strings.Contains(errOut, "-allow-excluded") {
+		t.Fatalf("enable -h does not list -allow-excluded (err=%v):\n%s", err, errOut)
+	}
+	for _, bad := range []string{".*", "a;b", "analytics:V", "", "x y", strings.Repeat("a", 61)} {
+		if bad == "" {
+			continue
+		}
+		_, _, err := captureVerb(t, "enable", "-mode", "canary", "-recorded-by", "lane", "-review-evidence", "why", "-allow-excluded", bad)
+		if err == nil || !strings.Contains(err.Error(), "is not an operation name") {
+			t.Fatalf("-allow-excluded %q = %v, want the not-an-operation-name refusal", bad, err)
+		}
+	}
+}

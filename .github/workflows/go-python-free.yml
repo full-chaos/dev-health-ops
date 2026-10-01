@@ -36,6 +36,9 @@ on:
       - 'ci/python_tripwire_shim.sh'
       - 'ci/python_free_ratchet.sh'
       - 'ci/python_free_known.tsv'
+      # The oracle harness: its own tests run stand-in interpreters, and a harness change that starts a
+      # real one (or runs the tripwire's shim) must be seen on the pull request that makes it.
+      - 'internal/testsupport/**'
   # Only a pull request that edits this workflow or its scripts runs it (so the change that touches the
   # tripwire is proven by the tripwire). The closed list is editable by freeze PRs through the same path.
   pull_request:

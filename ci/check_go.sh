@@ -79,7 +79,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|multi-replica-workers|integration-vet|integration-coverage|python-free-unit|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -166,6 +166,11 @@ usage() {
          derive deterministic longest-processing-time-first shard assignments,
          print the complete assignment, and write a GitHub Actions `matrix`
          output when GITHUB_OUTPUT is set. No Docker required.
+  python-free-unit
+         The unit leg of the go-python-free workflow (GO_PYTHON_FREE=1, PYTHON_FREE_OUT=DIR):
+         the plain untagged go test of every module with Python unreachable
+         (ci/python_tripwire.sh); tripwire hits and skips-without-Python are reported to
+         ci/python_free_ratchet.sh (CHAOS-7384).
   integration-images
          Print "<key>\t<image>" for every image declared by the Go test
          container harness. The single source of truth for the dependency set:
@@ -3070,6 +3075,45 @@ check_integration_prepull() {
   done
 }
 
+# python_free_enabled / python_free_go_test (CHAOS-7384): GO_PYTHON_FREE=1 runs the integration shards
+# with Python unreachable (ci/python_tripwire.sh) and holds the failures to the closed list
+# (ci/python_free_known.tsv, ci/python_free_ratchet.sh). Only .github/workflows/go-python-free.yml sets
+# it. The go test arguments after the shard label are the ordinary run's; the stream is `go test -json`
+# so each failure carries its own output, and the exit status is the classifier's.
+python_free_enabled() {
+  [ "${GO_PYTHON_FREE:-}" = "1" ]
+}
+
+python_free_go_test() {
+  local label="$1"
+  shift
+  local out="${PYTHON_FREE_OUT:?GO_PYTHON_FREE=1 needs PYTHON_FREE_OUT (a directory for the shard hits)}"
+  mkdir -p "${out}"
+  # shellcheck source=ci/python_tripwire.sh
+  source "${ROOT}/ci/python_tripwire.sh" || die "python_tripwire refused: the Python-free run cannot be proven"
+  local json="${out}/${label}.json"
+  # PYTHON_FREE_TAGS is "integration" for the shards and empty for the untagged unit leg.
+  local -a tag_args=()
+  [ -z "${PYTHON_FREE_TAGS-integration}" ] || tag_args=(-tags="${PYTHON_FREE_TAGS-integration}")
+  "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
+    go test -mod=readonly ${tag_args[@]+"${tag_args[@]}"} -count=1 -timeout=30m -json "$@" >"${json}" || true
+  bash "${ROOT}/ci/python_free_ratchet.sh" classify "${json}" "${out}/${label}.hits" "${PYTHON_TRIPWIRE_LOG}"
+}
+
+# check_python_free_unit (CHAOS-7384): the plain untagged `go test ./...` of every module under the
+# tripwire, so a unit test that starts Python (or skips because Python is missing) is counted too.
+check_python_free_unit() {
+  python_free_enabled || die "python-free-unit needs GO_PYTHON_FREE=1 (it is the go-python-free workflow's unit leg)"
+  local module_dir index=0
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    index=$((index + 1))
+    (
+      cd "${ROOT}/${module_dir}"
+      PYTHON_FREE_TAGS="" python_free_go_test "unit-${index}" ./...
+    )
+  done
+}
+
 check_integration_package_shard() {
   local shard="$1" mode="$2"
   local index module_dir pkg key
@@ -3107,7 +3151,11 @@ check_integration_package_shard() {
     fi
     (
       cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      if python_free_enabled; then
+        python_free_go_test "${shard}" "${run_pkgs[@]}"
+      else
+        "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      fi
     )
   done
 
@@ -3155,7 +3203,11 @@ check_providersync_test_shard() {
     "${shard}" "${selected_count}"
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
+    if python_free_enabled; then
+      python_free_go_test "providersync-${shard}" -run "${test_regex}" ./internal/providersync
+    else
+      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
+    fi
   )
 }
 
@@ -3321,6 +3373,9 @@ case "${1:-all}" in
   integration-prepull)
     [ "$#" -eq 1 ] || die "integration-prepull accepts no arguments"
     check_integration_prepull
+    ;;
+  python-free-unit)
+    check_python_free_unit
     ;;
   integration-shard)
     if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then

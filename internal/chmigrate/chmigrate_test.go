@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 func testBaseline() Baseline {
@@ -211,9 +212,14 @@ func TestUpgradeRefusesADatabaseBelowTheHead(t *testing.T) {
 	if !errors.As(err, &below) || !reflect.DeepEqual(below.Missing, []string{"001_b.py"}) {
 		t.Fatalf("upgrade below the head = %v", err)
 	}
-	for _, want := range []string{"below the head (ordering contract 2)", "001_b.py", "OPERATIONAL_ORDERING_CONTRACT=2"} {
+	for _, want := range []string{"below the head (ordering contract 2)", "001_b.py", "Ordering contract 1", "is unsupported", "re-create the database from the head"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal %q does not name %q", err, want)
+		}
+	}
+	for _, banned := range []string{"Python", "dev-hops"} {
+		if strings.Contains(err.Error(), banned) {
+			t.Fatalf("refusal %q still names %q as the remedy", err, banned)
 		}
 	}
 	if len(db.executed) != 0 {
@@ -408,5 +414,43 @@ func TestCommandRefusesBeforeConnecting(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The upgrade verb reports a database below the head as one JSON error on
+// stderr with code below_head and a failing exit, nothing on stdout, and says
+// that contract 1 is unsupported instead of pointing at the Python chain.
+func TestUpgradeVerbRefusesADatabaseBelowTheHeadAsUnsupported(t *testing.T) {
+	db := newFakeDB()
+	db.versions["000_a.sql"] = true
+	var stdout, stderr bytes.Buffer
+	env := cli.Env{Stdout: &stdout, Stderr: &stderr}
+	code := upgradeOutcome(context.Background(), db, testBaseline(), nil, env, secrets.NewBoundary(""))
+	if code != cli.ExitFailure {
+		t.Fatalf("exit %d, want %d", code, cli.ExitFailure)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want nothing", stdout.String())
+	}
+	var body map[string]map[string]string
+	if err := json.Unmarshal(stderr.Bytes(), &body); err != nil {
+		t.Fatalf("stderr is not the JSON error shape: %q", stderr.String())
+	}
+	if body["error"]["code"] != "below_head" {
+		t.Fatalf("error code %q, want below_head", body["error"]["code"])
+	}
+	message := body["error"]["detail"]
+	for _, want := range []string{"is unsupported", "re-create the database from the head", "Ordering contract 1"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("message %q does not say %q", message, want)
+		}
+	}
+	for _, banned := range []string{"Python", "dev-hops"} {
+		if strings.Contains(message, banned) {
+			t.Errorf("message %q still names %q", message, banned)
+		}
+	}
+	if len(db.executed) != 0 {
+		t.Fatalf("a refused upgrade executed %q", db.executed)
 	}
 }

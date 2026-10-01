@@ -310,6 +310,9 @@ func (g *Golden) project(text string) (string, error) {
 	return text, nil
 }
 
+// volatileHeaderValue is what a golden stores for the value of a Volatile header.
+const volatileHeaderValue = "<volatile>"
+
 // projectResponse is response with every header value and the body projected.
 func (g *Golden) projectResponse(response Response) (Response, error) {
 	out := clone(response)
@@ -318,6 +321,13 @@ func (g *Golden) projectResponse(response Response) (Response, error) {
 		return out, err
 	}
 	for name, value := range out.Headers {
+		if Volatile[strings.ToLower(name)] {
+			// A per-response header Diff never compares (a request id, a date):
+			// stored as a placeholder, so no two recordings differ by it. The
+			// name stays, so a response that lacks or gains it is still seen.
+			out.Headers[name] = volatileHeaderValue
+			continue
+		}
 		if out.Headers[name], err = g.project(value); err != nil {
 			return out, err
 		}

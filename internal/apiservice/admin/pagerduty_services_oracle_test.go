@@ -245,10 +245,10 @@ type servicesCredential struct {
 }
 
 func TestPagerDutyServicesVenueOracle(t *testing.T) {
-	runPagerDutyServicesOracle(t, "full", "a021360dda9e3860b24b7c6c7c114c4157c322d93965847335f0260e1688973d")
+	runPagerDutyServicesOracle(t, "full", "48ca8e096ae3c5ca4d01ed55625ea925f086cb10925bf1212a11a388b522e84b")
 }
 func TestPagerDutyServicesWithoutOAuthAppVenueOracle(t *testing.T) {
-	runPagerDutyServicesOracle(t, "noapp", "46ac849ae35609e8cffb35d38c9ac536c1f1d32b87221a95ac1c40ae552945ec")
+	runPagerDutyServicesOracle(t, "noapp", "9b5dd2956a82585962b42963d6960ed46daeffe603b3a36d78f15a6026e4f0eb")
 }
 
 func runPagerDutyServicesOracle(t *testing.T, mode, digest string) {

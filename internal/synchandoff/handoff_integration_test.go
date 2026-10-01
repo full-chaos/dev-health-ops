@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
 // startHandoffDatabase builds the real schema (the pgmigrate baseline and
@@ -157,4 +158,25 @@ func countJobs(ctx context.Context, t *testing.T, pool *pgxpool.Pool) int {
 		t.Fatal(err)
 	}
 	return count
+}
+
+// CHAOS-7132: a run that carries `degraded` in its result (an additive leg failed) is still a
+// materialized run for the handoff: readRun reads only status/error/error_category and must not trip
+// over the new key.
+func TestReadRunIgnoresTheDegradedKeyOfARunResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool, _ := startHandoffDatabase(ctx, t, 2)
+	const runID = "00000000-0000-4000-8000-0000000000a1"
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{
+		ID: runID, OrgID: "org-1", Status: "success", TotalUnits: 14, CompletedUnits: 14,
+		ResultJSON: `{"completed_units":14,"failed_units":0,"degraded":[{"dataset":"teams","leg":"jira_atlassian_teams","outcome":"failed","reason":"unclassified"}]}`,
+	})
+	outcome, err := readRun(ctx, pool, runID)
+	if err != nil {
+		t.Fatalf("readRun: %v", err)
+	}
+	if outcome.State != StateMaterialized || outcome.TotalUnits != 14 {
+		t.Fatalf("outcome = %+v, want a materialized run of 14 units", outcome)
+	}
 }

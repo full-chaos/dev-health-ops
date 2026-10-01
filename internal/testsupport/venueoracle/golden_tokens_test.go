@@ -353,3 +353,21 @@ func TestScrubIsTheEscapeForAFalsePositive(t *testing.T) {
 		t.Fatalf("the scrub did not clear the lookalike: %v", err)
 	}
 }
+
+func TestRowSnapshotsAreScrubbedOnBothPlanes(t *testing.T) {
+	dir := t.TempDir()
+	scrub := func(text string) string { return strings.ReplaceAll(text, "reset=abc123", "reset=<token>") }
+	golden, err := openGolden(GoldenSpec{Path: filepath.Join(dir, "g.json"), PythonBuild: goldenBuild, Recipe: "record it", Scrub: scrub}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden.state = statePython
+	jwt := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":7}`, "sig")
+	value := golden.CompareRows(t, "mail", func() string { return "link reset=abc123 " + jwt }, "link reset=abc123 "+mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":99}`, "other"))
+	if strings.Contains(value, "abc123") || strings.Contains(value, jwt) || !strings.Contains(value, "reset=<token>") {
+		t.Fatalf("recorded rows hold a per-run value or a token: %q", value)
+	}
+	if got := golden.recorded.Rows["mail"].Rows; got != value {
+		t.Fatalf("stored rows %q differ from the returned %q", got, value)
+	}
+}

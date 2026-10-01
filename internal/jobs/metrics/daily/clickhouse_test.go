@@ -66,7 +66,7 @@ func TestPythonDiscoverReposOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := rotguard.Spec("testdata/golden/daily_discover_repos_oracle.json", "4122e6f1b7f092bf82a835b782d3e99bdc27c16f7fb669501314675c27f10ec7",
+	spec := rotguard.Spec("testdata/golden/daily_discover_repos_oracle.json", "856b8850efef4a090ee9ebfd4a60e915bd9e2e18b4466a2ec622c7e6beabc9aa",
 		"./internal/jobs/metrics/daily/", "^TestPythonDiscoverReposOracle$")
 	answers := programoracle.Run(t, spec, root, []programoracle.Program{
 		programoracle.Script("daily discover repos oracle", scriptPath, string(source), nil),

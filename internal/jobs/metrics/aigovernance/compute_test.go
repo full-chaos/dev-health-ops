@@ -32,7 +32,7 @@ func runPythonOracle(t *testing.T) pythonOracleOutput {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := rotguard.Spec("testdata/golden/governance_oracle.json", "0fe9461d42c737348aabbc6bb393d209eb3282e388cb2877bb9212f2ba6fec98",
+	spec := rotguard.Spec("testdata/golden/governance_oracle.json", "5c92eb0d945bfc97cdbebb35edfe801d2566dc4b8452ea144afd278cc8fc4439",
 		"./internal/jobs/metrics/aigovernance/", "^TestGovernanceRowsMatchLivePythonProduction$")
 	answers := programoracle.Run(t, spec, root, []programoracle.Program{
 		programoracle.Script("governance oracle", scriptPath, string(source), nil),

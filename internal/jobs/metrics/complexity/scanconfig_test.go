@@ -244,6 +244,6 @@ func complexityRepositoryRoot(t *testing.T) string {
 // complexityGoldenPins holds the digest each golden of this package is pinned to (a placeholder until the
 // goldenrecord verb records the golden and replaces it).
 var complexityGoldenPins = map[string]string{
-	"blame_maxfiles_oracle.json": "3dcf404cf35fa2c9f535522e1bd032e16ca55829726ff89762f4bc5058ada3c3",
-	"should_process_oracle.json": "522d0dd8fc9bcb183857ad11b6ca98d8e27708e8a53b1a467433ea89e562c4d3",
+	"blame_maxfiles_oracle.json": "c6640a8a83d9c2585755e2a97e8fadff362e3ad32f06509925cabe41b5518958",
+	"should_process_oracle.json": "df4b96fd71a017d5588749d427a86b87d288bbc55794b55759bd17b351cbd46a",
 }

@@ -281,9 +281,9 @@ func edgesProgram(t *testing.T, slug, test, name, text string) string {
 // edgesGoldenPins holds the digest each golden of this package is pinned to (a placeholder until the
 // goldenrecord verb records the golden and replaces it).
 var edgesGoldenPins = map[string]string{
-	"numeric_type_digit_table": "7c2efe9cca6083ebc407328411d09fa29d2d75485ff2c085e89d229dc55c319b",
-	"int_max_str_digits":       "4fe601804e0d665cef4e38623126f1ff214aa623f251c0ab9331817d6582e533",
-	"python_decimal_blocks":    "231bc94c364a45128341599124399b2c4f2697a4728d91807c6a9995afd181e4",
-	"python_lower_multirune":   "584ee8fbf85e7664df4f07e902fe28fa55765677d83cee8deb2904595afe8420",
-	"python_lower_allrunes":    "e65de242fd27bd61b5304aa2dd907d29daaebdd6ffb5a2126b00bc06b75a2422",
+	"numeric_type_digit_table": "d6bd3f4a9c49512e6d03d327a2b04235222a24a3f461a5b2e34b1fbe0e870e91",
+	"int_max_str_digits":       "975e6aff200f3bfeb49203cea9173579f15b627aeadcce70262b64bb8e89f174",
+	"python_decimal_blocks":    "56513466093d83bbd625de3958b6cc2dc3d87991b176880f7e3421f86d19762f",
+	"python_lower_multirune":   "5670aca67aebd66f376583bdf0fa2b356d9d88237378b374b0419d47f787c5df",
+	"python_lower_allrunes":    "c92be3f2cf9f67ca26bc798e51799de2f1e2751d35f520cd163d445ec41727c7",
 }

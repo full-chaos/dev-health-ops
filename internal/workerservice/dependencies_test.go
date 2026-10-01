@@ -3624,12 +3624,18 @@ func TestWorkerRefusesToStartWithAnUnusableRecomputeCap(t *testing.T) {
 }
 
 // A contract mismatch at boot names the remedy: the migrate Job's verb, and
-// the path for a contract-1 database it refuses.
+// that a contract-1 database it refuses is unsupported (re-create it from the
+// head; the Python chain is no longer a remedy).
 func TestDORARefusalRemedyNamesTheMigrateVerb(t *testing.T) {
 	remedy := doraRefusalRemedy(jobruntime.DORARefusedOrderingContractMismatch)
-	for _, want := range []string{"dho migrate upgrade", "contract 2", "067", "dho migrate clickhouse status"} {
+	for _, want := range []string{"dho migrate upgrade", "contract 2", "unsupported", "re-create it from the head", "dho migrate clickhouse status"} {
 		if !strings.Contains(remedy, want) {
 			t.Fatalf("remedy %q does not name %q", remedy, want)
+		}
+	}
+	for _, banned := range []string{"Python", "dev-hops", "067"} {
+		if strings.Contains(remedy, banned) {
+			t.Fatalf("remedy %q still names %q as a remedy", remedy, banned)
 		}
 	}
 	for _, reason := range []string{jobruntime.DORARefusedContractUnparseable, jobruntime.DORARefusedUnknownSchema, jobruntime.DORARefusedInspectFailed} {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 	"log/slog"
 	"math/big"
 	"os"
@@ -151,7 +152,7 @@ func (cache *operationalTableContracts) resolve(
 			slog.Int("env_contract", int(configured)),
 			slog.Int("table_contract", int(contract)),
 			slog.String("used", "table"),
-			slog.String("remedy", "every topology defaults to contract 2: run the migrate Job (`dho migrate upgrade`) to bring ClickHouse to the head; a contract-1 table needs migration 067 applied first (deploy/go-workers/README.md)"))
+			slog.String("remedy", "every topology defaults to contract 2: run the migrate Job (`dho migrate upgrade`) to bring ClickHouse to the head; a contract-1 table is unsupported and has no upgrade path: re-create the database from the head (deploy/go-workers/README.md)"))
 	}
 	cache.store(table, contract)
 	return contract, nil
@@ -279,8 +280,7 @@ func (contract operationalStorageContract) latestQuery(legacyColumns, table, whe
 		return "SELECT " + columns + " FROM " + table + " FINAL WHERE " + where +
 			" AND " + operationalLegacyShapeGuard(table) + " LIMIT 1"
 	}
-	return "SELECT " + columns + " FROM " + table + " WHERE " + where +
-		" ORDER BY source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1"
+	return operationalordering.LatestRevisionRow(columns, table, where)
 }
 
 // activeQuery selects the newest stored version of every id matching where,
@@ -291,9 +291,7 @@ func (contract operationalStorageContract) activeQuery(legacyColumns, table, whe
 		return "SELECT " + columns + " FROM (SELECT " + columns + " FROM " + table +
 			" FINAL WHERE " + where + " AND " + operationalLegacyShapeGuard(table) + ") WHERE " + active
 	}
-	return "SELECT " + columns + " FROM (SELECT " + columns + " FROM " + table + " WHERE " + where +
-		" ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1 BY org_id, id) WHERE " +
-		active
+	return operationalordering.RevisionActiveRows(columns, table, where, active)
 }
 
 // fromCurrentValues reduces a value or scan-target list written in the

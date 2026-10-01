@@ -29,58 +29,79 @@ var operationalSchemaDDL = []string{
 	`CREATE TABLE operational_services (
     org_id String, provider LowCardinality(String), provider_instance_id String,
     source_entity_type LowCardinality(String), external_id String,
-    source_version_at DateTime64(6, 'UTC'), id String,
+    source_version_at DateTime64(6, 'UTC'),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0, ordering_contract UInt8 DEFAULT 2, id String,
     source_url Nullable(String), observed_at DateTime64(6, 'UTC'), last_synced DateTime64(6, 'UTC'),
     name String, owning_team_id Nullable(String), escalation_policy_id Nullable(String), is_deleted UInt8
-) ENGINE = ReplacingMergeTree(source_version_at) ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 	`CREATE TABLE operational_incidents (
     org_id String, provider LowCardinality(String), provider_instance_id String,
     source_entity_type LowCardinality(String), external_id String,
-    source_version_at DateTime64(6, 'UTC'), id String, source_url Nullable(String),
+    source_version_at DateTime64(6, 'UTC'),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0, ordering_contract UInt8 DEFAULT 2, id String, source_url Nullable(String),
     observed_at DateTime64(6, 'UTC'), last_synced DateTime64(6, 'UTC'),
     service_id Nullable(String), escalation_policy_id Nullable(String), title String,
     started_at Nullable(DateTime64(6, 'UTC')), is_deleted UInt8
-) ENGINE = ReplacingMergeTree(source_version_at) ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 	`CREATE TABLE operational_service_repository_mappings (
     org_id String, provider LowCardinality(String), provider_instance_id String,
     source_entity_type LowCardinality(String), external_id String,
-    source_version_at DateTime64(6, 'UTC'), id String, source_url Nullable(String),
+    source_version_at DateTime64(6, 'UTC'),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0, ordering_contract UInt8 DEFAULT 2, id String, source_url Nullable(String),
     observed_at DateTime64(6, 'UTC'), last_synced DateTime64(6, 'UTC'),
     relationship_provenance Nullable(String), relationship_confidence Nullable(Float64),
     service_id String, repo_id Nullable(UUID), mapping_kind Nullable(String), rule_id Nullable(String),
     valid_from Nullable(DateTime64(6, 'UTC')), valid_to Nullable(DateTime64(6, 'UTC')), is_active UInt8
-) ENGINE = ReplacingMergeTree(source_version_at) ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 	`CREATE TABLE operational_alerts (
     org_id String, provider LowCardinality(String), provider_instance_id String,
     source_entity_type LowCardinality(String), external_id String,
-    source_version_at DateTime64(6, 'UTC'), id String, source_url Nullable(String),
+    source_version_at DateTime64(6, 'UTC'),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0, ordering_contract UInt8 DEFAULT 2, id String, source_url Nullable(String),
     observed_at DateTime64(6, 'UTC'), last_synced DateTime64(6, 'UTC'),
     incident_id Nullable(String), title String, triggered_at Nullable(DateTime64(6, 'UTC')),
     is_deleted UInt8
-) ENGINE = ReplacingMergeTree(source_version_at) ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 	`CREATE TABLE operational_incident_timeline_events (
     org_id String, provider LowCardinality(String), provider_instance_id String,
     source_entity_type LowCardinality(String), external_id String,
-    source_version_at DateTime64(6, 'UTC'), id String, source_url Nullable(String),
+    source_version_at DateTime64(6, 'UTC'),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0, ordering_contract UInt8 DEFAULT 2, id String, source_url Nullable(String),
     observed_at DateTime64(6, 'UTC'), last_synced DateTime64(6, 'UTC'),
     incident_id String, event_type String, body Nullable(String), actor_id Nullable(String),
     occurred_at Nullable(DateTime64(6, 'UTC'))
-) ENGINE = ReplacingMergeTree(source_version_at) ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 	`CREATE TABLE operational_incident_notes (
     org_id String, provider LowCardinality(String), provider_instance_id String,
     source_entity_type LowCardinality(String), external_id String,
-    source_version_at DateTime64(6, 'UTC'), id String, source_url Nullable(String),
+    source_version_at DateTime64(6, 'UTC'),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0, ordering_contract UInt8 DEFAULT 2, id String, source_url Nullable(String),
     observed_at DateTime64(6, 'UTC'), last_synced DateTime64(6, 'UTC'),
     incident_id String, body String, author_user_id Nullable(String),
     created_at Nullable(DateTime64(6, 'UTC'))
-) ENGINE = ReplacingMergeTree(source_version_at) ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 	`CREATE TABLE operational_incident_responders (
     org_id String, provider LowCardinality(String), provider_instance_id String,
     source_entity_type LowCardinality(String), external_id String,
-    source_version_at DateTime64(6, 'UTC'), id String, source_url Nullable(String),
+    source_version_at DateTime64(6, 'UTC'),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0, ordering_contract UInt8 DEFAULT 2, id String, source_url Nullable(String),
     observed_at DateTime64(6, 'UTC'), last_synced DateTime64(6, 'UTC'),
     incident_id String, user_id Nullable(String), assigned_at Nullable(DateTime64(6, 'UTC'))
-) ENGINE = ReplacingMergeTree(source_version_at) ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 	`CREATE TABLE work_items (
     org_id String, work_item_id String, title Nullable(String), description Nullable(String)
 ) ENGINE = ReplacingMergeTree() ORDER BY (org_id, work_item_id)`,

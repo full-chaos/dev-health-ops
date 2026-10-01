@@ -68,7 +68,7 @@ func TestAProducerRequestIsKeyedByProgramInputAndEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed := ProgramRequest("corpus", sampleProgram+"# changed\n", []byte("abc"), map[string]string{"PYTHONHASHSEED": "0"})
-	if _, err := golden.frozenAnswers([]Request{changed}); err == nil || !strings.Contains(err.Error(), "regenerate") {
+	if _, err := golden.frozenAnswers([]Request{changed}, ""); err == nil || !strings.Contains(err.Error(), "regenerate") {
 		t.Fatalf("a changed program was answered from the file: %v", err)
 	}
 }

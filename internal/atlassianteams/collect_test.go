@@ -248,7 +248,7 @@ func TestCollectSendsTheOrganizationSiteCredentialsAndOptIns(t *testing.T) {
 	for _, req := range g.requests {
 		switch req.Operation {
 		case "TeamSearchV2":
-			if req.Variables["organizationId"] != "org-atlassian" || req.Variables["siteId"] != "site-uuid" {
+			if req.Variables["organizationId"] != "ari:cloud:platform::org/org-atlassian" || req.Variables["siteId"] != "site-uuid" {
 				t.Errorf("search variables = %v", req.Variables)
 			}
 			if got := strings.Join(req.Header.Values("X-ExperimentalApi"), ","); !strings.Contains(got, "teams-beta") {

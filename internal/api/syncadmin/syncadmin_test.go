@@ -25,7 +25,9 @@ type activeUsers struct{}
 func (activeUsers) UserState(context.Context, uuid.UUID) (policy.UserState, bool, error) {
 	return policy.UserState{IsActive: true}, true, nil
 }
-func (activeUsers) IsMember(context.Context, uuid.UUID, uuid.UUID) (bool, error) { return true, nil }
+func (activeUsers) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
+	return "member", true, nil
+}
 func (activeUsers) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impersonation, error) {
 	return nil, nil
 }

@@ -105,7 +105,7 @@ func TestQueryAPIRoleDriverObservesAMissingColumnGrant(t *testing.T) {
 		if _, _, err := policyStore.UserState(ctx, uuid.MustParse(pathsAdminUser)); err != nil {
 			return err
 		}
-		if _, err := policyStore.IsMember(ctx, uuid.MustParse(pathsAdminUser), uuid.MustParse(pathsOrg)); err != nil {
+		if _, _, err := policyStore.Membership(ctx, uuid.MustParse(pathsAdminUser), uuid.MustParse(pathsOrg)); err != nil {
 			return err
 		}
 		if _, err := policyStore.ActiveImpersonation(ctx, uuid.MustParse(pathsAdminUser)); err != nil {
@@ -407,10 +407,10 @@ VALUES (gen_random_uuid(), $1, 'paths connector' || $2::text, 'github', '[]'::js
 	if err == nil && (!found || !state.IsActive || !state.IsSuperuser || state.TokenVersion != pathsAdminTokenVersion) {
 		fail("policy.UserState", fmt.Errorf("unexpected state: found=%v state=%+v", found, state))
 	}
-	isMember, err := policyStore.IsMember(ctx, uuid.MustParse(pathsAdminUser), uuid.MustParse(pathsOrg))
-	fail("policy.IsMember", err)
+	_, isMember, err := policyStore.Membership(ctx, uuid.MustParse(pathsAdminUser), uuid.MustParse(pathsOrg))
+	fail("policy.Membership", err)
 	if err == nil && !isMember {
-		fail("policy.IsMember", errors.New("expected the seeded membership row, found none"))
+		fail("policy.Membership", errors.New("expected the seeded membership row, found none"))
 	}
 	session, err := policyStore.ActiveImpersonation(ctx, uuid.MustParse(pathsAdminUser))
 	fail("policy.ActiveImpersonation", err)

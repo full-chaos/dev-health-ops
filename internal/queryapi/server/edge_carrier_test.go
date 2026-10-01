@@ -39,6 +39,7 @@ type fakeEdgeStore struct {
 	states       map[uuid.UUID]policy.UserState
 	found        map[uuid.UUID]bool
 	members      map[[2]uuid.UUID]bool
+	roles        map[[2]uuid.UUID]string
 	sessions     map[uuid.UUID]*policy.Impersonation
 	errUserState error
 	errIsMember  error
@@ -52,11 +53,21 @@ func (f *fakeEdgeStore) UserState(_ context.Context, id uuid.UUID) (policy.UserS
 	return f.states[id], f.found[id], nil
 }
 
-func (f *fakeEdgeStore) IsMember(_ context.Context, userID, orgID uuid.UUID) (bool, error) {
+// Membership answers the row's existence from members and its role from
+// roles (a member with no roles entry holds "admin", the role every token in
+// these tests states for its own org).
+func (f *fakeEdgeStore) Membership(_ context.Context, userID, orgID uuid.UUID) (string, bool, error) {
 	if f.errIsMember != nil {
-		return false, f.errIsMember
+		return "", false, f.errIsMember
 	}
-	return f.members[[2]uuid.UUID{userID, orgID}], nil
+	key := [2]uuid.UUID{userID, orgID}
+	if !f.members[key] {
+		return "", false, nil
+	}
+	if role, ok := f.roles[key]; ok {
+		return role, true, nil
+	}
+	return "admin", true, nil
 }
 
 func (f *fakeEdgeStore) ActiveImpersonation(_ context.Context, adminID uuid.UUID) (*policy.Impersonation, error) {

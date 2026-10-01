@@ -21,6 +21,7 @@ const (
 	impersonationKey
 	impersonationDecidedKey
 	readsKey
+	orgDecidedKey
 )
 
 // OrgIDFrom returns the request's resolved org (the contextvar
@@ -37,6 +38,15 @@ func OrgIDFrom(ctx context.Context) string {
 func ImpersonationFrom(ctx context.Context) *Impersonation {
 	value, _ := ctx.Value(impersonationKey).(*Impersonation)
 	return value
+}
+
+// OrgScopeDecided reports whether the OrgScope middleware ran for the request
+// and let it through: only then is OrgIDFrom the scope's verified answer (the
+// X-Org-Id after its membership check, else the caller's own org) rather
+// than "nobody decided".
+func OrgScopeDecided(ctx context.Context) bool {
+	decided, _ := ctx.Value(orgDecidedKey).(bool)
+	return decided
 }
 
 // ImpersonationDecided reports whether the Impersonation middleware ran for
@@ -132,10 +142,11 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 		case user != nil && user.OrgID != "":
 			resolved = user.OrgID
 		}
+		ctx := context.WithValue(r.Context(), orgDecidedKey, true)
 		if resolved != "" {
-			r = r.WithContext(context.WithValue(r.Context(), orgIDKey, resolved))
+			ctx = context.WithValue(ctx, orgIDKey, resolved)
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -150,24 +161,33 @@ func (s *Scope) mayUseOrg(ctx context.Context, user *User, orgID string) (bool, 
 // IsMember is user_is_member_of_org: an id that does not parse is not a
 // member.
 func (a *Authenticator) IsMember(ctx context.Context, userID, orgID string) (bool, error) {
+	_, member, err := a.Membership(ctx, userID, orgID)
+	return member, err
+}
+
+// Membership is the user's membership in the org: the role they hold there,
+// and whether they are a member at all. An id that does not parse is not a
+// member and reads nothing. Within a request bound to a (ReadOnce) the row is
+// read once: the membership check and the role in that org are one answer.
+func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (string, bool, error) {
 	user, okUser := ParsePyUUID(userID)
 	org, okOrg := ParsePyUUID(orgID)
 	if !okUser || !okOrg {
-		return false, nil
+		return "", false, nil
 	}
 	reads := a.readsFor(ctx)
 	if reads == nil {
-		return a.store.IsMember(ctx, user, org)
+		return a.store.Membership(ctx, user, org)
 	}
 	reads.mu.Lock()
 	defer reads.mu.Unlock()
 	key := [2]uuid.UUID{user, org}
 	if got, ok := reads.members[key]; ok {
-		return got.member, got.err
+		return got.role, got.member, got.err
 	}
-	member, err := a.store.IsMember(ctx, user, org)
-	reads.members[key] = memberRead{member: member, err: err}
-	return member, err
+	role, member, err := a.store.Membership(ctx, user, org)
+	reads.members[key] = memberRead{role: role, member: member, err: err}
+	return role, member, err
 }
 
 // Impersonation is ImpersonationMiddleware. For a caller whose token claims

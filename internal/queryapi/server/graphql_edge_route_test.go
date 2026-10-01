@@ -825,6 +825,7 @@ func TestGraphQLEdgeReadsTheImpersonationSessionOnce(t *testing.T) {
 			states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
 			found:   map[uuid.UUID]bool{ecUser: true},
 			members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
+			roles:   map[[2]uuid.UUID]string{{ecUser, ecOrg}: "owner"},
 		}, answers: tc.answers}
 		handler, seen := edgeClaimsHarness(t, store)
 		recorder := edgePostAs(t, handler, tc.token)
@@ -841,10 +842,11 @@ func TestGraphQLEdgeReadsTheImpersonationSessionOnce(t *testing.T) {
 }
 
 // TestGraphQLEdgeRefusesARequestNoMiddlewareDecided: the pipeline takes the
-// impersonation decision from the middleware in front of it, so a request that
-// reached it without one (an authenticator bound, no impersonation middleware)
-// is refused as a check that could not be made, never served as a principal
-// that is not impersonating.
+// org and the impersonation decision from the middleware in front of it, so a
+// request that reached it without either (an authenticator bound, but no org
+// scope, or no impersonation middleware) is refused as a check that could not
+// be made: never served in an org nobody verified, or as a principal that is
+// not impersonating.
 func TestGraphQLEdgeRefusesARequestNoMiddlewareDecided(t *testing.T) {
 	store := &fakeEdgeStore{
 		states:   map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
@@ -857,15 +859,26 @@ func TestGraphQLEdgeRefusesARequestNoMiddlewareDecided(t *testing.T) {
 	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": true})
 	mux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { ran++ }))
 	auth := ecEdgeAuth(t, store)
-	bare := auth.ReadOnce(newGraphQLEdgeHandler(newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil)))
+	pipeline := newGraphQLEdgeHandler(newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil))
+	scope := policy.NewScope(auth, nil)
 	var logged strings.Builder
 	previous := log.Writer()
 	log.SetOutput(&logged)
 	t.Cleanup(func() { log.SetOutput(previous) })
 	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
-	recorder := edgePostAs(t, bare, token)
-	if recorder.Code != http.StatusInternalServerError || ran != 0 || !strings.Contains(logged.String(), "reason=edge_impersonation_undecided") {
-		t.Fatalf("%d ran=%d logged %q, want the 500, nothing run, and the reason", recorder.Code, ran, logged.String())
+	for name, tc := range map[string]struct {
+		handler http.Handler
+		reason  string
+	}{
+		"no org scope":              {auth.ReadOnce(scope.Impersonation(pipeline)), "reason=edge_org_undecided"},
+		"no impersonation decision": {auth.ReadOnce(scope.OrgScope(pipeline)), "reason=edge_impersonation_undecided"},
+	} {
+		logged.Reset()
+		ran = 0
+		recorder := edgePostAs(t, tc.handler, token)
+		if recorder.Code != http.StatusInternalServerError || ran != 0 || !strings.Contains(logged.String(), tc.reason) {
+			t.Errorf("%s: %d ran=%d logged %q, want the 500, nothing run, and %s", name, recorder.Code, ran, logged.String(), tc.reason)
+		}
 	}
 }
 

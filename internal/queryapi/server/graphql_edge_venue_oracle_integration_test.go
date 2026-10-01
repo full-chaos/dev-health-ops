@@ -79,6 +79,9 @@ func edgeUsers() []edgeUser {
 		{name: "nonmember", id: uuid.MustParse("e0000000-0000-4000-8000-000000000005"), active: true, tokenOrg: edgeOrgA, tokenRole: "admin", memberships: map[string]string{edgeOrgB: "admin"}},
 		{name: "inactive", id: uuid.MustParse("e0000000-0000-4000-8000-000000000006"), active: false, tokenOrg: edgeOrgA, tokenRole: "admin", memberships: map[string]string{edgeOrgA: "admin"}},
 		{name: "revoked", id: uuid.MustParse("e0000000-0000-4000-8000-000000000007"), active: true, dbVersion: 1, tokenOrg: edgeOrgA, tokenRole: "admin", memberships: map[string]string{edgeOrgA: "admin"}},
+		// A member of two orgs with a different role in each: the token names
+		// A and A's role; the web selects B with X-Org-Id.
+		{name: "multi", id: uuid.MustParse("e0000000-0000-4000-8000-000000000008"), active: true, tokenOrg: edgeOrgA, tokenRole: "member", memberships: map[string]string{edgeOrgA: "member", edgeOrgB: "admin"}},
 	}
 }
 
@@ -470,6 +473,40 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 		}
 	}
 
+	// One identity per request: the org the client selects (X-Org-Id, after
+	// the membership check) and the role held IN THAT ORG are what the
+	// resolvers read. The Python dispatcher forwarded the token's org and role
+	// whatever X-Org-Id the org scope had accepted
+	// (go_api_dispatcher.py _internal_identity_headers(context.user)), so on
+	// main a member selecting B got A's identity: B's data was refused and
+	// B's role never applied. That was the defect; query-api serves B.
+	multi := token("multi")
+	catalogB := urqlBody(t, documentOperationName(query.Document), query.Document, func() map[string]any {
+		spec, _ := goapiproof.SpecFor(query.Operation)
+		return spec.Variables(edgeOrgB, goapiproof.DefaultWindow())
+	}())
+	catalogA := urqlBody(t, documentOperationName(query.Document), query.Document, func() map[string]any {
+		spec, _ := goapiproof.SpecFor(query.Operation)
+		return spec.Variables(edgeOrgA, goapiproof.DefaultWindow())
+	}())
+	dataHealthDoc := probe("connectorsDataHealth")
+	dataHealthBody := urqlBody(t, documentOperationName(dataHealthDoc.Document), dataHealthDoc.Document, func() map[string]any {
+		spec, _ := goapiproof.SpecFor(dataHealthDoc.Operation)
+		return spec.Variables(edgeOrgA, goapiproof.DefaultWindow())
+	}())
+	cases = append(cases,
+		edgeCase{request: edgePost("member of A and B, no X-Org-Id: catalogValues of A", multi, catalogA, nil)},
+		edgeCase{request: edgePost("member of A and B, no X-Org-Id: role of A", multi, dataHealthBody, nil)},
+		edgeCase{request: edgePost("member of A and B, X-Org-Id A: catalogValues of A", multi, catalogA, map[string]string{"X-Org-Id": edgeOrgA})},
+		edgeCase{request: edgePost("member of A and B, X-Org-Id B: catalogValues of B", multi, catalogB, map[string]string{"X-Org-Id": edgeOrgB}),
+			declared: "selected org: the Python dispatcher forwarded the token's org A, so B's data was refused; query-api serves B, the org the scope verified",
+			pyWant:   edgeAnswer{status: 200, body: "Access denied: cannot query org"}, goWant: edgeAnswer{status: 200, body: `{"data":{"catalog":{`}},
+		edgeCase{request: edgePost("member of A and B, X-Org-Id B: role of B", multi, dataHealthBody, map[string]string{"X-Org-Id": edgeOrgB}),
+			declared: "selected org's role: the Python dispatcher forwarded the token's role in A (member), so B's admin role never applied; query-api uses the role held in B",
+			pyWant:   edgeAnswer{status: 200, body: "Data health requires operator access"}, goWant: edgeAnswer{status: 200, body: `{"data":{"dataHealth":`}},
+		edgeCase{request: edgePost("member of A and B, X-Org-Id of an org it is not in", multi, catalogA, map[string]string{"X-Org-Id": "0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0c"})},
+	)
+
 	// No usable document, and the size limit.
 	limit := defaultGraphQLMaxQueryBytes
 	oversize := urqlBody(t, "CatalogValues", query.Document+strings.Repeat(" ", limit), map[string]any{"orgId": edgeOrgA})
@@ -537,6 +574,15 @@ VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, sch
 			} else {
 				holds = python[i].Status == c.pyWant.status && strings.Contains(python[i].Body, c.pyWant.body) &&
 					goResponse.Status == c.goWant.status && strings.Contains(goResponse.Body, c.goWant.body)
+				// The status and body differ as declared; every header must
+				// still be the same (content-length aside: the bodies differ).
+				// A header that differs is a divergence nobody declared: it
+				// fails here, by name, never passes unseen.
+				if differing := headersThatDiffer(c.request, python[i], goResponse); len(differing) > 0 {
+					holds = false
+					t.Errorf("%s: declared divergence (%s) also differs in undeclared headers %v\n python %v\n go     %v",
+						c.request.Name, c.declared, differing, python[i].Headers, goResponse.Headers)
+				}
 			}
 			fmt.Fprintf(&receipt, "%-58s python=%d go=%d DECLARED holds=%v\n", c.request.Name, python[i].Status, goResponse.Status, holds)
 			if !holds {
@@ -626,4 +672,25 @@ func withoutHeader(response venueoracle.Response, name string) venueoracle.Respo
 	}
 	response.Headers = headers
 	return response
+}
+
+// headersThatDiffer compares every header of two answers whose status and body
+// are allowed to differ: venueoracle.Compare with the status and body made
+// equal and content-length skipped, so only the headers decide.
+func headersThatDiffer(request venueoracle.Request, python, goResponse venueoracle.Response) []string {
+	goSame := goResponse
+	goSame.Status, goSame.Body = python.Status, python.Body
+	same, compared, pyShown, goShown := venueoracle.Compare(request, python, goSame, venueoracle.DiffOptions{
+		SkipContentLength: func(venueoracle.Request) bool { return true },
+	})
+	if same {
+		return nil
+	}
+	var differing []string
+	for _, name := range compared {
+		if pyShown.Headers[name] != goShown.Headers[name] {
+			differing = append(differing, name)
+		}
+	}
+	return differing
 }

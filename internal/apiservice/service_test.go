@@ -391,7 +391,9 @@ type scopeStore struct{ admin, target, targetOrg uuid.UUID }
 func (s scopeStore) UserState(_ context.Context, id uuid.UUID) (policy.UserState, bool, error) {
 	return policy.UserState{IsActive: true, IsSuperuser: id == s.admin}, true, nil
 }
-func (scopeStore) IsMember(context.Context, uuid.UUID, uuid.UUID) (bool, error) { return false, nil }
+func (scopeStore) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
+	return "", false, nil
+}
 func (s scopeStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*policy.Impersonation, error) {
 	if admin != s.admin {
 		return nil, nil

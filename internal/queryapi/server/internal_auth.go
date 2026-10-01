@@ -102,7 +102,7 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 // get_authenticated_user does the same (services/auth.py:350), never
 // re-verified against a live row on either plane today.
 func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store, token string) (authctx.Claims, bool) {
-	claims, outcome := checkEdgeCarrier(r, edgeAuth, token, liveImpersonation(edgeStore))
+	claims, outcome := checkEdgeCarrier(r, edgeAuth, token, liveScope(edgeStore))
 	if outcome != edgeAccepted {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return authctx.Claims{}, false
@@ -121,47 +121,85 @@ const (
 	edgeUnavailable             // a live check could not be read: nothing was decided
 )
 
-// impersonationSource answers the active impersonation session that makes
-// user's effective identity the target's, or nil. An error decided nothing.
-type impersonationSource func(ctx context.Context, user *policy.User) (*policy.Impersonation, error)
+// edgeScope answers, for a caller Authenticate has just accepted, the org the
+// request acts in and the active impersonation session that makes the
+// caller's effective identity the target's (nil when none). An error decided
+// nothing.
+type edgeScope func(ctx context.Context, user *policy.User) (org string, session *policy.Impersonation, err error)
 
-// liveImpersonation is /query's source: nothing in front of /query read the
-// session, so the store is read here, once, for a caller the live users row
-// confirms is a superuser.
-func liveImpersonation(store policy.Store) impersonationSource {
-	return func(ctx context.Context, user *policy.User) (*policy.Impersonation, error) {
+// liveScope is /query's scope: nothing in front of /query decided anything,
+// so the org is the token's own and the session is read here, once, for a
+// caller the live users row confirms is a superuser.
+func liveScope(store policy.Store) edgeScope {
+	return func(ctx context.Context, user *policy.User) (string, *policy.Impersonation, error) {
 		if !user.IsSuperuser {
-			return nil, nil
+			return user.OrgID, nil, nil
 		}
-		return store.ActiveImpersonation(ctx, user.ID)
+		session, err := store.ActiveImpersonation(ctx, user.ID)
+		return user.OrgID, session, err
 	}
 }
 
-// errImpersonationUndecided: the request reached the /graphql pipeline
-// without passing the Impersonation middleware, so nobody read the session.
-var errImpersonationUndecided = errors.New("impersonation not decided for this request")
+// errOrgUndecided and errImpersonationUndecided: the request reached the
+// /graphql pipeline without passing the OrgScope or the Impersonation
+// middleware, so nobody decided the org or read the session.
+var (
+	errOrgUndecided           = errors.New("org scope not decided for this request")
+	errImpersonationUndecided = errors.New("impersonation not decided for this request")
+)
 
-// decidedImpersonation is /graphql's source: the session policy.Scope's
-// Impersonation middleware read for this request in front of the pipeline
-// (graphQLEdgeChain), the one that set X-Impersonating on the response. A
-// second store read here could see a session start or end between the two
-// and serve one identity under the other's headers. The Python edge read it
-// once as well: its ImpersonationMiddleware set the contextvar that
-// get_context and effective_principal_identity read, whatever the later
-// users-row read said. So this source applies the middleware's decision as
-// it stands, and a request no middleware decided is refused, never served
-// as a principal that is not impersonating.
-func decidedImpersonation(ctx context.Context, _ *policy.User) (*policy.Impersonation, error) {
-	if !policy.ImpersonationDecided(ctx) {
-		return nil, errImpersonationUndecided
+// decidedScope is /graphql's scope: the org policy.Scope's OrgScope verified
+// for this request (the X-Org-Id after its membership check, else the
+// caller's own org; the impersonation target's org while impersonating) and
+// the session its Impersonation middleware read, the one that set
+// X-Impersonating on the response. Reading either again here could give the
+// pipeline another answer than the middleware acted on: a session started or
+// ended between two reads, or the token's org where the scope accepted the
+// org the client selected. So this scope applies the middleware's decisions
+// as they stand, and a request no middleware decided is refused, never served
+// in an org nobody verified or as a principal that is not impersonating.
+func decidedScope(ctx context.Context, _ *policy.User) (string, *policy.Impersonation, error) {
+	if !policy.OrgScopeDecided(ctx) {
+		return "", nil, errOrgUndecided
 	}
-	return policy.ImpersonationFrom(ctx), nil
+	if !policy.ImpersonationDecided(ctx) {
+		return "", nil, errImpersonationUndecided
+	}
+	return policy.OrgIDFrom(ctx), policy.ImpersonationFrom(ctx), nil
+}
+
+// roleInOrg is the caller's role in the org the request acts in, and whether
+// the caller may act there at all. A member holds the membership's role. A
+// caller who is not a member may act only as a live superuser in an org other
+// than the token's own -- the one case the org scope lets a non-member name
+// an org -- and holds no role there (IsSuperuser is what they act by). The
+// token's own org always needs the membership, superuser or not.
+func roleInOrg(user *policy.User, orgID, memberRole string, member bool) (string, bool) {
+	switch {
+	case member:
+		return memberRole, true
+	case user.IsSuperuser && orgID != user.OrgID:
+		return "", true
+	}
+	return "", false
+}
+
+// canonicalOrg is org in the one spelling the resolvers compare against
+// (lower-case, hyphenated); an org id that does not parse is kept as given.
+func canonicalOrg(org string) string {
+	if parsed, ok := policy.ParsePyUUID(org); ok {
+		return parsed.String()
+	}
+	return org
 }
 
 // checkEdgeCarrier is the decision of authenticateEdgeCarrier, logged and
-// counted, without an answer written. sessionOf says where the impersonation
-// session comes from (liveImpersonation, decidedImpersonation).
-func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token string, sessionOf impersonationSource) (authctx.Claims, edgeOutcome) {
+// counted, without an answer written: the caller's ONE identity for the
+// request. The org is the scope's (decidedScope, liveScope); the role is the
+// role the caller holds IN THAT ORG, read from the same membership row that
+// answers the membership check, never the role the token states for its own
+// org; while impersonating, both are the session target's.
+func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token string, scope edgeScope) (authctx.Claims, edgeOutcome) {
 	ctx := r.Context()
 	user, err := edgeAuth.Authenticate(ctx, token)
 	if err != nil {
@@ -175,55 +213,62 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 		return authctx.Claims{}, edgeRefused
 	}
 
-	orgID := user.OrgID
-	role := user.Role
-	impersonationActive := false
-	session, sessionErr := sessionOf(ctx, user)
-	if sessionErr != nil {
+	orgID, session, scopeErr := scope(ctx, user)
+	if scopeErr != nil {
 		// FAIL CLOSED: a superuser who IS impersonating must never be
 		// served as the plain, non-impersonated principal because the
 		// session could not be read (a database fault) or was never read
 		// (no middleware decided it) -- that would let them pass a
 		// "not-impersonating" gate (e.g. RequirePlatformAdmin) exactly
-		// while genuinely impersonating. Every live check on this path
-		// fails closed; this is not the one exception. go-api's own
-		// Scope.Impersonation (internal/api/policy/scope.go) refuses on
-		// this same lookup failure too.
+		// while genuinely impersonating -- and no request is served in an
+		// org nobody verified. Every live check on this path fails closed.
+		// go-api's own Scope.Impersonation (internal/api/policy/scope.go)
+		// refuses on the same lookup failure too.
 		reason := "edge_impersonation_lookup_failed"
-		if errors.Is(sessionErr, errImpersonationUndecided) {
+		switch {
+		case errors.Is(scopeErr, errOrgUndecided):
+			reason = "edge_org_undecided"
+		case errors.Is(scopeErr, errImpersonationUndecided):
 			reason = "edge_impersonation_undecided"
 		}
 		log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
 			reason, r.URL.Path, envelopeRequestID(r))
 		return authctx.Claims{}, edgeUnavailable
 	}
-	if session != nil {
-		// The effective principal while impersonating is the TARGET's:
-		// org and role both, as the Python edge stated it to /query
-		// (principal_envelope.py effective_principal_identity).
+
+	role := ""
+	impersonationActive := session != nil
+	switch {
+	case impersonationActive:
+		// The effective principal while impersonating is the TARGET's: org
+		// and role both, from the session (principal_envelope.py
+		// effective_principal_identity). The session IS the authorization
+		// for the target org; an impersonating admin is deliberately not a
+		// member of it.
 		orgID = session.TargetOrgID.String()
 		role = session.TargetRole
-		impersonationActive = true
-	}
-
-	// Membership existence for the token's own claimed org (D2905
-	// condition 1) -- skipped only when impersonating (the live session
-	// above IS the authorization for the target org; an impersonating
-	// admin is deliberately not a member of it) or when orgID is empty
-	// (a platform-wide operation, e.g. productTelemetryPlatformDashboard,
-	// which Python itself calls with org_id="" -- schema.py:222).
-	if orgID != "" && !impersonationActive {
-		member, memberErr := edgeAuth.IsMember(ctx, user.UserID, orgID)
+	case orgID != "":
+		// One read of the membership row for the org the request acts in:
+		// its existence is the live membership check, its role is the
+		// caller's role there. The org scope read the same row when it
+		// verified an X-Org-Id, so within the request this is its answer.
+		memberRole, member, memberErr := edgeAuth.Membership(ctx, user.UserID, orgID)
 		if memberErr != nil {
 			log.Printf("query-api: internal request refused: reason=edge_membership_lookup_failed carrier=edge path=%s request_id=%s",
 				r.URL.Path, envelopeRequestID(r))
 			return authctx.Claims{}, edgeUnavailable
 		}
-		if !member {
+		orgRole, allowed := roleInOrg(user, orgID, memberRole, member)
+		if !allowed {
 			noteRefusal(r, "edge_not_a_member", "edge")
 			return authctx.Claims{}, edgeRefused
 		}
+		role = orgRole
+		orgID = canonicalOrg(orgID)
 	}
+	// No org at all (a platform-wide operation, e.g.
+	// productTelemetryPlatformDashboard, which Python itself calls with
+	// org_id="" -- schema.py:222): no membership, no role in an org.
 
 	internalidentity.RecordOutcome("edge", "accepted")
 	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive}, edgeAccepted
@@ -240,8 +285,8 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 // alg, the envelope's EdDSA included) is refused. A request with no
 // authenticator bound to it (edgeAuth nil) is refused as undecidable. The token itself is checked
 // exactly as /query's edge carrier checks it (authenticateEdgeCarrier), except
-// that the impersonation session is the one the middleware in front already
-// read (decidedImpersonation), never a second read.
+// that the org and the impersonation session are the ones the middleware in
+// front already decided (decidedScope), never a second read.
 func authenticateEdgeTokenOnly(r *http.Request, edgeAuth *policy.Authenticator) (authctx.Claims, edgeOutcome) {
 	if len(r.Header.Values("Authorization")) > 1 {
 		noteRefusal(r, "ambiguous_carrier", "authorization")
@@ -271,7 +316,7 @@ func authenticateEdgeTokenOnly(r *http.Request, edgeAuth *policy.Authenticator) 
 		noteRefusal(r, "not_an_edge_token", "edge")
 		return authctx.Claims{}, edgeRefused
 	}
-	return checkEdgeCarrier(r, edgeAuth, token, decidedImpersonation)
+	return checkEdgeCarrier(r, edgeAuth, token, decidedScope)
 }
 
 // refuseAmbiguousCarrier answers 401 and reports true when the request

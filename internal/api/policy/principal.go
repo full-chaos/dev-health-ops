@@ -52,8 +52,9 @@ type Store interface {
 	// UserState returns the users row for id; found is false when there is
 	// none.
 	UserState(ctx context.Context, id uuid.UUID) (state UserState, found bool, err error)
-	// IsMember reports whether a memberships row links user and org.
-	IsMember(ctx context.Context, userID, orgID uuid.UUID) (bool, error)
+	// Membership reads the memberships row linking user and org: the role
+	// the user holds in that org, and whether the row exists at all.
+	Membership(ctx context.Context, userID, orgID uuid.UUID) (role string, member bool, err error)
 	// ActiveImpersonation returns the admin's unexpired, unended session, or
 	// nil.
 	ActiveImpersonation(ctx context.Context, adminID uuid.UUID) (*Impersonation, error)

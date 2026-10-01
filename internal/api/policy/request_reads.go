@@ -30,6 +30,7 @@ type userRead struct {
 }
 
 type memberRead struct {
+	role   string
 	member bool
 	err    error
 }

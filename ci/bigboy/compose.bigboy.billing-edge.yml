@@ -7,7 +7,9 @@
 #   * the three values the listener needs reach go-api BY NAME from the stack's env file (--env-file ops/.env):
 #     they are never written here. Unset, the listener's /health names the missing one (503), as the Python edge did.
 #   * `billing-edge` is moved to a profile nothing enables, so `up` never starts it and `ps` never lists it;
-#     the cut also runs `docker compose ... rm -sf billing-edge` once to remove the existing container.
+#     the existing container is removed BEFORE the cut's `up` (`docker compose ... rm -sf billing-edge`, one approved
+#     line on the lead's GO): until it is gone two containers claim Host(`billing.localhost`). The go-api router is
+#     named `billing-go`, not `billing`, so the old container's router `billing` is never redefined while both exist.
 services:
   go-api:
     command: !override
@@ -20,10 +22,10 @@ services:
     labels:
       traefik.enable: "true"
       traefik.scope: dev-health
-      traefik.http.routers.billing.rule: Host(`billing.localhost`)
-      traefik.http.routers.billing.entrypoints: web
-      traefik.http.routers.billing.service: billing
-      traefik.http.services.billing.loadbalancer.server.port: "8010"
+      traefik.http.routers.billing-go.rule: Host(`billing.localhost`)
+      traefik.http.routers.billing-go.entrypoints: web
+      traefik.http.routers.billing-go.service: billing-go
+      traefik.http.services.billing-go.loadbalancer.server.port: "8010"
   billing-edge:
     profiles:
       - retired-billing-edge

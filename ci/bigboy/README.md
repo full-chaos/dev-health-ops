@@ -352,8 +352,13 @@ missing one with a 503); the Python `billing-edge` service moves to the profile 
 nothing enables. The file is in `bigboy-cut.sh`'s `COMPOSE_FILE` chain before the router (the router stays
 last), so go-api is never recreated without them.
 
-Applying it recreates go-api, so it goes in with a cut, never on its own while go-api is in use. The Python
-service is base-file drift (not recreated by the cut): remove its existing container once with compose verbs
-(`docker compose ... rm -sf billing-edge`, naming the container and its state first). Read the rendered chain only
-through `compose-config-redacted.sh`. Proof: the billing host answers from go-api :8010 through traefik, and
+Applying it recreates go-api, so it goes in with a cut, never on its own while go-api is in use, and the
+checkout the cut's scripts read (line 39's list) is pulled to the merge right before that cut, not earlier. ORDER:
+(1) name the Python container and its state (`docker compose ps billing-edge`), (2) remove it with compose verbs
+(`docker compose ... rm -sf billing-edge`; it is base-file drift, the cut has no rm step; one approved line, run
+on the lead's GO), (3) run the cut. The go-api router is `billing-go` so the old container's router `billing` is
+never redefined while both exist. All three values are present in `ops/.env` on this host (checked by name and length only), so the listener starts
+configured; whether go-api starts with them EMPTY was not executed (compose.go.workers.yml's go-api comment says its
+`/health` then answers 503 naming the missing one). Read the rendered chain only through
+`compose-config-redacted.sh`. Proof: the billing host answers from go-api :8010 through traefik, and
 `docker compose ps` no longer lists `billing-edge`.

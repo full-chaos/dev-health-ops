@@ -66,12 +66,12 @@ func TestGoAPIGetsTheBillingListenerAndTheRouterLabels(t *testing.T) {
 		t.Fatalf("go-api command = %v, want %v", goAPI.Command, want)
 	}
 	want := map[string]string{
-		"traefik.enable":                                         "true",
-		"traefik.scope":                                          "dev-health",
-		"traefik.http.routers.billing.rule":                      "Host(`billing.localhost`)",
-		"traefik.http.routers.billing.entrypoints":               "web",
-		"traefik.http.routers.billing.service":                   "billing",
-		"traefik.http.services.billing.loadbalancer.server.port": "8010",
+		"traefik.enable":                                            "true",
+		"traefik.scope":                                             "dev-health",
+		"traefik.http.routers.billing-go.rule":                      "Host(`billing.localhost`)",
+		"traefik.http.routers.billing-go.entrypoints":               "web",
+		"traefik.http.routers.billing-go.service":                   "billing-go",
+		"traefik.http.services.billing-go.loadbalancer.server.port": "8010",
 	}
 	if !reflect.DeepEqual(goAPI.Labels, want) {
 		t.Fatalf("go-api labels = %v, want %v", goAPI.Labels, want)

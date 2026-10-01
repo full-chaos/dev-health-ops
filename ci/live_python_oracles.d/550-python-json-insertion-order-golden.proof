@@ -1,0 +1,2 @@
+name=python-json-insertion-order-golden
+message=python json.dumps insertion-order golden did not compare against live Python

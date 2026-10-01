@@ -1,0 +1,4 @@
+label=internal/streamhandlers (external-ingest worker normalize_batch orchestration vs live Python, CHAOS-6345)
+package=./internal/streamhandlers
+run=^TestNormalizeExternalRecordsMatchesLivePythonNormalizeBatch$
+python=1

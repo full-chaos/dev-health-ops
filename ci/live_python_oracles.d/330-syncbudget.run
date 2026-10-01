@@ -1,0 +1,3 @@
+label=internal/syncbudget (in-process budget estimator vs live Python, CHAOS-6243)
+package=./internal/syncbudget
+run=^TestBudgetEstimatorMatchesLivePython$

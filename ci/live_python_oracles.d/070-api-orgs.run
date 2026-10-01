@@ -1,0 +1,3 @@
+label=internal/api/orgs (api decisions vs live Python)
+package=./internal/api/orgs
+run=^(TestRegistryMatchesLivePython)$

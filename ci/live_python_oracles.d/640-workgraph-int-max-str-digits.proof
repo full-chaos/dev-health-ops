@@ -1,0 +1,2 @@
+name=workgraph-int-max-str-digits
+message=int_max_str_digits was not read back from live Python

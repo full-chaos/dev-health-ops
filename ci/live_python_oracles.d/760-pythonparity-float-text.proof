@@ -1,0 +1,2 @@
+name=pythonparity-float-text
+message=the CPython float round/repr/format golden was not re-derived from the live interpreter

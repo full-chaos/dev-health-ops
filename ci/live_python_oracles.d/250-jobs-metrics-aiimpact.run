@@ -1,0 +1,4 @@
+label=internal/jobs/metrics/aiimpact (repo-team pattern resolver vs live Python, CHAOS-4280)
+package=./internal/jobs/metrics/aiimpact
+run=^TestRepoPatternResolverMatchesLivePython$
+python=1

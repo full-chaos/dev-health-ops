@@ -1,0 +1,4 @@
+label=internal/jobs/workgraph/edges (frozen issue<->issue edge golden vs live Python)
+package=./internal/jobs/workgraph/edges
+run=^(TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython|TestEveryRuneLowercasesLikeLivePython)$
+python=1

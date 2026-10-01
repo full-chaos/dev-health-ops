@@ -1,0 +1,3 @@
+label=internal/api/policy (api decisions vs live Python)
+package=./internal/api/policy
+run=^(TestPrincipalMatchesLivePythonAuthService)$

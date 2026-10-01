@@ -1,0 +1,3 @@
+label=internal/queryapi/server (POST body validation vs live FastAPI request models)
+package=./internal/queryapi/server
+run=^TestQueryAPIBodiesMatchLiveFastAPI$

@@ -1,0 +1,3 @@
+label=internal/providerfoundation (live Python encryption + credential field-read compatibility)
+package=./internal/providerfoundation/...
+run=^(TestFernetCipherMatchesLivePythonCustomSalt|TestFernetCipherMatchesLivePythonDefaultSalt|TestFernetRefusesWithoutKeyLikePython|TestCredentialFieldReadsMatchLivePython|TestCredentialFieldGridMatchesLivePython)$

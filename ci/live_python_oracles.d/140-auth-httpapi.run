@@ -1,0 +1,3 @@
+label=internal/auth/httpapi (redirect scheme vs live uvicorn, limit strings vs live limits)
+package=./internal/auth/httpapi
+run=^(TestForwardedSchemeMatchesLiveUvicorn|TestParseLimitMatchesLivePython)$

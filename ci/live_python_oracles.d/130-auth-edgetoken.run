@@ -1,0 +1,3 @@
+label=internal/auth/edgetoken (Go-signed session tokens vs the live AuthService)
+package=./internal/auth/edgetoken
+run=^(TestSignerMatchesLiveAuthService)$

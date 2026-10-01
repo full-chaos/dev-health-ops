@@ -1,0 +1,4 @@
+label=internal/mail (SMTP wire format and Resend requests/outcomes vs the live Python email service)
+package=./internal/mail
+run=^(TestSMTPSenderMatchesLivePythonSMTPProvider|TestResendSenderMatchesLivePythonResendProvider)$
+python=1

@@ -1,0 +1,2 @@
+name=externalingest-operational-host
+message=externalingest live Python oracle externalingest-operational-host did not run

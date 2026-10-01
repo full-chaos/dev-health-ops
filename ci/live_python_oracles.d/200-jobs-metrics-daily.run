@@ -1,0 +1,4 @@
+label=internal/jobs/metrics/daily (live Python repository discovery source is outside the Go embed/cache boundary)
+package=./internal/jobs/metrics/daily
+run=^TestPythonDiscoverReposOracle$
+python=1

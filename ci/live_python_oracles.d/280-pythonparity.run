@@ -1,0 +1,4 @@
+label=internal/pythonparity (frozen json.dumps golden vs live Python)
+package=./internal/pythonparity
+run=^(TestPythonJSONGoldenMatchesLivePython|TestPythonJSONInsertionOrderGoldenMatchesLivePython|TestReprBandGoldenMatchesLivePython|TestEdgeShapesGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$
+python=1

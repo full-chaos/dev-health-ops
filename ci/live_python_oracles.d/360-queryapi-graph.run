@@ -1,0 +1,3 @@
+label=internal/queryapi/graph (operation org guard vs the live OrgIdAuthExtension)
+package=./internal/queryapi/graph
+run=^TestOperationOrgViolationMatchesLivePythonExtension$

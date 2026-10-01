@@ -1,0 +1,3 @@
+label=internal/pythonparity (float round/repr/format mirrors vs the live interpreter)
+package=./internal/pythonparity/...
+run=^TestFloatTextGoldenMatchesLivePython$

@@ -1,0 +1,3 @@
+label=internal/api/licensing (tier feature registry and limits vs live Python)
+package=./internal/api/licensing
+run=^(TestTierFeaturesMatchLivePython|TestSignLicenseMatchesLivePython|TestPythonB64DecodeMatchesLivePython|TestBigDurationLicensesVerifyIdenticallyGoSignedAndPythonSigned)$

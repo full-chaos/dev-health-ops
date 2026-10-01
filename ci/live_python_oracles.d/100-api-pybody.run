@@ -1,0 +1,3 @@
+label=internal/api/pybody (api decisions vs live Python)
+package=./internal/api/pybody
+run=^(TestQueryIntMatchesLivePydantic|TestQueryBoolMatchesLivePydantic|TestBodyIntMatchesLivePydantic|TestQueryUUIDMatchesLivePydantic|TestEmailStrMatchesLiveFastAPI|TestStringMatchesLivePydantic|TestDateAndAwareDatetimeMatchLivePydantic)$

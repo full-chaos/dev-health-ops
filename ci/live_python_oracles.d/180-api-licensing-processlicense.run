@@ -1,0 +1,3 @@
+label=internal/api/licensing/processlicense (process-license verifier vs the live Python LicenseValidator)
+package=./internal/api/licensing/processlicense
+run=^(TestVerifierMatchesLivePythonLicenseValidator)$

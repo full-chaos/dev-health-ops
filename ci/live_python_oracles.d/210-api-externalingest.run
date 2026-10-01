@@ -1,0 +1,4 @@
+label=internal/api/externalingest (schema bundle, operational host, envelope validation vs live Python)
+package=./internal/api/externalingest
+run=^(TestOperationalProviderInstanceMatchesLivePython|TestEnvelopeValidationMatchesLivePython|TestDataPlaneEnvelopeParseMatchesLivePython)$
+python=1

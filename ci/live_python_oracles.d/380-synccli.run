@@ -1,0 +1,3 @@
+label=internal/synccli (dho sync <target> request handling vs the REAL dev-hops argparse, preflight and run_sync_target; the --search batch loop vs the REAL process_*_batch)
+package=./internal/synccli
+run=^(TestSyncTargetMatchesLivePython|TestBatchLoopMatchesLivePython)$

@@ -1,0 +1,2 @@
+name=query-api-principal-envelope
+message=the Go effective-principal verifier was not compared against a real Python-issued envelope

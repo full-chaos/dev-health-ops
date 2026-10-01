@@ -1,0 +1,4 @@
+label=internal/api/recordvalidation (record models and record validation vs live Python)
+package=./internal/api/recordvalidation
+run=^(TestRecordModelsGoldenMatchesLivePython|TestRecordValidationMatchesLivePython)$
+python=1

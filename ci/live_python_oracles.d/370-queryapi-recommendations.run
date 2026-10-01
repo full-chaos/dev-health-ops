@@ -1,0 +1,3 @@
+label=internal/queryapi/recommendations (evidence and window goldens vs the live Python)
+package=./internal/queryapi/recommendations
+run=^TestGoldensAreWhatPythonProducesNow$

@@ -1,0 +1,3 @@
+label=internal/api/pyjson (api decisions vs live Python)
+package=./internal/api/pyjson
+run=^(TestMarshalMatchesLivePythonJSONDumps|TestDecodeBodyMatchesLivePythonJSONLoads|TestDumpsMatchesLivePythonJSONDumpsDefault|TestMarshalModelAndReprMatchLivePydantic|TestSyntaxErrorTextMatchesLivePython)$

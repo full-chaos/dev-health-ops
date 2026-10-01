@@ -1,0 +1,3 @@
+label=internal/api/health (api decisions vs live Python)
+package=./internal/api/health
+run=^(TestSchemaRevisionsMatchLivePythonAlembic)$

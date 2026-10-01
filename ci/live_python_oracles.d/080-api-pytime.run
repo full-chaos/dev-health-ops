@@ -1,0 +1,3 @@
+label=internal/api/pytime (api decisions vs live Python)
+package=./internal/api/pytime
+run=^(TestParseDatetimeMatchesLivePydantic|TestParseDateMatchesLivePydantic|TestDatetimeReasonMatchesLivePydantic|TestFromISOFormatMatchesLivePython|TestPydanticMatchesLivePydanticDumpJSON)$

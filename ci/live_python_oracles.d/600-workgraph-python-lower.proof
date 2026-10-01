@@ -1,0 +1,2 @@
+name=workgraph-python-lower
+message=pythonLower was not re-derived against live str.lower()

@@ -23,6 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECK_GO = ROOT / "ci" / "check_go.sh"
+ORACLE_ENTRIES = ROOT / "ci" / "live_python_oracles.d"
 ORACLE_ENV = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
 
 _RUN_ARGUMENT = re.compile(r"-run\s+'\^?\(?([^']*?)\)?\$'")
@@ -52,6 +53,16 @@ def live_oracle_tests(root: Path) -> list[tuple[str, str]]:
     return found
 
 
+def entry_selectors(directory: Path) -> str:
+    """The entries of ci/live_python_oracles.d as the ``go test -run`` text they run."""
+    lines = []
+    for entry in sorted(directory.glob("*.run")):
+        for line in entry.read_text().splitlines():
+            if line.startswith("run="):
+                lines.append(f"go test -run '{line[4:]}' x")
+    return "\n".join(lines)
+
+
 def unregistered(root: Path, script: str) -> list[str]:
     selected = selected_test_names(script)
     return [
@@ -66,7 +77,9 @@ def test_every_live_oracle_test_is_run_by_ci() -> None:
     # The enumeration itself must not silently go empty (rule: a measurement
     # that did not happen fails).
     assert len(oracles) >= 40, f"only {len(oracles)} live-oracle tests found"
-    missing = unregistered(ROOT, CHECK_GO.read_text())
+    entries = entry_selectors(ORACLE_ENTRIES)
+    assert entries, f"{ORACLE_ENTRIES} holds no -run selector: the entries moved and this guard went blind"
+    missing = unregistered(ROOT, CHECK_GO.read_text() + "\n" + entries)
     assert not missing, (
         "live-Python oracle tests that ci/check_go.sh never runs (add the name to "
         "its live-python-oracles -run selector with a proof-file check, or name "

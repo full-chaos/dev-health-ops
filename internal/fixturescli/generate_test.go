@@ -393,6 +393,9 @@ const frozenStampWindow = 30 * time.Minute
 
 var randomIDText = regexp.MustCompile(`^([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 
+// maxTiesNamed is how many pairs of tied rows worldContent names per table.
+const maxTiesNamed = 3
+
 // worldContent is what two runs of the producer pinned to one instant must agree on, and what the
 // oracle compares a fresh run with the frozen world on. Per table: "#rows", "#columns", and one entry
 // per column: the digest of its values for a pinned column; for a random id the digest of the ids
@@ -428,6 +431,39 @@ func worldContent(tables []WorldTable, from, to time.Time) (content map[string]m
 			order[index] = index
 		}
 		sort.SliceStable(order, func(i, j int) bool { return pinnedKey[order[i]] < pinnedKey[order[j]] })
+		// Rows equal on every pinned column have no order of their own. When such rows carry
+		// different random ids, the order their ids are renamed in is not defined, so the table
+		// cannot be compared: that is a problem, never a guess.
+		var idColumns []int
+		for index, column := range table.Columns {
+			if unpinned, listed := unpinnedColumns[table.Name][column.Name]; listed && unpinned.class == randomID {
+				idColumns = append(idColumns, index)
+			}
+		}
+		rowIDs := func(rowIndex int) string {
+			ids := make([]any, 0, len(idColumns))
+			for _, index := range idColumns {
+				if index < len(table.Rows[rowIndex]) {
+					ids = append(ids, table.Rows[rowIndex][index])
+				}
+			}
+			raw, _ := json.Marshal(ids)
+			return string(raw)
+		}
+		ties := 0
+		for position := 1; position < len(order) && len(idColumns) > 0; position++ {
+			first, next := order[position-1], order[position]
+			if pinnedKey[first] != pinnedKey[next] || rowIDs(first) == rowIDs(next) {
+				continue
+			}
+			if ties++; ties <= maxTiesNamed {
+				problems = append(problems, fmt.Sprintf("%s: rows %d and %d are equal on every pinned column and carry different random ids (%s and %s): the order their ids are renamed in is not defined, so the table cannot be compared; pinned content %s",
+					table.Name, first, next, rowIDs(first), rowIDs(next), pinnedKey[first]))
+			}
+		}
+		if ties > maxTiesNamed {
+			problems = append(problems, fmt.Sprintf("%s: %d more pairs of rows equal on every pinned column with different random ids", table.Name, ties-maxTiesNamed))
+		}
 		for index, column := range table.Columns {
 			unpinned, listed := unpinnedColumns[table.Name][column.Name]
 			values := make([]string, 0, len(table.Rows))
@@ -554,6 +590,17 @@ func TestWorldContentComparesValuesAndHoldsUnpinnedColumnsToTheirClass(t *testin
 	if diff := contentDiff(same, want); len(diff) != 0 || len(problems) != 0 {
 		t.Fatalf("a run that differs only in unpinned values is reported: %v %v", diff, problems)
 	}
+	// Rows equal on every pinned column are a tie only where their random ids differ: the same
+	// id on both, or a table with no random id, has one content whatever the order.
+	for name, edit := range map[string]func(tables []WorldTable){
+		"tied rows of one run":              func(tables []WorldTable) { tables[3].Rows[1][0] = "w1" },
+		"equal rows in a table with no id":  func(tables []WorldTable) { tables[0].Rows[1] = []any{"a1", "2026-09-30 10:00:00.000"} },
+		"equal rows that differ in a stamp": func(tables []WorldTable) { tables[1].Rows[1][0] = "main.go" },
+	} {
+		if _, problems := worldContent(world(edit), from, to); len(problems) != 0 {
+			t.Errorf("%s: reported as a tie: %v", name, problems)
+		}
+	}
 	for name, c := range map[string]struct {
 		edit    func(tables []WorldTable)
 		diff    string // a contentDiff line must hold it
@@ -581,6 +628,11 @@ func TestWorldContentComparesValuesAndHoldsUnpinnedColumnsToTheirClass(t *testin
 			tables[0].Rows[1] = append(tables[0].Rows[1], "2026-10-01 02:00:10.000")
 		}, "git_commits.synced_at", ""},
 		"a table more": {func(tables []WorldTable) { tables[0].Name = "git_commits_2" }, "git_commits_2.#rows", ""},
+		"two rows equal on every pinned column with different ids": {func(tables []WorldTable) { tables[2].Rows[1][0] = "t1" }, "", "teams: rows 0 and 1 are equal on every pinned column and carry different random ids"},
+		"tied rows, one without its id": {func(tables []WorldTable) {
+			tables[3].Rows[1][0] = "w1"
+			tables[3].Rows[1][1] = nil
+		}, "", "work_unit_membership: rows 0 and 1 are equal on every pinned column"},
 	} {
 		got, problems := worldContent(world(c.edit), from, to)
 		diff := strings.Join(contentDiff(got, want), "\n")

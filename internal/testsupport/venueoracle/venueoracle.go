@@ -448,6 +448,11 @@ type Venue struct {
 
 	postgresURI string
 	pythonEnv   []string
+	// hostEnv is the values of the inherited names (inheritedPythonEnv) when
+	// the venue was built, PATH with the interpreter's directory first: what
+	// every Python child of this venue gets for them, whatever the process
+	// holds later.
+	hostEnv map[string]string
 
 	// ClickHouse (CHAOS-6310): one server, two databases. PythonClickHouseDB
 	// is what CLICKHOUSE_URI (Python's env) names; GoClickHouseDB is what
@@ -515,6 +520,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		}
 		v.Python = filepath.Join(bin, "python3")
 	}
+	v.hostEnv = inheritedValues(map[string]string{})
 
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -597,8 +603,12 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 
 	async := strings.Replace(v.AdminURI(t, v.SourceDB), "postgres://", "postgresql+asyncpg://", 1)
 	async = strings.Replace(async, "postgresql://", "postgresql+asyncpg://", 1)
-	v.pythonEnv = pythonPlaneEnv(options, inheritedValues(map[string]string{"PYTHONPATH": filepath.Join(options.Root, "src"), "POSTGRES_URI": async,
-		"REDIS_URL": v.PythonValkeyURI, "CLICKHOUSE_URI": v.AdminClickHouseHTTPURI(t, v.PythonClickHouseDB)}))
+	perRun := map[string]string{"PYTHONPATH": filepath.Join(options.Root, "src"), "POSTGRES_URI": async,
+		"REDIS_URL": v.PythonValkeyURI, "CLICKHOUSE_URI": v.AdminClickHouseHTTPURI(t, v.PythonClickHouseDB)}
+	for name, value := range v.hostEnv {
+		perRun[name] = value
+	}
+	v.pythonEnv = pythonPlaneEnv(options, perRun)
 
 	// 1. The real schema, then one seed and its tokens.
 	if goSchema {
@@ -832,15 +842,37 @@ func (v *Venue) pythonChildEnv() []string {
 	return append(testSetEnv(), v.pythonEnv...)
 }
 
+// pythonCommand is the one way this package starts a Python child: the
+// program is the constant name "python3", found through PATH as an activated
+// environment finds it, and the launch is refused unless what PATH gives is
+// the interpreter the venue fixed when it was built (Start put its directory
+// first on PATH). The lookup reads the process's PATH at this moment, which
+// is in no key: a PATH that changed since Start would run another interpreter
+// under an unchanged key, so it is an error and never a launch.
+func (v *Venue) pythonCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
+	command := exec.CommandContext(ctx, "python3", args...)
+	switch {
+	case v.Python == "":
+		return nil, fmt.Errorf("venue: this venue fixed no Python interpreter (python3 %v)", args)
+	case command.Err != nil:
+		return nil, fmt.Errorf("venue: python3 is not found through PATH any more (%v); the venue's interpreter is %s: PATH changed after the venue was built", command.Err, v.Python)
+	case command.Path != v.Python:
+		return nil, fmt.Errorf("venue: python3 through PATH is now %s, the venue's interpreter is %s: PATH changed after the venue was built, and another interpreter would answer under the same key", command.Path, v.Python)
+	}
+	return command, nil
+}
+
 func (v *Venue) runPython(t *testing.T, stdin any, args ...string) []byte {
 	t.Helper()
 	if v.frozen {
 		t.Fatalf("venue: a frozen venue runs no Python (python %v)", args)
 	}
-	// Start put the chosen interpreter's directory first on PATH. The
-	// program is the compiled-in pythonProgram; only its mode and the JSON
+	// The program is the compiled-in pythonProgram; only its mode and the JSON
 	// on stdin vary.
-	command := exec.Command("python3", append([]string{"-c", pythonProgram}, args...)...)
+	command, err := v.pythonCommand(context.Background(), append([]string{"-c", pythonProgram}, args...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The child's whole environment: what the test set in the process, then
 	// the plane's entries (a later entry wins). Nothing else is inherited.
 	command.Env = v.pythonChildEnv()
@@ -853,7 +885,7 @@ func (v *Venue) runPython(t *testing.T, stdin any, args ...string) []byte {
 	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
+	err = command.Run()
 	if path := os.Getenv("DEV_HEALTH_VENUE_PY_LOG"); path != "" {
 		_ = os.WriteFile(path+"."+args[0], stderr.Bytes(), 0o600)
 	}
@@ -873,12 +905,15 @@ func (v *Venue) runPython(t *testing.T, stdin any, args ...string) []byte {
 // runs against GoClickHouseDB.
 func (v *Venue) migrateClickHouse(t *testing.T, ctx context.Context, database string) {
 	t.Helper()
-	command := exec.CommandContext(ctx, "python3", "-m", "dev_health_ops.cli", "migrate", "clickhouse", "upgrade")
+	command, err := v.pythonCommand(ctx, "-m", "dev_health_ops.cli", "migrate", "clickhouse", "upgrade")
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The child's whole environment: what the test set in the process, the
-	// inherited names (PATH carries the activated interpreter: Start put its
-	// directory first) and the interpreter's settings, and this call's two
-	// own entries. Nothing else is inherited.
-	command.Env = append(append(testSetEnv(), interpreterEnv(inheritedValues(map[string]string{}))...),
+	// inherited names as the venue fixed them when it was built (PATH carries
+	// the activated interpreter) and the interpreter's settings, and this
+	// call's two own entries. Nothing else is inherited.
+	command.Env = append(append(testSetEnv(), interpreterEnv(v.hostEnv)...),
 		"PYTHONPATH="+filepath.Join(v.Root, "src"), "CLICKHOUSE_URI="+v.AdminClickHouseHTTPURI(t, database))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("clickhouse migrate %s: %v\n%s", database, err, output)

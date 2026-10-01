@@ -331,8 +331,14 @@ func TestThePlaneEnvironmentAndItsFirstKeyVersion(t *testing.T) {
 // holds extra, and returns the child's output.
 func probeChild(t *testing.T, mark string, extra ...string) (string, error) {
 	t.Helper()
+	return probeChildAs(t, mark, "1", extra...)
+}
+
+// probeChildAs runs this test again in a child process with mark set to value.
+func probeChildAs(t *testing.T, mark, value string, extra ...string) (string, error) {
+	t.Helper()
 	command := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
-	command.Env = append(append(os.Environ(), mark+"=1"), extra...)
+	command.Env = append(append(os.Environ(), mark+"="+value), extra...)
 	output, err := command.CombinedOutput()
 	return string(output), err
 }
@@ -351,7 +357,7 @@ func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
 		return
 	}
 	dir := t.TempDir()
-	names := []string{"VENUE_AMBIENT_ONLY", "VENUE_AMBIENT_SAME", "VENUE_SET_BY_TEST", "TRUSTED_PROXIES", "PYTHONHASHSEED", "TZ", "LANG", "HOME", "PATH", "JWT_SECRET_KEY", "ENVIRONMENT", "EXTRA_FOR_ONE_CALL", "OTEL_SDK_DISABLED", mark}
+	names := []string{"VENUE_AMBIENT_ONLY", "VENUE_AMBIENT_SAME", "VENUE_SET_BY_TEST", "TRUSTED_PROXIES", "PYTHONHASHSEED", "TZ", "LANG", "HOME", "PATH", "TMPDIR", "JWT_SECRET_KEY", "ENVIRONMENT", "EXTRA_FOR_ONE_CALL", "OTEL_SDK_DISABLED", mark}
 	// The stand-in prints what it sees, and keeps it in a file beside itself for the launch that reads no output.
 	script := "#!/bin/sh\nout=\"\"\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; out=\"$out $n=$v\"; done\necho \"$out\" > \"$(dirname \"$0\")/last.out\"\necho \"$out\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "python3"), []byte(script), 0o755); err != nil {
@@ -363,7 +369,16 @@ func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
 	t.Setenv("VENUE_AMBIENT_SAME", "same")   // the value it already has: the snapshot cannot see this one
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1") // an ambient variable the test gives another value
 	t.Setenv("OTEL_SDK_DISABLED", "false")   // a name the plane sets itself: the plane's value wins, as it did
-	venue := &Venue{pythonEnv: pythonPlaneEnv(Options{JWTKey: "k"}, inheritedValues(map[string]string{}))}
+	// As Start does: the inherited values are fixed when the venue is built.
+	host := inheritedValues(map[string]string{})
+	venue := &Venue{Python: filepath.Join(dir, "python3"), hostEnv: host, pythonEnv: pythonPlaneEnv(Options{JWTKey: "k"}, inheritedValues(map[string]string{}))}
+	// An inherited name the process changes after the venue was built: the
+	// children keep the value the venue fixed.
+	tmpAtBuild, held := os.LookupEnv("TMPDIR")
+	if !held {
+		tmpAtBuild = "<unset>" // a name the process did not hold is not handed on
+	}
+	t.Setenv("TMPDIR", filepath.Join(dir, "changed-after-the-venue-was-built"))
 	seen := func(v *Venue) map[string]string {
 		out := map[string]string{}
 		for _, field := range strings.Fields(string(v.runPython(t, nil, "probe"))) {
@@ -391,8 +406,8 @@ func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
 			t.Errorf("the Python child sees %s=%q, want %q", name, got[name], want)
 		}
 	}
-	if got["HOME"] == "<unset>" || !strings.HasPrefix(got["PATH"], dir) {
-		t.Errorf("the inherited names did not reach the child: HOME=%q PATH=%q", got["HOME"], got["PATH"])
+	if got["HOME"] == "<unset>" || !strings.HasPrefix(got["PATH"], dir) || got["TMPDIR"] != tmpAtBuild {
+		t.Errorf("the inherited names did not reach the child as the venue fixed them: HOME=%q PATH=%q TMPDIR=%q (at build %q)", got["HOME"], got["PATH"], got["TMPDIR"], tmpAtBuild)
 	}
 	// One call's extra entries reach that call's child only, and win over the plane's.
 	clone := *venue
@@ -401,7 +416,7 @@ func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
 		t.Errorf("a call's extra entries: %v", extra)
 	}
 	// The other Python child of the harness, the ClickHouse migration: the same rule.
-	migration := &Venue{Root: dir, clickHouseHTTPURI: "http://default:pw@127.0.0.1:1/source"}
+	migration := &Venue{Root: dir, Python: venue.Python, hostEnv: host, clickHouseHTTPURI: "http://default:pw@127.0.0.1:1/source"}
 	migration.migrateClickHouse(t, context.Background(), "target")
 	raw, err := os.ReadFile(filepath.Join(dir, "last.out"))
 	if err != nil {
@@ -417,9 +432,97 @@ func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
 			t.Errorf("the migration child sees %s=%q, want %q", name, migrated[name], want)
 		}
 	}
+	if !strings.HasPrefix(migrated["PATH"], dir) || migrated["HOME"] == "<unset>" || migrated["TMPDIR"] != tmpAtBuild {
+		t.Errorf("the inherited names did not reach the migration child as the venue fixed them: HOME=%q PATH=%q TMPDIR=%q (at build %q)", migrated["HOME"], migrated["PATH"], migrated["TMPDIR"], tmpAtBuild)
+	}
 	// What the child sees of the test's variables is what the key holds.
 	if set := strings.Join(testSetEnv(), " "); !strings.Contains(set, "VENUE_SET_BY_TEST=by-test") || !strings.Contains(set, "TRUSTED_PROXIES=127.0.0.1") || strings.Contains(set, "VENUE_AMBIENT") || strings.Contains(set, "PATH=") {
 		t.Errorf("the test-set variables for the key: %q", set)
+	}
+}
+
+// standInPython writes an executable python3 into a new directory; run, it
+// leaves a file named ran beside itself and prints label.
+func standInPython(t *testing.T, label string) (dir, program string) {
+	t.Helper()
+	dir = t.TempDir()
+	program = filepath.Join(dir, "python3")
+	if err := os.WriteFile(program, []byte("#!/bin/sh\ntouch \"$(dirname \"$0\")/ran\"\necho "+label+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir, program
+}
+
+// Which program runs as the Python child is an input too. The name is looked
+// up through the process's PATH at launch, and PATH is in no key, so the
+// launch is refused unless the lookup gives the interpreter the venue fixed
+// when it was built.
+func TestAPythonChildIsOnlyTheInterpreterTheVenueFixed(t *testing.T) {
+	ctx := context.Background()
+	own, program := standInPython(t, "own")
+	other, _ := standInPython(t, "other")
+	empty := t.TempDir()
+	venue := &Venue{Python: program}
+	for _, row := range []struct {
+		name, path, refusal string
+	}{
+		{"PATH as the venue left it", own + string(os.PathListSeparator) + other, ""},
+		{"another interpreter put first after the venue was built", other + string(os.PathListSeparator) + own, "another interpreter would answer under the same key"},
+		{"the venue's directory gone from PATH, another interpreter left", other, "another interpreter would answer under the same key"},
+		{"no python3 on PATH any more", empty, "is not found through PATH any more"},
+	} {
+		t.Setenv("PATH", row.path)
+		command, err := venue.pythonCommand(ctx, "-c", "pass")
+		switch {
+		case row.refusal == "" && (err != nil || command.Path != program):
+			t.Errorf("%s: err %v, program %v, want %s", row.name, err, command, program)
+		case row.refusal != "" && (err == nil || !strings.Contains(err.Error(), row.refusal)):
+			t.Errorf("%s: err = %v, want a refusal holding %q", row.name, err, row.refusal)
+		}
+	}
+	t.Setenv("PATH", own)
+	if _, err := (&Venue{}).pythonCommand(ctx, "-c", "pass"); err == nil || !strings.Contains(err.Error(), "fixed no Python interpreter") {
+		t.Errorf("a venue with no interpreter: err = %v, want a refusal", err)
+	}
+}
+
+// The two real launches (the plane's process and the ClickHouse migration),
+// each in a child process whose PATH puts another python3 first after the
+// venue was built: the launch fails the test, and the other program never runs.
+func TestBothPythonLaunchesRefuseAnotherInterpreterOnPath(t *testing.T) {
+	const mark = "VENUEORACLE_CHILD_PATH_SWAP"
+	if site := os.Getenv(mark); site != "" {
+		own, program := standInPython(t, "own")
+		t.Setenv("PATH", own+string(os.PathListSeparator)+os.Getenv("PATH"))
+		venue := &Venue{Root: own, Python: program, hostEnv: inheritedValues(map[string]string{}), clickHouseHTTPURI: "http://default:pw@127.0.0.1:1/source"}
+		venue.pythonEnv = pythonPlaneEnv(Options{JWTKey: "k"}, inheritedValues(map[string]string{}))
+		other := os.Getenv(mark + "_OTHER")
+		if site != "control-run" && site != "control-migrate" {
+			t.Setenv("PATH", other+string(os.PathListSeparator)+os.Getenv("PATH"))
+		}
+		switch strings.TrimPrefix(site, "control-") {
+		case "run":
+			fmt.Printf("LAUNCHED %s\n", venue.runPython(t, nil, "probe"))
+		case "migrate":
+			venue.migrateClickHouse(t, context.Background(), "target")
+			fmt.Println("LAUNCHED migrate")
+		}
+		return
+	}
+	for _, site := range []string{"run", "migrate"} {
+		other, _ := standInPython(t, "other")
+		// Control: with PATH as the venue left it, the launch happens.
+		output, err := probeChildAs(t, mark, "control-"+site, mark+"_OTHER="+other)
+		if err != nil || !strings.Contains(output, "LAUNCHED") {
+			t.Fatalf("%s, control: the launch did not happen: %v\n%s", site, err, output)
+		}
+		output, err = probeChildAs(t, mark, site, mark+"_OTHER="+other)
+		if err == nil || !strings.Contains(output, "PATH changed after the venue was built") || strings.Contains(output, "LAUNCHED") {
+			t.Errorf("%s: another python3 first on PATH: err %v, want the launch refused\n%s", site, err, output)
+		}
+		if _, statErr := os.Stat(filepath.Join(other, "ran")); statErr == nil {
+			t.Errorf("%s: the other python3 ran", site)
+		}
 	}
 }
 

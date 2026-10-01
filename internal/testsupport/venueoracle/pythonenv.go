@@ -17,6 +17,11 @@ import (
 // process environment reaches it: not the shell's variables, not the CI
 // job's. All of it is in a golden's key (bindPythonEnv, callEnvKey).
 //
+// Which program runs as the child is fixed with it: the venue's interpreter is
+// chosen when the venue is built, every launch goes through pythonCommand,
+// which refuses another python3 that a later PATH would give, and the children
+// get the inherited names with the values the venue fixed at that moment.
+//
 // NOT pinned, two limits of telling "set by the test" from "ambient":
 //   - a test that sets a variable to the value it already has in the ambient
 //     environment is not seen (nothing changed), so the Python plane does not
@@ -24,6 +29,9 @@ import (
 //   - a live venue test that silently relied on an ambient variable of the
 //     shell or the CI job loses it; only a run of the gated venue tests shows
 //     that. Such a test declares the variable (t.Setenv or PythonEnv).
+//   - the interpreter's installed packages: they are the pinned checkout's
+//     own environment, built from the lock file of that build, and their
+//     bytes are in no key.
 //
 // NOT covered at all: a Golden.Produce oracle. Its Python child is started by
 // the test's own function, this package sets no environment there, and a

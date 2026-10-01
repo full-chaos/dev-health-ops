@@ -60,7 +60,7 @@ func TestFrozenGoldenAnswersFromTheFile(t *testing.T) {
 	if golden.Recording() {
 		t.Fatal("a frozen golden must not record")
 	}
-	answers, err := golden.frozenAnswers(requests)
+	answers, err := golden.frozenAnswers(requests, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,23 +114,23 @@ func TestFrozenGoldenRefusesWhatItCannotTrust(t *testing.T) {
 		t.Run("drift "+name, func(t *testing.T) {
 			changed := sampleRequests()
 			mutate(changed)
-			if _, err := golden.frozenAnswers(changed); err == nil || !strings.Contains(err.Error(), "regenerate") {
+			if _, err := golden.frozenAnswers(changed, ""); err == nil || !strings.Contains(err.Error(), "regenerate") {
 				t.Fatalf("error = %v, want a regeneration instruction", err)
 			}
 		})
 	}
 	// A shorter request list is served, and the answer it leaves unused is
 	// what Finish refuses; a longer one asks for more than the file holds.
-	if _, err := golden.frozenAnswers(sampleRequests()[:1]); err != nil {
+	if _, err := golden.frozenAnswers(sampleRequests()[:1], ""); err != nil {
 		t.Fatalf("a shorter request list: error = %v", err)
 	}
 	if err := golden.unusedAnswers(); err == nil || !strings.Contains(err.Error(), "holds 2 answers but the test asked for 1") {
 		t.Fatalf("an unused frozen answer: error = %v", err)
 	}
-	if _, err := golden.frozenAnswers(sampleRequests()); err == nil || !strings.Contains(err.Error(), "the test asks for 2 more") {
+	if _, err := golden.frozenAnswers(sampleRequests(), ""); err == nil || !strings.Contains(err.Error(), "the test asks for 2 more") {
 		t.Fatalf("more requests than answers left: error = %v", err)
 	}
-	if _, err := golden.frozenAnswers(sampleRequests()[1:]); err != nil {
+	if _, err := golden.frozenAnswers(sampleRequests()[1:], ""); err != nil {
 		t.Fatalf("the remaining request: error = %v", err)
 	}
 	if err := golden.unusedAnswers(); err != nil {
@@ -337,7 +337,7 @@ func TestRequestHeadersAreKeptInTheKeyAndABearerTokenByItsClaims(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := golden.frozenAnswers([]Request{sameCaller(`{"sub":"u1","role":"member","iat":1}`)}); err == nil || !strings.Contains(err.Error(), "regenerate") {
+	if _, err := golden.frozenAnswers([]Request{sameCaller(`{"sub":"u1","role":"member","iat":1}`)}, ""); err == nil || !strings.Contains(err.Error(), "regenerate") {
 		t.Fatalf("header drift was accepted: %v", err)
 	}
 }
@@ -699,29 +699,80 @@ func TestARecordingNeedsBytecodeWritingSwitchedOff(t *testing.T) {
 }
 
 // PythonWithEnv serves one request under several configurations: frozen it
-// answers each from the file, keyed by the request's Name (the environment is
-// executed only while recording), so a scenario whose name drifted is refused.
-func TestFrozenPythonWithEnvAnswersEachScenarioByName(t *testing.T) {
+// answers each from the file, keyed by the request's Name and by the key of
+// the call's extra environment, so a scenario whose name or whose environment
+// drifted is refused.
+func TestFrozenPythonWithEnvAnswersEachScenarioByNameAndEnvironment(t *testing.T) {
 	t.Setenv(goldenUpdateEnv, "")
 	requests := []Request{
 		{Name: "secrets=111 GET /health", Method: "GET", Path: "/health"},
 		{Name: "secrets=000 GET /health", Method: "GET", Path: "/health"},
+		{Name: "plain GET /health", Method: "GET", Path: "/health"},
 	}
-	file := sampleGolden(requests)
-	file.Header.Test = t.Name()
-	path, digest := writeGoldenFile(t, t.TempDir(), file)
+	unset := []string{"STRIPE_SECRET_KEY="}
+	unsetKey, _ := pythonEnvKey(unset)
+	noneKey, _ := pythonEnvKey(nil)
+	frozen := func(callEnv ...string) (string, string) {
+		file := sampleGolden(requests)
+		file.Header.Test = t.Name()
+		for index, key := range callEnv {
+			file.Requests[index].CallEnv = key
+		}
+		return writeGoldenFile(t, t.TempDir(), file)
+	}
+	path, digest := frozen(unsetKey, noneKey, "")
 	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
-	first := golden.PythonWithEnv(t, nil, []string{"STRIPE_SECRET_KEY="}, requests[:1])
-	second := golden.PythonWithEnv(t, nil, []string{"STRIPE_SECRET_KEY="}, requests[1:])
-	if first[0].Status != 200 || second[0].Status != 201 {
-		t.Fatalf("scenario answers = %d, %d; each scenario must get its own recorded answer", first[0].Status, second[0].Status)
+	first := golden.PythonWithEnv(t, nil, unset, requests[:1])
+	second := golden.PythonWithEnv(t, nil, nil, requests[1:2]) // no entry is an extra environment too
+	third := golden.Python(t, nil, requests[2:])
+	if first[0].Status != 200 || second[0].Status != 201 || third[0].Status != 202 {
+		t.Fatalf("scenario answers = %d, %d, %d; each scenario must get its own recorded answer", first[0].Status, second[0].Status, third[0].Status)
 	}
-	drifted, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, t.Name(), false)
+	open := func(callEnv ...string) *Golden {
+		path, digest := frozen(callEnv...)
+		opened, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, t.Name(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return opened
+	}
+	renamed := []Request{{Name: "secrets=101 GET /health", Method: "GET", Path: "/health"}}
+	if _, err := open(unsetKey).frozenAnswers(renamed, unsetKey); err == nil || !strings.Contains(err.Error(), "secrets=111 GET /health") {
+		t.Fatalf("a renamed scenario was answered from the file: %v", err)
+	}
+	otherKey, _ := pythonEnvKey([]string{"STRIPE_SECRET_KEY=", "LICENSE_PRIVATE_KEY="})
+	valueKey, _ := pythonEnvKey([]string{"STRIPE_SECRET_KEY=x"})
+	for name, c := range map[string]struct {
+		recorded, call string
+		refusal        string
+	}{
+		"an entry more in the call":               {unsetKey, otherKey, "recorded under another extra environment"},
+		"another value in the call":               {unsetKey, valueKey, "recorded under another extra environment"},
+		"the call passes no extra environment":    {unsetKey, "", "recorded under another extra environment"},
+		"an answer of the venue's own, with one":  {"", unsetKey, "recorded before a golden kept the key of a call's extra environment"},
+		"an answer of the venue's own, with none": {"", noneKey, "recorded before a golden kept the key of a call's extra environment"},
+	} {
+		_, err := open(c.recorded).frozenAnswers(requests[:1], c.call)
+		if err == nil || !strings.Contains(err.Error(), c.refusal) || !strings.Contains(err.Error(), "secrets=111 GET /health") {
+			t.Errorf("%s: err = %v, want a refusal holding %q and the scenario's name", name, err, c.refusal)
+		}
+		if err != nil && (strings.Contains(err.Error(), "STRIPE_SECRET_KEY") || strings.Contains(err.Error(), "LICENSE_PRIVATE_KEY")) {
+			t.Errorf("%s: the refusal shows an entry of the environment: %v", name, err)
+		}
+	}
+	// Recording: the key of the call's extra environment is stored with each of its answers, never an entry.
+	recording, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, t.Name(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	renamed := []Request{{Name: "secrets=101 GET /health", Method: "GET", Path: "/health"}}
-	if _, err := drifted.frozenAnswers(renamed); err == nil || !strings.Contains(err.Error(), "secrets=111 GET /health") {
-		t.Fatalf("a renamed scenario was answered from the file: %v", err)
+	live := func() []Response { return []Response{{Status: 200, Body: "{}"}} }
+	recording.answer(t, "PythonWithEnv", unsetKey, requests[:1], func() error { return nil }, live, nil)
+	recording.answer(t, "Python", "", requests[2:], func() error { return nil }, live, nil)
+	if got := recording.recorded.Requests; len(got) != 2 || got[0].CallEnv != unsetKey || got[1].CallEnv != "" {
+		t.Fatalf("recorded call environments: %+v", got)
+	}
+	raw, _ := json.Marshal(recording.recorded)
+	if strings.Contains(string(raw), "STRIPE_SECRET_KEY") || strings.Count(string(raw), "call_env") != 1 {
+		t.Fatalf("the recorded file holds an entry of the environment, or a key for the venue's own: %s", raw)
 	}
 }

@@ -34,9 +34,9 @@ const (
 // declaration line with no such word sharing the line: a scanner false
 // positive on a hex-digest test fixture is fixed by shape, never ignored.
 const (
-	pagerDutyAuthorizeFullGoldenDigest         = "221534550e01fe0067882f638288ba4c8c173c2c6dfdd90c94ea7e60f286843c"
-	pagerDutyAuthorizeUnconfiguredGoldenDigest = "904dc24d7b92f594a83bd0263cb59bf22268d391e3c0c5a771b85a9528464b9c"
-	pagerDutyAuthorizeNoEncryptionGoldenDigest = "32873a78f80d7fc59e29acf645db0469085fabab6f9794f9082230634911c2a4"
+	pagerDutyAuthorizeFullGoldenDigest         = "e6661cf8d7a7777c81b8291758b2bf7c578db83c83427ac0a5aaa66b71984018"
+	pagerDutyAuthorizeUnconfiguredGoldenDigest = "bb86324d617e55aa1280989f9b5dfb9629399c9244788d3f30430806f2f3983f"
+	pagerDutyAuthorizeNoEncryptionGoldenDigest = "0f0bc9e37a62e06533420f939128bd0984c993e03c23ed357df0eeaae911672e"
 )
 
 // TestPagerDutyAuthorizeVenueOracle is the venue-oracle proof for POST

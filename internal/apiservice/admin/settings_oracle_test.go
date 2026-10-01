@@ -31,8 +31,8 @@ const settingsVenueEncryptionKey = "venue-settings-admin-fernet-key-32-bytes!"
 // keys on (key/token/secret/password/api/auth/access/client/passwd), each on
 // its own declaration line with no such word sharing the line.
 const (
-	settingsRoutesEncryptedGoldenDigest    = "47fad24c060949475af62138d342f4b8146792a9b80b147ddf1882f3fc86bea0"
-	settingsRoutesNoEncryptionGoldenDigest = "9bcb3f28a01fc786b76f5e96a4b431b223f73a066b78ef3ec2efb24e22079d63"
+	settingsRoutesEncryptedGoldenDigest    = "ac548730e699f7105fade5a7e11cc8afccea56d761bd48b37304255ad810bd5e"
+	settingsRoutesNoEncryptionGoldenDigest = "3a998e6f57e3d134a8085c00c7895f88570b3bb9767b03a9cd29eea0d56a725a"
 )
 
 func TestSettingsRoutesVenueOracle(t *testing.T) {

@@ -5,8 +5,6 @@ package pgmigrate_test
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -41,33 +39,12 @@ var historyScenarios = []historyScenario{
 	{name: "another hash seed", env: []string{"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1", "PYTHONHASHSEED=12345"}},
 }
 
-const historyGolden = "testdata/history_golden.json"
-
-// historyGoldenSHA256 pins testdata/history_golden.json (R24): what the real
-// `dev-hops migrate postgres history` printed for each scenario, and what the real
-// `dev-hops migrate postgres downgrade 0139` did to a database at the head. The
-// producer is deleted with the Python CLI, so this is a rot guard: the file is only
-// rewritten by TestHistoryVenueOracleMatchesAlembic with DHO_HISTORY_GOLDEN_UPDATE=1,
-// then this digest is updated.
-const historyGoldenSHA256 = "4997fe6ed22959b39883a30746f6579e0ed753c5bd6e98ae8ee8c9be33f9d281"
-
 type historyGoldenFile struct {
 	History   map[string]string `json:"history"`
 	Downgrade struct {
 		Exit          int      `json:"exit"`
 		VersionsAfter []string `json:"versionsAfter"`
 	} `json:"downgrade"`
-}
-
-func TestHistoryGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile(historyGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != historyGoldenSHA256 {
-		t.Fatalf("%s digest = %s, want %s: the golden changed without its digest", historyGolden, got, historyGoldenSHA256)
-	}
 }
 
 func historyChild(t *testing.T, name string) func(context.Context, cli.Env) int {
@@ -90,13 +67,61 @@ func goHistory(t *testing.T) string {
 	return stdout.String()
 }
 
+// historyPythonBuild is the build whose Python CLI (Alembic) answered the scenarios: a build that still
+// carried it.
+const historyPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// TestHistoryMatchesTheFrozenAlembicOutput compares dho's `history` text with what the REAL `dev-hops migrate
+// postgres history` printed in each scenario, and the one verb dho refuses (`downgrade`) with what Alembic did
+// to a database at the head: dho refuses with exit 3 and leaves the database as it was. The answers were
+// executed once on historyPythonBuild and are frozen in testdata/golden/history.json (the recipe regenerates
+// them by execution); the scenarios are part of the golden's key.
 func TestHistoryMatchesTheFrozenAlembicOutput(t *testing.T) {
-	raw, err := os.ReadFile(historyGolden)
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/history.json",
+		PythonBuild: historyPythonBuild,
+		SHA256:      "070ce3be31bd17bb8e1245db998ed4822e7c1c0517c4690b2b8bc5e5a7a7baba",
+		Recipe: "git worktree add --detach $DIR " + historyPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestHistoryMatchesTheFrozenAlembicOutput$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+
+	scenarios := make([]map[string]any, len(historyScenarios))
+	for index, scenario := range historyScenarios {
+		scenarios[index] = map[string]any{"name": scenario.name, "env": scenario.env}
+	}
+	input, err := json.Marshal(map[string]any{"history": scenarios, "downgrade": []string{"downgrade", "0139"}, "downgradeEnv": []string{"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"OTEL_ENABLED": "false"}
+	request := venueoracle.ProgramRequest("history scenarios", pythonCLIProgram, input, env)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		produced := historyGoldenFile{History: map[string]string{}}
+		for _, scenario := range historyScenarios {
+			code, text := pythonMigrate(t, root, scenario.env, "", "history")
+			if code != 0 {
+				t.Fatalf("%s: alembic history exited %d", scenario.name, code)
+			}
+			produced.History[scenario.name] = text
+		}
+		uri, _ := revisionsDatabase(t)
+		code, _ := pythonMigrate(t, root, []string{"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}, uri, "downgrade", "0139")
+		produced.Downgrade.Exit = code
+		produced.Downgrade.VersionsAfter = recordedVersions(t, uri)
+		body, err := json.Marshal(produced)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(body)}}
+	})
+	golden.Consumed(t, answers...)
 	var frozen historyGoldenFile
-	if err := json.Unmarshal(raw, &frozen); err != nil {
+	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {
 		t.Fatal(err)
 	}
 	got := goHistory(t)
@@ -115,26 +140,41 @@ func TestHistoryMatchesTheFrozenAlembicOutput(t *testing.T) {
 	if frozen.Downgrade.Exit != 0 || !reflect.DeepEqual(frozen.Downgrade.VersionsAfter, []string{"0066", "0139"}) {
 		t.Errorf("the frozen downgrade is %+v, want Alembic to have downgraded to 0139 (versions 0066, 0139)", frozen.Downgrade)
 	}
+
+	// downgrade: dho refuses a target outside its ported range and leaves the database (the ported targets
+	// are compared in TestDowngradeVenueOracleMatchesPythonDowngrade).
+	uri, _ := revisionsDatabase(t)
+	before := recordedVersions(t, uri)
+	for _, target := range []string{"base", "0066"} {
+		var stdout, stderr bytes.Buffer
+		code := historyChild(t, "downgrade")(context.Background(), cli.Env{Args: []string{target}, Stdout: &stdout, Stderr: &stderr})
+		if code != cli.ExitRefused || stdout.Len() != 0 || !strings.Contains(stderr.String(), `"error"`) {
+			t.Errorf("dho downgrade %s: exit %d stdout %q stderr %q, want a refusal (exit 3)", target, code, stdout.String(), stderr.String())
+		}
+		if after := recordedVersions(t, uri); !reflect.DeepEqual(after, before) {
+			t.Fatalf("dho downgrade %s changed alembic_version: %v -> %v", target, before, after)
+		}
+	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
-func pythonMigrate(t *testing.T, env []string, uri string, args ...string) (int, string) {
+// pythonCLIProgram is the entry point the producer runs: the real dev-hops CLI, in process.
+const pythonCLIProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
+
+func pythonMigrate(t *testing.T, root string, env []string, uri string, args ...string) (int, string) {
 	t.Helper()
-	return pythonCLI(t, env, uri, append([]string{"migrate", "postgres"}, args...)...)
+	return pythonCLI(t, root, env, uri, append([]string{"migrate", "postgres"}, args...)...)
 }
 
 // pythonCLI runs `dev-hops ARGS` (the real entry point, in process) and returns its
 // exit code and stdout.
-func pythonCLI(t *testing.T, env []string, uri string, cliArgs ...string) (int, string) {
+func pythonCLI(t *testing.T, root string, env []string, uri string, cliArgs ...string) (int, string) {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	python := pyoracle.Resolve(t, root)
-	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-	command := exec.Command(python, append([]string{"-c", program}, cliArgs...)...)
+	command := exec.Command(python, append([]string{"-c", pythonCLIProgram}, cliArgs...)...)
 	command.Env = removeEnv(removeEnv(os.Environ(), "MIGRATION_DATABASE_URI"), "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER")
-	command.Env = append(command.Env, "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_ENABLED=false")
+	command.Env = append(command.Env, "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_ENABLED=false", "PYTHONDONTWRITEBYTECODE=1")
 	if uri != "" {
 		// The async engine (migrate status) takes asyncpg's own query names.
 		pyURI := strings.Replace(strings.Replace(uri, "postgres://", "postgresql+asyncpg://", 1), "sslmode=", "ssl=", 1)
@@ -143,7 +183,7 @@ func pythonCLI(t *testing.T, env []string, uri string, cliArgs ...string) (int, 
 	command.Env = append(command.Env, env...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err = command.Run()
+	err := command.Run()
 	code := 0
 	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
@@ -226,64 +266,5 @@ print(json.dumps(out, indent=1, ensure_ascii=False))
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("baseline/history.json is not what the Alembic scripts walk to (%d entries embedded, %d generated): regenerate it with DHO_HISTORY_UPDATE=1 go test -tags integration -run TestHistoryGraphIsTheAlembicChain ./internal/pgmigrate", len(got), len(want))
-	}
-}
-
-// TestHistoryVenueOracleMatchesAlembic runs the real `dev-hops migrate postgres
-// history` in each scenario and compares its text with dho's; then downgrades a
-// database at the head with Alembic and asks dho to do the same. With
-// DHO_HISTORY_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestHistoryVenueOracleMatchesAlembic(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	frozen := historyGoldenFile{History: map[string]string{}}
-	got := goHistory(t)
-	for _, scenario := range historyScenarios {
-		code, want := pythonMigrate(t, scenario.env, "", "history")
-		if code != 0 {
-			t.Errorf("%s: alembic history exited %d", scenario.name, code)
-		}
-		if got != want {
-			t.Errorf("%s: dho printed\n%.400s\nAlembic printed\n%.400s", scenario.name, got, want)
-		}
-		frozen.History[scenario.name] = want
-	}
-
-	// downgrade: dho refuses a target outside its ported range and leaves the database;
-	// Alembic then downgrades it (the ported targets are compared in
-	// TestDowngradeVenueOracleMatchesPythonDowngrade).
-	uri, _ := revisionsDatabase(t)
-	before := recordedVersions(t, uri)
-	for _, target := range []string{"base", "0066"} {
-		var stdout, stderr bytes.Buffer
-		code := historyChild(t, "downgrade")(context.Background(), cli.Env{Args: []string{target}, Stdout: &stdout, Stderr: &stderr})
-		if code != cli.ExitRefused || stdout.Len() != 0 || !strings.Contains(stderr.String(), `"error"`) {
-			t.Errorf("dho downgrade %s: exit %d stdout %q stderr %q, want a refusal (exit 3)", target, code, stdout.String(), stderr.String())
-		}
-		if after := recordedVersions(t, uri); !reflect.DeepEqual(after, before) {
-			t.Fatalf("dho downgrade %s changed alembic_version: %v -> %v", target, before, after)
-		}
-	}
-	code, _ := pythonMigrate(t, []string{"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}, uri, "downgrade", "0139")
-	frozen.Downgrade.Exit = code
-	frozen.Downgrade.VersionsAfter = recordedVersions(t, uri)
-	if code != 0 || !reflect.DeepEqual(frozen.Downgrade.VersionsAfter, []string{"0066", "0139"}) {
-		t.Errorf("alembic downgrade 0139: exit %d, versions %v, want exit 0 and 0066, 0139: the refusal no longer contrasts with what Alembic does", code, frozen.Downgrade.VersionsAfter)
-	}
-	if os.Getenv("DHO_HISTORY_GOLDEN_UPDATE") == "1" {
-		body, err := json.MarshalIndent(frozen, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(historyGolden, append(body, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
 	}
 }

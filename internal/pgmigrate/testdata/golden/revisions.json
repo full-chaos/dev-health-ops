@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestRevisionsMatchTheFrozenAlembicOutput",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestRevisionsMatchTheFrozenAlembicOutput$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "revisions scenarios",
+      "method": "PYTHON",
+      "path": "program sha256 80245289190b0f67b69847a41b8f5e1504482c6a62dbe91f4ef29f54146ed933 env sha256 32e8fa53d1504687f08b54cab5dd7a746c0ec61fec11694b339628337744128e",
+      "body_sha256": "31689afa35cbeade667380aedb21bcc9ef4b7e567c7725383b6b30dbefdefd2e",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "[{\"name\":\"heads\",\"stdout\":\"0066 (river_cutover) (head)\\n0145 (application_schema) (head)\\n\"},{\"name\":\"current at the head\",\"stdout\":\"0145 (head)\\n0066 (head)\\n\"},{\"name\":\"current without the cutover head\",\"stdout\":\"0145 (head)\\n\"},{\"name\":\"current below the head\",\"stdout\":\"0145 (head)\\n0066 (head)\\n\"},{\"name\":\"current of an empty version table\",\"stdout\":\"\"},{\"name\":\"current without a version table\",\"stdout\":\"\"}]"
+    }
+  ]
+}

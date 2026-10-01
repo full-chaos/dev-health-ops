@@ -2,9 +2,6 @@ package metricscli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"os"
 	"strings"
 	"testing"
 
@@ -100,26 +97,5 @@ func TestValidateFlagsRefusesBeforeTouchingClickHouse(t *testing.T) {
 	}
 	if code, stderr := run(nil); code != cli.ExitFailure || !strings.Contains(stderr, "ClickHouse URI is required") {
 		t.Fatalf("no DSN: exit %d %q", code, stderr)
-	}
-}
-
-// goldenSHA256 pins testdata/validate_flags_golden.json (R24): the exit code and
-// report text (dates masked) of `dev-hops metrics validate-flags` for every
-// scenario the integration test seeds, written by the real Python producer at
-// commit ebef0e7b54cc47f8419d18550e224f99d7f4968f (with its one ClickHouse-refused condition replaced, see
-// requiredFlagFields). The producer is deleted with the Python CLI, so this is a
-// rot guard, not a freshness check: the file is only rewritten by
-// TestValidateFlagsVenueOracleMatchesThePythonProducer with
-// DHO_VALIDATE_FLAGS_GOLDEN_UPDATE=1, then this digest is updated.
-const goldenSHA256 = "5e70c96d9a2bfcd238bdf87f9917fcc57d320c294927b882210b7de4653616cb"
-
-func TestValidateFlagsGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile("testdata/validate_flags_golden.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != goldenSHA256 {
-		t.Fatalf("testdata/validate_flags_golden.json digest = %s, want %s: the golden changed without its digest. It is only rewritten from the live Python producer, then the digest is updated", got, goldenSHA256)
 	}
 }

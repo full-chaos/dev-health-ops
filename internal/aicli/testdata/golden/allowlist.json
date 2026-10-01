@@ -9,9 +9,9 @@
     {
       "name": "sequence 0",
       "method": "CLI",
-      "path": "dev-hops ai allowlist [\"set\" \"--tool\" \"claude-code\" \"--status\" \"allowed\" \"--reason\" \"Org policy AI-001\"]",
+      "path": "ORG_ID=c0ffee00-dead-4bee-8bad-f00dfeedface dev-hops ai allowlist [\"set\" \"--tool\" \"claude-code\" \"--status\" \"allowed\" \"--reason\" \"Org policy AI-001\"]",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "98e5c957c5af723e87515076d332714601a477310d2c70f98fa8bc80bbd5efbd",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
       "body": ""
@@ -19,9 +19,9 @@
     {
       "name": "sequence 1",
       "method": "CLI",
-      "path": "dev-hops ai allowlist [\"set\" \"--tool\" \"claude-code\" \"--model\" \"opus\" \"--status\" \"deprecated\"]",
+      "path": "ORG_ID=c0ffee00-dead-4bee-8bad-f00dfeedface dev-hops ai allowlist [\"set\" \"--tool\" \"claude-code\" \"--model\" \"opus\" \"--status\" \"deprecated\"]",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "98e5c957c5af723e87515076d332714601a477310d2c70f98fa8bc80bbd5efbd",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
       "body": ""
@@ -29,9 +29,9 @@
     {
       "name": "sequence 2",
       "method": "CLI",
-      "path": "dev-hops ai allowlist [\"set\" \"--tool\" \"copilot\" \"--model\" \"gpt-5\" \"--status\" \"allowed\" \"--reason\" \"pilot\"]",
+      "path": "ORG_ID=c0ffee00-dead-4bee-8bad-f00dfeedface dev-hops ai allowlist [\"set\" \"--tool\" \"copilot\" \"--model\" \"gpt-5\" \"--status\" \"allowed\" \"--reason\" \"pilot\"]",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "98e5c957c5af723e87515076d332714601a477310d2c70f98fa8bc80bbd5efbd",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
       "body": ""
@@ -39,9 +39,9 @@
     {
       "name": "sequence 3",
       "method": "CLI",
-      "path": "dev-hops ai allowlist [\"set\" \"--tool\" \"claude-code\" \"--model\" \"  \" \"--status\" \"disallowed\" \"--reason\" \"\"]",
+      "path": "ORG_ID=c0ffee00-dead-4bee-8bad-f00dfeedface dev-hops ai allowlist [\"set\" \"--tool\" \"claude-code\" \"--model\" \"  \" \"--status\" \"disallowed\" \"--reason\" \"\"]",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "98e5c957c5af723e87515076d332714601a477310d2c70f98fa8bc80bbd5efbd",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
       "body": ""
@@ -49,9 +49,9 @@
     {
       "name": "sequence 4",
       "method": "CLI",
-      "path": "dev-hops ai allowlist [\"set\" \"--tool\" \"cursor\" \"--status\" \"allowed\"]",
+      "path": "ORG_ID=c0ffee00-dead-4bee-8bad-f00dfeedface dev-hops ai allowlist [\"set\" \"--tool\" \"cursor\" \"--status\" \"allowed\"]",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "98e5c957c5af723e87515076d332714601a477310d2c70f98fa8bc80bbd5efbd",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
       "body": ""
@@ -59,9 +59,9 @@
     {
       "name": "sequence 5",
       "method": "CLI",
-      "path": "dev-hops ai allowlist [\"set\" \"--tool\" \"claude-code\" \"--status\" \"deprecated\" \"--reason\" \"other org\"]",
+      "path": "ORG_ID=22222222-2222-4333-8444-555555555555 dev-hops ai allowlist [\"set\" \"--tool\" \"claude-code\" \"--status\" \"deprecated\" \"--reason\" \"other org\"]",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "ef4bdc1120d1ba341e748d5659441e2625725d813287ab16cd9a9f690d4d5a5d",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
       "body": ""
@@ -69,9 +69,9 @@
     {
       "name": "list c0ffee00-dead-4bee-8bad-f00dfeedface",
       "method": "CLI",
-      "path": "dev-hops ai allowlist [\"list\"]",
+      "path": "ORG_ID=c0ffee00-dead-4bee-8bad-f00dfeedface dev-hops ai allowlist [\"list\"]",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "98e5c957c5af723e87515076d332714601a477310d2c70f98fa8bc80bbd5efbd",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
       "body": "AI tool allowlist for org c0ffee00-dead-4bee-8bad-f00dfeedface:\n  claude-code / opus: deprecated\n  claude-code / *: disallowed\n  copilot / gpt-5: allowed — pilot\n  cursor / *: allowed\n"
@@ -79,9 +79,9 @@
     {
       "name": "list 22222222-2222-4333-8444-555555555555",
       "method": "CLI",
-      "path": "dev-hops ai allowlist [\"list\"]",
+      "path": "ORG_ID=22222222-2222-4333-8444-555555555555 dev-hops ai allowlist [\"list\"]",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "ef4bdc1120d1ba341e748d5659441e2625725d813287ab16cd9a9f690d4d5a5d",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
       "body": "AI tool allowlist for org 22222222-2222-4333-8444-555555555555:\n  claude-code / *: deprecated — other org\n"
@@ -89,9 +89,9 @@
     {
       "name": "list 33333333-3333-4333-8444-555555555555",
       "method": "CLI",
-      "path": "dev-hops ai allowlist [\"list\"]",
+      "path": "ORG_ID=33333333-3333-4333-8444-555555555555 dev-hops ai allowlist [\"list\"]",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "8717808f95f57335fdb6a3cc3af2f5490b62b122651bd92cedf04cb731e89b98",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
       "body": "No allowlist entries for org 33333333-3333-4333-8444-555555555555.\n"
@@ -99,9 +99,9 @@
     {
       "name": "blank tool",
       "method": "CLI",
-      "path": "dev-hops ai allowlist [\"set\" \"--tool\" \" \" \"--status\" \"allowed\"]",
+      "path": "ORG_ID=c0ffee00-dead-4bee-8bad-f00dfeedface dev-hops ai allowlist [\"set\" \"--tool\" \" \" \"--status\" \"allowed\"]",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "request_headers_sha256": "98e5c957c5af723e87515076d332714601a477310d2c70f98fa8bc80bbd5efbd",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 1,
       "headers": null,
       "body": ""

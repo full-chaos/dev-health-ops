@@ -97,30 +97,46 @@ func (v *Venue) migratePostgresGo(t *testing.T, ctx context.Context) {
 // baseline's own.
 func (v *Venue) migrateClickHouseGo(t *testing.T, ctx context.Context, database string) {
 	t.Helper()
+	migrateClickHouseAt(t, ctx, v.AdminClickHouseURI(t, database), database)
+}
+
+// MigrateClickHouseGo builds the schema of the ClickHouse database uri names
+// with chmigrate (`dho migrate clickhouse upgrade`), with no Python: for a
+// frozen or Go-only test that needs a migrated ClickHouse of its own. uri
+// must carry an admin login and name its database.
+func MigrateClickHouseGo(t *testing.T, ctx context.Context, uri string) {
+	t.Helper()
+	migrateClickHouseAt(t, ctx, uri, "")
+}
+
+// migrateClickHouseAt migrates the database uri names; a non-empty want is
+// the database the connection must be on.
+func migrateClickHouseAt(t *testing.T, ctx context.Context, uri, want string) {
+	t.Helper()
 	baseline, err := chmigrate.LoadBaseline()
 	if err != nil {
-		t.Fatalf("frozen venue: %v", err)
+		t.Fatalf("go clickhouse schema: %v", err)
 	}
 	chain, err := chmigrate.LoadChain()
 	if err != nil {
-		t.Fatalf("frozen venue: %v", err)
+		t.Fatalf("go clickhouse schema: %v", err)
 	}
-	config := chstorage.DefaultConfig(v.AdminClickHouseURI(t, database))
+	config := chstorage.DefaultConfig(uri)
 	config.MaxOpenConns, config.MaxIdleConns = 1, 1
 	conn, err := chstorage.Open(ctx, config)
 	if err != nil {
-		t.Fatalf("frozen venue: clickhouse %s: %v", database, err)
+		t.Fatalf("go clickhouse schema: open: %v", err)
 	}
 	defer conn.Close()
 	db, current, err := chmigrate.NewConnDB(ctx, conn)
 	if err != nil {
-		t.Fatalf("frozen venue: clickhouse %s: %v", database, err)
+		t.Fatalf("go clickhouse schema: %v", err)
 	}
-	if current != database {
-		t.Fatalf("frozen venue: clickhouse connection is on %q, want %q", current, database)
+	if current == "" || (want != "" && current != want) {
+		t.Fatalf("go clickhouse schema: the connection is on %q, want %q", current, want)
 	}
 	if _, err := chmigrate.Upgrade(ctx, db, baseline, chain); err != nil {
-		t.Fatalf("frozen venue: migrate clickhouse %s: %v", database, err)
+		t.Fatalf("go clickhouse schema: migrate %s: %v", current, err)
 	}
 }
 

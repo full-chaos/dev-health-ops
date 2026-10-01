@@ -1,6 +1,8 @@
 package venueoracle
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,10 +45,12 @@ func TestFrozenProduceAnswersFromTheFileWithoutRunningTheProducer(t *testing.T) 
 func TestAProducerRequestIsKeyedByProgramInputAndEnvironment(t *testing.T) {
 	base := ProgramRequest("corpus", sampleProgram, []byte("abc"), map[string]string{"PYTHONHASHSEED": "0"})
 	for name, other := range map[string]Request{
-		"program":     ProgramRequest("corpus", sampleProgram+"# changed\n", []byte("abc"), map[string]string{"PYTHONHASHSEED": "0"}),
-		"stdin":       ProgramRequest("corpus", sampleProgram, []byte("abd"), map[string]string{"PYTHONHASHSEED": "0"}),
-		"environment": ProgramRequest("corpus", sampleProgram, []byte("abc"), map[string]string{"PYTHONHASHSEED": "1"}),
-		"no env":      ProgramRequest("corpus", sampleProgram, []byte("abc"), nil),
+		"program":       ProgramRequest("corpus", sampleProgram+"# changed\n", []byte("abc"), map[string]string{"PYTHONHASHSEED": "0"}),
+		"stdin":         ProgramRequest("corpus", sampleProgram, []byte("abd"), map[string]string{"PYTHONHASHSEED": "0"}),
+		"environment":   ProgramRequest("corpus", sampleProgram, []byte("abc"), map[string]string{"PYTHONHASHSEED": "1"}),
+		"no env":        ProgramRequest("corpus", sampleProgram, []byte("abc"), nil),
+		"env name case": ProgramRequest("corpus", sampleProgram, []byte("abc"), map[string]string{"pythonhashseed": "0"}),
+		"extra env":     ProgramRequest("corpus", sampleProgram, []byte("abc"), map[string]string{"PYTHONHASHSEED": "0", "A": ""}),
 	} {
 		if requestIdentity(other) == requestIdentity(base) {
 			t.Errorf("a changed %s keeps the request's identity", name)
@@ -66,6 +70,37 @@ func TestAProducerRequestIsKeyedByProgramInputAndEnvironment(t *testing.T) {
 	changed := ProgramRequest("corpus", sampleProgram+"# changed\n", []byte("abc"), map[string]string{"PYTHONHASHSEED": "0"})
 	if _, err := golden.frozenAnswers([]Request{changed}); err == nil || !strings.Contains(err.Error(), "regenerate") {
 		t.Fatalf("a changed program was answered from the file: %v", err)
+	}
+}
+
+// A producer request carries no headers: they are keyed case-folded (HTTP
+// semantics), which would let an environment that differs only in a name's
+// case replay another's answers.
+func TestProduceRefusesARequestThatCarriesHeaders(t *testing.T) {
+	plain := ProgramRequest("corpus", sampleProgram, []byte("abc"), map[string]string{"PYTHONHASHSEED": "0"})
+	withHeaders := plain
+	withHeaders.Headers = map[string]string{"PYTHONHASHSEED": "0"}
+	if os.Getenv("VENUEORACLE_PRODUCE_HEADERS_CHILD") == "1" {
+		// The child: Produce must fail the test before any answer is read.
+		t.Setenv(goldenUpdateEnv, "")
+		t.Setenv(goldenCandidateEnv, "")
+		path, digest := programGolden(t, []Request{plain}, "ABC\n")
+		golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+		golden.Produce(t, "/no/python/here", []Request{withHeaders}, func(string, []Request) []Response {
+			t.Fatal("the producer ran")
+			return nil
+		})
+		t.Log("PRODUCE RETURNED")
+		return
+	}
+	if err := producerRequestsErr([]Request{plain}); err != nil {
+		t.Fatalf("a program request was refused: %v", err)
+	}
+	child := exec.Command(os.Args[0], "-test.run=^TestProduceRefusesARequestThatCarriesHeaders$", "-test.v")
+	child.Env = append(os.Environ(), "VENUEORACLE_PRODUCE_HEADERS_CHILD=1")
+	output, err := child.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "carries headers") || strings.Contains(string(output), "PRODUCE RETURNED") {
+		t.Fatalf("Produce answered a request that carries headers (err %v):\n%s", err, output)
 	}
 }
 

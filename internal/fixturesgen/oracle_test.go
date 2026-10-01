@@ -166,7 +166,7 @@ func intLeaf(value int64) leaf { return leaf{"int", strconv.FormatInt(value, 10)
 // TestRandMatchesThePythonRandom drives Rand and a REAL random.Random over the same operation
 // sequences and compares every value: getrandbits, randrange, randint, choice and random().
 func TestRandMatchesThePythonRandom(t *testing.T) {
-	golden, root := openOracle(t, "pyrand", "f2c38c30de260eb1f819a66cf30ceb6f81744c46e86b77a18a2d36bd0b7a501a")
+	golden, root := openOracle(t, "pyrand", "374d1a8c9e5dbf6dc032ed91dd4e857cb13e5fbbcf9253b50fc7d3515aa6c365")
 	corpus, seeds := randomCorpus()
 	requests := make([]any, len(corpus))
 	for i := range corpus {
@@ -296,7 +296,7 @@ func columnValue(row ProductTelemetryRow, column string) (leaf, bool) {
 // instead of being skipped. ingested_at is the wall clock of the write, not of the generation, so
 // it is the one column not compared, and the test says so by requiring it to be exactly that.
 func TestProductTelemetryMatchesThePythonGenerator(t *testing.T) {
-	golden, root := openOracle(t, "product_telemetry", "0eeb9adbfbd7ad517f4102d7975fccab03a46132e4b9314e7f151caa0b7b4ecd")
+	golden, root := openOracle(t, "product_telemetry", "92e09ff4abde267db4e929ab8149ae720cb45ea37c01be2fc08d825f76fa1bcb")
 	corpus := telemetryCorpus()
 	requests := make([]any, len(corpus))
 	for i, c := range corpus {
@@ -366,7 +366,7 @@ func TestProductTelemetryMatchesThePythonGenerator(t *testing.T) {
 // TestSyntheticOrgIDsMatchThePythonFallback compares the fallback org ids with the ones the
 // Python verb's own expression yields.
 func TestSyntheticOrgIDsMatchThePythonFallback(t *testing.T) {
-	golden, root := openOracle(t, "synthetic_orgs", "281d6ec4d963a643bf2768ec336560a63c6d4519bf3fa26682a07a24865089dc")
+	golden, root := openOracle(t, "synthetic_orgs", "f58597fdb836189f8f3f725245be08ab6a09166e63365232f42b43a490505505")
 	answers := askPython(t, golden, root, []any{map[string]any{"kind": "synthetic_orgs", "count": 12}})
 	var want struct {
 		IDs []string `json:"ids"`

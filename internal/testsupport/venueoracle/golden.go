@@ -522,7 +522,7 @@ func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, req
 			}
 			return v.ServePythonWithEnv(t, extra, requests)
 		},
-		func() error { return g.frozenVenueErr(v) })
+		func() error { return g.frozenVenueErr(t, v) })
 }
 
 // Produce returns a Python producer's answers to requests, for an oracle whose
@@ -533,13 +533,29 @@ func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, req
 // names what was asked (ProgramRequest builds one for a Python program) and a
 // response what came back: Status the exit code, Body the stdout, Headers any
 // other stream. The lifecycle and the accounting are Python's: every answer
-// must then be compared by Diff or declared inspected (Consumed).
+// must then be compared by Diff or declared inspected (Consumed). A request
+// carries no headers: they are keyed case-folded, as HTTP headers are, and a
+// producer's environment names are case-sensitive, so the environment belongs
+// in the path (ProgramRequest), where it compares exactly.
 func (g *Golden) Produce(t *testing.T, root string, requests []Request, live func(root string, requests []Request) []Response) []Response {
 	t.Helper()
+	if err := producerRequestsErr(requests); err != nil {
+		t.Fatal(err)
+	}
 	return g.answer(t, "Produce", requests,
 		func() error { return g.producerRootErr(root) },
 		func() []Response { return live(root, requests) },
 		nil)
+}
+
+// producerRequestsErr is an error when a producer request carries headers.
+func producerRequestsErr(requests []Request) error {
+	for _, request := range requests {
+		if len(request.Headers) > 0 {
+			return fmt.Errorf("Produce: request %q carries headers: a producer's environment belongs in its path (ProgramRequest), where its names compare exactly", request.Name)
+		}
+	}
+	return nil
 }
 
 // producerRootErr is an error unless root is the checkout PythonRoot verified.
@@ -555,11 +571,28 @@ func (g *Golden) producerRootErr(root string) error {
 
 // ProgramRequest is the request of one run of a Python program: its name, the
 // program text's digest (a changed program cannot replay the answers of
-// another), its stdin, and the environment entries that shape its answers.
+// another), its stdin, and the environment entries that shape its answers. The
+// path holds the program's digest and the environment's (envDigest), so a
+// changed program or environment is another request.
 func ProgramRequest(name, program string, stdin []byte, env map[string]string) Request {
 	sum := sha256.Sum256([]byte(program))
 	body := base64.StdEncoding.EncodeToString(stdin)
-	return Request{Name: name, Method: "PYTHON", Path: "program sha256 " + hex.EncodeToString(sum[:]), Headers: env, Body: &body}
+	return Request{Name: name, Method: "PYTHON", Path: "program sha256 " + hex.EncodeToString(sum[:]) + " env sha256 " + envDigest(env), Body: &body}
+}
+
+// envDigest is a digest of environment entries with each name as written:
+// environment names are case-sensitive (PYTHONHASHSEED is not pythonhashseed).
+func envDigest(env map[string]string) string {
+	names := make([]string, 0, len(env))
+	for name := range env {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	hash := sha256.New()
+	for _, name := range names {
+		fmt.Fprintf(hash, "%d:%s=%d:%s\n", len(name), name, len(env[name]), env[name])
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 // packedPrefix marks a response body stored compressed (PackBody).
@@ -652,9 +685,13 @@ func (g *Golden) answer(t *testing.T, call string, requests []Request, rootErr f
 // frozenVenueErr is an error when a frozen golden's answers are asked for
 // through a venue built with Python: its test forgot Options.Golden, so it
 // still needs the Python substrate the golden exists to retire.
-func (g *Golden) frozenVenueErr(v *Venue) error {
+func (g *Golden) frozenVenueErr(t *testing.T, v *Venue) error {
 	if v != nil && !v.frozen {
 		return fmt.Errorf("golden %s is frozen but its venue was built with Python: pass the golden to venueoracle.Start (Options.Golden) so a frozen run needs no Python", g.spec.Path)
+	}
+	if v == nil {
+		// No venue named: the test may still have started a live one.
+		return liveVenueErr(t, "golden "+g.spec.Path+"'s frozen answers")
 	}
 	return nil
 }

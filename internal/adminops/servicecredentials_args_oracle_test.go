@@ -89,7 +89,7 @@ func TestCredentialArgsMatchTheFrozenPythonParser(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/credential_args.json",
 		PythonBuild: serviceArgsPythonBuild,
-		SHA256:      "16c39e1d8d90b8682256a5252829413471dc87082e1457ddec84feb485c97c92",
+		SHA256:      "45c53cb9d35ba3733ebecda7444018254679fea11285e82dfa9125e389aba306",
 		Recipe: "git worktree add --detach $DIR " + serviceArgsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/adminops/ -test '^TestCredentialArgsMatchTheFrozenPythonParser$' -python-root $DIR",
 	})

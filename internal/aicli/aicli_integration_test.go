@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -39,7 +38,7 @@ func startClickHouse(t *testing.T) clickHouse {
 		t.Fatalf("start clickhouse: %v", err)
 	}
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
-	chschema.Apply(ctx, t, instance)
+	venueoracle.MigrateClickHouseGo(t, ctx, instance.URI)
 	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
 	if err != nil {
 		t.Fatal(err)
@@ -201,10 +200,16 @@ func TestAllowlistSetAndListAgainstClickHouse(t *testing.T) {
 // frozen sequence: a build that still carried the Python CLI.
 const allowlistPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
-// cliRequest is one `dev-hops ai allowlist` run as a golden request: its argv
-// and the org it runs for.
-func cliRequest(name, org string, args ...string) venueoracle.Request {
-	return venueoracle.Request{Name: name, Method: "CLI", Path: "dev-hops ai allowlist " + fmt.Sprintf("%q", args), Headers: map[string]string{"ORG_ID": org}}
+// cliStep is one `dev-hops ai allowlist` run: the org it runs for and its argv.
+type cliStep struct {
+	org  string
+	args []string
+}
+
+// cliRequest is a cliStep as a golden request. Its path holds the org's
+// environment variable and the argv, so both are compared exactly.
+func cliRequest(name string, step cliStep) venueoracle.Request {
+	return venueoracle.Request{Name: name, Method: "CLI", Path: "ORG_ID=" + step.org + " dev-hops ai allowlist " + fmt.Sprintf("%q", step.args)}
 }
 
 // TestAllowlistMatchesTheFrozenPythonProducer is the differential oracle of
@@ -224,7 +229,7 @@ func TestAllowlistMatchesTheFrozenPythonProducer(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/allowlist.json",
 		PythonBuild: allowlistPythonBuild,
-		SHA256:      "7e6752d7ff3fec21636738563f3b5c4a3f5b7d0e91bbfbb53a69fdc05370d04f",
+		SHA256:      "7ce5949ded9073e4207f5f4fd93984db2be5991cd555116d8b788735d188cdc0",
 		Recipe: "git worktree add --detach $DIR " + allowlistPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/aicli/ -test '^TestAllowlistMatchesTheFrozenPythonProducer$' -python-root $DIR",
 	})
@@ -234,10 +239,22 @@ func TestAllowlistMatchesTheFrozenPythonProducer(t *testing.T) {
 	if golden.Recording() {
 		python = startClickHouse(t)
 	}
+	// steps maps each request's path to the run it stands for.
+	steps := map[string]cliStep{}
+	request := func(name, org string, args ...string) venueoracle.Request {
+		step := cliStep{org: org, args: args}
+		built := cliRequest(name, step)
+		steps[built.Path] = step
+		return built
+	}
 	produce := func(root string, requests []venueoracle.Request) []venueoracle.Response {
 		answers := make([]venueoracle.Response, len(requests))
 		for index, request := range requests {
-			code, stdout, _ := pythonVerb(t, python, root, request.Headers["ORG_ID"], argsOf(t, request)...)
+			step, ok := steps[request.Path]
+			if !ok {
+				t.Fatalf("no run for %s", request.Path)
+			}
+			code, stdout, _ := pythonVerb(t, python, root, step.org, step.args...)
 			answers[index] = venueoracle.Response{Status: code, Body: stdout}
 			time.Sleep(15 * time.Millisecond) // computed_at is the row version, at millisecond precision
 		}
@@ -247,7 +264,7 @@ func TestAllowlistMatchesTheFrozenPythonProducer(t *testing.T) {
 	golang := startClickHouse(t)
 	var sequenceRequests []venueoracle.Request
 	for index, step := range sequence {
-		sequenceRequests = append(sequenceRequests, cliRequest(fmt.Sprintf("sequence %d", index), step.org, step.args...))
+		sequenceRequests = append(sequenceRequests, request(fmt.Sprintf("sequence %d", index), step.org, step.args...))
 	}
 	for index, answer := range golden.Produce(t, root, sequenceRequests, produce) {
 		golden.Consumed(t, answer)
@@ -266,9 +283,9 @@ func TestAllowlistMatchesTheFrozenPythonProducer(t *testing.T) {
 	orgs := []string{testOrg, "22222222-2222-4333-8444-555555555555", "33333333-3333-4333-8444-555555555555"}
 	var listRequests []venueoracle.Request
 	for _, org := range orgs {
-		listRequests = append(listRequests, cliRequest("list "+org, org, "list"))
+		listRequests = append(listRequests, request("list "+org, org, "list"))
 	}
-	listRequests = append(listRequests, cliRequest("blank tool", testOrg, "set", "--tool", " ", "--status", "allowed"))
+	listRequests = append(listRequests, request("blank tool", testOrg, "set", "--tool", " ", "--status", "allowed"))
 	answers := golden.Produce(t, root, listRequests, produce)
 	golden.Consumed(t, answers...)
 	for index, org := range orgs {
@@ -288,21 +305,4 @@ func TestAllowlistMatchesTheFrozenPythonProducer(t *testing.T) {
 	}
 	golden.SkipDiff(t)
 	golden.Finish(t)
-}
-
-// argsOf is the argv a cliRequest was built from.
-func argsOf(t *testing.T, request venueoracle.Request) []string {
-	t.Helper()
-	for _, step := range sequence {
-		if cliRequest("", step.org, step.args...).Path == request.Path {
-			return step.args
-		}
-	}
-	for _, args := range [][]string{{"list"}, {"set", "--tool", " ", "--status", "allowed"}} {
-		if cliRequest("", "", args...).Path == request.Path {
-			return args
-		}
-	}
-	t.Fatalf("no argv for %s", request.Path)
-	return nil
 }

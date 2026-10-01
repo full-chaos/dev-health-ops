@@ -54,8 +54,7 @@ func TestReadinessProbeMatchesLivePython(t *testing.T) {
 	}
 	root := repoRootForReadinessOracle(t)
 	python := pyoracle.Resolve(t, root)
-	versionOut, versionErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
-	pyoracle.RequireDeployed(t, python, versionOut, versionErr)
+	pyoracle.RequireDeployed(t, python, root)
 
 	server := httptest.NewServer(http.HandlerFunc(scriptedReadinessStub))
 	defer server.Close()

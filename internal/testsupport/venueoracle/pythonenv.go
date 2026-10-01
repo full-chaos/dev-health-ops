@@ -179,6 +179,8 @@ var perRunPythonEnv = map[string]perRunName{
 
 	"GITHUB_APP_PRIVATE_KEY":              {true, "a private key generated for the run (the GitHub App venue signs with a new RSA key every run)"},
 	"REQUESTS_CA_BUNDLE":                  {true, "a temporary certificate file of the test's fake TLS server"},
+	"SMTP_HOST":                           {true, "the address of the test's fake SMTP sink (a loopback host the sink listens on)"},
+	"SMTP_PORT":                           {true, "the port of the test's fake SMTP sink (a free port taken per run)"},
 	"TELEMETRY_ENDPOINT":                  {true, "the address of the test's fake telemetry endpoint"},
 	"VENUE_PAGERDUTY_API_BASE_OVERRIDE":   {true, "the address of the test's fake PagerDuty server"},
 	"VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": {true, "the address of the test's fake PagerDuty server"},

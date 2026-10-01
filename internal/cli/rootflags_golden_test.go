@@ -54,12 +54,7 @@ func TestRootFlagsMatchThePythonRootParser(t *testing.T) {
 	request := venueoracle.ProgramRequest("root flags corpus", cli.RootFlagsOracleProgram(), input, env)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		ctx := context.Background()
-		version, err := producer.Command(ctx, nil, nil, pyoracle.VersionProbeArgs...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		probe, probeErr := version.Output()
-		pyoracle.RequireDeployed(t, version.Path, probe, probeErr)
+		producer.RequireDeployed()
 		// The closed environment: the root parser's own environment defaults
 		// are unset in it (see the named limits).
 		command, err := producer.Command(ctx, env, nil, "-c", cli.RootFlagsOracleProgram())

@@ -148,14 +148,17 @@ func TestEveryQueryListenerExportsAServerSpanNamedByThePattern(t *testing.T) {
 	handlers := realListenerHandlers(queryMux())
 	for listener, handler := range handlers {
 		send(handler, http.MethodPost, "/query?token=querycanary", map[string]string{"Authorization": "Bearer headercanary"})
-		for _, probe := range queryProbePaths {
+		// The literal paths the query listeners answer for the kubelet and the
+		// scraper, not queryProbePaths: a path dropped from that variable must
+		// fail here, not pass by being left out of both sides.
+		for _, probe := range []string{"/healthz", "/readyz", "/metrics"} {
 			send(handler, http.MethodGet, probe, nil)
 		}
 		send(handler, http.MethodGet, "/no/such/route-"+listener+"-pathcanary", nil)
 	}
 	spans := read()
 	if want := 2 * len(handlers); len(spans) != want {
-		t.Fatalf("got %d spans, want %d (a routed and an unmatched request per listener, none for the %d probe paths): %v", len(spans), want, len(queryProbePaths), spans)
+		t.Fatalf("got %d spans, want %d (a routed and an unmatched request per listener, none for /healthz /readyz /metrics): %v", len(spans), want, spans)
 	}
 	routed := map[string]bool{}
 	for _, span := range spans {

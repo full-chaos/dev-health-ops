@@ -977,7 +977,7 @@ func TestAKeyGeneratedForTheRunIsKeyedByNameWhateverItsValue(t *testing.T) {
 func TestThePerRunNamesAreExactlyTheClosedListWithTheirSide(t *testing.T) {
 	want := map[string]bool{ // name -> supplied by the test
 		"CLICKHOUSE_URI": false, "HOME": false, "PATH": false, "POSTGRES_URI": false, "PYTHONPATH": false, "REDIS_URL": false, "TMPDIR": false,
-		"GITHUB_APP_PRIVATE_KEY": true, "REQUESTS_CA_BUNDLE": true, "TELEMETRY_ENDPOINT": true,
+		"GITHUB_APP_PRIVATE_KEY": true, "REQUESTS_CA_BUNDLE": true, "SMTP_PORT": true, "TELEMETRY_ENDPOINT": true,
 		"VENUE_PAGERDUTY_API_BASE_OVERRIDE": true, "VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": true, "VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE": true,
 		"VENUE_PROVIDER_STUB_PORT": true, "VENUE_STRIPE_API_BASE": true,
 	}

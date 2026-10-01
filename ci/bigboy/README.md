@@ -340,3 +340,20 @@ Regenerate the live router from a pinned sha:
 `generate-plane-split-router.py --deploy-repo /home/ubuntu/devhealth/deploy --deploy-sha 8028ff17
 --expect-ops-sha 4f014a9d9babfff17b6ca71a33778f2f69d30737 --format dynamic > .traefik-dynamic/planes.yml`
 (write to a temp file and rename; traefik hot-reloads).
+
+## Billing host on go-api; the Python billing-edge is retired (CHAOS-7055)
+
+Prod serves the Stripe webhook host from go-api's billing-edge listener (:8010) and has no Python
+`billing-edge`. `compose.bigboy.billing-edge.yml` does the same here: go-api gains
+`--api-billing-edge-addr=:8010` and a traefik router for `Host(billing.localhost)` (the rule and entrypoint the
+Python service carried) to port 8010; `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `LICENSE_PRIVATE_KEY`
+reach go-api by name from `ops/.env` (never written in the file; unset, the listener's `/health` names the
+missing one with a 503); the Python `billing-edge` service moves to the profile `retired-billing-edge`, which
+nothing enables. The file is in `bigboy-cut.sh`'s `COMPOSE_FILE` chain before the router (the router stays
+last), so go-api is never recreated without them.
+
+Applying it recreates go-api, so it goes in with a cut, never on its own while go-api is in use. The Python
+service is base-file drift (not recreated by the cut): remove its existing container once with compose verbs
+(`docker compose ... rm -sf billing-edge`, naming the container and its state first). Read the rendered chain only
+through `compose-config-redacted.sh`. Proof: the billing host answers from go-api :8010 through traefik, and
+`docker compose ps` no longer lists `billing-edge`.

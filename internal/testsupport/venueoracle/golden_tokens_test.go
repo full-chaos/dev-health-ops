@@ -325,3 +325,30 @@ func TestDiffRefusesAnUndecodableToken(t *testing.T) {
 		t.Fatalf("Diff did not refuse an undecodable token: err=%v\n%s", err, out)
 	}
 }
+
+// TestScrubIsTheEscapeForAFalsePositive: an identifier that merely looks like
+// a credential is refused, and a per-golden Scrub that names it lets the
+// recording through.
+func TestScrubIsTheEscapeForAFalsePositive(t *testing.T) {
+	lookalike := "basic " + strings.Repeat("a", 30)
+	record := func(scrub func(string) string) error {
+		golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it", Scrub: scrub}, "TestSample", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		projected, err := golden.projectResponse(Response{Body: "plan: " + lookalike})
+		if err != nil {
+			t.Fatal(err)
+		}
+		golden.recorded.Header.ProducerDigest = strings.Repeat("c", 64)
+		golden.recorded.Requests = []goldenRequest{{Name: "a", Body: projected.Body}}
+		_, err = golden.writeCandidate(false)
+		return err
+	}
+	if err := record(nil); err == nil {
+		t.Fatal("a credential lookalike was recorded without a scrub")
+	}
+	if err := record(func(text string) string { return strings.ReplaceAll(text, lookalike, "<plan-name>") }); err != nil {
+		t.Fatalf("the scrub did not clear the lookalike: %v", err)
+	}
+}

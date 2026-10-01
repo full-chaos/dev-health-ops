@@ -1,0 +1,29 @@
+{
+  "header": {
+    "test": "TestJiraRenameVenueOracleMatchesFrozenPython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/scheduler/sync/ -test '^TestJiraRenameVenueOracleMatchesFrozenPython$' -python-root $DIR",
+    "python_env": "efd8fc4fa010c7252554e8cd5721d50d0c67efd2483628b544db44f04ec3147b"
+  },
+  "requests": [
+    {
+      "name": "jira rename discovery",
+      "method": "PYTHON",
+      "path": "program sha256 822a90c7bcbd8c17a5e612efc7686ba8a651e89f25dbbb488e3d8fab30561641 env sha256 e71f5c8f595123e07621cebc09aff3eed474b7d0d1abe6a983a9ca0ba428a2e9",
+      "body_sha256": "676bf93b86701285b2e9ac2af97101580cacd62c85b52e3af03ba9baad2f103b",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "[\"ok\", \"ok\", \"ok\", \"ok\", \"ok\", \"ok\", \"ok\"]\n"
+    }
+  ],
+  "rows": {
+    "rows:integration_sources": {
+      "rows": "63f6f781-8c0e-54c7-80a9-4deaa4596e1f | rename onto an existing watermark | jira | project | NEWKEY | NEWKEY project | NEWKEY | {\"jira_project_id\": \"10002\", \"project_type_key\": \"software\", \"discovered_project\": true, \"planner_managed_sync_config_id\": \"CFG\"} | t | 2026-01-01 00:00:00+00 | 2026-09-25 09:30:00.123456+00\n945ccc54-c5be-543c-a70d-42b366b0e84a | two rename candidates | jira | project | TWONEW | TWONEW project | TWONEW | {\"jira_project_id\": \"10006\", \"project_type_key\": \"software\", \"discovered_project\": true, \"planner_managed_sync_config_id\": \"CFG\"} | f | 2026-01-01 00:00:00+00 | 2026-09-25 09:30:00.123456+00\n9647ebc4-a53f-5231-92e8-659fb1a5bed8 | simple rename | jira | project | NEWKEY | NEWKEY project | NEWKEY | {\"project_type_key\": \"software\", \"discovered_project\": true, \"jira_project_id\": \"10001\", \"planner_managed_sync_config_id\": \"CFG\"} | t | 2026-01-01 00:00:00+00 | 2026-09-25 09:30:00.123456+00\n9d49e9aa-04e0-52ee-9702-28dba19818c7 | case-variant duplicates | jira | project | ENG | ENG | ENG | {\"duplicate_of_external_id\": \"eng\"} | f | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00\na987481d-6408-50ba-965f-eb30db20c79b | numeric stored id is not a match | jira | project | NUMOLD | NUMOLD | NUMOLD | {\"jira_project_id\": 10004} | t | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00\nbb0b5ba2-fcf5-5164-ac91-9a9c04805643 | two rename candidates | jira | project | TWOA | TWOA | TWOA | {\"jira_project_id\": \"10006\"} | t | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00\nc1302fa6-7b0b-5def-9514-e3926442697e | case-variant duplicates | jira | project | eng | ENG project | ENG | {\"jira_project_id\": \"10003\", \"project_type_key\": \"software\", \"discovered_project\": true, \"planner_managed_sync_config_id\": \"CFG\"} | t | 2026-01-01 00:00:00+00 | 2026-09-25 09:30:00.123456+00\nc5b9467e-8672-5181-8805-0331d0b2ae0d | unchanged key | jira | project | SAME | SAME project | SAME | {\"jira_project_id\": \"10005\", \"kept\": 1, \"project_type_key\": \"software\", \"discovered_project\": true, \"planner_managed_sync_config_id\": \"CFG\"} | t | 2026-01-01 00:00:00+00 | 2026-09-25 09:30:00.123456+00\nd4d2e00e-ab0b-5734-b1e4-d60c7e339f25 | no project id | jira | project | OLDNOID | OLDNOID | OLDNOID | {} | t | 2026-01-01 00:00:00+00 | 2026-01-01 00:00:00+00\nnew | no project id | jira | project | NOID | No id | NOID | {\"project_type_key\": \"\", \"discovered_project\": true, \"planner_managed_sync_config_id\": \"CFG\"} | t | 2026-09-25 09:30:00.123456+00 | 2026-09-25 09:30:00.123456+00\nnew | numeric stored id is not a match | jira | project | NUMNEW | NUMNEW project | NUMNEW | {\"project_type_key\": \"software\", \"discovered_project\": true, \"jira_project_id\": \"10004\", \"planner_managed_sync_config_id\": \"CFG\"} | t | 2026-09-25 09:30:00.123456+00 | 2026-09-25 09:30:00.123456+00"
+    },
+    "rows:sync_watermarks": {
+      "rows": "0397d7e9-1633-551a-bade-8d0c131dd52c | 00000000-0000-4000-8000-00000000fa11 | r8 | SAME | work-items | work-items | 2026-05-05 00:00:00+00 | seed\n35d51192-816d-58d1-8c75-40f141608a69 | 00000000-0000-4000-8000-00000000fa11 | r11 | eng | work-items | work-item-history | 2026-05-07 00:00:00+00 | moved\n51a90970-8207-50c4-98af-5797a573b617 | 00000000-0000-4000-8000-00000000fa11 | r10 | TWONEW | work-items | work-items | 2026-05-06 00:00:00+00 | moved\n9145380b-2850-5102-a875-0fea2235fb55 | 00000000-0000-4000-8000-00000000fa11 | r9 | TWOA | work-items | work-items | 2026-05-05 00:00:00+00 | seed\nac738993-ccf0-5389-96c1-2a0069a0b16c | 00000000-0000-4000-8000-00000000fa11 | r6 | NEWKEY | work-items | work-item-comments | 2026-03-01 00:00:00+00 | seed\nddd03c4b-157b-5440-8df7-71d006ce48df | 00000000-0000-4000-8000-00000000fa11 | r2 | NEWKEY | work-items | work-item-history | \u003cnull\u003e | moved\nfa91c8d0-935e-5709-9bbe-931ba04b729b | 00000000-0000-4000-8000-00000000fa11 | r4 | NEWKEY | work-items | work-items | 2026-06-01 00:00:00+00 | moved\nfda212a1-b3ad-525f-8b85-a41127de8478 | 00000000-0000-4000-8000-00000000fa11 | r7 | eng | work-items | work-items | 2026-05-09 00:00:00+00 | moved"
+    }
+  }
+}

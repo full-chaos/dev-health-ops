@@ -6,21 +6,16 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"net/url"
+	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // fingerprintVenueKey is the SETTINGS_ENCRYPTION_KEY both planes share.
@@ -28,16 +23,17 @@ const fingerprintVenueKey = "venue-oracle-credential-fingerprint-key-32bytes!"
 
 // pythonCredentialStampProgram runs the planner's own
 // _resolve_credential_stamp for each integration and prints the stamped
-// credential_fingerprint and auth_source, or "raise <class>".
+// credential_fingerprint and auth_source, or "raise <class>". The database is
+// the Python plane's, named by the environment of the run.
 const pythonCredentialStampProgram = `
-import json, sys, uuid
+import json, os, sys, uuid
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 from dev_health_ops.models.integrations import Integration
 from dev_health_ops.sync import planner
 payload = json.loads(sys.stdin.read())
-engine = create_engine(payload["uri"], poolclass=NullPool)
+engine = create_engine(os.environ["ORACLE_DATABASE_URI"], poolclass=NullPool)
 out = []
 for integration_id in payload["integrations"]:
     with Session(engine) as session:
@@ -57,24 +53,22 @@ type fingerprintCase struct {
 	credentialID  *string
 }
 
-// TestCredentialFingerprintVenueOracleMatchesLivePython holds the
+// TestCredentialFingerprintVenueOracleMatchesFrozenPython holds the
 // materializer's credential_fingerprint stamp to the planner's own
 // _resolve_credential_stamp over the same seeded rows: credentials of every
-// provider shape encrypted by the Python plane's encrypt_value (config
-// merged under the decrypted fields), environment auth, an undecryptable
-// credential and a credential whose payload is not a mapping. Each
-// integration gets the same fingerprint, or fails on both planes.
-func TestCredentialFingerprintVenueOracleMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the credential fingerprint oracle needs the full project Python environment; ci/check_go.sh venue-oracles runs it")
-	}
+// provider shape encrypted with the planes' shared key (config merged under
+// the decrypted fields), environment auth, an undecryptable credential and a
+// credential whose payload is not a mapping. Each integration gets the same
+// fingerprint, or fails on both planes. The Python answers are frozen: they
+// were executed once against a venue of the pinned build.
+func TestCredentialFingerprintVenueOracleMatchesFrozenPython(t *testing.T) {
+	golden, root := openVenueGolden(t, "venue-credential-fingerprint.golden.json")
 	ctx := context.Background()
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	const org = "00000000-0000-4000-8000-0000000f1a11"
 	var cases []fingerprintCase
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:      root,
+		Golden:    golden,
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + fingerprintVenueKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			cases = seedFingerprintCases(t, ctx, admin, venue, org)
@@ -82,35 +76,31 @@ func TestCredentialFingerprintVenueOracleMatchesLivePython(t *testing.T) {
 		},
 	})
 
-	python := pyoracle.Resolve(t, root)
-	parsed, err := url.Parse(venue.AdminURI(t, venue.SourceDB))
-	if err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"GITHUB_TOKEN", "GITHUB_URL", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH", "GITHUB_APP_INSTALLATION_ID",
+		"GITLAB_TOKEN", "GITLAB_URL", "JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "LINEAR_API_KEY"} {
+		if os.Getenv(name) != "" {
+			t.Fatalf("%s is set in the test environment; the environment-auth case needs it unset on the Go plane (the Python plane ran with none of them)", name)
+		}
 	}
-	parsed.Scheme = "postgresql+psycopg2"
 	ids := make([]string, len(cases))
 	for index, c := range cases {
 		ids[index] = c.integrationID
 	}
-	input, _ := json.Marshal(map[string]any{"uri": parsed.String(), "integrations": ids})
-	command := exec.Command(python, "-c", pythonCredentialStampProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_SDK_DISABLED=true", "ENVIRONMENT=test",
-		"SETTINGS_ENCRYPTION_KEY="+fingerprintVenueKey)
-	for _, name := range []string{"GITHUB_TOKEN", "GITHUB_URL", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH", "GITHUB_APP_INSTALLATION_ID",
-		"GITLAB_TOKEN", "GITLAB_URL", "JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "LINEAR_API_KEY"} {
-		if os.Getenv(name) != "" {
-			t.Fatalf("%s is set in the test environment; the environment-auth case needs it unset on both planes", name)
-		}
-	}
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
+	input, err := json.Marshal(map[string]any{"integrations": ids})
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	answer := programoracle.Produce(t, golden, root, []programoracle.Program{{
+		Name: "credential stamp", Text: pythonCredentialStampProgram, Stdin: input,
+		Env:    map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test", "SETTINGS_ENCRYPTION_KEY": fingerprintVenueKey},
+		PerRun: oracleDatabase(t, venue),
+	}})[0]
+	if answer.ExitCode != 0 {
+		t.Fatalf("the credential stamp program exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)
+	}
 	var want [][2]string
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil || len(want) != len(cases) {
-		t.Fatalf("decode: %v\n%s", err, output)
+	if err := json.Unmarshal([]byte(answer.Stdout), &want); err != nil || len(want) != len(cases) {
+		t.Fatalf("decode: %v\n%s", err, answer.Stdout)
 	}
 
 	pool, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
@@ -156,12 +146,15 @@ func TestCredentialFingerprintVenueOracleMatchesLivePython(t *testing.T) {
 		t.Fatalf("want both stamped and refused cases, got %d stamped, %d refused", stamped, raised)
 	}
 	t.Logf("%d integrations: %d stamped identically, %d refused on both planes", len(cases), stamped, raised)
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	venueoracle.WriteGoOnlyProof(t, "Go's credential fingerprint stamp against the frozen answers of Python's _resolve_credential_stamp")
+	golden.Finish(t)
 }
 
 // seedFingerprintCases writes the org and one integration per credential
-// shape, each credential encrypted by the Python plane, and returns the
-// cases in order.
+// shape, each credential encrypted with the planes' key (by the Python plane
+// when the golden is recorded, by its Go port when frozen), and returns the
+// cases in order. The ids are stable: they are in the program's input.
 func seedFingerprintCases(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue, org string) []fingerprintCase {
 	t.Helper()
 	exec := func(sql string, args ...any) {
@@ -201,7 +194,7 @@ func seedFingerprintCases(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 	encrypted := venue.CallPython(t, calls...)
 	var cases []fingerprintCase
 	next := 0
-	for _, shape := range shapes {
+	for index, shape := range shapes {
 		var ciphertext string
 		if shape.raw {
 			ciphertext = base64.StdEncoding.EncodeToString([]byte(shape.plaintext))
@@ -211,21 +204,22 @@ func seedFingerprintCases(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 			}
 			next++
 		}
-		credentialID, integrationID := uuid.New(), uuid.New()
+		credentialID := venueoracle.StableUUID(fmt.Sprintf("credential fingerprint: credential %d", index))
+		integrationID := venueoracle.StableUUID(fmt.Sprintf("credential fingerprint: integration %d", index))
 		exec(`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
-VALUES ($1, $2, $3, $4, true, $5, $6::json, $7, $7)`, credentialID, org, shape.provider, "cred-"+credentialID.String()[:8], ciphertext, shape.config, at)
+VALUES ($1, $2, $3, $4, true, $5, $6::json, $7, $7)`, credentialID, org, shape.provider, "cred-"+credentialID[:8], ciphertext, shape.config, at)
 		exec(`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, '{}', true, $6, $6)`, integrationID, org, shape.provider, credentialID, "int-"+integrationID.String()[:8], at)
-		id := credentialID.String()
-		cases = append(cases, fingerprintCase{integrationID: integrationID.String(), provider: shape.provider, credentialID: &id})
+VALUES ($1, $2, $3, $4, $5, '{}', true, $6, $6)`, integrationID, org, shape.provider, credentialID, "int-"+integrationID[:8], at)
+		id := credentialID
+		cases = append(cases, fingerprintCase{integrationID: integrationID, provider: shape.provider, credentialID: &id})
 	}
 	// Environment auth: no credential; both planes read no environment
 	// credentials, so both stamp the fallback scope's fingerprint.
 	for _, provider := range []string{"github", "jira"} {
-		integrationID := uuid.New()
+		integrationID := venueoracle.StableUUID("credential fingerprint: environment integration " + provider)
 		exec(`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
-VALUES ($1, $2, $3, NULL, $4, '{}', true, $5, $5)`, integrationID, org, provider, "env-"+integrationID.String()[:8], at)
-		cases = append(cases, fingerprintCase{integrationID: integrationID.String(), provider: provider})
+VALUES ($1, $2, $3, NULL, $4, '{}', true, $5, $5)`, integrationID, org, provider, "env-"+integrationID[:8], at)
+		cases = append(cases, fingerprintCase{integrationID: integrationID, provider: provider})
 	}
 	return cases
 }

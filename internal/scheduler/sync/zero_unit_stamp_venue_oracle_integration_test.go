@@ -5,21 +5,16 @@ package sync
 import (
 	"context"
 	"encoding/json"
-	"net/url"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -28,16 +23,17 @@ const zeroUnitStampVenueKey = "venue-oracle-zero-unit-stamp-key-32-bytes-ok!"
 // pythonZeroUnitPlanProgram runs the planner's own plan_sync_run for each
 // integration and prints the persisted run's stamp:
 // [total_units, credential_id, auth_source, credential_fingerprint], or
-// ["raise <class>", ...].
+// ["raise <class>", ...]. The database is the Python plane's, named by the
+// environment of the run.
 const pythonZeroUnitPlanProgram = `
-import json, sys, uuid
+import json, os, sys, uuid
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 from dev_health_ops.models.integrations import SyncRun
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 payload = json.loads(sys.stdin.read())
-engine = create_engine(payload["uri"], poolclass=NullPool)
+engine = create_engine(os.environ["ORACLE_DATABASE_URI"], poolclass=NullPool)
 out = []
 for integration_id in payload["integrations"]:
     with Session(engine) as session:
@@ -59,19 +55,15 @@ type zeroUnitStampCase struct {
 	credentialPlaintext, credentialCfg string // empty plaintext: environment auth
 }
 
-// TestZeroUnitRunAuthStampVenueOracleMatchesLivePython holds the Go
+// TestZeroUnitRunAuthStampVenueOracleMatchesFrozenPython holds the Go
 // materializer's run-auth stamp on ZERO-unit plans (every source disabled)
 // to Python's plan_sync_run over the same seeded rows (CHAOS-4593 /
 // CHAOS-6703): Jira stamps credential_id, auth_source and
 // credential_fingerprint anyway, for environment and stored-credential
 // auth; every other provider's zero-unit run stays unstamped.
-func TestZeroUnitRunAuthStampVenueOracleMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the zero-unit stamp oracle needs the full project Python environment; ci/check_go.sh venue-oracles runs it")
-	}
+func TestZeroUnitRunAuthStampVenueOracleMatchesFrozenPython(t *testing.T) {
+	golden, root := openVenueGolden(t, "venue-zero-unit-stamp.golden.json")
 	ctx := context.Background()
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	const org = "00000000-0000-4000-8000-000000006703"
 	cases := []zeroUnitStampCase{
 		{name: "jira environment", provider: "jira"},
@@ -85,10 +77,13 @@ func TestZeroUnitRunAuthStampVenueOracleMatchesLivePython(t *testing.T) {
 		{name: "linear stored credential", provider: "linear", credentialPlaintext: `{"api_key": "lin_api_x"}`, credentialCfg: `{}`},
 	}
 	for index := range cases {
-		cases[index].integrationID, cases[index].configID, cases[index].jobID = uuid.NewString(), uuid.NewString(), uuid.NewString()
+		cases[index].integrationID = venueoracle.StableUUID("zero-unit stamp: integration " + cases[index].name)
+		cases[index].configID = venueoracle.StableUUID("zero-unit stamp: configuration " + cases[index].name)
+		cases[index].jobID = venueoracle.StableUUID("zero-unit stamp: job " + cases[index].name)
 	}
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:      root,
+		Golden:    golden,
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + zeroUnitStampVenueKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			seedZeroUnitStampCases(t, ctx, admin, venue, org, cases)
@@ -96,34 +91,30 @@ func TestZeroUnitRunAuthStampVenueOracleMatchesLivePython(t *testing.T) {
 		},
 	})
 
-	python := pyoracle.Resolve(t, root)
-	parsed, err := url.Parse(venue.AdminURI(t, venue.SourceDB))
-	if err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"GITHUB_TOKEN", "GITLAB_TOKEN", "JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "LINEAR_API_KEY"} {
+		if os.Getenv(name) != "" {
+			t.Fatalf("%s is set in the test environment; the environment-auth cases need it unset on the Go plane (the Python plane ran with none of them)", name)
+		}
 	}
-	parsed.Scheme = "postgresql+psycopg2"
 	ids := make([]string, len(cases))
 	for index, c := range cases {
 		ids[index] = c.integrationID
 	}
-	input, _ := json.Marshal(map[string]any{"uri": parsed.String(), "org": org, "integrations": ids})
-	command := exec.Command(python, "-c", pythonZeroUnitPlanProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_SDK_DISABLED=true", "ENVIRONMENT=test",
-		"SETTINGS_ENCRYPTION_KEY="+zeroUnitStampVenueKey)
-	for _, name := range []string{"GITHUB_TOKEN", "GITLAB_TOKEN", "JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "LINEAR_API_KEY"} {
-		if os.Getenv(name) != "" {
-			t.Fatalf("%s is set in the test environment; the environment-auth cases need it unset on both planes", name)
-		}
-	}
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
+	input, err := json.Marshal(map[string]any{"org": org, "integrations": ids})
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	answer := programoracle.Produce(t, golden, root, []programoracle.Program{{
+		Name: "zero-unit plan", Text: pythonZeroUnitPlanProgram, Stdin: input,
+		Env:    map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test", "SETTINGS_ENCRYPTION_KEY": zeroUnitStampVenueKey},
+		PerRun: oracleDatabase(t, venue),
+	}})[0]
+	if answer.ExitCode != 0 {
+		t.Fatalf("the zero-unit plan program exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)
+	}
 	var want [][4]string
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil || len(want) != len(cases) {
-		t.Fatalf("decode: %v\n%s", err, output)
+	if err := json.Unmarshal([]byte(answer.Stdout), &want); err != nil || len(want) != len(cases) {
+		t.Fatalf("decode: %v\n%s", err, answer.Stdout)
 	}
 
 	config, err := pgxpool.ParseConfig(venue.AdminURI(t, venue.GoDB))
@@ -192,7 +183,9 @@ func TestZeroUnitRunAuthStampVenueOracleMatchesLivePython(t *testing.T) {
 		t.Fatalf("want both stamped and unstamped zero-unit plans, got %d stamped, %d unstamped", stamped, unstamped)
 	}
 	t.Logf("%d zero-unit plans: %d stamped identically, %d unstamped on both planes", len(cases), stamped, unstamped)
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	venueoracle.WriteGoOnlyProof(t, "Go's zero-unit run-auth stamp against the frozen answers of Python's plan_sync_run")
+	golden.Finish(t)
 }
 
 func orEmpty(value *string) string {
@@ -202,10 +195,11 @@ func orEmpty(value *string) string {
 	return *value
 }
 
-// seedZeroUnitStampCases writes the org and, per case, an optional
-// Python-encrypted credential, an integration, one DISABLED source (so both
-// planners plan zero units), a planner-managed sync configuration and its
-// scheduled job.
+// seedZeroUnitStampCases writes the org and, per case, an optional credential
+// encrypted with the planes' key (by the Python plane when the golden is
+// recorded, by its Go port when frozen), an integration, one DISABLED source
+// (so both planners plan zero units), a planner-managed sync configuration and
+// its scheduled job. The credential ids are stable: the stamp holds them.
 func seedZeroUnitStampCases(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue, org string, cases []zeroUnitStampCase) {
 	t.Helper()
 	exec := func(sql string, args ...any) {
@@ -232,7 +226,7 @@ func seedZeroUnitStampCases(t *testing.T, ctx context.Context, admin *pgxpool.Po
 				t.Fatal(err)
 			}
 			next++
-			id := uuid.NewString()
+			id := venueoracle.StableUUID("zero-unit stamp: credential " + c.name)
 			credentialID = &id
 			exec(`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
 VALUES ($1, $2, $3, $4, true, $5, $6::json, $7, $7)`, id, org, c.provider, "cred-"+id[:8], ciphertext, c.credentialCfg, at)

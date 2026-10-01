@@ -20,9 +20,11 @@ import (
 // directly after source_version_at, with CHECK ordering_contract = 2. A
 // contract-2 table that receives the legacy column list stores the type
 // default 0 in ordering_contract and refuses the whole batch, so the column
-// shape a sink sends is taken from the table itself. OPERATIONAL_ORDERING_CONTRACT
-// states what the deployment expects; a disagreement with the table is logged
-// and the table's shape is used.
+// shape is read from the table itself. OPERATIONAL_ORDERING_CONTRACT states what the
+// deployment expects (contract 2; unset is 2, any other value is refused). A
+// sink that finds a contract-1 table REFUSES (ErrOperationalTableContractLegacy,
+// "migrate the database to the head"): contract 1 is unsupported (D3635) and the
+// sinks no longer write the legacy shape (CHAOS-7421).
 type operationalStorageContract uint8
 
 const (
@@ -41,6 +43,13 @@ const (
 // ErrOperationalTableContractUnknown is returned when a table's column shape
 // cannot be read or matches neither contract. The sink writes nothing.
 var ErrOperationalTableContractUnknown = errors.New("operational table ordering contract unknown")
+
+// ErrOperationalTableContractLegacy is returned when a table the sink writes is
+// the unsupported contract-1 shape. The sink writes nothing. The remedy is to
+// migrate the database to the head (`dho migrate upgrade`; a contract-1 database
+// is below the head and has no upgrade path: re-create it from the head).
+var ErrOperationalTableContractLegacy = errors.New(
+	"operational table is the unsupported contract-1 shape: migrate the database to the head")
 
 var operationalOrderingColumnNames = strings.Split(operationalOrderingColumns, ",")
 
@@ -145,13 +154,13 @@ func (cache *operationalTableContracts) resolve(
 		return 0, err
 	}
 	if contract != configured {
-		slog.Default().WarnContext(ctx, "operational_ordering_contract_mismatch",
+		slog.Default().ErrorContext(ctx, "operational_ordering_contract_table_legacy",
 			slog.String("table", table),
 			slog.String("env_value", configuredRaw),
 			slog.Int("env_contract", int(configured)),
 			slog.Int("table_contract", int(contract)),
-			slog.String("used", "table"),
-			slog.String("remedy", "the contract is 2 (unset or 2): run the migrate Job (`dho migrate upgrade`) to bring ClickHouse to the head; a contract-1 table is unsupported and has no upgrade path: re-create the database from the head (deploy/go-workers/README.md)"))
+			slog.String("remedy", "migrate the database to the head: run the migrate Job (`dho migrate upgrade`); a contract-1 database is below the head and has no upgrade path: re-create it from the head (deploy/go-workers/README.md)"))
+		return 0, fmt.Errorf("%w: table %s", ErrOperationalTableContractLegacy, table)
 	}
 	cache.store(table, contract)
 	return contract, nil
@@ -201,9 +210,6 @@ func readOperationalTableColumns(ctx context.Context, conn driver.Conn, table st
 // columns returns the column list for this contract from a legacy list that
 // starts with operationalLegacyLeadColumns.
 func (contract operationalStorageContract) columns(legacy string) string {
-	if contract == operationalLegacyContract {
-		return legacy
-	}
 	return operationalLegacyLeadColumns + "," + operationalOrderingColumns +
 		strings.TrimPrefix(legacy, operationalLegacyLeadColumns)
 }
@@ -214,9 +220,6 @@ func (contract operationalStorageContract) insertValues(
 	legacy []any, sourceRevision *big.Int, conflictKey string,
 	ingestRevision *big.Int, ordering uint8,
 ) []any {
-	if contract == operationalLegacyContract {
-		return legacy
-	}
 	return operationalWithOrdering(legacy, sourceRevision, conflictKey, ingestRevision, ordering)
 }
 
@@ -236,18 +239,12 @@ type operationalOrderingTarget struct {
 }
 
 // scan reads one row in this contract's shape. Contract 2 takes the stored
-// ordering values; contract 1 derives them with fillLegacy, as the legacy
-// table stores none.
+// ordering values (the legacy shape is refused before any scan: the fillLegacy
+// parameter is never called and is kept only until the sinks drop it).
 func (contract operationalStorageContract) scan(
 	rows driver.Rows, legacyTargets []any, target operationalOrderingTarget,
 	fillLegacy func() error,
 ) error {
-	if contract == operationalLegacyContract {
-		if err := rows.Scan(legacyTargets...); err != nil {
-			return err
-		}
-		return fillLegacy()
-	}
 	var sourceRevision, ingestRevision big.Int
 	if err := rows.Scan(operationalWithOrdering(
 		legacyTargets, &sourceRevision, target.SourceConflictKey, &ingestRevision, target.OrderingContract,
@@ -259,26 +256,9 @@ func (contract operationalStorageContract) scan(
 	return nil
 }
 
-// operationalLegacyShapeGuard is a WHERE term that makes a legacy-shape
-// SELECT fail on a server whose table has the contract-2 columns. A legacy
-// SELECT is valid SQL on a contract-2 table, so without it a table read with
-// the wrong shape (a migration after the shape read, or another server of a
-// pool at a different migration stage) would return rows or none, which the
-// readback would take as exact or absent. The check runs on the server that
-// executes the statement, inside the statement. A contract-2 SELECT needs no
-// guard: it names columns a contract-1 table does not have.
-func operationalLegacyShapeGuard(table string) string {
-	return "(SELECT throwIf(hasColumnInTable(currentDatabase(), '" + table +
-		"', 'ordering_contract'), 'operational table has the contract-2 shape; legacy readback refused')) = 0"
-}
-
 // latestQuery selects the newest stored version matching where.
 func (contract operationalStorageContract) latestQuery(legacyColumns, table, where string) string {
 	columns := contract.columns(legacyColumns)
-	if contract == operationalLegacyContract {
-		return "SELECT " + columns + " FROM " + table + " FINAL WHERE " + where +
-			" AND " + operationalLegacyShapeGuard(table) + " LIMIT 1"
-	}
 	return operationalordering.LatestRevisionRow(columns, table, where)
 }
 
@@ -286,20 +266,5 @@ func (contract operationalStorageContract) latestQuery(legacyColumns, table, whe
 // then keeps those that pass active.
 func (contract operationalStorageContract) activeQuery(legacyColumns, table, where, active string) string {
 	columns := contract.columns(legacyColumns)
-	if contract == operationalLegacyContract {
-		return "SELECT " + columns + " FROM (SELECT " + columns + " FROM " + table +
-			" FINAL WHERE " + where + " AND " + operationalLegacyShapeGuard(table) + ") WHERE " + active
-	}
 	return operationalordering.RevisionActiveRows(columns, table, where, active)
-}
-
-// fromCurrentValues reduces a value or scan-target list written in the
-// contract-2 order to this contract's shape.
-func (contract operationalStorageContract) fromCurrentValues(values []any) []any {
-	if contract != operationalLegacyContract {
-		return values
-	}
-	legacy := make([]any, 0, len(values)-4)
-	legacy = append(legacy, values[:operationalLegacyLeadCount]...)
-	return append(legacy, values[operationalLegacyLeadCount+4:]...)
 }

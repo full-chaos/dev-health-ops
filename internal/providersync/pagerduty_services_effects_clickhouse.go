@@ -471,7 +471,7 @@ func pagerDutyServiceMappingValuesForContract(
 func pagerDutyServicesValuesForContract(
 	values []any, contract operationalStorageContract,
 ) []any {
-	return contract.fromCurrentValues(values)
+	return values
 }
 
 func pagerDutyServiceScanValues(row *pagerDutyServiceRow, sourceRevision, ingestRevision *big.Int) []any {
@@ -524,18 +524,11 @@ func pagerDutyHydrateServiceOrdering(
 	row *pagerDutyServiceRow, sourceRevision, ingestRevision *big.Int,
 	contract operationalStorageContract,
 ) error {
-	if contract == operationalCurrentContract {
-		row.SourceRevision = new(big.Int).Set(sourceRevision)
-		row.IngestRevision = new(big.Int).Set(ingestRevision)
-		return nil
-	}
-	storedID := row.ID
-	if err := fillPagerDutyServiceOrdering(row); err != nil {
-		return err
-	}
-	if row.ID != storedID {
-		return providerfoundation.ErrInvalidScope
-	}
+	// The table is contract 2 (a contract-1 table is refused before any scan): the
+	// stored ordering values are the row's.
+	_ = contract
+	row.SourceRevision = new(big.Int).Set(sourceRevision)
+	row.IngestRevision = new(big.Int).Set(ingestRevision)
 	return nil
 }
 
@@ -543,18 +536,11 @@ func pagerDutyHydrateServiceMappingOrdering(
 	row *pagerDutyServiceRepositoryMappingRow, sourceRevision, ingestRevision *big.Int,
 	contract operationalStorageContract,
 ) error {
-	if contract == operationalCurrentContract {
-		row.SourceRevision = new(big.Int).Set(sourceRevision)
-		row.IngestRevision = new(big.Int).Set(ingestRevision)
-		return nil
-	}
-	storedID := row.ID
-	if err := fillPagerDutyServiceMappingOrdering(row); err != nil {
-		return err
-	}
-	if row.ID != storedID {
-		return providerfoundation.ErrInvalidScope
-	}
+	// The table is contract 2 (a contract-1 table is refused before any scan): the
+	// stored ordering values are the row's.
+	_ = contract
+	row.SourceRevision = new(big.Int).Set(sourceRevision)
+	row.IngestRevision = new(big.Int).Set(ingestRevision)
 	return nil
 }
 

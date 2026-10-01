@@ -1,0 +1,30 @@
+{
+  "header": {
+    "test": "TestIsoformatUTCMatchesFrozenPython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pythonparity/ -test '^TestIsoformatUTCMatchesFrozenPython$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 628419b830b7036474e09ad0528bf34d795b2cfba85f04bc4eb459060d57c0b5 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "python 3.14.7\nunicodedata 16.0.0\n"
+    },
+    {
+      "name": "isoformat",
+      "method": "PYTHON",
+      "path": "program sha256 2eb427c7668ecc743f38ad5548b313ebb30b4857fcef8f43c99ffc35d5f424cb env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "57cf8e6034ada8046990f9a7b3832ce46c13e0ac7940bc60ff55c05c5e4aeafb",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\n  \"0 0\": \"1970-01-01T00:00:00+00:00\",\n  \"1704067200 0\": \"2024-01-01T00:00:00+00:00\",\n  \"1788519600 0\": \"2026-09-04T11:00:00+00:00\",\n  \"1788519600 1000\": \"2026-09-04T11:00:00.000001+00:00\",\n  \"1788519600 120000000\": \"2026-09-04T11:00:00.120000+00:00\",\n  \"1788519600 123000000\": \"2026-09-04T11:00:00.123000+00:00\",\n  \"1788519600 123456000\": \"2026-09-04T11:00:00.123456+00:00\",\n  \"1788519600 999\": \"2026-09-04T11:00:00+00:00\",\n  \"1788519600 999999999\": \"2026-09-04T11:00:00.999999+00:00\"\n}\n"
+    }
+  ]
+}

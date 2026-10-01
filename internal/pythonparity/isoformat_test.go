@@ -1,16 +1,9 @@
 package pythonparity
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // isoformatCases are chosen so each one can only pass for the right reason.
@@ -89,60 +82,5 @@ func TestIsoformatUTCDiffersFromRFC3339(t *testing.T) {
 	}
 	if strings.HasSuffix(iso, "Z") {
 		t.Errorf("isoformat must never end with Z, got %q", iso)
-	}
-}
-
-// TestIsoformatUTCMatchesLivePython runs CPython and compares byte for byte.
-// Gated like the repo's other live-oracle tests: it needs an interpreter, and
-// every CI leg does not have one.
-func TestIsoformatUTCMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	python := pyoracle.Resolve(t, parityRepositoryRoot(t))
-
-	var input strings.Builder
-	expected := map[string]string{}
-	for _, tc := range isoformatCases {
-		key := fmt.Sprintf("%d %d", tc.unix, tc.nanos)
-		input.WriteString(key + "\n")
-		expected[key] = IsoformatUTC(time.Unix(tc.unix, int64(tc.nanos)).UTC())
-	}
-
-	script := filepath.Join("testdata", "python_isoformat_oracle.py")
-	command := exec.Command(python, script)
-	command.Stdin = strings.NewReader(input.String())
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("python oracle failed: %v", pyoracle.RunError(python, err, nil))
-	}
-
-	var got map[string]string
-	if err := json.Unmarshal(output, &got); err != nil {
-		t.Fatalf("parse oracle output: %v\n%s", err, output)
-	}
-	if len(got) != len(expected) {
-		t.Fatalf("oracle returned %d results for %d inputs", len(got), len(expected))
-	}
-	for key, want := range expected {
-		if got[key] != want {
-			t.Errorf("input %q: python %q, go %q", key, got[key], want)
-		}
-	}
-	if !t.Failed() {
-		writeLiveProof(t, "pythonparity-isoformat")
-	}
-}
-
-// writeLiveProof records that a live-Python oracle executed, for the
-// proof-file check in ci/check_go.sh live-python-oracles.
-func writeLiveProof(t *testing.T, name string) {
-	t.Helper()
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, name), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }

@@ -1,16 +1,14 @@
-package pythonparity
+package pythonparity_test
 
 import (
 	"encoding/json"
 	"math/rand"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 const pythonURLSplitProgram = `
@@ -69,25 +67,18 @@ func urlSplitCorpus() []string {
 // TestURLSplitMatchesLivePython compares SplitURL, Hostname, Port and
 // HasUserInfo (and the text of every ValueError) with urllib.parse.urlsplit
 // for a hand-picked corpus and a seeded fuzz over a URL-ish alphabet.
-func TestURLSplitMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestURLSplitMatchesFrozenPython(t *testing.T) {
 	corpus := urlSplitCorpus()
 	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonURLSplitProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	output := frozenPython(t, "urlsplit.golden.json",
+		programoracle.Program{Name: "urlsplit", Text: pythonURLSplitProgram, Stdin: input})[0]
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	// UseNumber: a port is compared by its literal text, never through
+	// float64.
+	decoder := json.NewDecoder(strings.NewReader(lines[len(lines)-1]))
+	decoder.UseNumber()
 	var want []map[string]any
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+	if err := decoder.Decode(&want); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(want) != len(corpus) {
@@ -102,7 +93,7 @@ func TestURLSplitMatchesLivePython(t *testing.T) {
 	}
 	for index, url := range corpus {
 		expected := want[index]
-		split, err := SplitURL(url)
+		split, err := pythonparity.SplitURL(url)
 		if err != nil {
 			if message, _ := expected["split_error"].(string); message != err.Error() {
 				report(url, "split error "+err.Error(), expected)
@@ -125,7 +116,7 @@ func TestURLSplitMatchesLivePython(t *testing.T) {
 		case portErr != nil:
 			got["port_error"] = portErr.Error()
 		case set:
-			got["port"] = float64(port)
+			got["port"] = json.Number(strconv.Itoa(port))
 		default:
 			got["port"] = nil
 		}
@@ -137,13 +128,6 @@ func TestURLSplitMatchesLivePython(t *testing.T) {
 	}
 	if mismatches > 0 {
 		t.Fatalf("%d of %d cases differ", mismatches, len(corpus))
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "pythonparity-urlsplit"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	t.Logf("%d cases compared; 0 mismatches", len(corpus))
 }

@@ -1,17 +1,14 @@
-package pythonparity
+package pythonparity_test
 
 import (
 	"encoding/hex"
 	"encoding/json"
 	"math/rand"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 const pythonUTF8ReplaceProgram = `
@@ -63,28 +60,19 @@ func utf8ReplaceCorpus() []string {
 	return corpus
 }
 
-// TestDecodeUTF8ReplaceMatchesLivePython compares DecodeUTF8Replace with
-// bytes.decode("utf-8", "replace") on utf8ReplaceCorpus.
-func TestDecodeUTF8ReplaceMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	python := pyoracle.Resolve(t, root)
+// TestDecodeUTF8ReplaceMatchesFrozenPython compares DecodeUTF8Replace with
+// what bytes.decode("utf-8", "replace") answered on utf8ReplaceCorpus,
+// executed once on the pinned build and frozen.
+func TestDecodeUTF8ReplaceMatchesFrozenPython(t *testing.T) {
 	corpus := utf8ReplaceCorpus()
 	hexes := make([]string, len(corpus))
 	for index, value := range corpus {
 		hexes[index] = hex.EncodeToString([]byte(value))
 	}
 	input, _ := json.Marshal(hexes)
-	command := exec.Command(python, "-c", pythonUTF8ReplaceProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	output := frozenPython(t, "utf8replace.golden.json",
+		programoracle.Program{Name: "utf-8 replace", Text: pythonUTF8ReplaceProgram, Stdin: input})[0]
+	lines := strings.Split(strings.TrimSpace(output), "\n")
 	var want []string
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -94,7 +82,7 @@ func TestDecodeUTF8ReplaceMatchesLivePython(t *testing.T) {
 	}
 	mismatches := 0
 	for index, value := range corpus {
-		if got := hex.EncodeToString([]byte(DecodeUTF8Replace(value))); got != want[index] {
+		if got := hex.EncodeToString([]byte(pythonparity.DecodeUTF8Replace(value))); got != want[index] {
 			mismatches++
 			if mismatches <= 10 {
 				t.Errorf("% x: go %s, python %s", value, got, want[index])
@@ -103,13 +91,6 @@ func TestDecodeUTF8ReplaceMatchesLivePython(t *testing.T) {
 	}
 	if mismatches > 0 {
 		t.Fatalf("%d of %d inputs differ", mismatches, len(corpus))
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "pythonparity-utf8-replace"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	t.Logf("%d byte strings compared; 0 mismatches", len(corpus))
 }

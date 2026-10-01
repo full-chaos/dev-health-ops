@@ -1,23 +1,25 @@
-package pythonparity
+package pythonparity_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"math/rand"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 const pythonSanitizeProgram = `
-import json, sys
+import hashlib, json, sys
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
-cases = json.loads(sys.stdin.read())
-print(json.dumps([sanitize_error_text(text, max_length=(cap or None)) for text, cap in cases], ensure_ascii=False))
+out = []
+for text, cap in json.loads(sys.stdin.read()):
+    sanitized = sanitize_error_text(text, max_length=(cap or None)).encode("utf-8")
+    out.append({"sha256": hashlib.sha256(sanitized).hexdigest(), "bytes": len(sanitized)})
+print(json.dumps(out))
 `
 
 // sanitizeCorpus mixes real-shaped secrets with random concatenations of the
@@ -65,26 +67,23 @@ func sanitizeCorpus() [][2]any {
 	return out
 }
 
-// TestSanitizeErrorTextMatchesLivePython compares SanitizeErrorText with
-// sanitize_error_text over the corpus, exact string equality.
-func TestSanitizeErrorTextMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	python := pyoracle.Resolve(t, root)
+// TestSanitizeErrorTextMatchesFrozenPython compares SanitizeErrorText with what
+// sanitize_error_text answered over the corpus, executed once on the pinned
+// build and frozen: exact equality of the UTF-8 bytes, by their SHA-256 and
+// their length. The answer holds digests and not the sanitized texts: the
+// corpus is made of secret-shaped strings, a sanitized text can still hold one
+// (a near miss the patterns must leave alone), and no golden may hold a value
+// with the shape of a token.
+func TestSanitizeErrorTextMatchesFrozenPython(t *testing.T) {
 	corpus := sanitizeCorpus()
 	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonSanitizeProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+	output := frozenPython(t, "errorsanitize.golden.json",
+		programoracle.Program{Name: "sanitize error text", Text: pythonSanitizeProgram, Stdin: input})[0]
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	var want []struct {
+		SHA256 string `json:"sha256"`
+		Bytes  int    `json:"bytes"`
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	var want []string
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -94,19 +93,15 @@ func TestSanitizeErrorTextMatchesLivePython(t *testing.T) {
 	mismatches := 0
 	for index, pair := range corpus {
 		text, cap := pair[0].(string), pair[1].(int)
-		if got := SanitizeErrorText(text, cap); got != want[index] {
+		got := pythonparity.SanitizeErrorText(text, cap)
+		sum := sha256.Sum256([]byte(got))
+		if digest := hex.EncodeToString(sum[:]); digest != want[index].SHA256 || len(got) != want[index].Bytes {
 			mismatches++
 			if mismatches <= 12 {
-				t.Errorf("SanitizeErrorText(%q, %d)\n go     %q\n python %q", text, cap, got, want[index])
+				t.Errorf("pythonparity.SanitizeErrorText(%q, %d)\n go     %q (%d bytes, sha256 %s)\n python %d bytes, sha256 %s",
+					text, cap, got, len(got), digest, want[index].Bytes, want[index].SHA256)
 			}
 		}
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "pythonparity-sanitize"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	t.Logf("%d strings compared, %d mismatches", len(corpus), mismatches)
 }

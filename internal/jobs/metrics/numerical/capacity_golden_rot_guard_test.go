@@ -1,90 +1,79 @@
 package numerical
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
+	"reflect"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
-const capacityGoldenProofFile = "capacity-forecast-golden"
-
 // TestCapacityForecastGoldenMatchesLivePython is the rot guard for
-// tests/fixtures/capacity_forecast_golden.json.
+// tests/fixtures/capacity_forecast_golden.json. Two claims are needed and they
+// are different:
 //
-// The capacity port arrived with the same gap the numerical golden had before
-// TestRemainingMetricsGoldenMatchesLivePython closed it, and with the same
-// generator --check mode wired to nothing. Two claims are needed and they are
-// different:
-//
-//	Go      == recording   (TestCapacityForecastMatchesPythonGolden, no interpreter)
-//	CPython == recording   (this test, live interpreter, lane-gated)
+//	Go      == recording   (TestCapacityForecastMatchesPythonGolden)
+//	CPython == recording   (this test)
 //
 // Only both together mean "Go reproduces Python". With only the first, a change
 // to the Python forecast semantics leaves the frozen file encoding the OLD
 // behaviour, Go keeps matching the file, and the parity claim stays green while
-// the two implementations have diverged. That failure is silent by
-// construction: nothing goes red, the proof this PR rests on just quietly stops
-// being true.
+// the two implementations have diverged.
 //
-// The RNG family got this guard when its vectors were frozen. Capacity did not,
-// which is the asymmetry this closes.
+// The generator renders every case from the real producer; its own --check mode
+// compared the "cases" and "date_cases" sections with the checked-in file. The
+// generator's stdout was executed once on the last build that carried the Python
+// sources and is frozen in testdata/golden/capacity_forecast_rot_guard.json; a
+// frozen run makes the same comparison on the recorded stdout (no Python runs).
 func TestCapacityForecastGoldenMatchesLivePython(t *testing.T) {
-	if os.Getenv(livePythonOraclesEnv) != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv(livePythonOracleProofDir)
-	if proofDirectory == "" {
-		t.Fatalf("%s is required", livePythonOracleProofDir)
-	}
+	root := repositoryRoot(t)
+	spec := rotguard.Spec("testdata/golden/capacity_forecast_rot_guard.json", "1b7a1ec86d1a5a635596179d2b5d979cb6444bc4cd9ef47a20d365a6aa5b8c76",
+		"./internal/jobs/metrics/numerical/", "^TestCapacityForecastGoldenMatchesLivePython$")
+	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+		Name: "capacity forecast golden generator",
+		Path: "tests/fixtures/generate_capacity_forecast_golden.py",
+	})[0]
 
-	repoRoot := repositoryRoot(t)
-	python := livePython(t, repoRoot)
-	generator := filepath.Join(
-		repoRoot, "tests", "fixtures", "generate_capacity_forecast_golden.py",
-	)
-	if info, err := os.Stat(generator); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("capacity golden generator is missing at %s: %v", generator, err)
-	}
-	golden := filepath.Join(
-		repoRoot, "tests", "fixtures", "capacity_forecast_golden.json",
-	)
-
-	// --check re-derives every case from the LIVE interpreter and compares.
-	// The generator owns that comparison so there is one definition of what
-	// the cases are, rather than a second copy here free to drift from the
-	// producer in its own way.
-	command := exec.Command(python, generator, "--check", golden)
-	command.Dir = repoRoot
-	output, err := command.CombinedOutput()
+	frozen, err := os.ReadFile(filepath.Join(root, "tests", "fixtures", "capacity_forecast_golden.json"))
 	if err != nil {
-		t.Fatalf(
-			"the recorded capacity forecasts no longer match live Python.\n"+
-				"This is producer drift, not necessarily a Go bug: the frozen file "+
-				"was generated from production Python, and the parity test only "+
-				"proves Go matches the FILE. Regenerate with\n"+
-				"    python tests/fixtures/generate_capacity_forecast_golden.py\n"+
-				"and read the diff as a real behaviour change -- if Go should "+
-				"follow, Go changes too; if it should not, the Python change is the "+
-				"bug.\n%s",
-			output,
-		)
+		t.Fatal(err)
 	}
-	if !strings.Contains(string(output), "CAPACITY_FORECAST_GOLDEN_CURRENT") {
-		t.Fatalf(
-			"the check produced no positive marker, so a silent no-op cannot be "+
-				"distinguished from a pass:\n%s", output)
+	live, checkedIn := decodeExact(t, []byte(rendered), "recorded generator output"), decodeExact(t, frozen, "checked-in golden")
+	for _, key := range []string{"cases", "date_cases"} {
+		if _, present := live[key]; !present {
+			t.Fatalf("the recorded generator output has no %q section: the comparison would pass on nothing", key)
+		}
+		if !reflect.DeepEqual(checkedIn[key], live[key]) {
+			t.Errorf(
+				"the recorded capacity forecasts no longer match the checked-in golden in %q.\n"+
+					"This is producer drift, not necessarily a Go bug: the frozen file was generated "+
+					"from production Python, and the parity test only proves Go matches the FILE. "+
+					"Regenerate with\n    python tests/fixtures/generate_capacity_forecast_golden.py\n"+
+					"read the diff as a real behaviour change -- if Go should follow, Go changes too -- "+
+					"and record the producer again (the golden's recipe).", key)
+		}
 	}
+}
 
-	// Only on a PASS. t.Fatalf above already halts, but a later t.Errorf would
-	// not, and a marker that can mean either outcome is not evidence.
-	if t.Failed() {
-		return
+// decodeExact decodes JSON without collapsing numbers into float64: a numeric
+// golden compared through float64 would let a genuine precision drift round
+// away to equal.
+func decodeExact(t *testing.T, raw []byte, label string) map[string]any {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil {
+		t.Fatalf("decode %s: %v", label, err)
 	}
-	if err := os.WriteFile(
-		filepath.Join(proofDirectory, capacityGoldenProofFile), []byte("executed\n"), 0o600,
-	); err != nil {
-		t.Fatalf("write live Python oracle proof: %v", err)
-	}
+	return value
+}
+
+// repositoryRoot walks up from this package to the checkout root.
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+	return rotguard.RepositoryRoot(t, 4)
 }

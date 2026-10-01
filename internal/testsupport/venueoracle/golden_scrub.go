@@ -7,9 +7,11 @@ import (
 	"time"
 )
 
-// generatedUUID is a random (version 4) UUID. The ids a test seeds are version
-// 5 (StableUUID), so a version 4 id is one a plane generated during the run.
-var generatedUUID = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
+// generatedUUID is a random (version 4) or time-ordered (version 7) UUID: the
+// Python plane mints version 4 ids and the Go api version 7. The ids a test
+// seeds are version 5 (StableUUID), so a version 4 or 7 id is one a plane
+// generated during the run.
+var generatedUUID = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
 // isoTimestamp is an ISO date and time, with a T or a space between them, an
 // optional fraction and an optional zone.
@@ -25,7 +27,7 @@ var timestampLayouts = []string{
 }
 
 // ScrubRunValues is a GoldenSpec.Scrub for what a plane makes during the run
-// and a test does not seed: a random (version 4) UUID becomes "<id>", and a
+// and a test does not seed: a random (version 4) or time-ordered (version 7) UUID becomes "<id>", and a
 // timestamp in [floor, ceiling) becomes "<now>". Pick floor after the
 // goldens' seeded times and before the recording, and ceiling before the
 // earliest time a request supplies: a time outside the window stays as

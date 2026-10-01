@@ -224,29 +224,46 @@ func goRunErr(t *testing.T, ch clickHouse, org string, args ...string) (int, str
 	return code, stdout.String(), stderr.String()
 }
 
-func pythonRunErr(t *testing.T, ch clickHouse, org string, patched bool, args ...string) (int, string, string) {
-	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
+// validateFlagsPythonBuild is the build whose Python `dev-hops metrics validate-flags` answered the scenarios: a
+// build that still carried the Python CLI.
+const validateFlagsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// Patched=true replaces the one condition of the Python check that ClickHouse 26.x refuses (last_synced != ”
+// on a DateTime64: the whole Python command fails with code 41); the four string conditions stay as they are
+// and the timestamp is never NULL, so the answer is the one the check meant to give. patched=false is the
+// producer as it ships.
+const (
+	validateFlagsShippedProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
+	validateFlagsPatchedProgram = "import sys\nfrom dev_health_ops.metrics import ff_validation\n" +
+		"ff_validation._REQUIRED_FLAG_FIELDS = ['provider', 'flag_key', 'environment', 'flag_type']\n" +
+		"from dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
+)
+
+// validateFlagsPythonSettings are the variables that shape the producer's answers, as constants: the
+// producer's environment AND part of the golden's request key (a changed value fails the frozen replay).
+// ORG_ID is the scenario's own (in its input) and CLICKHOUSE_URI a per-run value: both are appended by name.
+var validateFlagsPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "TZ": "UTC"}
+
+func validateFlagsPythonEnv(root string) []string {
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
+	for _, name := range []string{"OTEL_ENABLED", "PYTHONHASHSEED", "TZ"} {
+		env = append(env, name+"="+validateFlagsPythonSettings[name])
 	}
+	return env
+}
+
+func pythonRunErr(t *testing.T, root string, ch clickHouse, org string, patched bool, args ...string) (int, string, string) {
+	t.Helper()
 	python := pyoracle.Resolve(t, root)
-	// Patched=true replaces the one condition of the Python check that
-	// ClickHouse 26.x refuses (last_synced != '' on a DateTime64: the whole
-	// Python command fails with code 41); the four string conditions stay as
-	// they are and the timestamp is never NULL, so the answer is the one the
-	// check meant to give. patched=false is the producer as it ships.
-	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
+	program := validateFlagsShippedProgram
 	if patched {
-		program = "import sys\nfrom dev_health_ops.metrics import ff_validation\n" +
-			"ff_validation._REQUIRED_FLAG_FIELDS = ['provider', 'flag_key', 'environment', 'flag_type']\n" +
-			"from dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
+		program = validateFlagsPatchedProgram
 	}
 	command := exec.Command(python, append([]string{"-c", program, "metrics", "validate-flags"}, args...)...)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "CLICKHOUSE_URI="+ch.httpDSN, "ORG_ID="+org, "OTEL_ENABLED=false")
+	command.Env = append(validateFlagsPythonEnv(root), "CLICKHOUSE_URI="+ch.httpDSN, "ORG_ID="+org)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err = command.Run()
+	err := command.Run()
 	code := 0
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
@@ -272,11 +289,6 @@ var scenarios = []struct {
 	{orgSolo, nil, seedIsolation}, {"", nil, nil},
 }
 
-const (
-	goldenPath   = "testdata/validate_flags_golden.json"
-	goldenUpdate = "DHO_VALIDATE_FLAGS_GOLDEN_UPDATE"
-)
-
 // goldenScenario is one frozen run of the Python producer (R24): the arguments,
 // the exit code and the report text with dates masked (the drift check prints
 // the days it saw, which move with the clock).
@@ -287,24 +299,90 @@ type goldenScenario struct {
 	Output string   `json:"output"`
 }
 
+// validateFlagsAnswers is what the producer's session recorded: the patched run of every scenario, and what
+// the producer as it ships does on this ClickHouse (the named difference).
+type validateFlagsAnswers struct {
+	Scenarios []goldenScenario `json:"scenarios"`
+	Shipped   struct {
+		Exit      int  `json:"exit"`
+		HasStdout bool `json:"hasStdout"`
+		Refused   bool `json:"refused"`
+	} `json:"shipped"`
+}
+
 var datePattern = regexp.MustCompile(`\d{4}-\d\d-\d\d`)
 
 func maskDates(text string) string { return datePattern.ReplaceAllString(text, "<date>") }
 
-// The report against a real ClickHouse: every status of every check appears in
-// some scenario, the exit code follows the report (1 only for a critical), and
-// the output is the exact text.
+// The report against a real ClickHouse: every status of every check appears in some scenario, the exit code
+// follows the report (1 only for a critical), and the output is the exact text the REAL `dev-hops metrics
+// validate-flags` printed. The answers were executed once on validateFlagsPythonBuild and are frozen in
+// testdata/golden/validate_flags.json (the recipe regenerates them by execution); the scenarios and the seeded
+// organizations are part of the golden's key. Dates (the drift check prints the days it saw, which move with
+// the clock) are masked in the stored text.
 func TestValidateFlagsAgainstClickHouse(t *testing.T) {
-	ch := startClickHouse(t)
-	seed(t, ch)
-	raw, err := os.ReadFile(goldenPath)
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var frozen []goldenScenario
-	if err := json.Unmarshal(raw, &frozen); err != nil {
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/validate_flags.json",
+		PythonBuild: validateFlagsPythonBuild,
+		SHA256:      "fb74c43385909d9d276f3326bfb8ac0adb59c94f56ddd7b865995654a2598752",
+		Recipe: "git worktree add --detach $DIR " + validateFlagsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/metricscli/ -test '^TestValidateFlagsAgainstClickHouse$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+
+	type keyed struct {
+		Org  string   `json:"org"`
+		Args []string `json:"args"`
+	}
+	keys := make([]keyed, len(scenarios))
+	for index, scenario := range scenarios {
+		keys[index] = keyed{Org: scenario.org, Args: scenario.args}
+	}
+	input, err := json.Marshal(map[string]any{"scenarios": keys, "shippedProgram": validateFlagsShippedProgram})
+	if err != nil {
 		t.Fatal(err)
 	}
+	request := venueoracle.ProgramRequest("validate-flags scenarios", validateFlagsPatchedProgram, input, validateFlagsPythonSettings)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		root := producer.Root
+		ch := startClickHouse(t)
+		seed(t, ch)
+		var produced validateFlagsAnswers
+		for _, scenario := range scenarios {
+			if scenario.prepare != nil {
+				scenario.prepare(t, ch)
+			}
+			code, out, stderr := pythonRunErr(t, root, ch, scenario.org, true, scenario.args...)
+			if !strings.Contains(out, "Feature Flag Pipeline Validation") {
+				t.Fatalf("the producer printed no report for org %q %v: the comparison would measure nothing:\n%s\n%s", scenario.org, scenario.args, out, stderr)
+			}
+			produced.Scenarios = append(produced.Scenarios, goldenScenario{Org: scenario.org, Args: scenario.args, Exit: code, Output: maskDates(out)})
+		}
+		// The named difference is real: the producer as it ships fails on this ClickHouse before printing
+		// anything.
+		code, out, stderr := pythonRunErr(t, root, ch, orgBad, false)
+		produced.Shipped.Exit, produced.Shipped.HasStdout, produced.Shipped.Refused = code, out != "", strings.Contains(stderr, "Cannot read DateTime")
+		body, err := json.Marshal(produced)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(body)}}
+	})
+	golden.Consumed(t, answers...)
+	var recorded validateFlagsAnswers
+	if err := json.Unmarshal([]byte(answers[0].Body), &recorded); err != nil {
+		t.Fatal(err)
+	}
+	frozen := recorded.Scenarios
+	if recorded.Shipped.Exit == 0 || recorded.Shipped.HasStdout || !recorded.Shipped.Refused {
+		t.Fatalf("the recorded producer as it ships no longer fails on last_synced != '' (%+v): the named difference is gone, drop the patch from the comparison", recorded.Shipped)
+	}
+	ch := startClickHouse(t)
+	seed(t, ch)
 	if len(frozen) != len(scenarios) {
 		t.Fatalf("the golden holds %d scenario(s), the test runs %d", len(frozen), len(scenarios))
 	}
@@ -351,49 +429,6 @@ func TestValidateFlagsAgainstClickHouse(t *testing.T) {
 	if code := runValidateFlags(context.Background(), cli.Env{Lookup: lookup, Stdout: &stdout, Stderr: &bytes.Buffer{}}); code != cli.ExitFailure || stdout.Len() != 0 {
 		t.Fatalf("unreachable ClickHouse: exit %d, stdout %q", code, stdout.String())
 	}
-}
-
-// The differential oracle, against the REAL producer while it exists: the same
-// ClickHouse, the same organizations and lookbacks, `dev-hops metrics
-// validate-flags` and `dho metrics validate-flags` print the same bytes and
-// exit the same. Both only read, so one database serves both. It needs the full
-// project Python environment; CI runs it in the venue-oracles job.
-func TestValidateFlagsVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	ch := startClickHouse(t)
-	seed(t, ch)
-	var frozen []goldenScenario
-	for _, scenario := range scenarios {
-		if scenario.prepare != nil {
-			scenario.prepare(t, ch)
-		}
-		pyCode, pyOut, pyErr := pythonRunErr(t, ch, scenario.org, true, scenario.args...)
-		frozen = append(frozen, goldenScenario{Org: scenario.org, Args: scenario.args, Exit: pyCode, Output: maskDates(pyOut)})
-		goCode, goOut, goErr := goRunErr(t, ch, scenario.org, scenario.args...)
-		if pyCode != goCode || pyOut != goOut {
-			t.Fatalf("org %q %v differs (exit python %d, go %d):\n--- python\n%s\n%s\n--- go\n%s\n%s", scenario.org, scenario.args, pyCode, goCode, pyOut, pyErr, goOut, goErr)
-		}
-		if !strings.Contains(pyOut, "Feature Flag Pipeline Validation") {
-			t.Fatalf("the producer printed no report for org %q %v: the comparison would measure nothing:\n%s\n%s", scenario.org, scenario.args, pyOut, pyErr)
-		}
-	}
-	if os.Getenv(goldenUpdate) == "1" {
-		raw, err := json.MarshalIndent(frozen, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(goldenPath, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// The named difference is still real: the producer as it ships fails on this
-	// ClickHouse before printing anything. When that stops being so, the
-	// patched comparison above is unnecessary and this fails, so it is removed.
-	code, stdout, stderr := pythonRunErr(t, ch, orgBad, false)
-	if code == 0 || stdout != "" || !strings.Contains(stderr, "Cannot read DateTime") {
-		t.Fatalf("the unpatched Python producer no longer fails on last_synced != '' (exit %d, stdout %q, stderr %q): drop the patch from the comparison", code, stdout, stderr)
-	}
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }

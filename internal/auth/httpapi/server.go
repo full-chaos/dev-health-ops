@@ -215,6 +215,12 @@ type ServerOptions struct {
 	// scheme: a peer it trusts may set X-Forwarded-Proto. Nil means the
 	// variable is unset, which is uvicorn's default, "127.0.0.1".
 	ForwardedAllowIPs *string
+	// TrustRemoteSampling honours the sampled flag of an incoming traceparent
+	// (set only for the internal listener, whose callers are in-cluster). Off,
+	// the default, a caller keeps its trace id but the recording decision is
+	// this process's own root sampler, so an outside client cannot force
+	// recording by sending a sampled traceparent.
+	TrustRemoteSampling bool
 }
 
 // Server is the auth API listener. It is a lifecycle.Component so the runtime,
@@ -445,7 +451,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	if listener == "" {
 		listener = "auth-api-http"
 	}
-	observer := newAccessObserver(logger, listener)
+	observer := newAccessObserver(logger, listener, options.TrustRemoteSampling)
 	return RequestIDWith(accept)(observer.wrap(RecoverWith(logger, "<unrouted>", write)(handler))), nil
 }
 

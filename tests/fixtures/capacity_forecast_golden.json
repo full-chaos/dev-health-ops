@@ -3408,6 +3408,93 @@
         "insufficient_history": false,
         "high_variance": false
       }
+    },
+    {
+      "name": "cap/never_completes",
+      "history_key": "len1_zero",
+      "throughputs": [
+        0
+      ],
+      "seed": 42,
+      "target_items": 40,
+      "target_date": null,
+      "today": "2026-08-23",
+      "simulations": 200,
+      "expected": {
+        "p50_days": 365,
+        "p85_days": 365,
+        "p95_days": 365,
+        "p50_date": "2027-08-23",
+        "p85_date": "2027-08-23",
+        "p95_date": "2027-08-23",
+        "p50_items": null,
+        "p85_items": null,
+        "p95_items": null,
+        "throughput_mean": "0",
+        "throughput_stddev": "0.0",
+        "history_days": 1,
+        "simulation_count": 200,
+        "insufficient_history": true,
+        "high_variance": false
+      }
+    },
+    {
+      "name": "cap/exactly_365_days",
+      "history_key": "len1_one",
+      "throughputs": [
+        1
+      ],
+      "seed": 42,
+      "target_items": 365,
+      "target_date": null,
+      "today": "2026-08-23",
+      "simulations": 200,
+      "expected": {
+        "p50_days": 365,
+        "p85_days": 365,
+        "p95_days": 365,
+        "p50_date": "2027-08-23",
+        "p85_date": "2027-08-23",
+        "p95_date": "2027-08-23",
+        "p50_items": null,
+        "p85_items": null,
+        "p95_items": null,
+        "throughput_mean": "1",
+        "throughput_stddev": "0.0",
+        "history_days": 1,
+        "simulation_count": 200,
+        "insufficient_history": true,
+        "high_variance": false
+      }
+    },
+    {
+      "name": "cap/needs_366_days",
+      "history_key": "len1_one",
+      "throughputs": [
+        1
+      ],
+      "seed": 42,
+      "target_items": 366,
+      "target_date": null,
+      "today": "2026-08-23",
+      "simulations": 200,
+      "expected": {
+        "p50_days": 365,
+        "p85_days": 365,
+        "p95_days": 365,
+        "p50_date": "2027-08-23",
+        "p85_date": "2027-08-23",
+        "p95_date": "2027-08-23",
+        "p50_items": null,
+        "p85_items": null,
+        "p95_items": null,
+        "throughput_mean": "1",
+        "throughput_stddev": "0.0",
+        "history_days": 1,
+        "simulation_count": 200,
+        "insufficient_history": true,
+        "high_variance": false
+      }
     }
   ],
   "date_cases": [

@@ -255,7 +255,19 @@ func customerPushNormalizer(seeded map[string]bool, start time.Time) func(string
 // values blanked, and on each plane every minted token hashes to its
 // stored hash and prefix.
 func TestVenueOracleCustomerPushWrites(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-customer-push-writes", t.Name(), "5cbbbb9fd2e21c8e3f0eb34160efa8dd6174e8c8b511f132db8dde4f7e09d7d4"))
+	spec := venueGolden("venue-oracle-customer-push-writes", t.Name(), "813d52dde0f7930d336a808a9750cbbe3c062eeaa801e56dd4e129eae4a0a9ca")
+	// Recording, the Python plane's minted tokens are checked against its own
+	// database, so the scrub keeps each raw body it sees while the Python
+	// answers are fetched; the golden itself holds placeholders only.
+	var capturing bool
+	var pythonRaw []string
+	spec.Scrub = func(text string) string {
+		if capturing {
+			pythonRaw = append(pythonRaw, text)
+		}
+		return scrubCustomerPushTokens(text)
+	}
+	golden := venueoracle.OpenGolden(t, spec)
 	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
 	// the header's first hop. Trust this test's loopback peer so both planes agree.
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient,10.0.0.1")
@@ -299,7 +311,9 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := customerPushWriteRequests(seed, venue.Tokens)
+	capturing = true
 	python := golden.Python(t, venue, requests)
+	capturing = false
 	normalize := customerPushNormalizer(seeded, start)
 	var goMinted []string
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
@@ -309,10 +323,7 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 			goMinted = append(goMinted, response.Body)
 		},
 	})
-	var pythonMinted []string
-	for _, response := range python {
-		pythonMinted = append(pythonMinted, response.Body)
-	}
+	pythonMinted := pythonRaw
 
 	// Minted tokens: sha256(token) is the stored hash, token[:12] the
 	// stored prefix, on each plane's own database. The Python plane's check
@@ -373,10 +384,13 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	for _, table := range tables {
 		name := table.name
 		goRows := normalizeRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query), seeded, goIDs, start)
-		pythonRows := golden.CompareRows(t, name+" rows", func() string {
+		failedBefore := t.Failed()
+		golden.CompareRows(t, name+" rows", func() string {
 			return normalizeRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query), seeded, pythonIDs, start)
 		}, goRows)
-		receipt += fmt.Sprintf("%s rows after writes: %s\n", name, venueoracle.Mark(pythonRows == goRows))
+		// CompareRows compares both planes as projected (the scrub turns each
+		// minted token into a placeholder) and fails the test on a difference.
+		receipt += fmt.Sprintf("%s rows after writes: %s\n", name, venueoracle.Mark(t.Failed() == failedBefore))
 	}
 	receipt += fmt.Sprintf("minted tokens checked against stored hash and prefix: %d\n", minted)
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
@@ -435,4 +449,19 @@ var customerPushRunCeiling = time.Date(2030, time.December, 1, 0, 0, 0, 0, time.
 
 func isRunTime(at time.Time) bool {
 	return !at.Before(customerPushRunFloor) && at.Before(customerPushRunCeiling)
+}
+
+// customerPushToken is a minted customer-push token or its stored prefix: a
+// random value per mint, so the golden holds a placeholder for it on both planes.
+var customerPushToken = regexp.MustCompile(`fcpush_[A-Za-z0-9_-]+`)
+
+func scrubCustomerPushTokens(text string) string {
+	return customerPushToken.ReplaceAllString(text, "fcpush_<token>")
+}
+
+func TestScrubCustomerPushTokensIsIdempotentAndHidesTheValue(t *testing.T) {
+	once := scrubCustomerPushTokens(`{"token":"fcpush_AbC-d_123456789012345678901234567890123","token_prefix":"fcpush_AbC-d"}`)
+	if strings.Contains(once, "AbC") || scrubCustomerPushTokens(once) != once || !strings.Contains(once, "fcpush_<token>") {
+		t.Fatalf("scrub = %s", once)
+	}
 }

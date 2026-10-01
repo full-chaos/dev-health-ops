@@ -34,7 +34,7 @@ func scrubSlugSuffix(text string) string {
 
 func TestOrgCRUDMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgs_crud", t.Name(), "021ad520c10812baa62ee748f0abe85aea5e2f7a915cec9735a789d075d1611e", scrubSlugSuffix))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgs_crud", t.Name(), "1dbf98b6960d00e239b9d2b4fe4065feb3705a69ce2aaecae5840ebd4f73e2e4", scrubSlugSuffix))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("orgs")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-crud-flow-32-bytes!!!"

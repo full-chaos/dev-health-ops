@@ -9,6 +9,7 @@
     "recorded_by": "goldenrecord",
     "blanked": {
       "body $.timestamp": 6,
+      "header content-length": 6,
       "header date": 5,
       "header x-dev-health-plane": 5,
       "header x-request-id": 10
@@ -63,7 +64,7 @@
       "request_headers_sha256": "dbca11b03706cd9a112bea2f443b67bf6b8e1030749e8a961c74f5f8e5eaf19b",
       "status": 200,
       "headers": {
-        "content-length": "4991",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -83,7 +84,7 @@
       "request_headers_sha256": "dbca11b03706cd9a112bea2f443b67bf6b8e1030749e8a961c74f5f8e5eaf19b",
       "status": 200,
       "headers": {
-        "content-length": "4991",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -103,7 +104,7 @@
       "request_headers_sha256": "dbca11b03706cd9a112bea2f443b67bf6b8e1030749e8a961c74f5f8e5eaf19b",
       "status": 200,
       "headers": {
-        "content-length": "4992",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",

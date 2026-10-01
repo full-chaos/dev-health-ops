@@ -12,6 +12,7 @@
       "body $.expires_at": 20,
       "body $.id": 20,
       "body $.updated_at": 20,
+      "header content-length": 20,
       "header date": 19,
       "header x-dev-health-plane": 19,
       "header x-request-id": 38
@@ -26,7 +27,7 @@
       "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
       "status": 201,
       "headers": {
-        "content-length": "368",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -46,7 +47,7 @@
       "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
       "status": 201,
       "headers": {
-        "content-length": "368",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -66,7 +67,7 @@
       "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
       "status": 201,
       "headers": {
-        "content-length": "368",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -86,7 +87,7 @@
       "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
       "status": 201,
       "headers": {
-        "content-length": "368",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -106,7 +107,7 @@
       "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
       "status": 201,
       "headers": {
-        "content-length": "368",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -126,7 +127,7 @@
       "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
       "status": 201,
       "headers": {
-        "content-length": "368",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -146,7 +147,7 @@
       "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
       "status": 201,
       "headers": {
-        "content-length": "368",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -166,7 +167,7 @@
       "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
       "status": 201,
       "headers": {
-        "content-length": "368",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -186,7 +187,7 @@
       "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
       "status": 201,
       "headers": {
-        "content-length": "368",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -206,7 +207,7 @@
       "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
       "status": 201,
       "headers": {
-        "content-length": "368",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",

@@ -9,6 +9,7 @@
     "recorded_by": "goldenrecord",
     "blanked": {
       "body $.last_fallback_at": 2,
+      "header content-length": 2,
       "header date": 18,
       "header x-dev-health-plane": 18,
       "header x-request-id": 36
@@ -243,7 +244,7 @@
       "request_headers_sha256": "36cb8519defc4bc1d3f2edec18d029012c9d12f19449a477e26dd7b9cd4eee33",
       "status": 200,
       "headers": {
-        "content-length": "270",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",

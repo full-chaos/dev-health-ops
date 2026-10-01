@@ -12,6 +12,7 @@
       "body $.expires_at": 38,
       "body $.id": 38,
       "body $.updated_at": 38,
+      "header content-length": 38,
       "header date": 34,
       "header x-dev-health-plane": 34,
       "header x-request-id": 68
@@ -26,7 +27,7 @@
       "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
       "status": 201,
       "headers": {
-        "content-length": "364",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -86,7 +87,7 @@
       "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -106,7 +107,7 @@
       "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -126,7 +127,7 @@
       "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -146,7 +147,7 @@
       "request_headers_sha256": "c35c3f80a1b9f1a9782aa328e5815ecd15ce8fe938a5867472e88cbece75988c",
       "status": 201,
       "headers": {
-        "content-length": "360",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -166,7 +167,7 @@
       "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -186,7 +187,7 @@
       "request_headers_sha256": "d87e7852686cbafd0be31877749d59c9c9aec0cc7c9c720181a2d3bee1c36c4a",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -206,7 +207,7 @@
       "request_headers_sha256": "355aa570f06469cb30c17e94cf75fe86e6048fe449e20812bb9dc99d068a85e3",
       "status": 201,
       "headers": {
-        "content-length": "361",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -467,7 +468,7 @@
       "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -487,7 +488,7 @@
       "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -507,7 +508,7 @@
       "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -527,7 +528,7 @@
       "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -547,7 +548,7 @@
       "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -567,7 +568,7 @@
       "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -587,7 +588,7 @@
       "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -607,7 +608,7 @@
       "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -627,7 +628,7 @@
       "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
       "status": 201,
       "headers": {
-        "content-length": "359",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -667,7 +668,7 @@
       "request_headers_sha256": "c35c3f80a1b9f1a9782aa328e5815ecd15ce8fe938a5867472e88cbece75988c",
       "status": 201,
       "headers": {
-        "content-length": "370",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -687,7 +688,7 @@
       "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
       "status": 201,
       "headers": {
-        "content-length": "370",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",

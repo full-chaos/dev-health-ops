@@ -34,7 +34,7 @@ import (
 // past the target org.
 func TestOrgDeletionMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion", t.Name(), "422964d5e3ed0537a2a218003dcbc926a464ccde3c143d96eee9e32f5c5657fd"))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion", t.Name(), "96b082e4c24e4278b0a67d2a576da4c6e201cd9cbe798eae53a709fc84ea4979"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("od")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-flow-32-bytes!!"

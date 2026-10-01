@@ -11,6 +11,7 @@
       "body $.created_at": 10,
       "body $.id": 10,
       "body $.updated_at": 18,
+      "header content-length": 18,
       "header date": 31,
       "header x-dev-health-plane": 31,
       "header x-request-id": 60
@@ -205,7 +206,7 @@
       "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
       "status": 201,
       "headers": {
-        "content-length": "321",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -246,7 +247,7 @@
       "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
       "status": 201,
       "headers": {
-        "content-length": "323",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -266,7 +267,7 @@
       "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
       "status": 201,
       "headers": {
-        "content-length": "317",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -326,7 +327,7 @@
       "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
       "status": 201,
       "headers": {
-        "content-length": "322",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -386,7 +387,7 @@
       "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
       "status": 201,
       "headers": {
-        "content-length": "327",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -426,7 +427,7 @@
       "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
       "status": 200,
       "headers": {
-        "content-length": "328",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -446,7 +447,7 @@
       "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
       "status": 200,
       "headers": {
-        "content-length": "334",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -466,7 +467,7 @@
       "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
       "status": 200,
       "headers": {
-        "content-length": "334",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -486,7 +487,7 @@
       "request_headers_sha256": "60a271d9cc9d4aa46fc1be0b9d5e86a0dc72364a95f1731333fd6fe325915e0a",
       "status": 200,
       "headers": {
-        "content-length": "334",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",

@@ -198,7 +198,7 @@ func checkInviteToken(t *testing.T, label, token, id, secret, storedHash string)
 // construction, and the route's 10/hour keyed rate limit.
 func TestCreateOrgInviteVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("invites", t.Name(), "4ee36c492f93c91c95d62ecc2d8a1d379d4c023e38d05e25e553e3697c401cfc"))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("invites", t.Name(), "77ed2eff3968d3c501cb2fc0657300827df7aaf45885a091c46c790a614a2e77"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("inv")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-invites-flow-32-bytes!"

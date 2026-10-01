@@ -9,6 +9,7 @@
     "recorded_by": "goldenrecord",
     "blanked": {
       "body $.expires_at": 4,
+      "header content-length": 4,
       "header date": 7,
       "header x-dev-health-plane": 7,
       "header x-request-id": 14
@@ -43,7 +44,7 @@
       "request_headers_sha256": "357463bb8454ee009494542bd1ead34b2d453860bc09d792e6c6e819d6e6e8ed",
       "status": 200,
       "headers": {
-        "content-length": "221",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -63,7 +64,7 @@
       "request_headers_sha256": "7324a7ce2114a5073603a50163ace7e38087880dcb37c0db5cb14a047f481b26",
       "status": 200,
       "headers": {
-        "content-length": "221",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",

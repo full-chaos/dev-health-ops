@@ -1,11 +1,7 @@
 package sync
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -15,13 +11,7 @@ import (
 
 // The operator dataset mapping is compared with the frozen answers of the real
 // sync/datasets.py over every provider spelling and every subset of the legacy
-// targets (plus one target no provider knows). goldenSHA256 pins the readable
-// subset of those answers in testdata (R24); the full comparison checks that
-// the file is still that subset.
-const operatorDatasetsGoldenSHA256 = "8210d5c6419796e2092e375518052d419653dc778f41c7a5312233a4de9d13c6"
-
-const operatorDatasetsGolden = "testdata/operator_datasets_golden.json"
-
+// targets (plus one target no provider knows).
 var (
 	oracleProviders = []string{"github", "gitlab", "jira", "linear", "launchdarkly", "pagerduty", "GitHub", "PAGERDUTY", "unknown", ""}
 	oracleTargets   = []string{"git", "prs", "blame", "cicd", "deployments", "incidents", "security", "tests", "work-items", "feature-flags", "operational", "bogus"}
@@ -87,13 +77,15 @@ for provider in spec["providers"]:
 json.dump(out, sys.stdout)
 `
 
-func keep(entry oracleEntry) bool {
-	return len(entry.Targets) <= 2 || len(entry.Targets) >= len(oracleTargets)-1
-}
+// pagerDutyRefusal is in the text Python gives for a PagerDuty selection that
+// is not the operational target alone.
+const pagerDutyRefusal = "PagerDuty sync target must be operational"
 
 // TestOperatorDatasetsMatchFrozenPythonOnEverySubset compares PlannerDatasetKeys
 // and SupportedLegacyTargets with the frozen answers of planner_dataset_keys
 // and supported_legacy_targets for every provider spelling and every subset.
+// The answers must select a dataset often and must hold the PagerDuty refusal:
+// a frozen file without them would measure nothing.
 func TestOperatorDatasetsMatchFrozenPythonOnEverySubset(t *testing.T) {
 	all := subsets()
 	input, err := json.Marshal(map[string]any{"providers": oracleProviders, "subsets": all})
@@ -110,8 +102,7 @@ func TestOperatorDatasetsMatchFrozenPythonOnEverySubset(t *testing.T) {
 	if len(python2) != len(oracleProviders) {
 		t.Fatalf("the frozen answer holds %d providers, want %d", len(python2), len(oracleProviders))
 	}
-	frozen := map[string]oracleProvider{}
-	nonEmpty := 0
+	nonEmpty, refusals := 0, 0
 	for _, provider := range oracleProviders {
 		want, got := python2[provider], goProvider(provider, all)
 		if !slices.Equal(want.Supported, got.Supported) {
@@ -131,81 +122,15 @@ func TestOperatorDatasetsMatchFrozenPythonOnEverySubset(t *testing.T) {
 			if len(w.Keys) > 0 {
 				nonEmpty++
 			}
-		}
-		kept := oracleProvider{Supported: want.Supported}
-		for _, entry := range want.Entries {
-			if keep(entry) {
-				kept.Entries = append(kept.Entries, entry)
+			if strings.Contains(w.Error, pagerDutyRefusal) {
+				refusals++
 			}
 		}
-		frozen[provider] = kept
 	}
 	if nonEmpty < 1000 {
 		t.Fatalf("only %d of the compared answers selected a dataset: the comparison would measure nothing", nonEmpty)
 	}
-	// The readable subset in testdata is cut from these answers: it must
-	// still be exactly that cut.
-	rendered, err := json.MarshalIndent(frozen, "", " ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	committed, err := os.ReadFile(operatorDatasetsGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(committed, append(rendered, '\n')) {
-		t.Fatalf("%s is not the subset of the frozen Python answers it is cut from", operatorDatasetsGolden)
-	}
-}
-
-func TestOperatorDatasetsGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile(operatorDatasetsGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != operatorDatasetsGoldenSHA256 {
-		t.Fatalf("%s digest = %s, want %s: the golden changed without its digest", operatorDatasetsGolden, got, operatorDatasetsGoldenSHA256)
-	}
-}
-
-// TestOperatorDatasetsMatchTheFrozenPythonAnswers checks the frozen answers of
-// the real Python functions without Python.
-func TestOperatorDatasetsMatchTheFrozenPythonAnswers(t *testing.T) {
-	raw, err := os.ReadFile(operatorDatasetsGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var frozen map[string]oracleProvider
-	if err := json.Unmarshal(raw, &frozen); err != nil {
-		t.Fatal(err)
-	}
-	if len(frozen) != len(oracleProviders) {
-		t.Fatalf("golden has %d providers, want %d", len(frozen), len(oracleProviders))
-	}
-	answers := 0
-	for provider, want := range frozen {
-		if !slices.Equal(SupportedLegacyTargets(provider), want.Supported) {
-			t.Errorf("SupportedLegacyTargets(%q) = %v, frozen Python %v", provider, SupportedLegacyTargets(provider), want.Supported)
-		}
-		for _, entry := range want.Entries {
-			keys, err := PlannerDatasetKeys(provider, entry.Targets)
-			message := ""
-			if err != nil {
-				message = err.Error()
-			}
-			if !slices.Equal(keys, entry.Keys) || message != entry.Error {
-				t.Errorf("PlannerDatasetKeys(%q, %v) = %v %q, frozen Python %v %q", provider, entry.Targets, keys, message, entry.Keys, entry.Error)
-			}
-			if len(entry.Keys) > 0 {
-				answers++
-			}
-		}
-	}
-	if answers < 100 {
-		t.Fatalf("the golden selects a dataset in only %d answers: it measures nothing", answers)
-	}
-	if !strings.Contains(string(raw), "PagerDuty sync target must be operational") {
-		t.Fatal("the golden records no PagerDuty refusal")
+	if refusals == 0 {
+		t.Fatalf("no frozen answer holds the PagerDuty refusal (%q)", pagerDutyRefusal)
 	}
 }

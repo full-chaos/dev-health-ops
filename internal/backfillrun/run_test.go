@@ -2,9 +2,6 @@ package backfillrun
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -121,24 +118,5 @@ func TestVerbRefusesBeforeTouchingPostgres(t *testing.T) {
 		if code != cli.ExitUsage {
 			t.Errorf("%s: exit %d, stderr %s", name, code, stderr.String())
 		}
-	}
-}
-
-// goldenSHA256 pins testdata/backfill_run_golden.json (R24): the exit code and
-// the rows the real Python hand-off left, for every comparable scenario of the
-// integration test. The producer is deleted with the Python CLI, so this is a
-// rot guard, not a freshness check: the file is only rewritten by
-// TestBackfillRunVenueOracleMatchesThePythonProducer with
-// DHO_BACKFILL_RUN_GOLDEN_UPDATE=1, then this digest is updated.
-const goldenSHA256 = "ed3e62589cf477964e5693c5172d40e8408522e812f9f42b365d63d92e653e44"
-
-func TestGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile("testdata/backfill_run_golden.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != goldenSHA256 {
-		t.Fatalf("golden digest = %s, want %s: the golden changed without its digest. It is only rewritten from the live Python producer, then the digest is updated", got, goldenSHA256)
 	}
 }

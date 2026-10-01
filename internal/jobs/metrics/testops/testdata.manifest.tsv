@@ -1,0 +1,5 @@
+# Every file under internal/jobs/metrics/testops/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: 416ab7251e2d54a9d372ff13a9ea6280a598ad7148d50003f143ed954f301c92 (3 files)
+d665836ad438188a3c4e7a803a3711ea567ae7fc0c2e77b5b0ff579f9ede48a8	python-recorded	testops_coverage_parity_golden.json
+8cea8bc0d184e84754c10f487f90292c073741ad07e29d98b9891859c967c56a	python-recorded	testops_pipeline_parity_golden.json
+14ad4e7b0ad91d94dc8a45a0c2fae2a9420e0f72e3e66abc771b6a5aedaf08b4	python-recorded	testops_test_parity_golden.json

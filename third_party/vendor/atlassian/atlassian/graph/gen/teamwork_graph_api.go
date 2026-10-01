@@ -50,11 +50,11 @@ const (
         ... on TownsquareProject { id name key }
       }
     } }
-    ... on GraphStoreCypherQueryV2StringObject { value }
-    ... on GraphStoreCypherQueryV2IntObject { value }
-    ... on GraphStoreCypherQueryV2FloatObject { value }
-    ... on GraphStoreCypherQueryV2BooleanObject { value }
-    ... on GraphStoreCypherQueryV2TimestampObject { value }
+    ... on GraphStoreCypherQueryV2StringObject { stringValue: value }
+    ... on GraphStoreCypherQueryV2IntObject { intValue: value }
+    ... on GraphStoreCypherQueryV2FloatObject { floatValue: value }
+    ... on GraphStoreCypherQueryV2BooleanObject { booleanValue: value }
+    ... on GraphStoreCypherQueryV2TimestampObject { timestampValue: value }
     ... on GraphStoreCypherQueryV2Path { elements }
             }
           }
@@ -100,11 +100,11 @@ const (
         ... on TownsquareProject { id name key }
       }
     } }
-    ... on GraphStoreCypherQueryV2StringObject { value }
-    ... on GraphStoreCypherQueryV2IntObject { value }
-    ... on GraphStoreCypherQueryV2FloatObject { value }
-    ... on GraphStoreCypherQueryV2BooleanObject { value }
-    ... on GraphStoreCypherQueryV2TimestampObject { value }
+    ... on GraphStoreCypherQueryV2StringObject { stringValue: value }
+    ... on GraphStoreCypherQueryV2IntObject { intValue: value }
+    ... on GraphStoreCypherQueryV2FloatObject { floatValue: value }
+    ... on GraphStoreCypherQueryV2BooleanObject { booleanValue: value }
+    ... on GraphStoreCypherQueryV2TimestampObject { timestampValue: value }
     ... on GraphStoreCypherQueryV2Path { elements }
             }
           }
@@ -150,11 +150,11 @@ const (
         ... on TownsquareProject { id name key }
       }
     } }
-    ... on GraphStoreCypherQueryV2StringObject { value }
-    ... on GraphStoreCypherQueryV2IntObject { value }
-    ... on GraphStoreCypherQueryV2FloatObject { value }
-    ... on GraphStoreCypherQueryV2BooleanObject { value }
-    ... on GraphStoreCypherQueryV2TimestampObject { value }
+    ... on GraphStoreCypherQueryV2StringObject { stringValue: value }
+    ... on GraphStoreCypherQueryV2IntObject { intValue: value }
+    ... on GraphStoreCypherQueryV2FloatObject { floatValue: value }
+    ... on GraphStoreCypherQueryV2BooleanObject { booleanValue: value }
+    ... on GraphStoreCypherQueryV2TimestampObject { timestampValue: value }
     ... on GraphStoreCypherQueryV2Path { elements }
             }
           }
@@ -196,11 +196,11 @@ const (
         ... on TownsquareProject { id name key }
       }
     } }
-    ... on GraphStoreCypherQueryV2StringObject { value }
-    ... on GraphStoreCypherQueryV2IntObject { value }
-    ... on GraphStoreCypherQueryV2FloatObject { value }
-    ... on GraphStoreCypherQueryV2BooleanObject { value }
-    ... on GraphStoreCypherQueryV2TimestampObject { value }
+    ... on GraphStoreCypherQueryV2StringObject { stringValue: value }
+    ... on GraphStoreCypherQueryV2IntObject { intValue: value }
+    ... on GraphStoreCypherQueryV2FloatObject { floatValue: value }
+    ... on GraphStoreCypherQueryV2BooleanObject { booleanValue: value }
+    ... on GraphStoreCypherQueryV2TimestampObject { timestampValue: value }
     ... on GraphStoreCypherQueryV2Path { elements }
             }
           }
@@ -242,11 +242,11 @@ const (
         ... on TownsquareProject { id name key }
       }
     } }
-    ... on GraphStoreCypherQueryV2StringObject { value }
-    ... on GraphStoreCypherQueryV2IntObject { value }
-    ... on GraphStoreCypherQueryV2FloatObject { value }
-    ... on GraphStoreCypherQueryV2BooleanObject { value }
-    ... on GraphStoreCypherQueryV2TimestampObject { value }
+    ... on GraphStoreCypherQueryV2StringObject { stringValue: value }
+    ... on GraphStoreCypherQueryV2IntObject { intValue: value }
+    ... on GraphStoreCypherQueryV2FloatObject { floatValue: value }
+    ... on GraphStoreCypherQueryV2BooleanObject { booleanValue: value }
+    ... on GraphStoreCypherQueryV2TimestampObject { timestampValue: value }
     ... on GraphStoreCypherQueryV2Path { elements }
             }
           }
@@ -291,23 +291,23 @@ type GraphStoreCypherQueryV2Path struct {
 }
 
 type GraphStoreCypherQueryV2StringObject struct {
-	Value string `json:"value"`
+	Value string `json:"stringValue"`
 }
 
 type GraphStoreCypherQueryV2IntObject struct {
-	Value int `json:"value"`
+	Value int `json:"intValue"`
 }
 
 type GraphStoreCypherQueryV2FloatObject struct {
-	Value float64 `json:"value"`
+	Value float64 `json:"floatValue"`
 }
 
 type GraphStoreCypherQueryV2BooleanObject struct {
-	Value bool `json:"value"`
+	Value bool `json:"booleanValue"`
 }
 
 type GraphStoreCypherQueryV2TimestampObject struct {
-	Value int64 `json:"value"`
+	Value int64 `json:"timestampValue"`
 }
 
 type GraphStoreCypherQueryV2Value struct {
@@ -411,7 +411,7 @@ func (v *GraphStoreCypherQueryV2Value) UnmarshalJSON(data []byte) error {
 			v.Path = &obj
 			return nil
 		}
-		if _, ok := probeMap["value"]; ok {
+		if _, ok := probeMap["stringValue"]; ok {
 			var obj GraphStoreCypherQueryV2StringObject
 			if err := json.Unmarshal(data, &obj); err != nil {
 				return err

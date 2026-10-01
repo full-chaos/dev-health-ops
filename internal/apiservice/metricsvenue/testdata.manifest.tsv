@@ -1,0 +1,4 @@
+# Every file under internal/apiservice/metricsvenue/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	counter_parity.json
+8bf9614d94899e5e0acef601dc9d3c589d4c7cb796093539d0fb5668f35605c8	unclassified	python_metrics.tsv

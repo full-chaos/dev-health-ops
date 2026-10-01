@@ -306,11 +306,9 @@ func perRunErr(program, text string, perRun map[string]string) error {
 }
 
 // withoutPerRun is text with every part of a per-run entry replaced by its
-// name, for a log line.
+// name, for a log line. A whole value is replaced before its parts.
 func withoutPerRun(text string, perRun map[string]string) string {
-	parts := perRunParts(perRun)
-	sort.SliceStable(parts, func(i, j int) bool { return len(parts[i].text) > len(parts[j].text) })
-	for _, part := range parts {
+	for _, part := range perRunParts(perRun) {
 		text = strings.ReplaceAll(text, part.text, "<"+part.name+" "+part.what+">")
 	}
 	return text

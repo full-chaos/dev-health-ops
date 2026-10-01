@@ -248,12 +248,14 @@ func perRunAddress() (address, host, password, database string) {
 // TestAnAnswerThatHoldsAPartOfAPerRunEntryIsRefused pins the guard of a
 // recording: the whole value, the host with its port, the password or the
 // database name in the answer is an error that names the entry and the part
-// and prints none of them. A short part (the user name) is not searched for.
+// and prints none of them. A part shorter than perRunMinimum is not searched
+// for: it is in an answer by chance.
 func TestAnAnswerThatHoldsAPartOfAPerRunEntryIsRefused(t *testing.T) {
 	address, host, password, database := perRunAddress()
-	perRun := map[string]string{"ORACLE_DATABASE_URI": address, "PLAIN": "value-of-this-run"}
+	perRun := map[string]string{"ORACLE_DATABASE_URI": address, "PLAIN": "value-of-this-run", "SHORT": "abc"}
 	for _, row := range []struct{ name, answer, want string }{
 		{"clean", `[["0", "", ""], "admin"]`, ""},
+		{"a short value is not searched for", `["abc", "abcdef"]`, ""},
 		{"whole value", `{"uri": "` + address + `"}`, "value of the per-run entry ORACLE_DATABASE_URI"},
 		{"host and port", "connected to " + host, "host and port of the per-run entry ORACLE_DATABASE_URI"},
 		{"password", "auth " + password, "password of the per-run entry ORACLE_DATABASE_URI"},

@@ -69,6 +69,62 @@ func TestAddressShapesAreFound(t *testing.T) {
 	}
 }
 
+// goldenTexts is every text in the golden file raw, by its place, with a packed
+// answer unpacked: an address in a packed answer is not visible in the file.
+func goldenTexts(t *testing.T, raw []byte) map[string]string {
+	t.Helper()
+	var document any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	texts := map[string]string{}
+	var walk func(where string, value any)
+	walk = func(where string, value any) {
+		switch typed := value.(type) {
+		case map[string]any:
+			for key, inner := range typed {
+				walk(where+"."+key, inner)
+			}
+		case []any:
+			for index, inner := range typed {
+				walk(fmt.Sprintf("%s[%d]", where, index), inner)
+			}
+		case string:
+			if strings.HasPrefix(typed, "gzip+base64:") {
+				typed = venueoracle.UnpackBody(t, typed)
+			}
+			texts[where] = typed
+		}
+	}
+	walk("$", document)
+	return texts
+}
+
+func TestGoldenTextsAreReadAtEveryDepthAndUnpacked(t *testing.T) {
+	packed := venueoracle.PackBody([]byte("rows from localhost:54321"))
+	raw, err := json.Marshal(map[string]any{
+		"header":   map[string]any{"test": "T"},
+		"requests": []any{map[string]any{"body": packed}, map[string]any{"body": "plain"}},
+		"rows":     map[string]any{"rows:t": map[string]any{"rows": "a | b"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := goldenTexts(t, raw)
+	want := map[string]string{"$.header.test": "T", "$.requests[0].body": "rows from localhost:54321", "$.requests[1].body": "plain", "$.rows.rows:t.rows": "a | b"}
+	if len(texts) != len(want) {
+		t.Fatalf("texts = %v, want %v", texts, want)
+	}
+	for where, text := range want {
+		if texts[where] != text {
+			t.Errorf("%s = %q, want %q", where, texts[where], text)
+		}
+	}
+	if addressErr(texts["$.requests[0].body"]) == nil {
+		t.Error("the address in a packed answer is not found")
+	}
+}
+
 // TestNoVenueGoldenHoldsAnAddress reads every venue golden of this package and
 // fails when a text in it, a packed answer included, has the shape of an
 // address. A venue golden that is not in venueGoldenFiles fails it too.
@@ -89,35 +145,14 @@ func TestNoVenueGoldenHoldsAnAddress(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var document any
-		if err := json.Unmarshal(raw, &document); err != nil {
-			t.Fatalf("%s: %v", name, err)
+		texts := goldenTexts(t, raw)
+		if len(texts) < 8 {
+			t.Fatalf("%s: only %d texts were read: the check would measure nothing", name, len(texts))
 		}
-		texts := 0
-		var walk func(where string, value any)
-		walk = func(where string, value any) {
-			switch typed := value.(type) {
-			case map[string]any:
-				for key, inner := range typed {
-					walk(where+"."+key, inner)
-				}
-			case []any:
-				for index, inner := range typed {
-					walk(fmt.Sprintf("%s[%d]", where, index), inner)
-				}
-			case string:
-				texts++
-				if strings.HasPrefix(typed, "gzip+base64:") {
-					typed = venueoracle.UnpackBody(t, typed)
-				}
-				if err := addressErr(typed); err != nil {
-					t.Errorf("%s: %s %v: a golden holds no address of the run that recorded it", name, where, err)
-				}
+		for where, text := range texts {
+			if err := addressErr(text); err != nil {
+				t.Errorf("%s: %s %v: a golden holds no address of the run that recorded it", name, where, err)
 			}
-		}
-		walk("$", document)
-		if texts < 8 {
-			t.Fatalf("%s: only %d texts were read: the check would measure nothing", name, texts)
 		}
 	}
 }

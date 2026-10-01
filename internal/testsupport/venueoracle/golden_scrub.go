@@ -2,6 +2,7 @@ package venueoracle
 
 import (
 	"regexp"
+	"testing"
 	"time"
 )
 
@@ -45,4 +46,19 @@ func ScrubRunValues(floor, ceiling time.Time) func(string) string {
 			return match
 		})
 	}
+}
+
+// Project is response as the golden compares it: tokens projected to their
+// claims, the spec's Scrub applied, Volatile header values replaced. Diff does
+// this to the Go plane's response itself; a test that compares with Compare
+// instead of Diff (its two planes send different requests) calls Project on the
+// Go response before it compares, because the golden's answers are stored
+// projected. A response that cannot be projected fails the test.
+func (g *Golden) Project(t *testing.T, response Response) Response {
+	t.Helper()
+	projected, err := g.projectResponse(response)
+	if err != nil {
+		t.Fatalf("golden %s: %v", g.spec.Path, err)
+	}
+	return projected
 }

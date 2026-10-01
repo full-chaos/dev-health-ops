@@ -21,6 +21,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // pythonProgram runs each case through the real Python router (the FastAPI
@@ -165,13 +166,10 @@ func authCorpus() []oracleCase {
 	return corpus
 }
 
-func TestLegacyIngestMatchesLiveFastAPI(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
+func TestLegacyIngestMatchesFrozenFastAPI(t *testing.T) {
+	frozen := venueoracle.OpenGolden(t, programGolden("legacy-ingest", t.Name(), "ae277ed14e870f6d7ae60e2fbd11e418ef139e649fc9d7368d9ee906cbf93dae"))
 	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
 	corpus := append(authCorpus(), bodyCorpus()...)
 	wire := make([]oracleWire, len(corpus))
 	for index, item := range corpus {
@@ -182,13 +180,20 @@ func TestLegacyIngestMatchesLiveFastAPI(t *testing.T) {
 		wire[index] = oracleWire{Route: item.Route, Env: item.Env, Headers: headers, Body: base64.StdEncoding.EncodeToString([]byte(item.Body))}
 	}
 	input, _ := json.Marshal(wire)
-	command := exec.Command(python, "-c", pythonProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
+	request := venueoracle.ProgramRequest("legacy ingest corpus", pythonProgram, input, nil)
+	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		python := pyoracle.Resolve(t, root)
+		command := exec.Command(python, "-c", pythonProgram)
+		command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
+		command.Stdin = strings.NewReader(string(input))
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(output)}}
+	})
+	frozen.Consumed(t, answers...)
+	output := []byte(answers[0].Body)
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []json.RawMessage
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -235,19 +240,9 @@ func TestLegacyIngestMatchesLiveFastAPI(t *testing.T) {
 	if mismatches > 0 {
 		t.Fatalf("%d of %d cases differ", mismatches, len(corpus))
 	}
-	writeProof(t, "api-legacyingest")
+	frozen.SkipDiff(t)
+	frozen.Finish(t)
 	t.Logf("%d cases compared (statuses %v); 0 mismatches", len(corpus), statuses)
-}
-
-func writeProof(t *testing.T, name string) {
-	t.Helper()
-	dir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if dir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // normalizedRows renders a telemetry insert the way the Python program

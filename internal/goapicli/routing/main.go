@@ -58,6 +58,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"net"
 	"net/url"
@@ -456,7 +457,7 @@ func (c *commonFlags) bindPostgresURI(set *flag.FlagSet, usage string) {
 func (c *commonFlags) resolvePostgresURI() {
 	c.postgresURI = strings.TrimSpace(c.postgresURI)
 	if c.postgresURI == "" {
-		c.postgresURI = strings.TrimSpace(os.Getenv(postgresURIEnvVar))
+		c.postgresURI = strings.TrimSpace(envsecrets.GetenvNamed(postgresURIEnvVar))
 	}
 }
 
@@ -709,7 +710,7 @@ func (c *commonFlags) requirePostgres() error {
 // Credential.EnvelopeSubject, which stays inside package goapiproof --
 // the raw token still never reaches cmd/go-api-routing.
 func envelopeCredential() (*goapiproof.Credential, error) {
-	bearer := os.Getenv(bearerEnvVar)
+	bearer := envsecrets.GetenvNamed(bearerEnvVar)
 	if bearer == "" {
 		return nil, refuse("no credential: set %s to an effective-principal ENVELOPE, which is what /buildinfo checks (the VALUE is never printed by this command)", bearerEnvVar)
 	}

@@ -387,6 +387,21 @@ var unpinnedColumns = map[string]map[string]unpinnedColumn{
 	"teams":                       {"team_uuid": {randomID, "models/teams.py:50: uuid.uuid4()"}},
 }
 
+// idLinks are the relations between random-id columns: the ids are not comparable between two runs,
+// but inside one run the left column's ids are all among the right column's. Where both tables
+// exist in a world the relation must hold (worldContent reports a broken one), so a producer change
+// that stops stamping two tables with one run id is seen although neither id is compared by value.
+var idLinks = [][2]string{
+	{"work_unit_membership.run_id", "work_unit_membership_runs.run_id"},
+	{"work_unit_membership_runs.run_id", "work_unit_membership.run_id"},
+	{"work_unit_investment_quotes.categorization_run_id", "work_unit_investments.categorization_run_id"},
+	{"work_unit_repo_effort.categorization_run_id", "work_unit_investments.categorization_run_id"},
+	{"llm_token_usage.run_id", "work_unit_investments.categorization_run_id"},
+	{"work_unit_investment_quotes.categorization_run_id", "work_unit_repo_effort.categorization_run_id"},
+	{"work_unit_repo_effort.categorization_run_id", "llm_token_usage.run_id"},
+	{"llm_token_usage.run_id", "work_unit_investment_quotes.categorization_run_id"},
+}
+
 // frozenStampWindow is how long after its frozen_at a world's unpinned stamps may lie: the freezer
 // pins the producer to the instant it starts at and produces every world twice before it writes.
 const frozenStampWindow = 30 * time.Minute
@@ -456,6 +471,34 @@ func worldContent(tables []WorldTable, from, to time.Time) (content map[string]m
 		}
 		content[table.Name] = entry
 	}
+	// The links between random-id columns, inside this one world.
+	ids := map[string]map[string]bool{}
+	for _, table := range tables {
+		for index, column := range table.Columns {
+			if unpinnedColumns[table.Name][column.Name].class != randomID {
+				continue
+			}
+			set := map[string]bool{}
+			for _, row := range table.Rows {
+				if text, ok := row[index].(string); ok {
+					set[text] = true
+				}
+			}
+			ids[table.Name+"."+column.Name] = set
+		}
+	}
+	for _, link := range idLinks {
+		left, leftHeld := ids[link[0]]
+		right, rightHeld := ids[link[1]]
+		if !leftHeld || !rightHeld {
+			continue
+		}
+		for id := range left {
+			if !right[id] {
+				problems = append(problems, fmt.Sprintf("%s holds the id %s, which %s does not: the two are stamped with one id in one run", link[0], id, link[1]))
+			}
+		}
+	}
 	sort.Strings(problems)
 	return content, problems
 }
@@ -505,6 +548,13 @@ func TestWorldContentComparesValuesAndHoldsUnpinnedColumnsToTheirClass(t *testin
 				Columns: []FrozenColumn{{"id", "String"}, {"team_uuid", "UUID"}},
 				Rows:    [][]any{{"t1", "0f8fad5b-d9cb-469f-a165-70867728950e"}, {"t2", "7c9e6679-7425-40de-944b-e07fc1f90ae7"}}}},
 		}
+		tables = append(tables,
+			WorldTable{FrozenTable: FrozenTable{Name: "work_unit_membership",
+				Columns: []FrozenColumn{{"work_unit_id", "String"}, {"run_id", "String"}},
+				Rows:    [][]any{{"w1", "0123456789abcdef0123456789abcdef"}, {"w2", "0123456789abcdef0123456789abcdef"}}}},
+			WorldTable{FrozenTable: FrozenTable{Name: "work_unit_membership_runs",
+				Columns: []FrozenColumn{{"org_id", "String"}, {"run_id", "String"}},
+				Rows:    [][]any{{"o", "0123456789abcdef0123456789abcdef"}}}})
 		if edit != nil {
 			edit(tables)
 		}
@@ -541,6 +591,7 @@ func TestWorldContentComparesValuesAndHoldsUnpinnedColumnsToTheirClass(t *testin
 		"a listed stamp that is a number":         {func(tables []WorldTable) { tables[1].Rows[0][1] = json.Number("1") }, "", "is not a string"},
 		"a listed id that is not an id":           {func(tables []WorldTable) { tables[2].Rows[0][1] = "team-1" }, "", "is not an id"},
 		"a listed stamp missing in one row":       {func(tables []WorldTable) { tables[1].Rows[0][1] = nil }, "git_blame_dirty_paths.marked_at", ""},
+		"a run marker with another run's id":      {func(tables []WorldTable) { tables[4].Rows[0][1] = "fedcba9876543210fedcba9876543210" }, "", "are stamped with one id in one run"},
 		"two rows sharing one listed id":          {func(tables []WorldTable) { tables[2].Rows[1][1] = tables[2].Rows[0][1] }, "teams.team_uuid", ""},
 		"a new column nobody classified": {func(tables []WorldTable) {
 			tables[0].Columns = append(tables[0].Columns, FrozenColumn{"synced_at", "DateTime64(3, 'UTC')"})

@@ -153,7 +153,7 @@ func TestRunTestsFailsForAGoldenItsTestDidNotUse(t *testing.T) {
 			return OpenGolden(child, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
 		}
 		compare := func(child *testing.T, golden *Golden) {
-			answers := golden.Produce(child, "/no/python/here", requests, func(string, []Request) []Response { return nil })
+			answers := golden.Produce(child, "/no/python/here", requests, func(*Producer, []Request) []Response { return nil })
 			golden.Consumed(child, answers...)
 			golden.SkipDiff(child)
 		}

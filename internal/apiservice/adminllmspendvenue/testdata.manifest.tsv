@@ -1,4 +1,5 @@
 # Every file under internal/apiservice/adminllmspendvenue/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	spend_localzone.json
--	header	spend_utc.json
+# header-before-stamp set: a35baf7416e9674e9204edb77673c11a56442217e804e5d826d27f9d15ba14ed (2 files)
+af2e618c5b6d1fcc0a3e8bb66f7b1ecd5a8dc171d7a90c44f3b10588ec3db4ae	header-before-stamp	spend_localzone.json
+5adf6653989638eeb38586be3d95ab43c18c47ab82054204d6b6e7b53f9ff66f	header-before-stamp	spend_utc.json

@@ -1,4 +1,5 @@
 # Every file under internal/cli/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 -	header	golden/root_flags.json
 c42082fdb71e8384690f7b17f020bc6fb1e307064a086a514ea27f9d4f396f76	unclassified	root_flags_oracle.py

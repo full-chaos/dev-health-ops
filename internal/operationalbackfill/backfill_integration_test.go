@@ -473,7 +473,7 @@ func TestBackfillOperationalWritesTheFrozenPythonRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("backfill operational scenarios", operationalPythonProgram, input, operationalPythonSettings)
-	answers := goldenFile.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := goldenFile.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		var produced []golden
 		forEachShape(t, func(t *testing.T, ch clickHouse, _ string, group []scenario) {
 			for _, s := range comparable(group) {

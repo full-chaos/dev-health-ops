@@ -1,5 +1,6 @@
 # Every file under internal/goapiproof/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 4f6d203989ff205b1b94201504cbbf33ca4bb079d1ff74125048330ddf9ef0b7	unclassified	capacityforecast_stochastic_first_report_4f6d2039.json
 c1ad30cd3e81625ccc187de169714bffe2ad1f249e5bbf3b1d030a47369482a9	unclassified	capacityforecast_stochastic_second_report_c1ad30cd.json
 57bc6594e3d0d93250a2ebe3b5aba4c4881fb649a87c98a0c39a479c9df476e9	unclassified	drilldownprs_boundarycopy_baseline_57bc6594.json

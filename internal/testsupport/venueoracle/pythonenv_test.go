@@ -502,7 +502,7 @@ func TestStartRefusesAGoldenRecordedUnderAnotherPythonEnvironment(t *testing.T) 
 // raised, and legacyKeyGoldenCount goes down with every row that is deleted.
 const (
 	legacyKeyGoldenCeiling = 38
-	legacyKeyGoldenCount   = 38
+	legacyKeyGoldenCount   = 37
 )
 
 // legacyKeyGoldens reads the closed list: repository-relative paths, one per line.

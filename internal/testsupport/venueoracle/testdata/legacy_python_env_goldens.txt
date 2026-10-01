@@ -33,7 +33,6 @@ internal/apiservice/adminllmvenue/testdata/budget.json
 internal/apiservice/billingvenue/testdata/golden/TestInvoiceWebhookAppliesTestModeEvents.json
 internal/apiservice/billingvenue/testdata/golden/TestRefundEventOwnershipGrid.json
 internal/apiservice/billingvenue/testdata/golden/TestRefundEventSettledGrid.json
-internal/apiservice/billingvenue/testdata/golden/TestVenueOracleBillingEdge.json
 internal/apiservice/billingvenue/testdata/golden/TestVenueOracleBillingLedger.json
 internal/apiservice/billingvenue/testdata/golden/TestVenueOracleBillingPlansCheckout.json
 internal/apiservice/billingvenue/testdata/golden/TestVenueOracleBillingWebhook.json

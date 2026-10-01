@@ -192,7 +192,7 @@ var goldenOracles = []string{
 }
 
 var goldenPins = []string{
-	"ca56ab51efd2daa26198d191aff4f8711cb7eabf3b98a216496eef6d54437079",
+	"7076bb567067211c66de89db88d0a3a7d17d04ee65a033042a5b169ba45cd629",
 	"11a31b73914c5ddbf3853383489d18a71f20efc090d136219321adbdc5aa88a8",
 	"7bbaaf09dc400706d9b2c7de9d9428e14d7aedddfdf0e576d81350ce25a4f4ef",
 	"8b5ff7eeb5f773ef9ce637e4e9ba1b120abe24aa0b539baddd0a14459eb5dd88",

@@ -241,7 +241,7 @@ func TestTheVersionProbeRunsInTheClosedEnvironment(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("PYTHONHOME", "/a-directory-that-does-not-exist")
 	t.Setenv("AMBIENT_OF_THE_DAY", "1")
-	if err := ProbeDeployed(python, root); err != nil {
+	if err := probeDeployed(t, python, root); err != nil {
 		t.Fatalf("the probe did not pass under a recording test's guard: %v", err)
 	}
 	raw, err := os.ReadFile(envFile)
@@ -273,12 +273,12 @@ func TestAProbeThatCannotStartSaysWhatTheInterpreterWrote(t *testing.T) {
 	if err := os.WriteFile(python, []byte("#!/bin/sh\necho 'Fatal Python error: the reason is here' >&2\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	err := ProbeDeployed(python, t.TempDir())
+	err := probeDeployed(t, python, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "Fatal Python error: the reason is here") || !strings.Contains(err.Error(), "exit status 1") {
 		t.Fatalf("the error does not hold what the interpreter wrote: %v", err)
 	}
 	old, _ := refusingInterpreter(t, "3.12")
-	if err := ProbeDeployed(old, t.TempDir()); err == nil || !strings.Contains(err.Error(), `resolved Python "3.12"`) {
+	if err := probeDeployed(t, old, t.TempDir()); err == nil || !strings.Contains(err.Error(), `resolved Python "3.12"`) {
 		t.Fatalf("an older release was not refused by what it said: %v", err)
 	}
 }

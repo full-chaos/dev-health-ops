@@ -197,3 +197,19 @@ func TestDocRouteClassProofOfAStochasticRootNeedsTheDeclaration(t *testing.T) {
 		t.Fatalf("a drawn-value difference without the declaration was not blocked: verdict %+v defects %v", verdict, receipt.BaselineDefects)
 	}
 }
+
+// A stochastic shape of a document operation that is not itself receipt-backed is EXCLUDED and named, exactly like a match would be: the
+// class proof never counts a shape whose document operation has no admissible receipt at this build.
+func TestStochasticShapeOfAnUnbackedDocumentOperationIsExcluded(t *testing.T) {
+	outcomes, runner := stochasticDocRouteRun(t,
+		forecastBody(t, "go", map[string]any{"p85Days": 4, "p85Date": forecastDay(4)}), forecastBody(t, "go", nil))
+	sources := map[string][]string{mcpclass.Operation("capacityForecast"): {"capacityForecast"}}
+	receipts, verdicts, err := runner.MCPClassReceipts(outcomes, sources, map[string]bool{"capacityForecast": false}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := verdicts[0]
+	if len(receipts) != 0 || v.Executed != 0 || len(v.Stochastic) != 0 || len(v.Excluded) != 1 || !strings.HasSuffix(v.Excluded[0], "=doc_operation_not_receipt_backed") {
+		t.Fatalf("an unbacked stochastic shape was counted: receipts=%d verdict %+v", len(receipts), v)
+	}
+}

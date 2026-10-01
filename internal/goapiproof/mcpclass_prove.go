@@ -246,10 +246,10 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 		}
 		sealed := r.sealed[index]
 		state, reason := classifyMCPOutcome(outcome)
-		// An unbacked document operation's shape is excluded only when it MATCHED: a
+		// An unbacked document operation's shape is excluded only when it MATCHED or is proven under the stochastic leaf class (both would count): a
 		// divergence between the MCP pipeline and the document route blocks the root
 		// whether or not the document operation itself is receipt-backed.
-		if state == "executed" && r.Config.DocRouteReference && !docBacked[outcome.Operation] && sealedMatches(sealed) {
+		if state == "executed" && r.Config.DocRouteReference && !docBacked[outcome.Operation] && (sealedMatches(sealed) || sealedStochasticCitation(sealed) != "") {
 			state, reason = "excluded", "doc_operation_not_receipt_backed"
 		}
 		// A shape refused for measuring nothing (both answers empty: the org holds no data

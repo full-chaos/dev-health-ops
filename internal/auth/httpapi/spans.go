@@ -65,6 +65,12 @@ func (s spanObserver) start(r *http.Request) (context.Context, trace.Span) {
 	}
 	if s.trustRemoteSampling {
 		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
+		// The caller's tracestate is a request header value: a span inherits
+		// and exports its parent's, so it is dropped. Trace id, parent span id
+		// and the sampled flag are what the in-cluster caller sends to be used.
+		if remote := trace.SpanContextFromContext(ctx); remote.IsValid() {
+			ctx = trace.ContextWithRemoteSpanContext(ctx, remote.WithTraceState(trace.TraceState{}))
+		}
 	} else {
 		options = append(options, trace.WithNewRoot())
 	}
@@ -76,8 +82,11 @@ func (s spanObserver) start(r *http.Request) (context.Context, trace.Span) {
 	return otel.Tracer(spanTracerName).Start(ctx, method+" "+UnmatchedRoute, options...)
 }
 
-// finish names and ends the span. status is 0 for an aborted handler.
-func (s spanObserver) finish(span trace.Span, method, pattern string, status int) {
+// finish names and ends the span. aborted is true when the handler did not
+// return (http.ErrAbortHandler re-panicked to net/http): the response was cut
+// off, whatever status had been committed before, so the span is an error one.
+// status is 0 when none was committed.
+func (s spanObserver) finish(span trace.Span, method, pattern string, status int, aborted bool) {
 	if span == nil {
 		return
 	}
@@ -87,14 +96,14 @@ func (s spanObserver) finish(span trace.Span, method, pattern string, status int
 		span.SetAttributes(attribute.String("http.route", pattern))
 	}
 	span.SetName(method + " " + pattern)
+	if status > 0 {
+		span.SetAttributes(attribute.Int("http.response.status_code", status))
+	}
 	switch {
-	case status == 0:
+	case aborted:
 		span.SetStatus(codes.Error, "aborted")
 	case status >= 500:
-		span.SetAttributes(attribute.Int("http.response.status_code", status))
 		span.SetStatus(codes.Error, "")
-	default:
-		span.SetAttributes(attribute.Int("http.response.status_code", status))
 	}
 	span.End()
 }

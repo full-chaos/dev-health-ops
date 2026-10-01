@@ -305,3 +305,73 @@ func TestAnOuterListenerWithoutATraceparentUsesTheRootSampler(t *testing.T) {
 		t.Fatalf("spans = %v, want one root span", spans)
 	}
 }
+
+// TestTheInternalListenerNeverExportsTheCallersTracestate: the in-cluster
+// caller's trace id, parent span id and sampled flag are used, but its
+// tracestate header value must not reach the exported span.
+func TestTheInternalListenerNeverExportsTheCallersTracestate(t *testing.T) {
+	read := tracedEnv(t, "1")
+	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	get(spanHandler(t, "internal", true, itemsRoute()), "/v1/items/1", map[string]string{
+		"traceparent": sampledParent(traceID, "00f067aa0ba902b7"),
+		"tracestate":  "vendor=tracestatecanary",
+	})
+	spans := read()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	if got := hex.EncodeToString(spans[0].GetTraceId()); got != traceID {
+		t.Errorf("trace id = %s, want the caller's %s", got, traceID)
+	}
+	if spans[0].GetTraceState() != "" || strings.Contains(fmt.Sprint(spans[0]), "tracestatecanary") {
+		t.Errorf("the caller's tracestate reached the exported span: %q", spans[0].GetTraceState())
+	}
+}
+
+// TestAnAbortedHandlerEndsItsSpanInErrorWhateverWasCommitted: a handler that
+// wrote a 200 and then aborted the response cut the client off, so its span is
+// an error span even though the committed status is 200; the status that was
+// committed stays on the span, as it stays on the metric.
+func TestAnAbortedHandlerEndsItsSpanInErrorWhateverWasCommitted(t *testing.T) {
+	read := tracedEnv(t, "1")
+	abort := func(write bool) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if write {
+				_, _ = w.Write([]byte("partial"))
+			}
+			panic(http.ErrAbortHandler)
+		})
+	}
+	handler := spanHandler(t, "public", false,
+		Route{Method: http.MethodGet, Pattern: "/v1/abort-after-body", Handler: abort(true)},
+		Route{Method: http.MethodGet, Pattern: "/v1/abort-before-body", Handler: abort(false)})
+	for _, target := range []string{"/v1/abort-after-body", "/v1/abort-before-body"} {
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != http.ErrAbortHandler {
+					t.Errorf("%s: recovered %v, want http.ErrAbortHandler re-panicked to net/http", target, recovered)
+				}
+			}()
+			get(handler, target, nil)
+		}()
+	}
+	byName := map[string]*tracepb.Span{}
+	for _, span := range read() {
+		byName[span.GetName()] = span
+	}
+	for _, name := range []string{"GET /v1/abort-after-body", "GET /v1/abort-before-body"} {
+		span := byName[name]
+		if span == nil {
+			t.Fatalf("no span %q in %v", name, byName)
+		}
+		if span.GetStatus().GetCode() != tracepb.Status_STATUS_CODE_ERROR {
+			t.Errorf("%s: span status = %v, want error", name, span.GetStatus())
+		}
+	}
+	if status, _ := attrInt(byName["GET /v1/abort-after-body"], "http.response.status_code"); status != http.StatusOK {
+		t.Errorf("committed status attribute = %d, want 200", status)
+	}
+	if _, has := attrInt(byName["GET /v1/abort-before-body"], "http.response.status_code"); has {
+		t.Errorf("a response that committed nothing carries a status attribute")
+	}
+}

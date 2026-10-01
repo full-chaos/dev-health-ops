@@ -131,8 +131,10 @@ func TestClassifyMCPOutcome(t *testing.T) {
 		"python informational":      {refused(http.StatusForbidden, 199), "failed"},
 		"known refusal":             {Outcome{KnownRefusal: &KnownRefusal{}}, "excluded"},
 		"needs an instance id":      {Outcome{RefusalReason: RefusalNeedsInstanceID}, "excluded"},
-		"admission refusal":         {Outcome{RefusalReason: RefusalWrongPlane}, "failed"},
-		"non-success without legs":  {Outcome{RefusalReason: RefusalNonSuccessStatus}, "failed"},
+		"known refusal tag, doc-route, needs an instance id": {Outcome{EdgeMode: EdgeModeDocRoute, KnownRefusal: &KnownRefusal{}, RefusalReason: RefusalNeedsInstanceID}, "excluded"},
+		"known refusal tag, doc-route, any other refusal":    {Outcome{EdgeMode: EdgeModeDocRoute, KnownRefusal: &KnownRefusal{}, RefusalReason: RefusalWrongPlane}, "failed"},
+		"admission refusal":        {Outcome{RefusalReason: RefusalWrongPlane}, "failed"},
+		"non-success without legs": {Outcome{RefusalReason: RefusalNonSuccessStatus}, "failed"},
 	} {
 		state, reason := classifyMCPOutcome(tc.outcome)
 		if state != tc.state {
@@ -262,4 +264,21 @@ func TestEnableNamesAClassKindOnADocumentOperation(t *testing.T) {
 // mcpRefusalBody is the listener's typed refusal body (errors[0].extensions.reason).
 func mcpRefusalBody(reason string) []byte {
 	return []byte(`{"errors":[{"message":"refused","extensions":{"code":"MCP_REFUSED","reason":"` + reason + `"}}]}`)
+}
+
+// CHAOS-7500: the reason named on the receipt is the TRUE one. In the Python reference a known-refusal tag excludes the shape as such; in doc-route
+// mode the tag does not apply and the shape that needs an instance id says so.
+func TestClassifyMCPOutcomeNamesTheTrueReasonInDocRouteMode(t *testing.T) {
+	tagged := Outcome{KnownRefusal: &KnownRefusal{}, RefusalReason: RefusalNeedsInstanceID}
+	if state, reason := classifyMCPOutcome(tagged); state != "excluded" || reason != "known_refusal" {
+		t.Fatalf("python reference: %s %s", state, reason)
+	}
+	tagged.EdgeMode = EdgeModeDocRoute
+	if state, reason := classifyMCPOutcome(tagged); state != "excluded" || reason != "needs_instance_identifier" {
+		t.Fatalf("doc-route: %s %s, want excluded needs_instance_identifier", state, reason)
+	}
+	tagged.RefusalReason = RefusalWrongPlane
+	if state, reason := classifyMCPOutcome(tagged); state != "failed" || reason != RefusalWrongPlane {
+		t.Fatalf("doc-route, other refusal: %s %s, want failed with the true reason", state, reason)
+	}
 }

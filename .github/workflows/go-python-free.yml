@@ -33,6 +33,7 @@ on:
       - '.github/workflows/go-python-free.yml'
       - 'ci/check_go.sh'
       - 'ci/python_tripwire.sh'
+      - 'ci/python_tripwire_shim.sh'
       - 'ci/python_free_ratchet.sh'
       - 'ci/python_free_known.tsv'
   # Only a pull request that edits this workflow or its scripts runs it (so the change that touches the
@@ -46,8 +47,11 @@ permissions:
   packages: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  # The fleet-wide shape of go.yml / venue-oracles.yml (CHAOS-4906): group by PR number on a pull_request, by
+  # commit sha on a push to main (never cancelled), by ref otherwise; a re-push to a branch or PR cancels the
+  # stale run. A scheduled run on main shares its ref group with nothing else.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 jobs:
   plan:

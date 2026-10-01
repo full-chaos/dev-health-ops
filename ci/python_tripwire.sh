@@ -38,33 +38,19 @@ PYTHON_TRIPWIRE_DIR="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/python-tripwir
 PYTHON_TRIPWIRE_LOG="${PYTHON_TRIPWIRE_LOG:-${PYTHON_TRIPWIRE_DIR}/hits.log}"
 : >"${PYTHON_TRIPWIRE_LOG}"
 
-# The shim body, written once from a quoted template: @NAME@ and @LOG@ are the only substitutions.
-_python_tripwire_template="${PYTHON_TRIPWIRE_DIR}/.shim-template"
-cat >"${_python_tripwire_template}" <<'SHIM'
-#!/bin/sh
-# parent = the nearest ancestor that is a Go test binary (*.test), else the direct parent: a start through
-# `sh -c` or a helper script is still attributed to the test binary that ran it.
-parent="$(tr '\000' ' ' < "/proc/$PPID/cmdline" 2>/dev/null)"
-p=$PPID
-depth=0
-while [ "$p" -gt 1 ] 2>/dev/null && [ "$depth" -lt 12 ]; do
-  cmd="$(tr '\000' ' ' < "/proc/$p/cmdline" 2>/dev/null)"
-  case "${cmd%% *}" in
-    *.test) parent="$cmd"; break ;;
-  esac
-  p="$(awk '/^PPid:/ { print $2 }' "/proc/$p/status" 2>/dev/null)"
-  depth=$((depth + 1))
-done
-printf 'pid=%s ppid=%s shim=%s argv=%s parent=%s\n' "$$" "$PPID" "@NAME@" "$*" "$parent" >> "@LOG@"
-echo "PYTHON TRIPWIRE: @NAME@ invoked with: $* (parent: $parent)" >&2
-exit 97
-SHIM
+# The shim body is ci/python_tripwire_shim.sh: @NAME@ and @LOG@ are the only substitutions.
+_python_tripwire_shim="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/python_tripwire_shim.sh"
+[ -f "${_python_tripwire_shim}" ] || {
+  _python_tripwire_refuse "the shim template ${_python_tripwire_shim} is missing"
+  # shellcheck disable=SC2317
+  return 1 2>/dev/null || exit 1
+}
 for _python_tripwire_name in python python3 python3.13 python3.14 pip pip3 uv; do
   sed -e "s|@NAME@|${_python_tripwire_name}|g" -e "s|@LOG@|${PYTHON_TRIPWIRE_LOG}|g" \
-    "${_python_tripwire_template}" >"${PYTHON_TRIPWIRE_DIR}/${_python_tripwire_name}"
+    "${_python_tripwire_shim}" >"${PYTHON_TRIPWIRE_DIR}/${_python_tripwire_name}"
   chmod +x "${PYTHON_TRIPWIRE_DIR}/${_python_tripwire_name}"
 done
-rm -f "${_python_tripwire_template}"
+unset _python_tripwire_shim
 unset _python_tripwire_name
 
 export PYTHON_TRIPWIRE_DIR PYTHON_TRIPWIRE_LOG

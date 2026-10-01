@@ -684,7 +684,61 @@ func TestTheStartOfThisTreeHasTheFormTheReportIsPutInto(t *testing.T) {
 	if found := startHead.FindAllIndex(source, -1); len(found) != 1 {
 		t.Fatalf("venueoracle.Start matches the report's insertion point %d times, want once", len(found))
 	}
-	if !strings.Contains(reportSource, "pythonEnvKey(env)") || !strings.Contains(string(source), "options.PythonEnv") {
-		t.Fatal("the report no longer reads the key of options.PythonEnv")
+	if !strings.Contains(reportSource, "pythonEnvKey(pythonPlaneEnv(options, nil))") || !strings.Contains(string(source), "bindPythonEnv(pythonPlaneEnv(options, nil))") {
+		t.Fatal("the report and Start no longer take the key over the same environment")
+	}
+}
+
+// The harness of a recording commit must have handed the Python plane the
+// environment the working tree's harness does: the legacy statement in Start
+// for a commit from before the key, the same pythonPlaneEnv after it.
+func TestTheHarnessOfARecordingCommitMustHandThePythonPlaneTheSameEnvironment(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ours, err := os.ReadFile(filepath.Join(root, "internal", "testsupport", "venueoracle", "pythonenv.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planeEnvFunction.Find(ours) == nil {
+		t.Fatal("pythonPlaneEnv of this tree is not found: the check would compare nothing")
+	}
+	tree := func(start, env string) string {
+		dir := filepath.Join(t.TempDir(), "internal", "testsupport", "venueoracle")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "venueoracle.go"), []byte(start), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if env != "" {
+			if err := os.WriteFile(filepath.Join(dir, "pythonenv.go"), []byte(env), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return filepath.Dir(filepath.Dir(filepath.Dir(dir)))
+	}
+	legacy := "package venueoracle\n\nfunc Start() {\n\t// a comment\n\t" + legacyPlaneEnv + "\n}\n"
+	for name, c := range map[string]struct {
+		start, env string
+		refusal    string // "" = accepted
+	}{
+		"a commit from before the key":          {legacy, "", ""},
+		"the same statement, other white space": {strings.ReplaceAll(legacy, "\n\t\t", "\n  "), "", ""},
+		"a harness setting had another value":   {strings.Replace(legacy, "ENVIRONMENT=test", "ENVIRONMENT=dev", 1), "", "another environment than the one known"},
+		"a harness setting more":                {strings.Replace(legacy, `"ENVIRONMENT=test", `, `"ENVIRONMENT=test", "EXTRA=1", `, 1), "", "another environment than the one known"},
+		"a commit with this tree's function":    {"package venueoracle\n", string(ours), ""},
+		"a commit with another function":        {"package venueoracle\n", strings.Replace(string(ours), "ENVIRONMENT=test", "ENVIRONMENT=dev", 1), "another environment than the harness of the working tree"},
+		"a commit with neither":                 {"package venueoracle\n", "", "in a way this tool does not know"},
+		"a commit with a file and no function":  {"package venueoracle\n", "package venueoracle\n", "another environment than the harness of the working tree"},
+	} {
+		err := harnessEnvErr(root, tree(c.start, c.env))
+		if c.refusal == "" && err != nil {
+			t.Errorf("%s: refused: %v", name, err)
+		}
+		if c.refusal != "" && (err == nil || !strings.Contains(err.Error(), c.refusal)) {
+			t.Errorf("%s: err = %v, want a refusal holding %q", name, err, c.refusal)
+		}
 	}
 }

@@ -166,8 +166,9 @@ type goldenHeader struct {
 	// PassedEnv is the sorted names of the ambient variables the recorder
 	// passed to the recording beyond its fixed set (GoldenSpec.PassEnv).
 	PassedEnv []string `json:"passed_env,omitempty"`
-	// PythonEnv is the key of the Python settings the venue test declared
-	// when the answers were recorded (pythonEnvKey over Options.PythonEnv):
+	// PythonEnv is the key of the environment the venue handed to the Python
+	// plane when the answers were recorded (pythonEnvKey over pythonPlaneEnv:
+	// the harness's settings, Options.JWTKey and Options.PythonEnv):
 	// a frozen run with other settings is refused instead of being served
 	// answers the real Python api would not give under them.
 	PythonEnv string `json:"python_env,omitempty"`
@@ -198,9 +199,9 @@ func (g *Golden) bindPythonEnv(env []string) error {
 	case recorded == key:
 		return nil
 	case recorded == "":
-		return fmt.Errorf("golden %s was recorded before a golden kept the key of its venue's Python settings (Options.PythonEnv), so it cannot show that its answers were given under the settings this test declares; backfill the key (goldenrecord -backfill-python-env, which first shows that the test declared the same settings at the recording) or regenerate: %s", g.spec.Path, g.spec.Recipe)
+		return fmt.Errorf("golden %s was recorded before a golden kept the key of its venue's Python settings (Options.JWTKey, Options.PythonEnv and the harness's own), so it cannot show that its answers were given under the settings this test declares; backfill the key (goldenrecord -backfill-python-env, which first shows that the test declared the same settings at the recording) or regenerate: %s", g.spec.Path, g.spec.Recipe)
 	default:
-		return fmt.Errorf("golden %s was recorded under other Python settings than this test declares (Options.PythonEnv key %s, the golden's %s): a changed, added or removed setting changes what the real Python api answers; regenerate: %s", g.spec.Path, keyHead(key), keyHead(recorded), g.spec.Recipe)
+		return fmt.Errorf("golden %s was recorded under other Python settings than this test declares (key %s over Options.JWTKey, Options.PythonEnv and the harness's own settings; the golden's %s): a changed, added or removed setting changes what the real Python api answers; regenerate: %s", g.spec.Path, keyHead(key), keyHead(recorded), g.spec.Recipe)
 	}
 }
 

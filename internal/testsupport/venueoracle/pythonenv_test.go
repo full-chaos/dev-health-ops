@@ -200,25 +200,27 @@ func TestWithPythonEnvKeyAddsTheKeyAndTouchesNothingElse(t *testing.T) {
 }
 
 // startWithSettingsInChild runs the real Start in a child process, in a frozen
-// venue test whose golden was recorded under the settings recorded and which
-// declares the settings declared, and returns the child's output. The context
-// is cancelled, so a Start that gets past the settings check fails on its
-// first build step instead of building a venue.
-func startWithSettingsInChild(t *testing.T, env string, recorded []string, declared func(name string) []string, name string) (string, error, bool) {
+// venue test whose golden was recorded under the Options recorded and which
+// declares the Options declared(name), and returns the child's output. The
+// context is cancelled, so a Start that gets past the settings check fails on
+// its first build step instead of building a venue.
+func startWithSettingsInChild(t *testing.T, env string, recorded Options, declared func(name string) Options, name string) (string, error, bool) {
 	t.Helper()
 	if which := os.Getenv(env); which != "" {
 		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLES", "1")
 		t.Setenv(goldenUpdateEnv, "")
 		t.Setenv(goldenCandidateEnv, "")
-		key, err := pythonEnvKey(recorded)
+		key, err := pythonEnvKey(pythonPlaneEnv(recorded, nil))
 		if err != nil {
 			t.Fatal(err)
 		}
 		golden, _ := frozenWithEnv(t, key)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
+		options := declared(which)
+		options.Root, options.Golden = t.TempDir(), golden
 		t.Log("START CALLED")
-		Start(t, ctx, Options{Root: t.TempDir(), JWTKey: "k", Golden: golden, PythonEnv: declared(which)})
+		Start(t, ctx, options)
 		t.Log("START RETURNED")
 		return "", nil, true
 	}
@@ -228,19 +230,21 @@ func startWithSettingsInChild(t *testing.T, env string, recorded []string, decla
 	return string(output), err, false
 }
 
-// The real Start: a frozen golden recorded under one set of Python settings is
-// refused, before anything is built, by a test that declares another value
-// (the pinned clock), one variable more, or none.
+// The real Start: a frozen golden recorded under one environment of the Python
+// plane is refused, before anything is built, by a test that declares another
+// value (the pinned clock), one variable more, none, or another JWT key.
 func TestStartRefusesAGoldenRecordedUnderOtherPythonSettings(t *testing.T) {
-	recorded := []string{"VENUE_PINNED_NOW=2026-01-01T00:00:00Z", "SETTINGS_ENCRYPTION_KEY=k"}
-	cases := map[string][]string{
-		"a changed value":  {"VENUE_PINNED_NOW=2099-01-01T00:00:00Z", recorded[1]},
-		"a variable more":  append(append([]string{}, recorded...), "TRIAL_DAYS=7"),
-		"no settings":      nil,
-		"another per-run":  append(append([]string{}, recorded...), "VENUE_STRIPE_API_BASE=http://127.0.0.1:1"),
+	env := []string{"VENUE_PINNED_NOW=2026-01-01T00:00:00Z", "SETTINGS_ENCRYPTION_KEY=k"}
+	recorded := Options{JWTKey: "recorded", PythonEnv: env}
+	cases := map[string]Options{
+		"a changed value":  {JWTKey: recorded.JWTKey, PythonEnv: []string{"VENUE_PINNED_NOW=2099-01-01T00:00:00Z", env[1]}},
+		"a variable more":  {JWTKey: recorded.JWTKey, PythonEnv: append(append([]string{}, env...), "TRIAL_DAYS=7")},
+		"no settings":      {JWTKey: recorded.JWTKey},
+		"another per-run":  {JWTKey: recorded.JWTKey, PythonEnv: append(append([]string{}, env...), "VENUE_STRIPE_API_BASE=http://127.0.0.1:1")},
+		"another JWT key":  {JWTKey: "other", PythonEnv: env},
 		"the same (start)": recorded,
 	}
-	declared := func(name string) []string { return cases[name] }
+	declared := func(name string) Options { return cases[name] }
 	for name := range cases {
 		output, err, inChild := startWithSettingsInChild(t, "VENUEORACLE_PYTHON_ENV_START_CHILD", recorded, declared, name)
 		if inChild {
@@ -260,5 +264,53 @@ func TestStartRefusesAGoldenRecordedUnderOtherPythonSettings(t *testing.T) {
 		if err == nil || !refused || strings.Contains(output, "START RETURNED") {
 			t.Errorf("%s: Start did not refuse (err %v):\n%s", name, err, output)
 		}
+	}
+}
+
+// The key is taken over the whole environment the Python plane gets: the
+// harness's own settings, the JWT key and PythonEnv. And that environment is
+// the one Start built before a golden kept its key, entry for entry: a golden
+// from before the key can only be given the key of today's environment
+// because the two are the same.
+func TestThePlaneEnvironmentIsKeyedWholeAndIsTheOneOfTheGoldensFromBeforeTheKey(t *testing.T) {
+	options := Options{JWTKey: "jwt", PythonEnv: []string{"TRIAL_DAYS=7", "ENVIRONMENT=other"}}
+	perRun := map[string]string{"PYTHONPATH": "/checkout/src", "POSTGRES_URI": "postgresql+asyncpg://db", "REDIS_URL": "redis://cache", "CLICKHOUSE_URI": "http://ch"}
+	want := []string{"PYTHONPATH=/checkout/src", "POSTGRES_URI=postgresql+asyncpg://db",
+		"JWT_SECRET_KEY=jwt", "OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
+		"PGBOUNCER_TRANSACTION_MODE=true", "ENVIRONMENT=test", "REDIS_URL=redis://cache",
+		"CLICKHOUSE_URI=http://ch", "TRIAL_DAYS=7", "ENVIRONMENT=other"}
+	if got := pythonPlaneEnv(options, perRun); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("the Python plane's environment changed:\n got %q\nwant %q\na golden from before the key was recorded under the second one: it can no longer be given a key (remove the backfill verb), and every keyed golden must be recorded again", got, want)
+	}
+	key := func(o Options, values map[string]string) string {
+		out, err := pythonEnvKey(pythonPlaneEnv(o, values))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	base := key(options, nil)
+	// The values made for a run are not in the key; every name of them is listed as per-run.
+	if key(options, perRun) != base {
+		t.Fatal("the key depends on a per-run value")
+	}
+	for name := range perRun {
+		if _, listed := perRunPythonEnv[name]; !listed {
+			t.Fatalf("%s is given a per-run value and is not in perRunPythonEnv", name)
+		}
+	}
+	for name, other := range map[string]Options{
+		"another JWT key":       {JWTKey: "other", PythonEnv: options.PythonEnv},
+		"a PythonEnv value":     {JWTKey: "jwt", PythonEnv: []string{"TRIAL_DAYS=8", "ENVIRONMENT=other"}},
+		"an override taken out": {JWTKey: "jwt", PythonEnv: []string{"TRIAL_DAYS=7"}},
+	} {
+		if key(other, nil) == base {
+			t.Errorf("%s: the same key", name)
+		}
+	}
+	// A harness setting is in the key by value: PythonEnv setting it to its own value changes nothing, another value does.
+	plain := Options{JWTKey: "jwt"}
+	if key(Options{JWTKey: "jwt", PythonEnv: []string{"ENVIRONMENT=test"}}, nil) != key(plain, nil) || key(Options{JWTKey: "jwt", PythonEnv: []string{"ENVIRONMENT=production"}}, nil) == key(plain, nil) {
+		t.Fatal("the harness setting ENVIRONMENT is not in the key by value")
 	}
 }

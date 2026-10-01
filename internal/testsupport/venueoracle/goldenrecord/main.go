@@ -592,8 +592,8 @@ import (
 	"testing"
 )
 
-func venuePythonEnvReport(t *testing.T, env []string) {
-	key, err := pythonEnvKey(env)
+func venuePythonEnvReport(t *testing.T, options Options) {
+	key, err := pythonEnvKey(pythonPlaneEnv(options, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -614,11 +614,70 @@ func venuePythonEnvReport(t *testing.T, env []string) {
 // startHead is where the report call goes: the first statement of Start.
 var startHead = regexp.MustCompile(`func Start\(t \*testing\.T, ctx context\.Context, options Options\) \*Venue \{\n\tt\.Helper\(\)\n`)
 
+// legacyPlaneEnv is the statement with which venueoracle.Start built the
+// Python plane's environment in every commit before a golden kept its key. A
+// golden recorded then got exactly this environment around its test's JWT key
+// and PythonEnv; pythonPlaneEnv of the working tree must give the same one (a
+// test in package venueoracle holds that), so the key the working tree
+// computes for a test's Options is the key of what the recording ran under.
+const legacyPlaneEnv = `v.pythonEnv = append([]string{"PYTHONPATH=" + filepath.Join(options.Root, "src"), "POSTGRES_URI=" + async,
+		"JWT_SECRET_KEY=" + options.JWTKey, "OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
+		"PGBOUNCER_TRANSACTION_MODE=true", "ENVIRONMENT=test", "REDIS_URL=" + v.PythonValkeyURI,
+		"CLICKHOUSE_URI=" + v.AdminClickHouseHTTPURI(t, v.PythonClickHouseDB)},
+		options.PythonEnv...)`
+
+var (
+	planeEnvStatement = regexp.MustCompile(`(?s)v\.pythonEnv = append\(\[\]string\{.*?options\.PythonEnv\.\.\.\)`)
+	planeEnvFunction  = regexp.MustCompile(`(?s)\nfunc pythonPlaneEnv\(options Options, perRun map\[string\]string\) \[\]string \{.*?\n\}\n`)
+	commentLine       = regexp.MustCompile(`(?m)^\s*//.*$`)
+	blank             = regexp.MustCompile(`\s+`)
+)
+
+// codeText is source with its comment lines and all white space taken out.
+func codeText(source string) string {
+	return blank.ReplaceAllString(commentLine.ReplaceAllString(source, ""), "")
+}
+
+// harnessEnvErr is an error unless the harness of tree hands the Python plane
+// the environment the harness of root does. A tree from before the key built
+// it in Start with the legacy statement; a later tree builds it in
+// pythonPlaneEnv, which must be the function of root. A tree that does
+// neither cannot be shown to have recorded under today's harness settings.
+func harnessEnvErr(root, tree string) error {
+	harness := filepath.Join("internal", "testsupport", "venueoracle")
+	start, err := os.ReadFile(filepath.Join(tree, harness, "venueoracle.go"))
+	if err != nil {
+		return err
+	}
+	if statement := planeEnvStatement.Find(start); statement != nil {
+		if codeText(string(statement)) != codeText(legacyPlaneEnv) {
+			return errors.New("the harness of that commit handed the Python plane another environment than the one known for goldens from before the key")
+		}
+		return nil
+	}
+	theirs, err := os.ReadFile(filepath.Join(tree, harness, "pythonenv.go"))
+	if err != nil {
+		return fmt.Errorf("the harness of that commit builds the Python plane's environment in a way this tool does not know: %w", err)
+	}
+	ours, err := os.ReadFile(filepath.Join(root, harness, "pythonenv.go"))
+	if err != nil {
+		return err
+	}
+	then, now := planeEnvFunction.Find(theirs), planeEnvFunction.Find(ours)
+	if then == nil || now == nil || codeText(string(then)) != codeText(string(now)) {
+		return errors.New("the harness of that commit handed the Python plane another environment than the harness of the working tree does")
+	}
+	return nil
+}
+
 // declaredKeys is the default Config.Keys: it runs the selected tests of the
 // package in tree with a go test overlay that makes venueoracle.Start write
-// pythonEnvKey(options.PythonEnv) for the running test and stop, so it
-// executes what each test declares and builds no venue. The key function is
-// always the one of Root, so the keys of two trees compare.
+// the key of the Python plane's environment for the running test's Options
+// (pythonEnvKey over pythonPlaneEnv) and stop, so it executes what each test
+// declares and builds no venue. The two functions are always the ones of
+// Root, so the keys of two trees compare; that the harness of tree handed the
+// Python plane the environment those functions describe is checked first
+// (harnessEnvErr).
 func declaredKeys(cfg Config, tree string) (map[string]string, error) {
 	work, err := os.MkdirTemp("", "goldenrecord-keys-")
 	if err != nil {
@@ -629,6 +688,15 @@ func declaredKeys(cfg Config, tree string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	root, err := filepath.Abs(cfg.Root)
+	if err != nil {
+		return nil, err
+	}
+	if tree != root {
+		if err := harnessEnvErr(root, tree); err != nil {
+			return nil, err
+		}
+	}
 	harness := filepath.Join(tree, "internal", "testsupport", "venueoracle")
 	source, err := os.ReadFile(filepath.Join(harness, "venueoracle.go"))
 	if err != nil {
@@ -638,7 +706,7 @@ func declaredKeys(cfg Config, tree string) (map[string]string, error) {
 	if at == nil {
 		return nil, fmt.Errorf("%s has no venueoracle.Start of the form the report is put into", tree)
 	}
-	patched := append(append(append([]byte{}, source[:at[1]]...), "\tvenuePythonEnvReport(t, options.PythonEnv)\n"...), source[at[1]:]...)
+	patched := append(append(append([]byte{}, source[:at[1]]...), "\tvenuePythonEnvReport(t, options)\n"...), source[at[1]:]...)
 	keyFunction, err := filepath.Abs(filepath.Join(cfg.Root, "internal", "testsupport", "venueoracle", "pythonenv.go"))
 	if err != nil {
 		return nil, err

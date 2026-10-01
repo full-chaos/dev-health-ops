@@ -486,8 +486,9 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		t.Fatal("venue: a GoOnly venue has no golden: a golden holds the Python plane's answers, which a Go-only test never compares")
 	}
 	if options.Golden != nil {
-		// The Python settings this venue declares are part of the golden's key.
-		if err := options.Golden.bindPythonEnv(options.PythonEnv); err != nil {
+		// The environment this venue hands to the Python plane is part of the
+		// golden's key: the harness's settings, the JWT key and PythonEnv.
+		if err := options.Golden.bindPythonEnv(pythonPlaneEnv(options, nil)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -596,13 +597,8 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 
 	async := strings.Replace(v.AdminURI(t, v.SourceDB), "postgres://", "postgresql+asyncpg://", 1)
 	async = strings.Replace(async, "postgresql://", "postgresql+asyncpg://", 1)
-	v.pythonEnv = append([]string{"PYTHONPATH=" + filepath.Join(options.Root, "src"), "POSTGRES_URI=" + async,
-		"JWT_SECRET_KEY=" + options.JWTKey, "OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
-		// NullPool: TestClient gives each request its own event loop, and a
-		// pooled asyncpg connection cannot cross loops.
-		"PGBOUNCER_TRANSACTION_MODE=true", "ENVIRONMENT=test", "REDIS_URL=" + v.PythonValkeyURI,
-		"CLICKHOUSE_URI=" + v.AdminClickHouseHTTPURI(t, v.PythonClickHouseDB)},
-		options.PythonEnv...)
+	v.pythonEnv = pythonPlaneEnv(options, map[string]string{"PYTHONPATH": filepath.Join(options.Root, "src"), "POSTGRES_URI": async,
+		"REDIS_URL": v.PythonValkeyURI, "CLICKHOUSE_URI": v.AdminClickHouseHTTPURI(t, v.PythonClickHouseDB)})
 
 	// 1. The real schema, then one seed and its tokens.
 	if goSchema {

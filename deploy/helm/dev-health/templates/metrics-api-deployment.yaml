@@ -64,10 +64,18 @@ spec:
                 name: {{ include "dev-health.configMapName" . }}
             - secretRef:
                 name: {{ include "dev-health.secretName" . }}
-          {{- with .Values.metricsApi.extraEnv }}
-          env:
-            {{- toYaml . | nindent 12 }}
+          {{- /*
+          CHAOS-7421: the Python metrics api reads the ordering contract too
+          (unset is contract 1 there); see api-deployment.yaml.
+          */}}
+          {{- $metricsEnv := list (dict "name" "OPERATIONAL_ORDERING_CONTRACT" "value" (include "dev-health.operationalOrderingContract" .)) }}
+          {{- range (.Values.metricsApi.extraEnv | default (list)) }}
+          {{- if ne .name "OPERATIONAL_ORDERING_CONTRACT" }}
+          {{- $metricsEnv = append $metricsEnv . }}
           {{- end }}
+          {{- end }}
+          env:
+            {{- toYaml $metricsEnv | nindent 12 }}
           {{- with .Values.metricsApi.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}

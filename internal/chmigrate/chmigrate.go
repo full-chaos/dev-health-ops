@@ -42,6 +42,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 )
 
 // SchemaMigrationsTable records applied versions. Its shape is the one the
@@ -83,19 +85,16 @@ type ChainFile struct {
 	SQL     string
 }
 
-// ParseContract reads OPERATIONAL_ORDERING_CONTRACT the way the Python chain
-// does (storage/operational_ordering_guard.py).
+// ParseContract reads OPERATIONAL_ORDERING_CONTRACT through the one resolver
+// every binary uses (operationalordering.ResolveValue): unset or "2" is contract
+// 2, the head's; anything else, "1" included, is refused (contract 1 is
+// unsupported, D3635; the 067 rebuild exists only in the Python chain).
 func ParseContract(raw string, present bool) (int, error) {
-	if !present {
-		return 1, nil
+	contract, err := operationalordering.ResolveValue(raw, present)
+	if err != nil {
+		return 0, err
 	}
-	switch raw {
-	case "1":
-		return 1, nil
-	case "2":
-		return 2, nil
-	}
-	return 0, fmt.Errorf("%s must be 1 or 2, got %q", OrderingContractEnv, raw)
+	return int(contract), nil
 }
 
 // LoadBaseline returns the checked-in head.

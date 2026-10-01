@@ -10,6 +10,7 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -39,6 +40,15 @@ type MCPClassRootStatus struct {
 	// state a digest move produces when carry did not run, so it is named.
 	Dark         bool
 	StaleDigests []string
+	// ProofReference, ProofExecuted, ProofMatched and ProofExcluded come from the
+	// admissible class receipt of the build the live row names (empty when there is
+	// none): what the MCP pipeline was compared with, how many shapes counted and
+	// matched, and every shape left out, "operation[:variant]=reason". An operator
+	// reads the exclusions here, not only in the prove report.
+	ProofReference string
+	ProofExecuted  int
+	ProofMatched   int
+	ProofExcluded  []string
 }
 
 // MCPClassStatusRows reports every allowlisted root at liveSchemaDigest.
@@ -110,6 +120,18 @@ func MCPClassStatusRows(ctx context.Context, db Querier, liveSchemaDigest string
 		}
 	}
 
+	provenance := map[string]*MCPClassProvenance{}
+	for operation, row := range live {
+		if !proven[operation] {
+			continue
+		}
+		p, err := classReceiptProvenance(ctx, db, liveSchemaDigest, operation, row.build)
+		if err != nil {
+			return nil, err
+		}
+		provenance[operation] = p
+	}
+
 	out := make([]MCPClassRootStatus, 0, len(mcpclass.SortedRoots()))
 	for _, root := range mcpclass.SortedRoots() {
 		operation := mcpclass.Operation(root)
@@ -124,6 +146,9 @@ func MCPClassStatusRows(ctx context.Context, db Querier, liveSchemaDigest string
 			status.CurrentCandidateBuild = row.build
 			status.Reachable = row.mode == TargetModeCanary || row.mode == TargetModePrimary
 			status.Proven = proven[operation]
+			if p := provenance[operation]; p != nil {
+				status.ProofReference, status.ProofExecuted, status.ProofMatched, status.ProofExcluded = p.Reference, p.Executed, p.Matched, p.Excluded
+			}
 		} else if len(status.StaleDigests) > 0 {
 			status.DigestState = DigestStale
 		} else {
@@ -133,4 +158,36 @@ func MCPClassStatusRows(ctx context.Context, db Querier, liveSchemaDigest string
 		out = append(out, status)
 	}
 	return out, nil
+}
+
+// classReceiptProvenance reads the class provenance of the newest ADMISSIBLE class
+// receipt for (schema digest, operation, build): the same predicate `enable` applies,
+// plus the class route and digest. nil when the receipt predates the provenance field.
+func classReceiptProvenance(ctx context.Context, db Querier, schemaDigest, operation, build string) (*MCPClassProvenance, error) {
+	clause, err := EnablementProofClause("p", TargetModeCanary)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Query(ctx, `
+		SELECT COALESCE(p.review_evidence, '')
+		  FROM go_api_proof_run AS p
+		 WHERE p.schema_digest = $1 AND p.document_digest = $2 AND p.selected_operation = $3
+		   AND p.candidate_build = $4 AND p.measurement_route = '`+RouteProof+`' AND (`+clause+`)
+		 ORDER BY p.observed_at DESC LIMIT 1`, schemaDigest, mcpclass.DocumentDigest(), operation, build)
+	if err != nil {
+		return nil, fmt.Errorf("goapiproof: read the class receipt of %s: %w", operation, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	var evidence string
+	if err := rows.Scan(&evidence); err != nil {
+		return nil, fmt.Errorf("goapiproof: scan the class receipt of %s: %w", operation, err)
+	}
+	var provenance ReceiptProvenance
+	if json.Unmarshal([]byte(evidence), &provenance) != nil {
+		return nil, nil
+	}
+	return provenance.MCPClass, nil
 }

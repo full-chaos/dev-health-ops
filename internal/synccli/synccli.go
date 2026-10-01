@@ -218,6 +218,9 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	}
 	boundary := secrets.NewBoundary(dsn.Reveal())
 	redact := func(err error) string { return boundary.Redact(settings.redact(err)).Error() }
+	// What the collector and the writer log (not only what they return) is
+	// redacted with the same boundary.
+	defer redactProcessLogger(boundary.RedactText)()
 
 	conn, err := d.openStore(ctx, dsn.Reveal())
 	if err != nil {

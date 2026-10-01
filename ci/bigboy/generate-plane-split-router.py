@@ -348,6 +348,7 @@ def query_api_paths_that_differ_by_host(doc: dict) -> list[str]:
             continue
         found += [
             f"{path} is sent to query-api by {', '.join(have)} and not by {source}"
+            f" (host {host.get('host')})"
             for path, have in carried.items()
             if source not in have
         ]
@@ -362,7 +363,7 @@ def query_api_paths_that_differ_by_host(doc: dict) -> list[str]:
                 f" has paths of its own beside `/`: {', '.join(own_paths)}"
                 for path, have in carried.items()
             ]
-    return list(dict.fromkeys(found))
+    return found
 
 
 def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:

@@ -866,11 +866,11 @@ _OWN_LIST = "ops.ingress.hosts[in-cluster.example].pythonAllowList"
 
 
 @pytest.mark.parametrize(
-    ("shared", "own", "has", "lacks"),
+    ("shared", "own", "has", "lacks", "host"),
     [
-        ([], [_GRAPHQL_QUERY, _METRICS], _OWN_LIST, _SHARED_LIST),
-        ([_GRAPHQL_QUERY], [_METRICS], _SHARED_LIST, _OWN_LIST),
-        ([_GRAPHQL_QUERY], [], _SHARED_LIST, _OWN_LIST),
+        ([], [_GRAPHQL_QUERY, _METRICS], _OWN_LIST, _SHARED_LIST, "api.example"),
+        ([_GRAPHQL_QUERY], [_METRICS], _SHARED_LIST, _OWN_LIST, "in-cluster.example"),
+        ([_GRAPHQL_QUERY], [], _SHARED_LIST, _OWN_LIST, "in-cluster.example"),
     ],
 )
 def test_a_named_backend_that_differs_by_host_is_refused(
@@ -881,6 +881,7 @@ def test_a_named_backend_that_differs_by_host_is_refused(
     own: list[dict],
     has: str,
     lacks: str,
+    host: str,
 ) -> None:
     """/graphql on query-api on one list and not named on the other is query-api on one prod
     host and the Go api's default on another. This router has one host: whichever of the two
@@ -890,7 +891,8 @@ def test_a_named_backend_that_differs_by_host_is_refused(
     assert captured.out == ""
     assert "REFUSED: one path, a backend that differs by host" in captured.err
     assert (
-        f"/graphql$ is sent to query-api by {has} and not by {lacks}\n" in captured.err
+        f"/graphql$ is sent to query-api by {has} and not by {lacks} (host {host})\n"
+        in captured.err
     )
 
 
@@ -1069,7 +1071,7 @@ def test_values_that_list_no_host_read_the_shared_list(
     assert _route(_emit(gen, doc), "/graphql") == "http://query-api:8090"
 
 
-def test_hosts_that_share_a_list_are_named_once(
+def test_every_host_that_lacks_the_entry_is_named(
     gen: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
     doc = _hosts_values(
@@ -1081,8 +1083,11 @@ def test_hosts_that_share_a_list_are_named_once(
         ],
     )
     assert _run(gen, tmp_path, doc) == 4
-    line = f"/graphql$ is sent to query-api by {_OWN_LIST} and not by {_SHARED_LIST}\n"
-    assert capsys.readouterr().err.count(line) == 1
+    err = capsys.readouterr().err
+    for host in ("a.example", "b.example"):
+        line = f"/graphql$ is sent to query-api by {_OWN_LIST} and not by {_SHARED_LIST} (host {host})\n"
+        assert err.count(line) == 1, host
+    assert "(host in-cluster.example)" not in err
 
 
 @pytest.mark.parametrize(

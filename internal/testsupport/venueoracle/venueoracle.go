@@ -1025,7 +1025,7 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 			if err != nil {
 				t.Fatal(err)
 			}
-			projectedGo, err := options.Golden.projectResponse(goResponse)
+			projectedGo, err := options.Golden.projectResponseAt(request.Name, goResponse)
 			if err != nil {
 				t.Fatal(err)
 			}

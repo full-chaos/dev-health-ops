@@ -1,0 +1,5 @@
+# Every file under internal/pythonparity/pyunicodedata/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/nfc.golden.json
+-	header	golden/tables.golden.json
+c1d6e80a10088faa6536d5860a5f09d035e8c769fc18582c9ad1b8100330d74d	unclassified	nfc_golden.jsonl

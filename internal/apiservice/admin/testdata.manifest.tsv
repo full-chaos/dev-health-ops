@@ -1,0 +1,20 @@
+# Every file under internal/apiservice/admin/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	governance/credentialdelete.json
+-	header	governance/governance.json
+-	header	governance/llmsettings_keyed.json
+-	header	governance/llmsettings_nokey.json
+-	header	governance/retention.json
+-	header	governance/settings_keyed.json
+-	header	governance/settings_nokey.json
+905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770	unclassified	llmreadinessoracle/certify_oracle.py
+-	header	pagerduty/authorize_full.json
+-	header	pagerduty/authorize_noclientid.json
+-	header	pagerduty/authorize_nokey.json
+-	header	pagerduty/bindings.json
+-	header	pagerduty/callback.json
+-	header	pagerduty/disconnect.json
+-	header	pagerduty/disconnect_noclient.json
+-	header	pagerduty/services_full.json
+-	header	pagerduty/services_noapp.json
+-	header	pagerduty/status_preflight.json

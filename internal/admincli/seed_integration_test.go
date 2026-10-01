@@ -81,8 +81,8 @@ func TestStandardFeaturesMatchThePythonRegistry(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, seedGolden(t, "standard_features", "872225b77164e3a5e095cd15d9799b8c00cd2ce174de1b03a0bed8e4b7461922"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("standard features", registryProgram, nil, nil)},
-		func(root string, _ []venueoracle.Request) []venueoracle.Response {
-			return []venueoracle.Response{{Body: string(runPython(t, root, pyoracle.Resolve(t, root), registryProgram))}}
+		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+			return []venueoracle.Response{{Body: string(runPython(t, producer, registryProgram))}}
 		})
 	golden.Consumed(t, answers...)
 	var rows [][]string
@@ -153,9 +153,9 @@ func TestSeedMatchesThePythonProducer(t *testing.T) {
 		// and the rows it left are frozen.
 		var pythonWindow [2]time.Time
 		answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("seed: "+pass, seedProgram, nil, nil)},
-			func(root string, _ []venueoracle.Request) []venueoracle.Response {
+			func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 				pythonStarted := time.Now()
-				output := runPython(t, root, pyoracle.Resolve(t, root), seedProgram, uris[0])
+				output := runPython(t, producer, seedProgram, uris[0])
 				pythonWindow = [2]time.Time{pythonStarted, time.Now()}
 				return []venueoracle.Response{{Body: string(output)}}
 			})
@@ -338,14 +338,22 @@ func repoRoot(t *testing.T) string {
 	return root
 }
 
-func runPython(t *testing.T, root, python, program string, args ...string) []byte {
+// runPython runs program with args through the harness's launcher: the pinned
+// interpreter in the closed environment, so nothing ambient shapes the answer.
+// args are the program's own (the address of the run's database).
+func runPython(t *testing.T, producer *venueoracle.Producer, program string, args ...string) []byte {
 	t.Helper()
-	command := exec.Command(python, append([]string{"-c", program}, args...)...)
-	// The producer's whole environment: nothing ambient shapes its answer.
-	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-	output, err := command.CombinedOutput()
+	command, err := producer.Command(context.Background(), nil, nil, append([]string{"-c", program}, args...)...)
 	if err != nil {
-		t.Fatalf("python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
+	}
+	output, err := command.Output()
+	if err != nil {
+		var stderr []byte
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = exitErr.Stderr
+		}
+		t.Fatalf("python: %v", pyoracle.RunError(command.Path, err, stderr))
 	}
 	return output
 }

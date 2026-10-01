@@ -1,0 +1,142 @@
+{
+  "header": {
+    "test": "TestReadinessProbeMatchesTheFrozenPythonProbe",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestReadinessProbeMatchesTheFrozenPythonProbe$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "ready",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "af70f87692d37458cef265dc3c1f04ab5c065858a6d0a8853035af5e3ca21d3b",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"ready\", \"safe_error_code\": null}\n"
+    },
+    {
+      "name": "unauthorized -\u003e provider_not_configured",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "65184b5c1855ea7da8eca735d57ca9626d01e51719e7ede3d8ec21e436c6c9ca",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_not_configured\"}\n"
+    },
+    {
+      "name": "rate limited -\u003e rate_limited",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "d4fe3c2a54178c260a582976854d2c56d939e8a5bb824647531f303b39cf072e",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"rate_limited\"}\n"
+    },
+    {
+      "name": "bad request -\u003e invalid_request",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "183b0b56f24c7f08000af0c4b0f2c1900d48ecfa9d53f4be8f970cd09ec05b7e",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"invalid_request\"}\n"
+    },
+    {
+      "name": "model not found -\u003e model_not_supported",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "aebc8e9ceee29c10a5881409dc7d3a1420d8a42cdb445d773422a1378c4ed763",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"model_not_supported\"}\n"
+    },
+    {
+      "name": "server error -\u003e provider_unavailable",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "3d58d83cefe9e703869b6fb241a5693f90869327912d686c8e1d67a3918f4e83",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_unavailable\"}\n"
+    },
+    {
+      "name": "two tool calls -\u003e provider_contract_violation",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "8d82054630aa8b622d95483db45daf5f077867dc20355c318d3b62d784f144a3",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_contract_violation\"}\n"
+    },
+    {
+      "name": "finish_reason length -\u003e output_exhausted",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "6619380341d06da90b97a945d1b4c829722c165662a6ee29b2bdf5aa940bda21",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"output_exhausted\"}\n"
+    },
+    {
+      "name": "malformed final answer -\u003e invalid_response",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "11a94d9820b1ace90a2380ed14fcadc8b0526b4af7a5498ddb190966a967273a",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"invalid_response\"}\n"
+    },
+    {
+      "name": "extra envelope field -\u003e invalid_response",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "fe1c115d3e2657f356278d72330dff58fd7d11278f414253b3f3c2d346682d08",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"invalid_response\"}\n"
+    },
+    {
+      "name": "quota exhaustion (429) -\u003e provider_not_configured, not rate_limited",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "0c103e563241e1d405f5a4ac9f13151b94a002762e40c2b0dd9d2b35ffeb8db6",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_not_configured\"}\n"
+    },
+    {
+      "name": "one transient 500 then success -\u003e ready",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "f6486c55ebcafdde2215be5276c245526b84ec89b8f9fc58bac942aaa78cdff7",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"ready\", \"safe_error_code\": null}\n"
+    },
+    {
+      "name": "redirect is not followed -\u003e provider_unavailable",
+      "method": "PYTHON",
+      "path": "program sha256 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_sha256": "715ecea615916873da924cf0ec2800646750cdb1935db0f0be97c5477fdf2273",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"outcome\": \"failed\", \"safe_error_code\": \"provider_unavailable\"}\n"
+    }
+  ]
+}

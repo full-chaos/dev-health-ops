@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"sort"
 	"testing"
@@ -91,15 +90,21 @@ print(json.dumps(sorted(org_deletion._clickhouse_tables_from_migrations())))
 	// org_deletion.py's table list, parsed from the pinned build's migration
 	// files while recording, frozen otherwise.
 	answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("clickhouse org tables", script, nil, nil)},
-		func(root string, _ []venueoracle.Request) []venueoracle.Response {
-			python := pyoracle.Resolve(t, root)
-			cmd := exec.Command(python, "-c", script)
-			cmd.Dir = root
-			// The producer's whole environment: nothing ambient shapes its answer.
-			cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONDONTWRITEBYTECODE=1"}
+		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+			// The harness starts the child in the closed environment: nothing
+			// ambient shapes its answer.
+			cmd, err := producer.Command(ctx, nil, nil, "-c", script)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd.Dir = producer.Root
 			output, err := cmd.Output()
 			if err != nil {
-				t.Fatalf("python: %v", pyoracle.RunError(python, err, output))
+				var stderr []byte
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					stderr = exitErr.Stderr
+				}
+				t.Fatalf("python: %v", pyoracle.RunError(cmd.Path, err, stderr))
 			}
 			return []venueoracle.Response{{Status: 0, Body: string(output)}}
 		})

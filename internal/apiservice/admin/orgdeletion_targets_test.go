@@ -2,9 +2,8 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -24,19 +23,6 @@ func orgDeletionRepoRoot(t *testing.T) string {
 		t.Fatal("cannot locate this test's source file")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-}
-
-func orgDeletionInterpreter(t *testing.T, root string) string {
-	t.Helper()
-	venv := filepath.Join(root, ".venv", "bin", "python3")
-	if info, err := os.Stat(venv); err == nil && !info.IsDir() {
-		return venv
-	}
-	path, err := exec.LookPath("python3")
-	if err != nil {
-		t.Fatal("recording needs a python3 interpreter")
-	}
-	return path
 }
 
 // pythonDeletionTarget is one entry of the introspection script's JSON
@@ -126,11 +112,14 @@ out = [describe(t) for t in org_deletion._postgres_targets()]
 print(json.dumps(out))
 `
 	answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("org deletion targets", script, nil, nil)},
-		func(root string, _ []venueoracle.Request) []venueoracle.Response {
-			cmd := exec.Command(orgDeletionInterpreter(t, root), "-c", script)
-			cmd.Dir = root
-			// The producer's whole environment: nothing ambient shapes its answer.
-			cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONDONTWRITEBYTECODE=1"}
+		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+			// The harness starts the child in the closed environment: nothing
+			// ambient shapes its answer.
+			cmd, err := producer.Command(context.Background(), nil, nil, "-c", script)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd.Dir = producer.Root
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
 			output, err := cmd.Output()

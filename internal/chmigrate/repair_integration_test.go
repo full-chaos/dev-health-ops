@@ -194,6 +194,8 @@ const repairGolden = "testdata/repair_golden.json"
 // not a freshness check: the file is only rewritten by
 // TestRepairVenueOracleMatchesThePythonProducer with DHO_REPAIR_GOLDEN_UPDATE=1,
 // then this digest is updated.
+// Recorded again in a closed environment (CHAOS-7471, byte-identical) at chmigrate's
+// pythonGoldenBuild.
 const repairGoldenSHA256 = "71881e8263ab0d427ed0b4e98040d079659c9c6a4fef10baf0acf2e045eab051"
 
 func TestRepairGoldenIsTheFileTheDigestPins(t *testing.T) {

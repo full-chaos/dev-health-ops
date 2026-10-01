@@ -267,7 +267,7 @@ func TestDBLookupsMatchFrozenPython(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/db_lookup.json",
 		PythonBuild: dbLookupPythonBuild,
-		SHA256:      "14e80709091558deb9714f6bcda0b63a034a6ac988b88ec0141b29608d6237e6",
+		SHA256:      "ee4c149d85d5af2089c7f331b2bbabd1427536c4ff7766c9db2221cd7c21468c",
 		Recipe: "git worktree add --detach $DIR " + dbLookupPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestDBLookupsMatchFrozenPython$' -python-root $DIR",
 	})

@@ -81,22 +81,76 @@ func TestAPythonStringLiteralKeepsEveryCharacter(t *testing.T) {
 	}
 }
 
+// fakeInterpreter puts a python3 that is a shell script first on PATH and
+// returns its path. The script gets the program text as its second argument:
+// "leak" prints the per-run database entry, "fail" writes it to stderr, prints
+// a part of an answer and exits 3, any other text prints "ok".
+func fakeInterpreter(t *testing.T) string {
+	t.Helper()
+	bin := t.TempDir()
+	script := "#!/bin/sh\ncase \"$2\" in\n" +
+		"leak) printf '%s' \"$ORACLE_DATABASE_URI\" ;;\n" +
+		"fail) printf 'cannot reach %s\n' \"$ORACLE_DATABASE_URI\" >&2; printf 'part'; exit 3 ;;\n" +
+		"*) printf 'ok' ;;\nesac\n"
+	python3 := filepath.Join(bin, "python3")
+	if err := os.WriteFile(python3, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return python3
+}
+
 // TestTheInterpreterRunsInThePinnedCheckout pins the command of a recording:
-// python3 by name with the program as -c text, the pinned checkout as working
-// directory, the program's input, and the interpreter environment.
+// the python3 that is first on PATH, started under its full path, with the
+// program as -c text, the pinned checkout as working directory, the program's
+// input, and the interpreter environment.
 func TestTheInterpreterRunsInThePinnedCheckout(t *testing.T) {
+	python3 := fakeInterpreter(t)
 	command := interpreterCommand("/pinned", Program{Text: "print(1)", Stdin: []byte("in")}, nil)
 	if command.Dir != "/pinned" {
 		t.Errorf("working directory = %q", command.Dir)
 	}
-	if strings.Join(command.Args, " ") != "python3 -c print(1)" {
-		t.Errorf("arguments = %q", command.Args)
+	if command.Path != python3 {
+		t.Errorf("the command starts %q, want the python3 first on PATH (%s)", command.Path, python3)
+	}
+	if want := []string{python3, "-c", "print(1)"}; !slices.Equal(command.Args, want) {
+		t.Errorf("arguments = %q, want %q: the interpreter must get its full path as its name", command.Args, want)
 	}
 	if input, err := io.ReadAll(command.Stdin); err != nil || string(input) != "in" {
 		t.Errorf("input = %q, %v", input, err)
 	}
 	if !slices.Contains(command.Env, "PYTHONPATH="+filepath.Join("/pinned", "src")) {
 		t.Errorf("environment = %q", command.Env)
+	}
+}
+
+// TestARunRefusesAnAnswerWithAPerRunValueAndLogsNone pins what a run does with
+// the entries of one run: an answer that holds one is an error, and the
+// stderr it returns for the log holds none.
+func TestARunRefusesAnAnswerWithAPerRunValueAndLogsNone(t *testing.T) {
+	fakeInterpreter(t)
+	address, host, _, _ := perRunAddress()
+	perRun := func() map[string]string { return map[string]string{"ORACLE_DATABASE_URI": address} }
+	root := t.TempDir()
+	if result, err := executeErr(root, Program{Name: "clean", Text: "clean", PerRun: perRun}); err != nil || result.exitCode != 0 || string(result.stdout) != "ok" {
+		t.Fatalf("a clean answer = %+v, %v", result, err)
+	}
+	result, err := executeErr(root, Program{Name: "leaks", Text: "leak", PerRun: perRun})
+	if err == nil || !strings.Contains(err.Error(), "value of the per-run entry ORACLE_DATABASE_URI") {
+		t.Fatalf("an answer that holds the address = %+v, %v: want it refused by the name of the entry", result, err)
+	}
+	if strings.Contains(err.Error(), host) || len(result.stdout) != 0 {
+		t.Fatalf("the refusal hands the address on: %v, stdout %q", err, result.stdout)
+	}
+	result, err = executeErr(root, Program{Name: "fails", Text: "fail", PerRun: perRun})
+	if err != nil || result.exitCode != 3 || string(result.stdout) != "part" {
+		t.Fatalf("a program that exits 3 = %+v, %v", result, err)
+	}
+	if want := "cannot reach <ORACLE_DATABASE_URI value>\n"; result.stderr != want {
+		t.Fatalf("stderr for the log = %q, want %q", result.stderr, want)
+	}
+	if result, err := executeErr(root, Program{Name: "no entries", Text: "leak"}); err != nil || len(result.stdout) != 0 {
+		t.Fatalf("a program with no per-run entry = %+v, %v", result, err)
 	}
 }
 

@@ -362,20 +362,34 @@ func interpreterDir(path string) (string, error) {
 
 // interpreterCommand is the command a recording runs for program: python3 (the
 // activated interpreter) with the program as its -c text, in the pinned
-// checkout, with the program's input and the interpreter environment.
+// checkout, with the program's input and the interpreter environment. The
+// interpreter gets its own full path as its name: it looks for its
+// environment (the installed distributions) beside the file it was started
+// as, and with only the name it would look the name up on the closed PATH of
+// its environment and find another interpreter.
 func interpreterCommand(pinnedRoot string, program Program, perRun map[string]string) *exec.Cmd {
 	command := exec.Command("python3", "-c", program.Text)
+	if command.Err == nil {
+		command.Args[0] = command.Path
+	}
 	command.Dir = pinnedRoot
 	command.Stdin = bytes.NewReader(program.Stdin)
 	command.Env = interpreterEnv(pinnedRoot, program, perRun)
 	return command
 }
 
-// execute runs program with the activated interpreter and returns its exit
-// code and stdout. An interpreter that cannot be started fails the test, and
-// so does an answer that holds a part of a per-run entry.
-func execute(t *testing.T, pinnedRoot string, program Program) (int, []byte) {
-	t.Helper()
+// executed is what one run of a program gave. stderr holds no part of a
+// per-run entry.
+type executed struct {
+	exitCode int
+	stdout   []byte
+	stderr   string
+}
+
+// executeErr runs program with the activated interpreter. It is an error when
+// the interpreter cannot be started and when the answer holds a part of a
+// per-run entry.
+func executeErr(pinnedRoot string, program Program) (executed, error) {
 	var perRun map[string]string
 	if program.PerRun != nil {
 		perRun = program.PerRun()
@@ -384,19 +398,33 @@ func execute(t *testing.T, pinnedRoot string, program Program) (int, []byte) {
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	stdout, err := command.Output()
+	result := executed{stdout: stdout, stderr: withoutPerRun(stderr.String(), perRun)}
 	if leak := perRunErr(program.Name, string(stdout), perRun); leak != nil {
-		t.Fatal(leak)
-	}
-	if err == nil {
-		return 0, stdout
+		return executed{}, leak
 	}
 	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		t.Logf("programoracle: program %q exited %d; stderr: %s", program.Name, exit.ExitCode(), withoutPerRun(stderr.String(), perRun))
-		return exit.ExitCode(), stdout
+	switch {
+	case err == nil:
+	case errors.As(err, &exit):
+		result.exitCode = exit.ExitCode()
+	default:
+		return executed{}, fmt.Errorf("programoracle: program %q: %w", program.Name, pyoracle.RunError("python3", err, []byte(result.stderr)))
 	}
-	t.Fatalf("programoracle: program %q: %v", program.Name, pyoracle.RunError("python3", err, []byte(withoutPerRun(stderr.String(), perRun))))
-	return 0, nil
+	return result, nil
+}
+
+// execute is executeErr for a recording: an error fails the test, and the
+// stderr of a program that exited non-zero is logged.
+func execute(t *testing.T, pinnedRoot string, program Program) (int, []byte) {
+	t.Helper()
+	result, err := executeErr(pinnedRoot, program)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.exitCode != 0 {
+		t.Logf("programoracle: program %q exited %d; stderr: %s", program.Name, result.exitCode, result.stderr)
+	}
+	return result.exitCode, result.stdout
 }
 
 // Set is the goldens of one package's program oracles: where they live, the

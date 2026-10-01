@@ -142,11 +142,61 @@ const noRequest = "<no request>"
 // reach is not proven: a family fired only on an untested path reads as
 // not firing under that route.
 func TestPythonMetricsTableSweepVenueOracle(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the sweep runs the live Python api's tests; run with DEV_HEALTH_LIVE_PYTHON_ORACLES=1")
+	golden := venueoracle.OpenGolden(t, sweepGoldenSpec(t.Name(), "PIN:table-sweep.golden"))
+	root := golden.PythonRoot(t, venueRoot())
+	// The sweep is one Python run (the migrations, then the api's route tests
+	// under sweepPlugin); its answer is the map of metric families to the routes
+	// they fired under, executed once on the pinned build and frozen.
+	request := venueoracle.ProgramRequest("python api route sweep", sweepPlugin+"\n"+sweepMigrateProgram+"\n# pytest tests/api -m 'not benchmark and not clickhouse'", nil, nil)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		body, err := json.Marshal(sortedFired(runSweep(t, root)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(body)}}
+	})
+	golden.Consumed(t, answers...)
+	var recorded map[string][]string
+	if err := json.Unmarshal([]byte(answers[0].Body), &recorded); err != nil {
+		t.Fatalf("decode the frozen sweep: %v", err)
 	}
-	checkSweptTable(t, runSweep(t), dhoAPIServes(t), parsePythonMetricsTable(t))
-	venueoracle.WriteProof(t)
+	fired := map[string]map[string]bool{}
+	for family, routes := range recorded {
+		fired[family] = map[string]bool{}
+		for _, route := range routes {
+			fired[family][route] = true
+		}
+	}
+	checkSweptTable(t, fired, dhoAPIServes(t), parsePythonMetricsTable(t))
+	golden.SkipDiff(t)
+	venueoracle.WriteGoOnlyProof(t, "the Go api's counter table against the frozen sweep of the Python api's route tests")
+	golden.Finish(t)
+}
+
+// sweepPythonBuild is the build whose Python api tests the sweep ran: the one
+// the table python_metrics.tsv describes.
+const sweepPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// sweepGoldenSpec is the GoldenSpec of the sweep's golden; digest is the
+// SHA-256 the test pins ("PIN:table-sweep.golden" until its first recording).
+func sweepGoldenSpec(test, digest string) venueoracle.GoldenSpec {
+	return venueoracle.GoldenSpec{
+		Path:        "testdata/table-sweep.golden.json",
+		PythonBuild: sweepPythonBuild,
+		SHA256:      digest,
+		Recipe: fmt.Sprintf("git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); then from the repository root: "+
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/metricsvenue/ -test '^%s$' -python-root $DIR",
+			sweepPythonBuild, test),
+	}
+}
+
+// sortedFired is the sweep's result as sorted lists, the form that is frozen.
+func sortedFired(fired map[string]map[string]bool) map[string][]string {
+	out := make(map[string][]string, len(fired))
+	for family, routes := range fired {
+		out[family] = sortedKeys(routes)
+	}
+	return out
 }
 
 // checkSweptTable applies the rules above to a sweep's result (family ->
@@ -225,9 +275,8 @@ func checkSweptTable(t *testing.T, fired map[string]map[string]bool, served func
 // migrates that database to the Alembic heads first, as the venue does:
 // some of these tests expect the app schema, which the Python test job
 // only has because its migration tests (outside tests/api) ran first.
-func runSweep(t *testing.T) map[string]map[string]bool {
+func runSweep(t *testing.T, root string) map[string]map[string]bool {
 	t.Helper()
-	root := venueRoot()
 	python := pyoracle.Resolve(t, root)
 	postgres, err := containers.StartPostgres(context.Background())
 	if err != nil {

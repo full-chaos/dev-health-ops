@@ -13,7 +13,7 @@
       "body_sha256": "36b6ca18c26ad6cc503ace59d0df8f9d68e1a18ae9f2d31902ade48106492e77",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"issue_with_project_dimensions\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"gh:acme/api#7\"}, \"provider\": {\"t\": \"str\", \"v\": \"github\"}, \"title\": {\"t\": \"str\", \"v\": \"Repair delivery path\"}, \"type\": {\"t\": \"str\", \"v\": \"bug\"}, \"status\": {\"t\": \"str\", \"v\": \"in_progress\"}, \"status_raw\": {\"t\": \"str\", \"v\": \"Doing\"}, \"description\": null, \"repo_id\": null, \"native_team_key\": null, \"project_key\": null, \"project_id\": {\"t\": \"str\", \"v\": \"ghprojv2:acme#3\"}, \"project_name\": null, \"assignees\": [{\"t\": \"str\", \"v\": \"github:reviewer\"}], \"reporter\": {\"t\": \"str\", \"v\": \"github:author\"}, \"created_at\": {\"t\": \"datetime\", \"v\": \"2026-08-01T08:00:00.123456Z\"}, \"updated_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T09:30:00.654321Z\"}, \"started_at\": null, \"completed_at\": null, \"closed_at\": null, \"labels\": [{\"t\": \"str\", \"v\": \"bug\"}], \"story_points\": {\"t\": \"float\", \"v\": \"5.0\"}, \"sprint_id\": {\"t\": \"str\", \"v\": \"ITER_8\"}, \"sprint_name\": {\"t\": \"str\", \"v\": \"Sprint 8\"}, \"parent_id\": null, \"epic_id\": null, \"url\": {\"t\": \"str\", \"v\": \"https://github.com/acme/api/issues/7\"}, \"priority_raw\": null, \"service_class\": null, \"due_at\": null, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}], \"excluded_fields\": {}}\n"
     }
   ]

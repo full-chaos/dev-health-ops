@@ -13,7 +13,7 @@
       "body_sha256": "86a8e1d2af6ad1ca3ef6d7347c2ca80676b4f44ad16fe216f97b9790539a56a7",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"scannable_content\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"path\": {\"t\": \"str\", \"v\": \"src/main.go\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": {\"t\": \"str\", \"v\": \"package main\\n\"}}}, {\"id\": \"path_only\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"path\": {\"t\": \"str\", \"v\": \"README.md\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": null}}, {\"id\": \"empty_text_is_distinct_from_missing\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"path\": {\"t\": \"str\", \"v\": \"src/empty.go\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": {\"t\": \"str\", \"v\": \"\"}}}, {\"id\": \"paths_only_preserves_existing_content\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"path\": {\"t\": \"str\", \"v\": \"src/main.go\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": {\"t\": \"str\", \"v\": \"package existing\\n\"}}}], \"excluded_fields\": {\"last_synced\": \"Python GitFile defaults this persistence timestamp after backfill_file_records; Go carries the normalized collection instant\"}}\n"
     }
   ]

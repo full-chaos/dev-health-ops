@@ -13,7 +13,7 @@
       "body_sha256": "32a155efc83c122dec1afb6c20065174eb9e527ceb1b70d26d4cb777cfdf8764",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"case_sensitive_extensions\", \"row\": {\"producer_requests\": [{\"t\": \"str\", \"v\": \"/api/v4/projects/{project}/repository/tree?page=1\u0026per_page=100\u0026recursive=true\u0026ref=main\"}, {\"t\": \"str\", \"v\": \"/api/graphql\"}, {\"t\": \"str\", \"v\": \"/api/graphql\"}], \"requested_content_paths\": [{\"t\": \"str\", \"v\": \"src/main.go\"}, {\"t\": \"str\", \"v\": \"src/main.go\"}], \"usage_request_count\": {\"t\": \"int\", \"v\": \"3\"}, \"tree_paths\": [{\"t\": \"str\", \"v\": \"src/Main.GO\"}, {\"t\": \"str\", \"v\": \"src/mixed.Go\"}, {\"t\": \"str\", \"v\": \"src/main.go\"}], \"rows\": [{\"path\": {\"t\": \"str\", \"v\": \"src/Main.GO\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": null}, {\"path\": {\"t\": \"str\", \"v\": \"src/main.go\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": {\"t\": \"str\", \"v\": \"package main\\n\"}}, {\"path\": {\"t\": \"str\", \"v\": \"src/mixed.Go\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": null}], \"incomplete\": []}}], \"excluded_fields\": {}}\n"
     }
   ]

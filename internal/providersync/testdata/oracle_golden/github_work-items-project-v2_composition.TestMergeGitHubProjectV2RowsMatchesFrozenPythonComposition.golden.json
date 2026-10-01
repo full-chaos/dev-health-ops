@@ -13,7 +13,7 @@
       "body_sha256": "7ecff1886602f72410c509c3a7ca784bc3c9e3d7bbf4cb86fc7d668054dad2e2",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"last_wins_append\", \"row\": {\"item_ids\": [{\"t\": \"str\", \"v\": \"same\"}, {\"t\": \"str\", \"v\": \"repo-only\"}, {\"t\": \"str\", \"v\": \"project-only\"}], \"titles\": [{\"t\": \"str\", \"v\": \"project\"}, {\"t\": \"str\", \"v\": \"repo\"}, {\"t\": \"str\", \"v\": \"project\"}], \"transitions\": [{\"t\": \"str\", \"v\": \"repo-transition\"}, {\"t\": \"str\", \"v\": \"project-transition\"}]}}], \"excluded_fields\": {}}\n"
     }
   ]

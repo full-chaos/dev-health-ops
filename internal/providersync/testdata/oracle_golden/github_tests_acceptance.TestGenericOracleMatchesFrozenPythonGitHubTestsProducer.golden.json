@@ -13,7 +13,7 @@
       "body_sha256": "6f02f0d8b61e338587afcc14cdc39b5bafd86ad7ab507ace28fe33d4e5e056eb",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"required_main_branch_job\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"run_id\": {\"t\": \"str\", \"v\": \"9001\"}, \"check_key\": {\"t\": \"str\", \"v\": \"github_actions:f63cf8775466290d2bf259c2\"}, \"check_name\": {\"t\": \"str\", \"v\": \"unit\"}, \"provider\": {\"t\": \"str\", \"v\": \"github_actions\"}, \"requirement\": {\"t\": \"str\", \"v\": \"required\"}, \"result\": {\"t\": \"str\", \"v\": \"passed\"}, \"rule_version\": {\"t\": \"str\", \"v\": \"ci-acceptance.v1\"}, \"provenance\": {\"t\": \"str\", \"v\": \"github.branch_protection.required_status_checks\"}, \"observed_at\": {\"t\": \"datetime\", \"v\": \"2026-07-22T10:05:00Z\"}, \"target_branch\": {\"t\": \"str\", \"v\": \"main\"}, \"pr_number\": {\"t\": \"int\", \"v\": \"42\"}, \"source_url\": {\"t\": \"str\", \"v\": \"https://github.com/acme/api/actions/runs/9001\"}, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}], \"excluded_fields\": {\"last_synced\": \"stamped by the persistence boundary after project_checks returns\"}}\n"
     }
   ]

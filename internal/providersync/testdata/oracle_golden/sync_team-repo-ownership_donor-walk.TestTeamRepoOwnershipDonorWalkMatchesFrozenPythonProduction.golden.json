@@ -13,7 +13,7 @@
       "body_sha256": "ebf6c56e607df26de470e0e5f8edcd86297f7778af49ec2fe325bcbb538e10cd",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"own_project_id_wins_outright\", \"row\": {\"team_id\": {\"t\": \"str\", \"v\": \"team-own\"}}}, {\"id\": \"inheritable_relates_to_transfers\", \"row\": {\"team_id\": {\"t\": \"str\", \"v\": \"team-donor\"}}}, {\"id\": \"blocking_relationship_never_inherits\", \"row\": {\"team_id\": null}}, {\"id\": \"latest_edge_by_last_synced_wins\", \"row\": {\"team_id\": null}}, {\"id\": \"extkey_target_resolves_cross_provider\", \"row\": {\"team_id\": {\"t\": \"str\", \"v\": \"team-donor\"}}}, {\"id\": \"ambiguous_extkey_never_guessed\", \"row\": {\"team_id\": null}}, {\"id\": \"multiple_donor_candidates_pick_lexicographically_smallest\", \"row\": {\"team_id\": {\"t\": \"str\", \"v\": \"team-platform\"}}}, {\"id\": \"unowned_donor_never_suppresses_an_owned_donor\", \"row\": {\"team_id\": {\"t\": \"str\", \"v\": \"team-platform\"}}}], \"excluded_fields\": {}}\n"
     }
   ]

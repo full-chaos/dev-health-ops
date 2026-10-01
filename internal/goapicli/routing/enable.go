@@ -28,6 +28,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
@@ -47,15 +49,18 @@ import (
 // edge it is enabling rows for.
 func localSchemaDigest() string { return goapidigest.Schema(schemav1.SDL) }
 
+var allowExcludedName = regexp.MustCompile(`^[A-Za-z]{1,60}$`)
+
 func runEnable(argv []string) error {
 	set := newVerbFlagSet("enable")
 	var common commonFlags
-	var registryURL, buildInfoURL, expectBuild, mode string
+	var registryURL, buildInfoURL, expectBuild, mode, allowExcluded string
 	var rollout int
 	var dryRun bool
 	set.StringVar(&registryURL, "registry-url", "", "GET /registry on the DEPLOYED query-api (falls back to "+queryAPIURLEnvVar+"+\"/registry\")")
 	set.StringVar(&buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the DEPLOYED query-api -- the ONLY source of the candidate build written (falls back to "+queryAPIURLEnvVar+"+\"/buildinfo\")")
 	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_routing_state")
+	set.StringVar(&allowExcluded, "allow-excluded", "", "MCP class roots only (CHAOS-7512): comma-separated OPERATION names whose excluded (unmeasured) shapes on a class receipt you accept. Default empty = refuse any class receipt that lists an excluded shape. A name counts only if the go-served ledger also holds an UNPROVEN named-limit entry for that operation")
 	set.StringVar(&common.operations, "operations", "all-registered", "comma-separated operation names, or 'all-registered' (default)")
 	set.StringVar(&common.catalogPath, "catalog", goapiproof.DefaultCatalogPath, "the edge's registered-document catalog -- what the Python dispatcher can map a request to")
 	set.StringVar(&common.recordedBy, "recorded-by", "", "WHO is running this, recorded on every row touched (required)")
@@ -79,6 +84,17 @@ func runEnable(argv []string) error {
 	}
 	if err := common.requireProvenance(); err != nil {
 		return err
+	}
+	var allowedNames []string
+	if strings.TrimSpace(allowExcluded) != "" {
+		for _, name := range strings.Split(allowExcluded, ",") {
+			name = strings.TrimSpace(name)
+			if !allowExcludedName.MatchString(name) {
+				return refuse("-allow-excluded: %q is not an operation name (letters only, up to 60)", name)
+			}
+			allowedNames = append(allowedNames, name)
+		}
+		fmt.Fprintf(stdout, "go-api-routing: allow-excluded in use: %s\n", strings.Join(allowedNames, ","))
 	}
 	if err := common.requirePostgres(); err != nil {
 		return err
@@ -268,8 +284,9 @@ func runEnable(argv []string) error {
 		ReviewEvidence:    common.reviewEvidence,
 		// CHAOS-5505: WHO THE CREDENTIAL SAYS is acting. Distinct from
 		// -recorded-by, which is what the operator typed about themselves.
-		PrincipalID: principalID,
-		DryRun:      dryRun,
+		PrincipalID:   principalID,
+		AllowExcluded: allowedNames,
+		DryRun:        dryRun,
 	})
 	if err != nil {
 		if errors.Is(err, goapiproof.ErrEnableUnproven) || errors.Is(err, goapiproof.ErrEnableRequestRefused) {

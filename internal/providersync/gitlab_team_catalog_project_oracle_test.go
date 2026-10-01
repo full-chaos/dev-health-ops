@@ -27,7 +27,7 @@ type gitlabTeamCatalogProjectProducerRow struct {
 	LeadEmail  *string   `json:"lead_email"`
 }
 
-func TestGitLabReferenceProjectCatalogMatchesLivePythonProducer(t *testing.T) {
+func TestGitLabReferenceProjectCatalogMatchesFrozenPythonProducer(t *testing.T) {
 	// team_autoimport_gitlab.py is deleted -- native Go providersync is the
 	// only producer now. Frozen under the last live comparison (see
 	// testdata/oracle_frozen/README.md).

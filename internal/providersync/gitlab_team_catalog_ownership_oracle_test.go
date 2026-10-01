@@ -22,7 +22,7 @@ type gitlabTeamCatalogOwnershipProducerRow struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
-func TestGitLabReferenceOwnershipMatchesLivePythonProducer(t *testing.T) {
+func TestGitLabReferenceOwnershipMatchesFrozenPythonProducer(t *testing.T) {
 	// team_autoimport_gitlab.py is deleted -- native Go providersync is the
 	// only producer now. Frozen under the last live comparison (see
 	// testdata/oracle_frozen/README.md).

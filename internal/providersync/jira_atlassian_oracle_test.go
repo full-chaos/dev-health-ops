@@ -22,7 +22,7 @@ type jiraAtlassianOracleSurfaces struct {
 	AIAttributions []json.RawMessage `json:"ai_attributions"`
 }
 
-func TestJiraAtlassianSurfacesMatchLivePythonProducer(t *testing.T) {
+func TestJiraAtlassianSurfacesMatchFrozenPythonProducer(t *testing.T) {
 	// CHAOS-5329/CHAOS-3092: jira.normalize/jira.provider (the Python Jira
 	// ingestion path) is deleted -- providersync's JiraAtlassianRouteHandler
 	// is the only Jira work-items writer now. Frozen, see

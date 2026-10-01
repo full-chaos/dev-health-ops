@@ -20,7 +20,7 @@ func buildGitHubFileRowForOracle(t *testing.T, input map[string]any) gitFileRow 
 	)
 }
 
-func TestGenericOracleMatchesLivePythonForGitHubFilesRowConstruction(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitHubFilesRowConstruction(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "github/files/row", []oracleCase{
 		{ID: "scannable_content", Input: map[string]any{
 			"repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79", "path": "src/main.go",

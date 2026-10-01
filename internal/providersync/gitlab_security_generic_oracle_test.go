@@ -106,14 +106,14 @@ func oracleGitLabSecurityDependencyCases() []oracleCase {
 	}}
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabSecurityVulnerabilityRows(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabSecurityVulnerabilityRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "gitlab/security/vulnerability", oracleGitLabSecurityVulnerabilityCases(),
 		buildGitLabSecurityVulnerabilityRowForOracle, oracleGitLabSecurityGoOnlyFields,
 	)
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabSecurityDependencyRows(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabSecurityDependencyRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "gitlab/security/dependency", oracleGitLabSecurityDependencyCases(),
 		buildGitLabSecurityDependencyRowForOracle, oracleGitLabSecurityGoOnlyFields,
@@ -131,7 +131,7 @@ type gitLabSecurityTraversalTrace struct {
 	Rows              []gitLabSecurityTraversalTraceRow `json:"rows"`
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabSecurityTraversal(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabSecurityTraversal(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "gitlab/security/trace", oracleGitLabSecurityTraversalCases(),
 		buildGitLabSecurityTraversalTrace, nil,

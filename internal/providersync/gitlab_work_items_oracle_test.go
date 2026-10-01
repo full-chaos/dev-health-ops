@@ -14,7 +14,7 @@ var gitlabWorkItemsFetchGoOnlyFields = map[string]string{
 	"last_synced": "the Python semantic WorkItem dataclasses have no last_synced field; Go carries deterministic normalizedAt for replay",
 }
 
-func TestGitLabFetchWorkItemMatchesLivePythonProducer(t *testing.T) {
+func TestGitLabFetchWorkItemMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"gitlab/work-items/issue",
@@ -24,7 +24,7 @@ func TestGitLabFetchWorkItemMatchesLivePythonProducer(t *testing.T) {
 	)
 }
 
-func TestGitLabFetchStatusTransitionMatchesLivePythonProducer(t *testing.T) {
+func TestGitLabFetchStatusTransitionMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"gitlab/work-items/status-transition",

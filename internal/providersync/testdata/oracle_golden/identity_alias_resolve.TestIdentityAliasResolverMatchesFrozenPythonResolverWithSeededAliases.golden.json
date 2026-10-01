@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestIdentityAliasResolverMatchesFrozenPythonResolverWithSeededAliases",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair identity/alias/resolve: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestIdentityAliasResolverMatchesFrozenPythonResolverWithSeededAliases$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "identity/alias/resolve",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 38eaa36754bdb11c2834c1133648d9cb97830bfff1c645787886539f4e0a8d09",
+      "body_sha256": "947d9f6e3faa3e8d2e62330f7fcf4875e52d20476f942cfc1320657acc59102d",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"exact_login_alias\", \"row\": {\"resolved\": {\"t\": \"str\", \"v\": \"lead@example.com\"}, \"facets\": [{\"t\": \"str\", \"v\": \"lead@example.com\"}, {\"t\": \"str\", \"v\": \"github:octocat\"}]}}, {\"id\": \"case_different_login_alias\", \"row\": {\"resolved\": {\"t\": \"str\", \"v\": \"lead@example.com\"}, \"facets\": [{\"t\": \"str\", \"v\": \"lead@example.com\"}, {\"t\": \"str\", \"v\": \"github:OctoCat\"}]}}, {\"id\": \"email_alias\", \"row\": {\"resolved\": {\"t\": \"str\", \"v\": \"new.email@example.com\"}, \"facets\": [{\"t\": \"str\", \"v\": \"new.email@example.com\"}, {\"t\": \"str\", \"v\": \"old.email@example.com\"}]}}, {\"id\": \"unmapped_identity\", \"row\": {\"resolved\": {\"t\": \"str\", \"v\": \"gitlab:monalisa\"}, \"facets\": [{\"t\": \"str\", \"v\": \"gitlab:monalisa\"}]}}, {\"id\": \"provider_id_alias_to_different_person\", \"row\": {\"resolved\": {\"t\": \"str\", \"v\": \"person-b@example.com\"}, \"facets\": [{\"t\": \"str\", \"v\": \"person-b@example.com\"}, {\"t\": \"str\", \"v\": \"jira:accountid:acct-999\"}]}}], \"excluded_fields\": {}}\n"
+    }
+  ]
+}

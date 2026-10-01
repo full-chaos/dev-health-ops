@@ -23,7 +23,7 @@ func runComplexityOracle(t *testing.T, goldenPath, testPattern, name, script str
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := rotguard.Spec(goldenPath, "", "./internal/jobs/metrics/complexity/", testPattern)
+	spec := rotguard.Spec(goldenPath, complexityGoldenPins[filepath.Base(goldenPath)], "./internal/jobs/metrics/complexity/", testPattern)
 	answers := programoracle.Run(t, spec, root, []programoracle.Program{
 		programoracle.Script(name, scriptPath, string(source), stdin),
 	})
@@ -239,4 +239,11 @@ func complexityRepositoryRoot(t *testing.T) string {
 		}
 		directory = parent
 	}
+}
+
+// complexityGoldenPins holds the digest each golden of this package is pinned to (a placeholder until the
+// goldenrecord verb records the golden and replaces it).
+var complexityGoldenPins = map[string]string{
+	"blame_maxfiles_oracle.json": "PIN:blame_maxfiles_oracle",
+	"should_process_oracle.json": "PIN:should_process_oracle",
 }

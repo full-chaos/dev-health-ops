@@ -198,10 +198,17 @@ func textrefsRepositoryRoot(t *testing.T) string {
 // refused until it is recorded again.
 func textrefsProgram(t *testing.T, slug, test, name, text string) string {
 	t.Helper()
-	spec := rotguard.Spec("testdata/golden/"+slug+".json", "", "./internal/jobs/workgraph/textrefs/", "^"+test+"$")
+	spec := rotguard.Spec("testdata/golden/"+slug+".json", textrefsGoldenPins[slug], "./internal/jobs/workgraph/textrefs/", "^"+test+"$")
 	answers := programoracle.Run(t, spec, textrefsRepositoryRoot(t), []programoracle.Program{{Name: name, Text: text}})
 	if answers[0].ExitCode != 0 {
 		t.Fatalf("the %s program exited %d (stdout %q)", name, answers[0].ExitCode, answers[0].Stdout)
 	}
 	return answers[0].Stdout
+}
+
+// textrefsGoldenPins holds the digest each golden of this package is pinned to (a placeholder until the
+// goldenrecord verb records the golden and replaces it).
+var textrefsGoldenPins = map[string]string{
+	"charclass_allrunes": "PIN:charclass_allrunes",
+	"number_allrunes":    "PIN:number_allrunes",
 }

@@ -270,10 +270,20 @@ print(json.dumps({"mapping": mapping, "unicode": unicodedata.unidata_version}))
 // changed derivation is refused until it is recorded again.
 func edgesProgram(t *testing.T, slug, test, name, text string) string {
 	t.Helper()
-	spec := rotguard.Spec("testdata/golden/"+slug+".json", "", "./internal/jobs/workgraph/edges/", "^"+test+"$")
+	spec := rotguard.Spec("testdata/golden/"+slug+".json", edgesGoldenPins[slug], "./internal/jobs/workgraph/edges/", "^"+test+"$")
 	answers := programoracle.Run(t, spec, repositoryRootPath(t), []programoracle.Program{{Name: name, Text: text}})
 	if answers[0].ExitCode != 0 {
 		t.Fatalf("the %s program exited %d (stdout %q)", name, answers[0].ExitCode, answers[0].Stdout)
 	}
 	return answers[0].Stdout
+}
+
+// edgesGoldenPins holds the digest each golden of this package is pinned to (a placeholder until the
+// goldenrecord verb records the golden and replaces it).
+var edgesGoldenPins = map[string]string{
+	"numeric_type_digit_table": "PIN:numeric_type_digit_table",
+	"int_max_str_digits":       "PIN:int_max_str_digits",
+	"python_decimal_blocks":    "PIN:python_decimal_blocks",
+	"python_lower_multirune":   "PIN:python_lower_multirune",
+	"python_lower_allrunes":    "PIN:python_lower_allrunes",
 }

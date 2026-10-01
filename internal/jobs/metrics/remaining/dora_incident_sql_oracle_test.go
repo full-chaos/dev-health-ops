@@ -78,7 +78,7 @@ func TestGoIncidentProjectionMatchesLivePythonBuilder(t *testing.T) {
 			runs = append(runs, run{ci, fi})
 		}
 	}
-	spec := rotguard.Spec("testdata/golden/dora_incident_sql_oracle.json", "",
+	spec := rotguard.Spec("testdata/golden/dora_incident_sql_oracle.json", "PIN:dora_incident_sql_oracle",
 		"./internal/jobs/metrics/remaining/", "^TestGoIncidentProjectionMatchesLivePythonBuilder$")
 	answers := programoracle.Run(t, spec, repositoryRootForOracle(t), programs)
 

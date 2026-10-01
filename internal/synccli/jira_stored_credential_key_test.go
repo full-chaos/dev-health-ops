@@ -38,3 +38,19 @@ func TestStrictVerbExitsNonZeroWhenTheAtlassianLegFails(t *testing.T) {
 		t.Errorf("stdout=%q stderr=%q", stdout, stderr)
 	}
 }
+
+// D3678: the strict verb's stderr is a sink too. The gateway can echo the token AND the email it was sent;
+// neither may reach stderr or stdout (value-based redaction through secrets.Boundary).
+func TestStrictVerbStderrCarriesNeitherTheTokenNorTheEmailTheGatewayEchoes(t *testing.T) {
+	rec := &recorded{}
+	failure := errors.New("search atlassian teams: rejected Basic " + tokenValue + " for sync@example.test: token=" + tokenValue)
+	code, stdout, stderr := run(t, validEnv(), stubDeps(rec, failingClient{err: failure}, nil), "--provider", "jira", "--org", "o")
+	if code != cli.ExitFailure {
+		t.Fatalf("exit %d, want %d", code, cli.ExitFailure)
+	}
+	for _, sink := range []string{stdout, stderr} {
+		if strings.Contains(sink, tokenValue) || strings.Contains(sink, "sync@example.test") {
+			t.Fatalf("a credential value reached the verb's output: %q", sink)
+		}
+	}
+}

@@ -245,6 +245,13 @@ func TestTheInterpreterDirectoryMustHoldPython3(t *testing.T) {
 	if _, err := interpreterDir(python); err == nil {
 		t.Error("a python3 that is a directory was accepted")
 	}
+	// A name that is not on PATH is refused even when the working directory
+	// holds a python3: a name is looked up, never taken as a relative path.
+	here := t.TempDir()
+	if err := os.WriteFile(filepath.Join(here, "python3"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(here)
 	if _, err := interpreterDir("no-such-interpreter-on-path"); err == nil {
 		t.Error("an interpreter name that is not on PATH was accepted")
 	}

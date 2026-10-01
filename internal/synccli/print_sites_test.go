@@ -67,11 +67,19 @@ func TestEverySyncPrintSiteIsClassified(t *testing.T) {
 					found[name]++
 				}
 			case *ast.SelectorExpr:
+				if isLogLevelMethod(fun.Sel.Name) && isProcessLogger(fun.X) {
+					found[name]++
+					return true
+				}
 				owner, _ := fun.X.(*ast.Ident)
 				if owner == nil {
 					return true
 				}
 				switch {
+				case owner.Name == "fmt" && strings.HasPrefix(fun.Sel.Name, "Print"):
+					found[name]++
+				case owner.Name == "log" && (strings.HasPrefix(fun.Sel.Name, "Print") || strings.HasPrefix(fun.Sel.Name, "Fatal") || strings.HasPrefix(fun.Sel.Name, "Panic")):
+					found[name]++
 				case owner.Name == "fmt" && strings.HasPrefix(fun.Sel.Name, "Fprint"):
 					// a strings.Builder or bytes.Buffer is not an operator stream
 					if len(call.Args) > 0 {
@@ -79,8 +87,6 @@ func TestEverySyncPrintSiteIsClassified(t *testing.T) {
 							return true
 						}
 					}
-					found[name]++
-				case (owner.Name == "slog" || owner.Name == "logger") && (fun.Sel.Name == "Info" || fun.Sel.Name == "Warn" || fun.Sel.Name == "Error" || fun.Sel.Name == "Debug"):
 					found[name]++
 				}
 			}
@@ -105,4 +111,33 @@ func TestEverySyncPrintSiteIsClassified(t *testing.T) {
 			t.Errorf("%s is classified with %d site(s) but has none: remove the row", name, want)
 		}
 	}
+}
+
+// isLogLevelMethod is a slog level method, with or without a context.
+func isLogLevelMethod(name string) bool {
+	switch name {
+	case "Info", "Warn", "Error", "Debug", "InfoContext", "WarnContext", "ErrorContext", "DebugContext", "Log", "LogAttrs":
+		return true
+	}
+	return false
+}
+
+// isProcessLogger is a receiver that writes through a logger: the slog package,
+// a variable named logger, or a call that returns one (slog.Default(),
+// slog.Default().With(...), logger.With(...)).
+func isProcessLogger(expr ast.Expr) bool {
+	switch value := expr.(type) {
+	case *ast.Ident:
+		return value.Name == "slog" || value.Name == "logger"
+	case *ast.CallExpr:
+		if selector, ok := value.Fun.(*ast.SelectorExpr); ok {
+			if owner, ok := selector.X.(*ast.Ident); ok && owner.Name == "slog" && selector.Sel.Name == "Default" {
+				return true
+			}
+			if selector.Sel.Name == "With" || selector.Sel.Name == "WithGroup" {
+				return isProcessLogger(selector.X)
+			}
+		}
+	}
+	return false
 }

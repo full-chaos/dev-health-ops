@@ -255,7 +255,7 @@ func customerPushNormalizer(seeded map[string]bool, start time.Time) func(string
 // values blanked, and on each plane every minted token hashes to its
 // stored hash and prefix.
 func TestVenueOracleCustomerPushWrites(t *testing.T) {
-	spec := venueGolden("venue-oracle-customer-push-writes", t.Name(), "813d52dde0f7930d336a808a9750cbbe3c062eeaa801e56dd4e129eae4a0a9ca")
+	spec := venueGolden("venue-oracle-customer-push-writes", t.Name(), "c157fb41b79b696055102e5d601e1edba873f7814d8843f4697093ca927d3390")
 	// Recording, the Python plane's minted tokens are checked against its own
 	// database, so the scrub keeps each raw body it sees while the Python
 	// answers are fetched; the golden itself holds placeholders only.
@@ -455,8 +455,27 @@ func isRunTime(at time.Time) bool {
 // random value per mint, so the golden holds a placeholder for it on both planes.
 var customerPushToken = regexp.MustCompile(`fcpush_[A-Za-z0-9_-]+`)
 
+// customerPushGeneratedID is a random (version 4) UUID: the ids the planes
+// generate. Seeded ids are version 5 (stableVenueID) and stay as written.
+var customerPushGeneratedID = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
+
+// scrubCustomerPushTokens turns what a run generates into a placeholder, so the
+// golden holds no per-run value: minted tokens and their prefixes, generated
+// ids, and timestamps taken from the clock during the run.
 func scrubCustomerPushTokens(text string) string {
-	return customerPushToken.ReplaceAllString(text, "fcpush_<token>")
+	text = customerPushToken.ReplaceAllString(text, "fcpush_<token>")
+	text = customerPushGeneratedID.ReplaceAllString(text, "<id>")
+	return venueTimestamp.ReplaceAllStringFunc(text, func(match string) string {
+		for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999"} {
+			if at, err := time.Parse(layout, match); err == nil {
+				if isRunTime(at) {
+					return "<now>"
+				}
+				return match
+			}
+		}
+		return match
+	})
 }
 
 func TestScrubCustomerPushTokensIsIdempotentAndHidesTheValue(t *testing.T) {

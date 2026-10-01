@@ -87,13 +87,26 @@ func runDisable(argv []string) error {
 		}
 	}
 
-	catalog, err := goapiproof.LoadOperationCatalog(common.catalogPath)
+	scope, isClass, err := resolveClassScope(common.operations)
 	if err != nil {
-		return refuse("%v", err)
+		return err
 	}
-	operations, err := goapiproof.ResolveOperations(common.operations, catalog)
-	if err != nil {
-		return refuse("%v", err)
+	var catalog map[string]string
+	var operations []string
+	if isClass {
+		// MCP class rows (CHAOS-7214): the class digest stands in for the catalog's.
+		// No root-in-SDL check here on purpose: disabling a root the SDL no longer
+		// has is exactly the cleanup a removed root needs.
+		catalog, operations = scope.Digests, scope.Operations
+	} else {
+		catalog, err = goapiproof.LoadOperationCatalog(common.catalogPath)
+		if err != nil {
+			return refuse("%v", err)
+		}
+		operations, err = goapiproof.ResolveOperations(common.operations, catalog)
+		if err != nil {
+			return refuse("%v", err)
+		}
 	}
 	if documentDigest != "" && len(operations) != 1 {
 		return refuse("-document selects one specific row and requires exactly one -operations name, got %d (%v)", len(operations), operations)

@@ -286,6 +286,8 @@ func mountQueryRouteSets(getenv getenvFunc, mux, internalMux, mcpMux *http.Serve
 	// A test proves the public route
 	// set has no /query/proof-write.
 	mountProofWriteRoute(getenv, internalMux, handlers.ProofWrite)
+	// CHAOS-7214: the proof variant of the MCP class route, internalMux ONLY.
+	mountProofMCPRoute(getenv, internalMux, handlers.MCPProof)
 	// CHAOS-7085: on mcpMux ONLY. A test proves neither the public nor
 	// the internal route set reaches the MCP class.
 	mcpMux.Handle("/query", handlers.MCP)
@@ -402,6 +404,7 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 		// registered/not-registered lines exist to prevent (codex r1 F8).
 		mountProofRoute(getenv, mux, nil)
 		mountProofWriteRoute(getenv, internalMux, nil)
+		mountProofMCPRoute(getenv, internalMux, nil)
 	}
 
 	// The live users-row store behind every edge-verified REST route below

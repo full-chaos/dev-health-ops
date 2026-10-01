@@ -49,6 +49,7 @@ var tokenShapes = []tokenShape{
 	{"anthropic-key", regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`)},
 	{"openai-key", regexp.MustCompile(`\bsk-(proj-)?[A-Za-z0-9_-]{32,}`)},
 	{"linear-key", regexp.MustCompile(`lin_api_[A-Za-z0-9]{30,}`)},
+	{"customer-push-token", regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{16,}`)},
 	{"authorization-credential", regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{20,}`)},
 }
 

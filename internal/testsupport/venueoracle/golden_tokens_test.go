@@ -34,6 +34,7 @@ func tokenSamples() map[string]string {
 		"anthropic-key":            "sk-" + "ant-" + rep("g", 24),
 		"openai-key":               "sk-" + rep("h", 40),
 		"linear-key":               "lin" + "_api_" + rep("i", 36),
+		"customer-push-token":      "fc" + "push_" + strings.Repeat("k", 40),
 		"authorization-credential": "Bear" + "er " + rep("j", 30),
 	}
 }
@@ -41,8 +42,8 @@ func tokenSamples() map[string]string {
 func TestEveryTokenShapeIsFoundAndNamed(t *testing.T) {
 	samples := tokenSamples()
 	names := TokenShapeNames()
-	if len(names) != 13 || len(samples) != 13 {
-		t.Fatalf("shapes = %d, samples = %d, want 13 each", len(names), len(samples))
+	if len(names) != 14 || len(samples) != 14 {
+		t.Fatalf("shapes = %d, samples = %d, want 14 each", len(names), len(samples))
 	}
 	for _, name := range names {
 		sample, ok := samples[name]
@@ -217,8 +218,8 @@ func TestTheGateFailsOnAPlantedToken(t *testing.T) {
 		}
 	}
 	checked, violations := goldenTokenViolations(t, dir)
-	if checked != 13 || len(violations) != 13 {
-		t.Fatalf("planted 13 tokens: checked %d, reported %d", checked, len(violations))
+	if checked != 14 || len(violations) != 14 {
+		t.Fatalf("planted 14 tokens: checked %d, reported %d", checked, len(violations))
 	}
 }
 

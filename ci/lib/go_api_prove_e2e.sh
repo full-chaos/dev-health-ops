@@ -4,27 +4,23 @@
 # SOURCED by ci/run_live_backend_e2e.sh, never executed. Functions only, in
 # the same caller-set-globals style as ci/lib/go_worker_fixture.sh.
 #
-# What it proves. go-api-prove runs against a real query-api and the real
-# Python edge the caller already started, with NOTHING hand-minted: the
-# proof envelope comes from mint-envelope and the edge access token from
-# mint-edge-token, both signed locally from keys in their own environment,
-# the edge token for the dedicated proof service principal. Then the edge's
-# own per-request checks run against that principal: a bumped token_version
-# refuses the old token and a fresh mint is accepted, and an inactive
-# principal refuses the token while the minter refuses to mint.
+# What it proves. go-api-prove runs against a real query-api, whose own
+# /graphql is the product edge (CHAOS-6263: no Python process is involved),
+# with NOTHING hand-minted: the proof envelope comes from mint-envelope and
+# the edge access token from mint-edge-token, both signed locally from keys
+# in their own environment, the edge token for the dedicated proof service
+# principal. The prover runs in Go-edge mode (-go-edge): once with the
+# operation in shadow (measured through the proof route) and once in canary
+# (measured through /graphql itself). Then the edge's own per-request checks
+# run against that principal, with the registered document: a bumped
+# token_version refuses the old token and a fresh mint is accepted, and an
+# inactive principal refuses the token while the minter refuses to mint.
 #
-# Reads: ROOT_DIR, BIN_DIR, TMP_DIR, EDGE_BASE_URL, POSTGRES_URI,
-# CLICKHOUSE_URI_NATIVE, E2E_ORG_ID, JWT_SECRET_KEY, QUERY_API_PORT,
-# READINESS_ATTEMPTS, READINESS_SLEEP_SECS, EXIT_FAILURE. Sets QUERY_API_PID
-# (the caller declares it and stops it with stop_service). Requires
-# run_python and wait_for_http_ready to be defined.
-#
-# CHAOS-7039: EDGE_BASE_URL is the Python `dev-hops api` process, kept
-# booted ONLY for this file's /graphql leg (go_api_prove_e2e_edge_status
-# below) -- it is no longer the same process ci/run_live_backend_e2e.sh's
-# health/customer-push checks run against (that is now `dho api`, BASE_URL).
-# CHAOS-6263 (after CHAOS-6084) moves this leg onto query-api and retires
-# the Python process from the harness; this comment's owner is that ticket.
+# Reads: ROOT_DIR, BIN_DIR, TMP_DIR, POSTGRES_URI, CLICKHOUSE_URI_NATIVE,
+# E2E_ORG_ID, JWT_SECRET_KEY, QUERY_API_PORT, READINESS_ATTEMPTS,
+# READINESS_SLEEP_SECS, EXIT_FAILURE. Sets QUERY_API_PID (the caller declares
+# it and stops it with stop_service). Requires run_python and
+# wait_for_http_ready to be defined.
 #
 # CHAOS-6241: query_api_e2e_start/query_api_e2e_mint_envelope_token are also
 # called directly by the caller (ci/run_live_backend_e2e.sh) BEFORE
@@ -78,16 +74,19 @@ with engine.begin() as conn:
 engine.dispose()
 '
 
-# The fixture program that puts the measured operation's routing row in shadow
-# mode at the running build. It writes the row directly: `go-api-routing
-# enable` admits an operation only from a recorded proof run or a written
-# ledger limit, and the run this script checks is what records the first one. The digests come from the running query-api's own /registry.
+# The fixture program that puts the measured operation's routing row in the
+# given mode (shadow, then canary) at the running build. It writes the row
+# directly: `dho goapi routing enable` admits an operation only from a recorded
+# proof run or a written ledger limit, and the run this script checks is what
+# records the first one. The digests come from the running query-api's own /registry.
 GO_API_PROVE_E2E_ROUTING_PROGRAM='import json, os, sys
 from datetime import datetime, timezone
 from sqlalchemy import create_engine, text
 
 registry = json.load(open(sys.argv[1]))
-operation, build = sys.argv[2], sys.argv[3]
+operation, build, mode = sys.argv[2], sys.argv[3], sys.argv[4]
+if mode not in ("shadow", "canary"):
+    sys.exit("unknown routing mode " + mode)
 digest = {entry["operation"]: entry["document_digest"] for entry in registry["operations"]}.get(operation)
 if not digest:
     sys.exit("the running query-api does not register " + operation)
@@ -104,7 +103,7 @@ with engine.begin() as conn:
         " VALUES (:s, :d, :o, :b, :owner, :mode, 0, :why, :who, :now)"
         " ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE"
         " SET current_candidate_build = EXCLUDED.current_candidate_build, mode = EXCLUDED.mode, updated_at = EXCLUDED.updated_at"
-    ), dict(key, owner="go", mode="shadow", why="live-e2e: measure through the proof route, not the edge dispatcher",
+    ), dict(key, owner="go", mode=mode, why="live-e2e: measure through the proof route (shadow), then through /graphql (canary)",
             who="live-e2e", now=datetime.now(timezone.utc)))
 engine.dispose()
 '
@@ -131,16 +130,44 @@ go_api_prove_e2e_principal() {
   E2E_ORG_ID="${E2E_ORG_ID}" run_python "${GO_API_PROVE_E2E_DIR}/principal.py" "$1" "${GO_API_PROVE_E2E_PRINCIPAL_ID}"
 }
 
-# go_api_prove_e2e_edge_status TOKEN_FILE -- prints the HTTP status the edge
-# answers an authenticated GraphQL request with. The token reaches curl in a
-# header FILE, never on its command line.
+# The request the edge checks send: the measured operation's REGISTERED
+# document, from the same documents.json the prover reads, with the variables
+# its proof request carries (internal/goapiproof/operations.go). query-api's
+# /graphql serves registered documents only, so any other text (the old
+# `{ __typename }` probe) is a 404 whatever the token is.
+GO_API_PROVE_E2E_EDGE_REQUEST_PROGRAM='import json, sys
+
+documents, operation, org = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+texts = [entry["document"] for entry in documents if entry["operation"] == operation]
+if len(texts) != 1:
+    sys.exit("documents.json does not carry exactly one document for " + operation)
+variables = {"featureFlags": {"orgId": org, "provider": None, "project": None, "includeArchived": False, "limit": 100}}
+if operation not in variables:
+    sys.exit("no request variables for " + operation)
+json.dump({"query": texts[0], "variables": variables[operation]}, sys.stdout)
+'
+
+# go_api_prove_e2e_edge_status TOKEN_FILE -- prints the HTTP status query-api's
+# /graphql answers the registered document with, and leaves the response body
+# (edge-response.json) and headers (edge-response.headers) for the caller. The
+# token reaches curl in a header FILE, never on its command line.
 go_api_prove_e2e_edge_status() {
   local token_file="$1" header_file="${GO_API_PROVE_E2E_DIR}/edge-header"
   { printf 'Authorization: Bearer '; tr -d '\r\n' < "${token_file}"; printf '\n'; } > "${header_file}"
-  curl -sS -o "${GO_API_PROVE_E2E_DIR}/edge-response.json" -w '%{http_code}' \
+  curl -sS -o "${GO_API_PROVE_E2E_DIR}/edge-response.json" -D "${GO_API_PROVE_E2E_DIR}/edge-response.headers" -w '%{http_code}' \
     -H @"${header_file}" -H 'Content-Type: application/json' \
-    --data '{"query":"{ __typename }"}' "${EDGE_BASE_URL}/graphql"
+    --data @"${GO_API_PROVE_E2E_DIR}/edge-request.json" "http://127.0.0.1:${QUERY_API_PORT}/graphql"
   rm -f "${header_file}"
+}
+
+# go_api_prove_e2e_edge_served -- the last edge answer is the operation SERVED
+# by query-api: its own root in the data, no GraphQL error, and the plane
+# header naming go. A 200 that carries an error (an operation not enabled, a
+# refused variable) is not a served answer.
+go_api_prove_e2e_edge_served() {
+  grep -q "\"data\":{\"${GO_API_PROVE_E2E_OPERATION}\":" "${GO_API_PROVE_E2E_DIR}/edge-response.json" \
+    && ! grep -q '"errors"' "${GO_API_PROVE_E2E_DIR}/edge-response.json" \
+    && grep -qi '^x-dev-health-plane: go' "${GO_API_PROVE_E2E_DIR}/edge-response.headers"
 }
 
 go_api_prove_e2e_mint_edge_token() {
@@ -199,6 +226,9 @@ query_api_e2e_start() {
     export GO_API_ENVELOPE_ISSUER="dev-health-ops-edge"
     export GO_API_ENVELOPE_AUDIENCE="query-api"
     export QUERY_API_ADDR="127.0.0.1:${QUERY_API_PORT}"
+    # /graphql is mounted only with the edge access-token key: the same key
+    # mint-edge-token signs with, as in the deployed query-api.
+    export GO_API_EDGE_JWT_SECRET="${JWT_SECRET_KEY}"
     export DEV_HEALTH_ENV="ci"
     export GO_API_PROOF_ROUTE_ENABLED="true"
     export GO_API_HOME_ENABLED="true"
@@ -222,12 +252,57 @@ query_api_e2e_mint_envelope_token() {
   "${BIN_DIR}/dho" mint envelope -org "$1" -key-file "${GO_API_PROVE_E2E_ENVELOPE_PEM}"
 }
 
+# go_api_prove_e2e_prove LOG -- runs dho goapi prove in Go-edge mode against
+# the running query-api (its /registry, /buildinfo, /query/proof and its own
+# /graphql as the edge), writes the output to LOG and prints it. Returns the
+# command's exit status.
+go_api_prove_e2e_prove() {
+  local log="$1" rc query_api="http://127.0.0.1:${QUERY_API_PORT}"
+  set +e
+  (
+    cd "${ROOT_DIR}"
+    unset GO_API_PROVE_PROOF_BEARER
+    POSTGRES_URI="$(go_api_prove_e2e_pgx_uri)" GO_API_ENVELOPE_PRIVATE_KEY="$(cat "${GO_API_PROVE_E2E_ENVELOPE_PEM}")" \
+      "${BIN_DIR}/dho" goapi prove \
+      -go-edge \
+      -registry-url "${query_api}/registry" \
+      -buildinfo-url "${query_api}/buildinfo" \
+      -proof-url "${query_api}/query/proof" \
+      -edge-url "${query_api}/graphql" \
+      -documents "${GO_API_PROVE_E2E_DIR}/documents.json" \
+      -org "${E2E_ORG_ID}" \
+      -artifact-dir "${GO_API_PROVE_E2E_DIR}/artifacts" \
+      -recorded-by live-e2e \
+      -review-evidence "live-e2e: go-api-prove -go-edge with the envelope and the edge access token minted in process"
+  ) > "${log}" 2>&1
+  rc=$?
+  set -e
+  cat "${log}"
+  return "${rc}"
+}
+
+# go_api_prove_e2e_assert_run LOG COMMIT -- what every prove run here must say.
+go_api_prove_e2e_assert_run() {
+  local log="$1" commit="$2"
+  grep -Fq "go-api-prove: edge_mode=go (Go-edge:" "${log}" \
+    || go_api_prove_e2e_fail "the prover did not report Go-edge mode"
+  grep -Fq "go-api-prove: prover_build=${commit} prover_build_modified=false candidate_build=${commit} prover_build_skew=false prover_build_skew_allowed=false" "${log}" \
+    || go_api_prove_e2e_fail "the prover did not report its own build equal to the candidate's"
+  grep -Eq '^go-api-prove: attempted=[0-9]+ admitted=[0-9]+ executed=[1-9][0-9]* ' "${log}" \
+    || go_api_prove_e2e_fail "no operation was executed"
+  grep -Eq '^go-api-prove:   edge access token mints = [1-9][0-9]*$' "${log}" \
+    || go_api_prove_e2e_fail "the edge access token was not minted in process"
+  grep -Eq '^go-api-prove:   envelope mints = [1-9][0-9]*$' "${log}" \
+    || go_api_prove_e2e_fail "the envelope was not minted in process"
+}
+
 run_go_api_prove_e2e() {
   local dir commit prove_log rc status pgx_uri
   dir="${GO_API_PROVE_E2E_DIR}"
   pgx_uri="$(go_api_prove_e2e_pgx_uri)"
   printf '%s' "${GO_API_PROVE_E2E_PRINCIPAL_PROGRAM}" > "${dir}/principal.py"
   printf '%s' "${GO_API_PROVE_E2E_ROUTING_PROGRAM}" > "${dir}/routing.py"
+  printf '%s' "${GO_API_PROVE_E2E_EDGE_REQUEST_PROGRAM}" > "${dir}/edge-request.py"
 
   # dho (goapi prove, mint edge-token) is already built, by
   # query_api_e2e_start -- nothing to build here.
@@ -238,8 +313,10 @@ run_go_api_prove_e2e() {
   local query_api="http://127.0.0.1:${QUERY_API_PORT}"
   curl -fsS "${query_api}/registry" > "${dir}/registry.json" \
     || go_api_prove_e2e_fail "could not read ${query_api}/registry"
-  POSTGRES_URI="${pgx_uri}" run_python "${dir}/routing.py" "${dir}/registry.json" "${GO_API_PROVE_E2E_OPERATION}" "${commit}" \
+  POSTGRES_URI="${pgx_uri}" run_python "${dir}/routing.py" "${dir}/registry.json" "${GO_API_PROVE_E2E_OPERATION}" "${commit}" shadow \
     || go_api_prove_e2e_fail "could not route ${GO_API_PROVE_E2E_OPERATION} to shadow"
+  run_python "${dir}/edge-request.py" "${dir}/documents.json" "${GO_API_PROVE_E2E_OPERATION}" "${E2E_ORG_ID}" > "${dir}/edge-request.json" \
+    || go_api_prove_e2e_fail "could not build the registered ${GO_API_PROVE_E2E_OPERATION} request"
 
   echo "==> [go-api-prove e2e] the migration created the proof service principal, with no membership"
   go_api_prove_e2e_principal assert-migrated || go_api_prove_e2e_fail "the proof service principal row is not the migrated one"
@@ -256,43 +333,32 @@ run_go_api_prove_e2e() {
   echo "==> [go-api-prove e2e] granting the proof service principal a viewer membership"
   go_api_prove_e2e_principal grant-membership || go_api_prove_e2e_fail "could not grant the proof service principal a membership"
 
-  echo "==> [go-api-prove e2e] running dho goapi prove with both bearers minted in-process"
+  echo "==> [go-api-prove e2e] running dho goapi prove -go-edge (shadow: the proof route) with both bearers minted in-process"
   prove_log="${dir}/go-api-prove.log"
-  set +e
-  (
-    cd "${ROOT_DIR}"
-    unset GO_API_PROVE_PROOF_BEARER
-    POSTGRES_URI="${pgx_uri}" GO_API_ENVELOPE_PRIVATE_KEY="$(cat "${GO_API_PROVE_E2E_ENVELOPE_PEM}")" \
-      "${BIN_DIR}/dho" goapi prove \
-      -registry-url "${query_api}/registry" \
-      -buildinfo-url "${query_api}/buildinfo" \
-      -proof-url "${query_api}/query/proof" \
-      -edge-url "${EDGE_BASE_URL}/graphql" \
-      -documents "${dir}/documents.json" \
-      -org "${E2E_ORG_ID}" \
-      -artifact-dir "${dir}/artifacts" \
-      -recorded-by live-e2e \
-      -review-evidence "live-e2e: go-api-prove with the envelope and the edge access token minted in process"
-  ) > "${prove_log}" 2>&1
-  rc=$?
-  set -e
-  cat "${prove_log}"
-  [ "${rc}" -eq 0 ] || go_api_prove_e2e_fail "go-api-prove exited ${rc}"
-  grep -Eq "^go-api-prove:   ${GO_API_PROVE_E2E_OPERATION} +mode=shadow +route=proof " "${prove_log}" \
-    || go_api_prove_e2e_fail "${GO_API_PROVE_E2E_OPERATION} was not executed through the proof route"
-  grep -Fq "go-api-prove: prover_build=${commit} prover_build_modified=false candidate_build=${commit} prover_build_skew=false prover_build_skew_allowed=false" "${prove_log}" \
-    || go_api_prove_e2e_fail "the prover did not report its own build equal to the candidate's"
-  grep -Eq '^go-api-prove: attempted=[0-9]+ admitted=[0-9]+ executed=[1-9][0-9]* ' "${prove_log}" \
-    || go_api_prove_e2e_fail "no operation was executed"
-  grep -Eq '^go-api-prove:   edge access token mints = [1-9][0-9]*$' "${prove_log}" \
-    || go_api_prove_e2e_fail "the edge access token was not minted in process"
-  grep -Eq '^go-api-prove:   envelope mints = [1-9][0-9]*$' "${prove_log}" \
-    || go_api_prove_e2e_fail "the envelope was not minted in process"
+  go_api_prove_e2e_prove "${prove_log}" || go_api_prove_e2e_fail "go-api-prove exited $?"
+  grep -Eq "^go-api-prove:   ${GO_API_PROVE_E2E_OPERATION} +mode=shadow +route=proof +PROVEN_GO_ONLY \(go-edge mode" "${prove_log}" \
+    || go_api_prove_e2e_fail "${GO_API_PROVE_E2E_OPERATION} was not proven through the proof route in Go-edge mode"
+  go_api_prove_e2e_assert_run "${prove_log}" "${commit}"
+
+  # The same operation in canary: the candidate now goes through /graphql
+  # itself, the path a real client takes. query-api reads the routing row on
+  # every request, so the row takes effect at once.
+  echo "==> [go-api-prove e2e] routing ${GO_API_PROVE_E2E_OPERATION} to canary and proving it through /graphql"
+  POSTGRES_URI="${pgx_uri}" run_python "${dir}/routing.py" "${dir}/registry.json" "${GO_API_PROVE_E2E_OPERATION}" "${commit}" canary \
+    || go_api_prove_e2e_fail "could not route ${GO_API_PROVE_E2E_OPERATION} to canary"
+  prove_log="${dir}/go-api-prove-edge.log"
+  go_api_prove_e2e_prove "${prove_log}" || go_api_prove_e2e_fail "go-api-prove (canary) exited $?"
+  grep -Eq "^go-api-prove:   ${GO_API_PROVE_E2E_OPERATION} +mode=canary +route=edge +PROVEN_GO_ONLY \(go-edge mode" "${prove_log}" \
+    || go_api_prove_e2e_fail "${GO_API_PROVE_E2E_OPERATION} was not proven through /graphql in Go-edge mode"
+  grep -Eq '^go-api-prove:   build binding per_request = [1-9][0-9]*$' "${prove_log}" \
+    || go_api_prove_e2e_fail "the /graphql answer was not bound to the serving build"
+  go_api_prove_e2e_assert_run "${prove_log}" "${commit}"
 
   echo "==> [go-api-prove e2e] the edge re-checks the principal row on every request"
   (umask 077 && go_api_prove_e2e_mint_edge_token > "${dir}/token-v0") || go_api_prove_e2e_fail "mint-edge-token refused a provisioned principal"
   status="$(go_api_prove_e2e_edge_status "${dir}/token-v0")"
   [ "${status}" = "200" ] || go_api_prove_e2e_fail "the edge answered ${status} to a fresh minted token, want 200"
+  go_api_prove_e2e_edge_served || go_api_prove_e2e_fail "the edge answered 200 to a fresh minted token but did not serve ${GO_API_PROVE_E2E_OPERATION} from plane go"
 
   go_api_prove_e2e_principal bump-token-version || go_api_prove_e2e_fail "could not bump token_version"
   status="$(go_api_prove_e2e_edge_status "${dir}/token-v0")"
@@ -300,6 +366,7 @@ run_go_api_prove_e2e() {
   (umask 077 && go_api_prove_e2e_mint_edge_token > "${dir}/token-v1") || go_api_prove_e2e_fail "mint-edge-token refused after a token_version bump"
   status="$(go_api_prove_e2e_edge_status "${dir}/token-v1")"
   [ "${status}" = "200" ] || go_api_prove_e2e_fail "the edge answered ${status} to a token minted after the bump, want 200"
+  go_api_prove_e2e_edge_served || go_api_prove_e2e_fail "the edge answered 200 to a token minted after the bump but did not serve ${GO_API_PROVE_E2E_OPERATION} from plane go"
 
   go_api_prove_e2e_principal deactivate || go_api_prove_e2e_fail "could not deactivate the principal"
   status="$(go_api_prove_e2e_edge_status "${dir}/token-v1")"

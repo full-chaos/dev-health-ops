@@ -302,6 +302,7 @@ func readEnvOverrides(lookup secrets.LookupEnv) (envOverrides, error) {
 	if o.email, err = first(emailKey, legacyEmailKey); err != nil {
 		return envOverrides{}, err
 	}
+	defer func() { secrets.Register(apiTokenKey, o.token) }()
 	if o.token, err = first(apiTokenKey, legacyAPITokenKey); err != nil {
 		return envOverrides{}, err
 	}

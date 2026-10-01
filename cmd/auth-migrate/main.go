@@ -94,7 +94,7 @@ func execute(
 		return 0
 	}
 
-	migrationURI, configured, err := secrets.Resolve(envMigrationURI, lookup)
+	migrationURI, configured, err := secrets.ResolveDSNSetting(envMigrationURI, lookup)
 	if err != nil {
 		fmt.Fprintf(stderr, "configuration error: could not resolve %s\n", envMigrationURI)
 		return 1

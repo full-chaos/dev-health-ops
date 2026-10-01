@@ -72,7 +72,7 @@ func ResolveMigrationDatabase(
 		WriteConfigError(stderr, errors.New("MIGRATION_DATABASE_URI is required"))
 		return secrets.Value{}, "", false
 	}
-	postgres, configured, err := secrets.Resolve("POSTGRES_URI", lookup)
+	postgres, configured, err := secrets.ResolveDSNSetting("POSTGRES_URI", lookup)
 	if err != nil {
 		WriteConfigError(stderr, err)
 		return secrets.Value{}, "", false

@@ -392,6 +392,7 @@ func (loader Loader) credentialMapping(encrypted, configText *string) (any, erro
 		if err != nil {
 			return nil, bootstrapError("credential decryption failed")
 		}
+		secrets.RegisterCredentialJSON(plaintext)
 		if decrypted, err = decodeJSON(plaintext); err != nil {
 			return nil, bootstrapError("decrypted credential is not JSON")
 		}

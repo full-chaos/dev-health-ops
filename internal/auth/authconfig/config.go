@@ -241,7 +241,7 @@ func Load(spec Spec) (Config, error) {
 	// secrets.Resolve is the platform's direct-value/_FILE mutual exclusion
 	// (TRD §6, ACP-ADR-02 §4). It is reused rather than reimplemented so this
 	// service cannot drift from the rule the worker fleet already enforces.
-	databaseURI, configured, err := secrets.Resolve(EnvDatabaseURI, lookup)
+	databaseURI, configured, err := secrets.ResolveDSNSetting(EnvDatabaseURI, lookup)
 	if err != nil {
 		return Config{}, err
 	}

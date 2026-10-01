@@ -44,6 +44,9 @@ func runStopBoundHelper() {
 	os.Exit(0)
 }
 
+// NOTE: on main today the stop holds only the trace flush; the OTLP metrics
+// push (a separate change) adds its own flush to the same stop, and this number
+// is where the two are summed once it lands.
 // TestTheWholeStopWithEveryTelemetryEndpointDownStaysUnderTheContainerBudget
 // runs the shell (the code `dho api` runs through) with the trace and the
 // metrics endpoints pointing at a port nothing listens on, a sampled span

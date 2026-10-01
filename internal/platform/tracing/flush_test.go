@@ -113,15 +113,45 @@ func TestACallerContextThatExpiredIsNotSwallowed(t *testing.T) {
 			t.Errorf("an expired caller deadline was reported as an unreachable collector:\n%s", logs.String())
 		}
 	})
-	t.Run("already cancelled", func(t *testing.T) {
-		logs.Reset()
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		// The SDK may return nil or the context's error for a cancelled caller;
-		// either way it must not be reported as an unreachable collector.
-		_ = component.Shutdown(ctx)
-		if strings.Contains(logs.String(), "collector is not reachable") {
-			t.Errorf("a cancelled caller was reported as an unreachable collector:\n%s", logs.String())
-		}
-	})
+}
+
+// TestAnExporterDeadlineErrorBeforeTheBoundIsAFailureNotACollectorOutage: an
+// exporter that itself returns context.DeadlineExceeded from its shutdown while
+// the bound has not elapsed (and the caller is live) is a real flush failure.
+func TestAnExporterDeadlineErrorBeforeTheBoundIsAFailureNotACollectorOutage(t *testing.T) {
+	var logs bytes.Buffer
+	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(failingExporter{shutdownErr: context.DeadlineExceeded}))
+	component := Component{provider: provider, logger: slog.New(slog.NewTextHandler(&logs, nil)), endpoint: "x"}
+	started := time.Now()
+	err := component.Shutdown(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Shutdown = %v, want the exporter's own deadline error returned", err)
+	}
+	if time.Since(started) >= shutdownFlushTimeout {
+		t.Fatalf("the exporter's error took the whole bound; the test did not exercise an early deadline error")
+	}
+	if strings.Contains(logs.String(), "collector is not reachable") {
+		t.Errorf("an exporter's own deadline error was reported as an unreachable collector:\n%s", logs.String())
+	}
+}
+
+// TestACancelledCallerOnAFreshComponentIsNotReportedAsAnOutage covers the
+// cancelled-caller case on a component nothing has shut down yet (a second
+// Shutdown of an SDK provider is a no-op, so it cannot share the component of
+// the deadline cell).
+func TestACancelledCallerOnAFreshComponentIsNotReportedAsAnOutage(t *testing.T) {
+	t.Setenv("OTEL_ENABLED", "true")
+	t.Setenv("OTEL_SAMPLE_RATE", "1")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", closedPort(t))
+	var logs bytes.Buffer
+	component := InitWithServiceName(slog.New(slog.NewTextHandler(&logs, nil)), "flush-test")
+	t.Cleanup(func() { otel.SetTracerProvider(sdktrace.NewTracerProvider()) })
+	_, span := otel.Tracer("flush-test").Start(context.Background(), "buffered")
+	span.End()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = component.Shutdown(ctx) // the SDK may return nil or the context's error
+	if strings.Contains(logs.String(), "collector is not reachable") {
+		t.Errorf("a cancelled caller was reported as an unreachable collector:\n%s", logs.String())
+	}
 }

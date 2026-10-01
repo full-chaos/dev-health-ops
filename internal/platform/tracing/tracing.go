@@ -82,7 +82,10 @@ func (component Component) Shutdown(ctx context.Context) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+	// The bound itself expired: flushCtx is done by its own deadline while the
+	// caller's context is still live. A DeadlineExceeded the exporter returned
+	// on its own (flushCtx still live) is a real failure and is returned.
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil && errors.Is(flushCtx.Err(), context.DeadlineExceeded) {
 		logger := component.logger
 		if logger == nil {
 			logger = slog.Default()

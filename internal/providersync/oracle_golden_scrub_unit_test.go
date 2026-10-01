@@ -61,6 +61,16 @@ func TestThePairScrubStoresAPlaceholderInThePerRunFieldsOnly(t *testing.T) {
 	if text := "Traceback (most recent call last)"; scrub(text) != text {
 		t.Error("text that is not an answer was changed")
 	}
+	// Only the value of the leaf itself is a per-run value: a string deeper
+	// under it, and a case that is no object, stay.
+	for _, text := range []string{
+		`{"cases": [{"id": "one", "row": {"last_synced": {"t": "list", "v": ["kept"]}}}], "excluded_fields": {"last_synced": "r"}}`,
+		`{"cases": ["last_synced"], "excluded_fields": {}}`,
+	} {
+		if got := scrub(text); got != text {
+			t.Errorf("scrub(%s) = %s", text, got)
+		}
+	}
 	if pairPerRunScrub("github/prs/row") != nil {
 		t.Error("a pair with no per-run field has a scrub")
 	}

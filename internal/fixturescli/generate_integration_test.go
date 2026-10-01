@@ -104,10 +104,13 @@ func pythonGenerate(t *testing.T, dsn, org string, p GenerateParams, at time.Tim
 	}
 	command := exec.Command(python, args...)
 	// The producer's whole environment: nothing ambient shapes what it writes. No PostgreSQL: the
-	// analytics rows only.
+	// analytics rows only. The test schema is ordering contract 2 (startClickHouse), so the producer
+	// is told to stamp the four ordering columns of the operational tables: without it it writes
+	// ordering_contract 0 and the schema's constraint refuses the insert. The stamped columns are
+	// left out of a world by name (withoutOrdering); their values are checked by the ordering oracle.
 	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"),
 		"PYTHONDONTWRITEBYTECODE=1", "PYTHONHASHSEED=0", "ORG_ID=" + org, "OTEL_ENABLED=false",
-		"DATABASE_URI=", "POSTGRES_URI=", "DATABASE_URL="}
+		"OPERATIONAL_ORDERING_CONTRACT=2", "DATABASE_URI=", "POSTGRES_URI=", "DATABASE_URL="}
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("the Python fixtures generate failed: %v", pyoracle.RunError(python, err, output))
 	}

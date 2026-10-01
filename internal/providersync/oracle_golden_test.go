@@ -83,6 +83,7 @@ func frozenPairAnswer(t *testing.T, pairID string, encodedCases []byte) []byte {
 		PythonBuild: oraclePairPythonBuild,
 		SHA256:      pin,
 		Recipe:      recipe,
+		Scrub:       pairPerRunScrub(pairID),
 	})
 	root := golden.PythonRoot(t, repoRoot)
 
@@ -101,6 +102,9 @@ func frozenPairAnswer(t *testing.T, pairID string, encodedCases []byte) []byte {
 	output := []byte(oraclePairAnswerText(t, answers[0].Body))
 	if err := untaggedLeafErr(output); err != nil {
 		t.Fatalf("pair %q: %v", pairID, err)
+	}
+	if err := perRunFieldsErr(pairID, output); err != nil {
+		t.Fatal(err)
 	}
 	golden.SkipDiff(t)
 	golden.Finish(t)

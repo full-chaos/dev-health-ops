@@ -107,6 +107,7 @@ func frozenScriptAnswer(t *testing.T, oracle scriptOracle) []byte {
 		PythonBuild: oraclePairPythonBuild,
 		SHA256:      pin,
 		Recipe:      recipe,
+		Scrub:       scriptPerRunScrub(oracle.name),
 	})
 	root := golden.PythonRoot(t, repoRoot)
 

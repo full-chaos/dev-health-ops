@@ -13,7 +13,7 @@
       "body_sha256": "bffc0ab72418c6ed1ca7c6c78302092b062e695cf140f8d83c60b34fe87fa53d",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"multi_page_filter_and_dedup\", \"row\": {\"calls\": [{\"project_id\": {\"t\": \"int\", \"v\": \"123\"}, \"issue_type\": {\"t\": \"str\", \"v\": \"incident\"}, \"updated_after\": {\"t\": \"str\", \"v\": \"2026-07-01T00:00:00Z\"}, \"updated_before\": {\"t\": \"str\", \"v\": \"2026-07-31T23:59:59Z\"}, \"state\": {\"t\": \"str\", \"v\": \"all\"}, \"page\": {\"t\": \"int\", \"v\": \"1\"}, \"per_page\": {\"t\": \"int\", \"v\": \"3\"}, \"order_by\": {\"t\": \"str\", \"v\": \"updated_at\"}, \"sort\": {\"t\": \"str\", \"v\": \"desc\"}}, {\"project_id\": {\"t\": \"int\", \"v\": \"123\"}, \"issue_type\": {\"t\": \"str\", \"v\": \"incident\"}, \"updated_after\": {\"t\": \"str\", \"v\": \"2026-07-01T00:00:00Z\"}, \"updated_before\": {\"t\": \"str\", \"v\": \"2026-07-31T23:59:59Z\"}, \"state\": {\"t\": \"str\", \"v\": \"all\"}, \"page\": {\"t\": \"int\", \"v\": \"2\"}, \"per_page\": {\"t\": \"int\", \"v\": \"3\"}, \"order_by\": {\"t\": \"str\", \"v\": \"updated_at\"}, \"sort\": {\"t\": \"str\", \"v\": \"desc\"}}], \"incident_external_ids\": [{\"t\": \"str\", \"v\": \"9003\"}, {\"t\": \"str\", \"v\": \"9004\"}, {\"t\": \"str\", \"v\": \"9005\"}]}}], \"excluded_fields\": {}}\n"
     }
   ]

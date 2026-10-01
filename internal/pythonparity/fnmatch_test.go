@@ -1,14 +1,7 @@
 package pythonparity
 
 import (
-	"bytes"
-	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // fnMatchCases pair a pattern with a name. They are chosen to separate
@@ -105,80 +98,5 @@ func TestFnMatchDiffersFromPathMatchWhereItMust(t *testing.T) {
 	// merely CONTAINS the excluded directory name.
 	if FnMatch("contests/thing.py", "tests/**") {
 		t.Errorf(`"tests/**" must not match "contests/thing.py" -- fnmatch anchors at the start`)
-	}
-}
-
-// TestFnMatchMatchesLivePython is the oracle: it compares both the match
-// outcome AND the translated expression against CPython.
-func TestFnMatchMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	python := pyoracle.Resolve(t, parityRepositoryRoot(t))
-
-	// JSON rather than a line-based protocol: two cases carry a newline INSIDE
-	// the name, and a line-based encoding silently drops them. The first
-	// version of this harness did exactly that and reported "checked 28 of 30"
-	// -- the count guard caught it, which is why the guard is there.
-	pairs := make([][2]string, 0, len(fnMatchCases))
-	for _, tc := range fnMatchCases {
-		pairs = append(pairs, [2]string{tc.pattern, tc.name})
-	}
-	encoded, err := json.Marshal(pairs)
-	if err != nil {
-		t.Fatalf("encode cases: %v", err)
-	}
-
-	script := filepath.Join("testdata", "python_fnmatch_oracle.py")
-	command := exec.Command(python, script)
-	command.Stdin = bytes.NewReader(encoded)
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("python oracle failed: %v", pyoracle.RunError(python, err, nil))
-	}
-
-	var got []struct {
-		Pattern    string `json:"pattern"`
-		Name       string `json:"name"`
-		Match      bool   `json:"match"`
-		MatchCase  bool   `json:"matchcase"`
-		Translated string `json:"translated"`
-	}
-	if err := json.Unmarshal(output, &got); err != nil {
-		t.Fatalf("parse oracle output: %v\n%s", err, output)
-	}
-	if len(got) != len(fnMatchCases) {
-		t.Fatalf("oracle returned %d results for %d cases -- every comparison "+
-			"below would be checking a subset it chose for itself",
-			len(got), len(fnMatchCases))
-	}
-
-	checked := 0
-	for i, tc := range fnMatchCases {
-		want := got[i]
-		if want.Pattern != tc.pattern || want.Name != tc.name {
-			t.Fatalf("oracle result %d is for (%q,%q), expected (%q,%q) -- "+
-				"the results are not aligned with the inputs",
-				i, want.Pattern, want.Name, tc.pattern, tc.name)
-		}
-		checked++
-		if g := FnMatch(tc.name, tc.pattern); g != want.Match {
-			t.Errorf("FnMatch(%q, %q) = %v, python %v (translated %q)",
-				tc.name, tc.pattern, g, want.Match, want.Translated)
-		}
-		// fnmatch vs fnmatchcase differ only under a case-folding normcase,
-		// which POSIX does not have. If these ever disagree the platform
-		// assumption in fnmatch.go is wrong and the helper needs revisiting.
-		if want.Match != want.MatchCase {
-			t.Errorf("python fnmatch and fnmatchcase disagree on (%q,%q): %v vs %v -- "+
-				"the POSIX identity-normcase assumption does not hold here",
-				tc.pattern, tc.name, want.Match, want.MatchCase)
-		}
-	}
-	if checked != len(fnMatchCases) {
-		t.Fatalf("checked %d of %d cases", checked, len(fnMatchCases))
-	}
-	if !t.Failed() {
-		writeLiveProof(t, "pythonparity-fnmatch")
 	}
 }

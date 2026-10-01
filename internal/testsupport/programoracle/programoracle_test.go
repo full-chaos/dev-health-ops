@@ -117,10 +117,10 @@ func TestTheIdentityProgramNamesItsDistributionsInOrder(t *testing.T) {
 // and the refusal names what was expected and what was found.
 func TestAnotherIdentityIsRefusedByName(t *testing.T) {
 	pinned := "python 3.14.7\nunicodedata 16.0.0"
-	if err := identityErr(Answer{Stdout: pinned + "\n"}, pinned); err != nil {
+	if err := IdentityErr(Answer{Stdout: pinned + "\n"}, pinned); err != nil {
 		t.Errorf("the pinned identity was refused: %v", err)
 	}
-	err := identityErr(Answer{Stdout: "python 3.15.0\nunicodedata 17.0.0\n"}, pinned)
+	err := IdentityErr(Answer{Stdout: "python 3.15.0\nunicodedata 17.0.0\n"}, pinned)
 	if err == nil {
 		t.Fatal("another identity was accepted")
 	}
@@ -129,7 +129,7 @@ func TestAnotherIdentityIsRefusedByName(t *testing.T) {
 			t.Errorf("the refusal does not name %q:\n%v", part, err)
 		}
 	}
-	if err := identityErr(Answer{ExitCode: 1, Stdout: pinned}, pinned); err == nil {
+	if err := IdentityErr(Answer{ExitCode: 1, Stdout: pinned}, pinned); err == nil {
 		t.Error("an identity program that failed was accepted")
 	}
 }

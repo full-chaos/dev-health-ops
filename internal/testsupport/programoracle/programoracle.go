@@ -93,12 +93,14 @@ func Identity(distributions ...string) Program {
 // failure names both.
 func RequireIdentity(t *testing.T, answer Answer, want string) {
 	t.Helper()
-	if err := identityErr(answer, want); err != nil {
+	if err := IdentityErr(answer, want); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func identityErr(answer Answer, want string) error {
+// IdentityErr is nil when answer is the identity want names, and otherwise an
+// error that names both.
+func IdentityErr(answer Answer, want string) error {
 	found := strings.TrimSpace(answer.Stdout)
 	if answer.ExitCode != 0 {
 		return fmt.Errorf("the producer identity program exited %d (stdout %q): the answers were not produced by a known interpreter", answer.ExitCode, found)

@@ -137,6 +137,7 @@ func TestLastSyncedCursorContractAgainstRealClickHouse(t *testing.T) {
 	// they may be equal or ordered, so no sleep is used to separate them and only the reader-visible
 	// property is asserted.
 	exec(`SYSTEM STOP MERGES team_project_ownership`)
+	t.Cleanup(func() { _ = conn.Exec(context.Background(), `SYSTEM START MERGES team_project_ownership`) }) // also when a cell below fails
 	exec(cols + `VALUES ('o', 'jira', 'T', 'RMT', 'RMT', 'native', '2020-01-01 00:00:00', NULL, '2020-01-01 00:00:20')`)
 	newerVersionStamp := stamp("RMT")
 	exec(cols + `VALUES ('o', 'jira', 'T', 'RMT', 'RMT', 'native', '2020-01-01 00:00:00', NULL, '2020-01-01 00:00:10')`) // older version, later (or equal) stamp

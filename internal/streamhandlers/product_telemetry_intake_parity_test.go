@@ -35,14 +35,22 @@ type pythonStored struct {
 	} `json:"row"`
 }
 
-// payloadTextDivergences are corpus shapes whose payload_json TEXT differs from Python's although the
-// row is stored: the Go consumer decodes every payload number as float64 and re-encodes it with
-// encoding/json, Python kept ints exact, kept a float's ".0" and escaped non-ASCII. They are pinned
-// here so a change in either side fails this test; they are NOT part of this change (see PR RISK-NOTES).
-var payloadTextDivergences = map[string]struct{ goText, pythonText string }{
-	"payload_big_int":        {`{"i":9007199254740992}`, `{"i":9007199254740993}`},
+// payloadNamedDivergences are corpus shapes whose payload_json TEXT differs from Python's although the
+// stored value is the same JSON: the Go consumer re-encodes with encoding/json (a float's ".0" is
+// dropped, non-ASCII is kept raw, <, > and & are escaped). They are accepted divergences: the only
+// reader of the column (queryapi/producttelemetry) parses it with JSONExtract*, which reads both
+// spellings as the same value. Pinned so a change on either side fails this test.
+var payloadNamedDivergences = map[string]struct{ goText, pythonText string }{
 	"payload_float_integral": {`{"f":100}`, `{"f":100.0}`},
 	"payload_unicode":        {`{"s":"héllo ☃ \u003c\u0026\u003e"}`, `{"s":"h\u00e9llo \u2603 <&>"}`},
+}
+
+// payloadKnownDefects are shapes where the Go consumer stores a DIFFERENT VALUE than Python: it decodes
+// every payload number through float64, so an integer above 2^53 changes. This is a defect, pinned at
+// its current wrong output so the fix flips this entry to the exact Python text (KNOWN DEFECT, ticket
+// CHAOS-7472).
+var payloadKnownDefects = map[string]struct{ goText, pythonText string }{
+	"payload_big_int": {`{"i":9007199254740992}`, `{"i":9007199254740993}`},
 }
 
 type parityStreams struct{ fields map[string]string }
@@ -118,11 +126,13 @@ func TestConsumerStoresEveryIntakeAcceptedShapeAsPythonStoredIt(t *testing.T) {
 			if occurred := row[8].(interface{ Format(string) string }).Format("2006-01-02T15:04:05.000000"); occurred != want.Row.OccurredAt {
 				t.Fatalf("occurred_at %s, Python stored %s", occurred, want.Row.OccurredAt)
 			}
-			if pinned, divergent := payloadTextDivergences[name]; divergent {
-				if row[7].(string) != pinned.goText || want.Row.PayloadJSON != pinned.pythonText {
-					t.Fatalf("known payload_json divergence changed: Go %s (pinned %s), Python %s (pinned %s)", row[7], pinned.goText, want.Row.PayloadJSON, pinned.pythonText)
+			for kind, table := range map[string]map[string]struct{ goText, pythonText string }{"named divergence": payloadNamedDivergences, "KNOWN DEFECT": payloadKnownDefects} {
+				if pinned, listed := table[name]; listed {
+					if row[7].(string) != pinned.goText || want.Row.PayloadJSON != pinned.pythonText {
+						t.Fatalf("%s changed: Go %s (pinned %s), Python %s (pinned %s)", kind, row[7], pinned.goText, want.Row.PayloadJSON, pinned.pythonText)
+					}
+					return
 				}
-				return
 			}
 			if row[7].(string) != want.Row.PayloadJSON {
 				t.Fatalf("payload_json %s, Python stored %s", row[7], want.Row.PayloadJSON)

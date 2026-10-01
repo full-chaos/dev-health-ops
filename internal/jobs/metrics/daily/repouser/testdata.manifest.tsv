@@ -1,3 +1,4 @@
 # Every file under internal/jobs/metrics/daily/repouser/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	golden/pysum_rot_guard.json
+# header-before-stamp set: 96c7cfce003de68576287a780b37bc2d851116bfb50d9ea943ae5adaf1ce3922 (1 files)
+ed18bc20ef2267236eb04e763322fd03429d4f3bbc42434930057220fc42adea	header-before-stamp	golden/pysum_rot_guard.json

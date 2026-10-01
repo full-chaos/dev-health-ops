@@ -399,3 +399,37 @@ func TestTheInterpreterDirectoryMustHoldPython3(t *testing.T) {
 		t.Error("an interpreter name that is not on PATH was accepted")
 	}
 }
+
+// A recording test holds PYTHONHOME set to a directory that does not exist, so
+// that a Python child that inherits the test process's environment cannot
+// start (venueoracle's producer guard). The helper's own Python starts, the
+// version probe and the program, do not inherit it: under that guard both run.
+func TestTheRecordingGuardDoesNotStopTheHelpersOwnPython(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, ".venv", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The stand-in behaves as the real interpreter does under the guard: with
+	// PYTHONHOME set it cannot start. Otherwise "-c <probe>" prints a version
+	// and a program prints "ran".
+	script := "#!/bin/sh\nif [ -n \"${PYTHONHOME+set}\" ]; then echo \"Fatal Python error: PYTHONHOME = '$PYTHONHOME'\" >&2; exit 1; fi\n" +
+		"case \"$2\" in *version_info*) : > '" + filepath.Join(root, "probed") + "'; echo 3.14 ;; *) printf 'ran' ;; esac\n"
+	for _, name := range []string{"python", "python3"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("DEV_HEALTH_PYTHON", "")
+	t.Setenv("PYTHON", "")
+	t.Setenv("PYTHONHOME", "/a-directory-that-does-not-exist")
+
+	activateInterpreter(t, root)
+	if _, err := os.Stat(filepath.Join(root, "probed")); err != nil {
+		t.Fatalf("the checkout's interpreter was not probed: %v", err)
+	}
+	exitCode, stdout := execute(t, root, Program{Name: "p", Text: "print('x')"})
+	if exitCode != 0 || string(stdout) != "ran" {
+		t.Fatalf("the program under the guard: exit %d, stdout %q", exitCode, stdout)
+	}
+}

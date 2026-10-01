@@ -36,6 +36,9 @@ on:
       - 'ci/python_tripwire_shim.sh'
       - 'ci/python_free_ratchet.sh'
       - 'ci/python_free_known.tsv'
+      # The oracle harness: its own tests run stand-in interpreters, and a harness change that starts a
+      # real one (or runs the tripwire's shim) must be seen on the pull request that makes it.
+      - 'internal/testsupport/**'
   # Only a pull request that edits this workflow or its scripts runs it (so the change that touches the
   # tripwire is proven by the tripwire). The closed list is editable by freeze PRs through the same path.
   pull_request:
@@ -131,6 +134,18 @@ jobs:
           path: ${{ runner.temp }}/python-free/*.hits
           if-no-files-found: warn
 
+      # The whole go test -json stream of the shard, so a failure the log cannot show (a package-level
+      # failure with no output, a killed binary) is still readable. Its own name: the ratchet job downloads
+      # python-free-hits-* only.
+      - name: Keep this shard's go test stream
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-free-stream-${{ matrix.target }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/python-free/*.json
+          # The run step always writes its stream: a shard with none did not measure anything.
+          if-no-files-found: error
+
   # The untagged unit set under the same tripwire (CHAOS-7384, lead's ruling): a unit test can start Python too,
   # through PATH, and a test that SKIPS because Python is missing is how it hides. No Docker, no shards.
   unit:
@@ -174,6 +189,14 @@ jobs:
           name: python-free-hits-unit
           path: ${{ runner.temp }}/python-free/*.hits
           if-no-files-found: warn
+
+      - name: Keep the unit leg's go test stream
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-free-stream-unit
+          path: ${{ runner.temp }}/python-free/*.json
+          if-no-files-found: error
 
   ratchet:
     name: go-python-free

@@ -175,7 +175,8 @@ func Produce(t *testing.T, golden *venueoracle.Golden, pythonRoot string, progra
 	for index, program := range programs {
 		requests[index] = venueoracle.ProgramRequest(program.Name, program.Text, program.Stdin, keyedEnv(program))
 	}
-	responses := golden.Produce(t, pythonRoot, requests, func(pinnedRoot string, _ []venueoracle.Request) []venueoracle.Response {
+	responses := golden.Produce(t, pythonRoot, requests, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		pinnedRoot := producer.Root
 		activateInterpreter(t, pinnedRoot)
 		recorded := make([]venueoracle.Response, len(programs))
 		for index, program := range programs {
@@ -328,8 +329,9 @@ func activateInterpreter(t *testing.T, pinnedRoot string) {
 	if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
 		t.Fatalf("programoracle: python3 on PATH is %q (%v), want the one in %s", found, err, bin)
 	}
-	probe, probeErr := exec.Command("python3", pyoracle.VersionProbeArgs...).Output()
-	pyoracle.RequireDeployed(t, filepath.Join(bin, "python3"), probe, probeErr)
+	// The probe starts the interpreter by its path, in the closed environment:
+	// nothing of the test process's environment reaches it.
+	pyoracle.RequireDeployed(t, filepath.Join(bin, "python3"), pinnedRoot)
 }
 
 // interpreterDir returns, as an absolute path, the directory of the

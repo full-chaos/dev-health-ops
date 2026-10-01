@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // Golden freezes the Python plane's answers for a venue oracle whose Python
@@ -85,6 +86,18 @@ type GoldenSpec struct {
 	// and must be deterministic and idempotent. A golden stores no token value:
 	// the recorder refuses a candidate that still holds a token shape.
 	Scrub func(text string) string
+	// KeyScrub turns a value in a REQUEST that the Python plane issued earlier
+	// and the test sends back (a mailed link token) into a placeholder, for the
+	// request's key only: the request sent to Python is untouched. A JWT in a
+	// request is projected without it. Like Scrub it must be deterministic and
+	// idempotent, and it is not applied to the authorization header.
+	KeyScrub func(text string) string
+	// RawSink, set, is called while RECORDING with each Python answer as the
+	// Python plane gave it, before it is projected, for a test whose later
+	// requests must carry what the Python plane issued earlier (a refresh token).
+	// It is never called on a replay, and what it is given must stay in memory:
+	// the golden holds the projected answer only.
+	RawSink func(request Request, answer Response)
 }
 
 // Golden is an opened GoldenSpec.
@@ -195,6 +208,13 @@ type goldenHeader struct {
 	// on the closed list legacy_python_env_goldens.txt may still hold that.
 	PythonEnv        string `json:"python_env,omitempty"`
 	PythonEnvVersion int    `json:"python_env_version,omitempty"`
+	// RecordedBy is the stamp of the record verb: the recording ran under the
+	// verb (its fixed environment, its two runs, its replay), not under a
+	// hand-started go test. A golden with no stamp was recorded before the
+	// stamp existed; the manifest of its directory holds it by digest
+	// (recordedfiles). The stamp stops an accident: a hand-made golden has
+	// none. It does not stop a hand edit that also writes the stamp.
+	RecordedBy string `json:"recorded_by,omitempty"`
 	// Blanked lists, by pattern, the leaves the recording replaced by a
 	// placeholder, with how many: the paths the golden does not hold by value
 	// (a token projected to its claims, a Volatile header, a generated id or a
@@ -202,6 +222,9 @@ type goldenHeader struct {
 	// recorded before it has none, and is then not checked against it.
 	Blanked map[string]int `json:"blanked"`
 }
+
+// recordVerbName is what the record verb's stamp holds.
+const recordVerbName = "goldenrecord"
 
 // goldenPassedEnv is how the recorder tells a recording which ambient
 // variables it passed by name (comma-separated).
@@ -385,6 +408,11 @@ func OpenGolden(t *testing.T, spec GoldenSpec) *Golden {
 		t.Fatal(err)
 	}
 	g.use = use
+	if recording {
+		// For the whole recording test: a Python child that inherits the
+		// process environment cannot start (producer.go).
+		poisonInheritedEnvironment(t)
+	}
 	return g
 }
 
@@ -398,6 +426,11 @@ func openGolden(spec GoldenSpec, test string, recording bool) (*Golden, error) {
 			return nil, err
 		}
 		g.recorded = goldenFile{Header: goldenHeader{Test: test, PythonBuild: spec.PythonBuild, Recipe: spec.Recipe, PassedEnv: envNames(spec.PassEnv)}, Rows: map[string]goldenRows{}}
+		// The record verb always sets goldenPassedEnv for its runs, with no
+		// names when it passed none: its presence is the verb.
+		if _, byVerb := os.LookupEnv(goldenPassedEnv); byVerb {
+			g.recorded.Header.RecordedBy = recordVerbName
+		}
 		return g, nil
 	}
 	raw, err := os.ReadFile(spec.Path)
@@ -578,6 +611,84 @@ func producerDigest(dir string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// keyOf is the key of request as this golden holds it: the key of the request
+// after the golden's own projection (tokens to their claims, the spec's Scrub),
+// so a request that carries a token or id the Python plane issued earlier has
+// the same key in every recording and in the replay, whose request is built
+// from the projected answers. A request the projection leaves unchanged has
+// the key requestKey gives it, byte for byte.
+func (g *Golden) keyOf(request Request) goldenRequest {
+	return requestKey(g.projectRequest(request))
+}
+
+// sameKeySameAnswerErr is an error when an earlier request of this recording
+// has the key of entry (the same request once its tokens and generated values
+// are projected) and another answer: the replay could not tell the two apart,
+// so it would serve one answer for both. Two requests that differ only in a
+// projected value may fold only when the Python plane answered both alike.
+func (g *Golden) sameKeySameAnswerErr(entry goldenRequest) error {
+	for _, earlier := range g.recorded.Requests {
+		if earlier.Name != entry.Name || earlier.Method != entry.Method || earlier.Path != entry.Path ||
+			earlier.BodySHA256 != entry.BodySHA256 || earlier.HeadersSHA256 != entry.HeadersSHA256 || earlier.CallEnv != entry.CallEnv {
+			continue
+		}
+		if earlier.Status != entry.Status || !reflect.DeepEqual(earlier.Headers, entry.Headers) || earlier.Body != entry.Body {
+			return fmt.Errorf("golden %s: two requests named %q have the same key once their tokens and generated values are projected (path %s, body %s.., headers %s..), and the Python plane answered them differently: the replay could not tell them apart; give them different names or stable values", g.spec.Path, entry.Name, entry.Path, short(entry.BodySHA256), short(entry.HeadersSHA256))
+		}
+	}
+	return nil
+}
+
+// projectKeyText is a text as the golden holds it in a request key: its tokens
+// projected and the spec's KeyScrub applied (not Scrub: an id the test writes in
+// a request on purpose is part of the request, and stays in its key). It is idempotent, so the request of a
+// recording (real token) and of its replay (projected token) key alike.
+func (g *Golden) projectKeyText(text string) string {
+	text = ProjectTokens(text)
+	if g.spec.KeyScrub != nil {
+		text = g.spec.KeyScrub(text)
+	}
+	return text
+}
+
+// projectRequest is request with its path, its body (decoded from base64, and
+// encoded again only when the projection changed it) and its header values but
+// the authorization one (headersDigest reduces a bearer token to its claims)
+// projected.
+func (g *Golden) projectRequest(request Request) Request {
+	if request.Method == programMethod {
+		// A program request (ProgramRequest) is not projected, for two reasons. Cost: its
+		// stdin is a corpus (235 MB in pyidna) and projecting it on every key took minutes
+		// under -race. Safety: nothing of it can reach a golden through the key -- the key
+		// holds only the sha256 of the body (requestKey, BodySHA256; goldenRequest has no
+		// field for the body itself), and a program path is digests already. A corpus may
+		// hold credential-SHAPED fixtures on purpose (the sanitize-error-text oracle's
+		// redaction inputs), so a guard that forbade them would refuse a valid test.
+		// Determinism: a corpus holding a per-run value changes its digest between runs, and
+		// the two-run check and the frozen replay both refuse that by name.
+		return request
+	}
+	out := request
+	out.Path = g.projectKeyText(request.Path)
+	if request.Body != nil {
+		if raw, err := base64.StdEncoding.DecodeString(*request.Body); err == nil && utf8.Valid(raw) {
+			if projected := g.projectKeyText(string(raw)); projected != string(raw) {
+				out.Body = B64(projected)
+			}
+		}
+	}
+	if len(request.Headers) > 0 {
+		out.Headers = make(map[string]string, len(request.Headers))
+		for name, value := range request.Headers {
+			if strings.ToLower(name) != "authorization" {
+				value = g.projectKeyText(value)
+			}
+			out.Headers[name] = value
+		}
+	}
+	return out
+}
+
 func requestKey(request Request) goldenRequest {
 	sum := sha256.Sum256([]byte(""))
 	if request.Body != nil {
@@ -731,7 +842,10 @@ func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, req
 // Python side is not the api's HTTP plane: a program run over a corpus, a CLI
 // verb, a function. While recording, live runs the requests from root, which
 // must be the checkout PythonRoot verified, and the answers are recorded;
-// frozen, they are read from the file and live is never called. A request
+// frozen, they are read from the file and live is never called. live starts
+// Python only with the command its Producer gives (producer.go): the pinned
+// interpreter in the one closed environment. A Python child started any other
+// way with the process environment cannot start while live runs. A request
 // names what was asked (ProgramRequest builds one for a Python program) and a
 // response what came back: Status the exit code, Body the stdout, Headers any
 // other stream. The lifecycle and the accounting are Python's: every answer
@@ -739,14 +853,16 @@ func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, req
 // carries no headers: they are keyed case-folded, as HTTP headers are, and a
 // producer's environment names are case-sensitive, so the environment belongs
 // in the path (ProgramRequest), where it compares exactly.
-func (g *Golden) Produce(t *testing.T, root string, requests []Request, live func(root string, requests []Request) []Response) []Response {
+func (g *Golden) Produce(t *testing.T, root string, requests []Request, live func(producer *Producer, requests []Request) []Response) []Response {
 	t.Helper()
 	if err := producerRequestsErr(requests); err != nil {
 		t.Fatal(err)
 	}
 	return g.answer(t, "Produce", "", requests,
 		func() error { return g.producerRootErr(root) },
-		func() []Response { return live(root, requests) },
+		func() []Response {
+			return live(&Producer{Root: root, t: t}, requests)
+		},
 		func() error { return liveVenueErr(t, "golden "+g.spec.Path+"'s frozen answers") })
 }
 
@@ -771,6 +887,9 @@ func (g *Golden) producerRootErr(root string) error {
 	return nil
 }
 
+// programMethod is the Method of a program request (ProgramRequest).
+const programMethod = "PYTHON"
+
 // ProgramRequest is the request of one run of a Python program: its name, the
 // program text's digest (a changed program cannot replay the answers of
 // another), its stdin, and the environment entries that shape its answers. The
@@ -779,7 +898,7 @@ func (g *Golden) producerRootErr(root string) error {
 func ProgramRequest(name, program string, stdin []byte, env map[string]string) Request {
 	sum := sha256.Sum256([]byte(program))
 	body := base64.StdEncoding.EncodeToString(stdin)
-	return Request{Name: name, Method: "PYTHON", Path: "program sha256 " + hex.EncodeToString(sum[:]) + " env sha256 " + envDigest(env), Body: &body}
+	return Request{Name: name, Method: programMethod, Path: "program sha256 " + hex.EncodeToString(sum[:]) + " env sha256 " + envDigest(env), Body: &body}
 }
 
 // envDigest is a digest of environment entries with each name as written:
@@ -855,6 +974,14 @@ func (g *Golden) answer(t *testing.T, call, callEnv string, requests []Request, 
 			t.Fatal(err)
 		}
 		answers = live()
+		if len(answers) != len(requests) {
+			t.Fatalf("golden %s: the Python producer answered %d of %d requests", g.spec.Path, len(answers), len(requests))
+		}
+		if g.spec.RawSink != nil {
+			for index := range answers {
+				g.spec.RawSink(requests[index], clone(answers[index]))
+			}
+		}
 		for index := range answers {
 			projected, err := g.projectResponseAt(requests[index].Name, answers[index])
 			if err != nil {
@@ -862,13 +989,13 @@ func (g *Golden) answer(t *testing.T, call, callEnv string, requests []Request, 
 			}
 			answers[index] = projected
 		}
-		if len(answers) != len(requests) {
-			t.Fatalf("golden %s: the Python producer answered %d of %d requests", g.spec.Path, len(answers), len(requests))
-		}
 		for index, request := range requests {
-			entry := requestKey(request)
+			entry := g.keyOf(request)
 			entry.CallEnv = callEnv
 			entry.Status, entry.Headers, entry.Body = answers[index].Status, answers[index].Headers, answers[index].Body
+			if err := g.sameKeySameAnswerErr(entry); err != nil {
+				t.Fatal(err)
+			}
 			g.recorded.Requests = append(g.recorded.Requests, entry)
 		}
 	} else {
@@ -884,7 +1011,7 @@ func (g *Golden) answer(t *testing.T, call, callEnv string, requests []Request, 
 		markFrozenTree(t, "the frozen answers of golden "+g.spec.Path)
 	}
 	for index := range answers {
-		g.slots = append(g.slots, answerSlot{request: requestIdentity(requests[index])})
+		g.slots = append(g.slots, answerSlot{request: g.identityOf(requests[index])})
 		answers[index].slot = len(g.slots)
 	}
 	if g.state == stateOpen {
@@ -913,7 +1040,7 @@ func (g *Golden) frozenAnswers(requests []Request, callEnv string) ([]Response, 
 	}
 	out := make([]Response, len(requests))
 	for index, request := range requests {
-		want := requestKey(request)
+		want := g.keyOf(request)
 		got := g.loaded.Requests[g.served+index]
 		if got.Name != want.Name || got.Method != want.Method || got.Path != want.Path || got.BodySHA256 != want.BodySHA256 || got.HeadersSHA256 != want.HeadersSHA256 {
 			return nil, fmt.Errorf("golden %s request %d is %q %s %s (body %s.., headers %s..); the test sends %q %s %s (body %s.., headers %s..); regenerate: %s",
@@ -1033,7 +1160,7 @@ func (g *Golden) bindAnswers(requests []Request, answers []Response) error {
 			return fmt.Errorf("golden %s: the Python answer for request %d (%q) did not come from golden.Python", g.spec.Path, index, request.Name)
 		}
 		bound := &g.slots[slot-1]
-		if bound.request != requestIdentity(request) {
+		if bound.request != g.identityOf(request) {
 			return fmt.Errorf("golden %s: request %d (%q) was given the answer that belongs to another request (%s): each answer answers the one request it was fetched for", g.spec.Path, index, request.Name, bound.request)
 		}
 		if bound.compared || bound.consumed {
@@ -1150,6 +1277,9 @@ func (g *Golden) writeCandidate(failed bool) (string, error) {
 	if len(g.recorded.Header.ProducerDigest) != 64 {
 		return "", fmt.Errorf("recording %s: the Python producer was never verified (golden.PythonRoot was not called)", g.spec.Path)
 	}
+	if g.recorded.Header.RecordedBy != recordVerbName {
+		return "", fmt.Errorf("recording %s: this run was not started by the record verb, so no candidate was written: a golden is recorded under the verb's fixed environment, twice, and replayed before it is promoted (%s)", g.spec.Path, g.spec.Recipe)
+	}
 	g.recorded.Header.Blanked = g.blankedHeader()
 	raw, err := json.MarshalIndent(g.recorded, "", "  ")
 	if err != nil {
@@ -1204,8 +1334,13 @@ func sameDirectory(a, b string) bool {
 }
 
 // requestIdentity is what makes a request the same request across processes.
-func requestIdentity(request Request) string {
-	key := requestKey(request)
+func (g *Golden) identityOf(request Request) string {
+	return identityOfKey(g.keyOf(request))
+}
+
+func requestIdentity(request Request) string { return identityOfKey(requestKey(request)) }
+
+func identityOfKey(key goldenRequest) string {
 	return fmt.Sprintf("%s %s %s body=%s headers=%s", key.Name, key.Method, key.Path, key.BodySHA256, key.HeadersSHA256)
 }
 

@@ -435,11 +435,11 @@ func compareCredentials(t *testing.T, got, want []stepResult, wantName string) {
 // TestServiceCredentialsMatchTheFrozenPythonOutput runs the script on a real PostgreSQL at the migration head
 // and compares every step (exit, stdout, stderr, the rows left) with what the REAL `dev-hops
 // service-credentials` verbs did. The answers were executed once on adminPythonBuild and are frozen in
-// testdata/golden/service_credentials.json (the recipe regenerates them by execution); the script is part of
+// testdata/golden/svc_verbs.json (the recipe regenerates them by execution); the script is part of
 // the golden's key. Printed tokens are stored as typed placeholders (<svc_acr_token>, <svc_worker_token>)
 // proven against the rows' hashes, never as values; clock times are one-minute buckets.
 func TestServiceCredentialsMatchTheFrozenPythonOutput(t *testing.T) {
-	golden, root := adminGolden(t, "service_credentials", "a5724d54fec6a597166225fb3d825b900e527b0cb2e1b3b40463be5031bfa853", "TestServiceCredentialsMatchTheFrozenPythonOutput")
+	golden, root := adminGolden(t, "svc_verbs", "a5724d54fec6a597166225fb3d825b900e527b0cb2e1b3b40463be5031bfa853", "TestServiceCredentialsMatchTheFrozenPythonOutput")
 	script := make([]map[string]any, len(credScript))
 	for index, s := range credScript {
 		script[index] = map[string]any{"args": s.args, "sql": s.sql}

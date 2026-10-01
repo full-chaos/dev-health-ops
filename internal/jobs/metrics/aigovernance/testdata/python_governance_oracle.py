@@ -165,6 +165,14 @@ ARTIFACTS = [
             "artifact_url": None,
         },
     ),
+    # 21. NON-PR subject that is human_reviewed AND security_scanned: both PR-only
+    #     rollup counters must stay 0 for it (the rollup's subject_type guard).
+    artifact(subject_id="21", subject_type="commit"),
+    # 22. Not a sensitive repo but repo_allows_ai False: no SENSITIVE_REPO violation
+    #     (both operands of the rule are load-bearing).
+    artifact(subject_id="22", sensitive_repo=False, repo_allows_ai=False),
+    # 23. UNKNOWN allowlist status is not DISALLOWED: no DISALLOWED_TOOL violation.
+    artifact(subject_id="23", tool_allowlist_status=ToolAllowlistStatus.UNKNOWN),
 ]
 
 

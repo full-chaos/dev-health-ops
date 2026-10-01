@@ -28,6 +28,7 @@ func fixtureTeams() []Team {
 		{ID: "team-dup-a", Name: "DupA", RepoPatterns: []string{"dup/repo"}},
 		{ID: "team-dup-b", Name: "DupB", RepoPatterns: []string{"dup/repo"}},
 		{ID: "team-ws", Name: "WS", RepoPatterns: []string{"   "}},
+		{ID: "team-interior", Name: "Interior", RepoPatterns: []string{"interior/*-svc"}},
 	}
 }
 
@@ -44,6 +45,8 @@ var fixtureProbes = []string{
 	"dup/repo",
 	"",
 	"   ",
+	"interior/*-svc-x",
+	"interior/x-svc",
 }
 
 // TestRepoPatternResolverMatchesLivePython compares (against the frozen production answers) this port against the
@@ -163,7 +166,7 @@ func runRepoTeamsOracle(t *testing.T) map[string]*string {
 	spec := venueoracle.GoldenSpec{
 		Path:        "testdata/golden/repo_teams_oracle.json",
 		PythonBuild: rotguard.PythonBuild,
-		SHA256:      "bc769a998695e292148aeba7c0cd95ac96deb96c70914dc5dfd42b051f8e0014",
+		SHA256:      "2693cf24ac7bbcc598a1ca079458b40b75857993dd8ba2b3384f295babaa658a",
 		Recipe: "git worktree add --detach $DIR " + rotguard.PythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/metrics/aiimpact/ -test '^TestRepoPatternResolverMatchesLivePython$' -python-root $DIR",
 	}

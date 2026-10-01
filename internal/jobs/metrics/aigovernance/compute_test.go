@@ -32,7 +32,7 @@ func runPythonOracle(t *testing.T) pythonOracleOutput {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := rotguard.Spec("testdata/golden/governance_oracle.json", "b34ac6f73482c26cc648b278816b01e2ad6d45ebe383fff3c8ddb9de37553d1c",
+	spec := rotguard.Spec("testdata/golden/governance_oracle.json", "c4bbe2b27fee8f25d0e3d12ef14f4d56f8c28d5ca7c0a0aae4a3f9259532a804",
 		"./internal/jobs/metrics/aigovernance/", "^TestGovernanceRowsMatchLivePythonProduction$")
 	answers := programoracle.Run(t, spec, root, []programoracle.Program{
 		programoracle.Script("governance oracle", scriptPath, string(source), nil),
@@ -195,6 +195,9 @@ func fixtureArtifacts() []Artifact {
 			a.Evidence.Source = stringPtr("pr_body")
 			a.Evidence.Confidence = &zero
 		}),
+		fixtureArtifact(func(a *Artifact) { a.SubjectID = "21"; a.SubjectType = "commit" }),
+		fixtureArtifact(func(a *Artifact) { a.SubjectID = "22"; a.SensitiveRepo = false; a.RepoAllowsAI = false }),
+		fixtureArtifact(func(a *Artifact) { a.SubjectID = "23"; a.ToolAllowlistStatus = AllowlistUnknown }),
 	}
 }
 

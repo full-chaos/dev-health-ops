@@ -184,6 +184,10 @@ func TestBlameMaxFilesArithmeticMatchesLivePython(t *testing.T) {
 		{intp(10), 15, 10, 6},
 		{intp(0), 5, 0, 0},
 		{intp(1000000), 3, 3, 3},
+		// total_files below non_empty: missing clamps at 0 (Python max(total - non_empty, 0)).
+		{nil, 3, 4, 0},
+		// more git files than the budget: remaining clamps at 0 (Python max(remaining - consumed, 0)).
+		{intp(10), 15, 10, 11},
 	}
 	payload, err := json.Marshal(cases)
 	if err != nil {

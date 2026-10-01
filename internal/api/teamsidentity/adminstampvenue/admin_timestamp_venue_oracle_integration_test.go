@@ -49,7 +49,9 @@ var stamps = []string{
 // microsecond timestamps, and requires byte-identical answers: the compare
 // is raw response text (R398), so a "Z" suffix or a trimmed zero is a diff.
 func TestAdminTimestampVenueOracle(t *testing.T) {
-	runAdminTimestampVenue(t)
+	golden := venueoracle.OpenGolden(t, venueGolden("admin-timestamp-venue-oracle", t.Name(), "3f699a337fc4f12e16b59816353457ad89589f382e9e13c0951f2d4bd212d413"))
+	runAdminTimestampVenue(t, golden)
+	golden.Finish(t)
 }
 
 // TestAdminTimestampServerZoneVenueOracle is the same comparison against a
@@ -58,18 +60,21 @@ func TestAdminTimestampVenueOracle(t *testing.T) {
 // Go route must too. Both a winter and a summer stamp are seeded, so the
 // offset changes with daylight saving.
 func TestAdminTimestampServerZoneVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("admin-timestamp-server-zone-venue-oracle", t.Name(), "693c410269636a99efa6a052fb552cdd89ad304517df06a5bb6bf338ab9a984f"))
 	t.Setenv(containers.ClickHouseTimezoneEnv, "America/Los_Angeles")
-	runAdminTimestampVenue(t)
+	runAdminTimestampVenue(t, golden)
+	golden.Finish(t)
 }
 
-func runAdminTimestampVenue(t *testing.T) {
+func runAdminTimestampVenue(t *testing.T, golden *venueoracle.Golden) {
 	zone := os.Getenv(containers.ClickHouseTimezoneEnv)
 	ctx := context.Background()
-	root := repoRoot(t)
+	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-admin-stamps-32b!"
-	orgID, adminID, memberID := uuid.New(), uuid.New(), uuid.New()
+	orgID, adminID, memberID := stableID("org"), stableID("admin"), stableID("member")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
@@ -90,7 +95,7 @@ VALUES ($1, 'stamps', 'stamps', '{}', 'community', true, now(), now())`, orgID)
 				exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, false, 0, now(), now())`, user.id, user.email)
 				exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, now(), now())`,
-					uuid.New(), user.id, orgID, user.role)
+					stableID("membership-"+user.role), user.id, orgID, user.role)
 			}
 			return map[string]map[string]any{
 				"admin":  {"user_id": adminID.String(), "email": "admin-stamps@example.com", "org_id": orgID.String(), "role": "admin"},
@@ -138,8 +143,9 @@ VALUES ($1, $2, true, true, false, 0, now(), now())`, user.id, user.email)
 		get("clock: written team read back", "/teams/written-new"), get("clock: patched team read back", "/teams/team-1"),
 		get("clock: identities after the writes", "/identities?active_only=false"),
 	)
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		Golden:    golden,
 		Normalize: normalizeClock,
 		// The seed must reach every stored shape, or a SAME could be two
 		// empty lists agreeing: each stamp's Python rendering must appear
@@ -214,9 +220,9 @@ func seedClickHouse(t *testing.T, ctx context.Context, venue *venueoracle.Venue,
 		}
 		statements = append(statements,
 			fmt.Sprintf(`INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id)
-VALUES ('%s', '%s', 'Team %d', NULL, [], [], [], [], %d, '%s', '%s', '%s')`, teamID, uuid.New(), i, active, stamp, stamp, orgID),
+VALUES ('%s', '%s', 'Team %d', NULL, [], [], [], [], %d, '%s', '%s', '%s')`, teamID, stableID(fmt.Sprintf("team-%d", i)), i, active, stamp, stamp, orgID),
 			fmt.Sprintf(`INSERT INTO identities (org_id, canonical_id, identity_uuid, display_name, email, provider_identities, team_ids, is_active, updated_at)
-VALUES ('%s', 'user-%d@example.com', '%s', NULL, 'user-%d@example.com', '{}', ['%s'], %d, '%s')`, orgID, i, uuid.New(), i, teamID, active, stamp))
+VALUES ('%s', 'user-%d@example.com', '%s', NULL, 'user-%d@example.com', '{}', ['%s'], %d, '%s')`, orgID, i, stableID(fmt.Sprintf("identity-%d", i)), i, teamID, active, stamp))
 	}
 	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
 		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
@@ -288,4 +294,10 @@ func repoRoot(t *testing.T) string {
 		}
 		directory = parent
 	}
+}
+
+// stableID is the id a golden-backed seed gives the row it names: a recording and
+// every replay must send the same bytes.
+func stableID(name string) uuid.UUID {
+	return uuid.MustParse(venueoracle.StableUUID("admin-stamp-" + name))
 }

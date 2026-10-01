@@ -118,8 +118,9 @@ var updatedAtPattern = regexp.MustCompile(`"updated_at":"[^"]*"`)
 // authentication, its validation and then the feature_not_licensed 402;
 // activate and deactivate are not gated and do their work.
 func TestSSORoutesVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("s-s-o-routes-venue-oracle", t.Name(), "fbbd572d7b5a73beaa64a3a05a5e6e8c10603f18af745ba9138842c13db1c5be"))
 	ctx := context.Background()
-	venue := venueoracle.Start(t, ctx, venueoracle.Options{Root: venueRoot(), JWTKey: jwtKey,
+	venue := venueoracle.Start(t, ctx, venueoracle.Options{Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: jwtKey,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Seed: seed})
 	tok := venue.Tokens
 	req := func(name, method, path, bearer, body string) venueoracle.Request {
@@ -233,8 +234,9 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 		req("activate: provider id in braces", post, "/sso/providers/{"+oidcID+"}/activate", "owner", ""),
 		req("deactivate: GET is 405", get, "/sso/providers/"+samlID+"/deactivate", "owner", ""),
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	receipt := venueoracle.Diff(t, startGoAPI(t, ctx, venue), requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(_ venueoracle.Request, body string) string {
 			return updatedAtPattern.ReplaceAllString(body, `"updated_at":"<stamped>"`)
 		},
@@ -242,18 +244,20 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 	rows := `SELECT id, org_id, name, protocol, status, is_default, allow_idp_initiated, auto_provision_users, default_role,
 		config::text, coalesce(encrypted_secrets::text, '<null>'), coalesce(allowed_domains::text, '<null>'),
 		created_at, updated_at > created_at FROM sso_providers ORDER BY id`
-	pyRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), rows)
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), rows)
+	pyRows := golden.CompareRows(t, "sso_providers", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), rows)
+	}, goRows)
 	same := pyRows == goRows && pyRows != ""
 	receipt += "sso_providers rows after the requests: " + venueoracle.Mark(same) + "\n"
-	if !same {
-		t.Errorf("sso_providers rows differ (or are empty):\n python %s\n go     %s", pyRows, goRows)
+	if pyRows == "" {
+		t.Error("sso_providers rows are empty")
 	}
-	venueoracle.WriteProof(t)
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	golden.Finish(t)
 }
 
 // startGoAPI builds the dho api route set against the venue's Go copy as

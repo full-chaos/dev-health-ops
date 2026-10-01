@@ -55,12 +55,13 @@ const (
 // the wait answers 202 "pending" with the occurrence id. The last two kinds
 // are asserted below, not compared.
 func TestIntegrationSyncVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("integration-sync-venue-oracle", t.Name(), "38b9ebd15310b59d48c278c0651497249b6ca50ef4db15f736f2a66ffa76dfec"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-integration-sync!"
 	v := newIDs()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Golden: golden, Root: golden.PythonRoot(t, root),
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + venueKey,
@@ -132,8 +133,8 @@ func TestIntegrationSyncVenueOracle(t *testing.T) {
 	t.Cleanup(func() { stop(); <-done })
 
 	same := sameRequests(venue, v)
-	python := venue.ServePython(t, same)
-	receipt := venueoracle.Diff(t, base, same, python, venueoracle.DiffOptions{Normalize: normalize})
+	python := golden.Python(t, venue, same)
+	receipt := venueoracle.Diff(t, base, same, python, venueoracle.DiffOptions{Golden: golden, Normalize: normalize})
 	t.Logf("receipt (%d requests):\n%s", len(same), receipt)
 
 	// The rows each plane planned, columns that are ids or a ruled difference
@@ -153,11 +154,10 @@ u.status, u.attempts, u.processor_flags::text FROM sync_run_units u WHERE u.inte
 ORDER BY u.integration_id::text, u.source_id::text, u.dataset_key`, 14},
 	}
 	for _, table := range compare {
-		pythonRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
-		if pythonRows != goRows {
-			t.Errorf("%s differ\n python:\n%.4000s\n go:\n%.4000s", table.name, pythonRows, goRows)
-		}
+		pythonRows := golden.CompareRows(t, table.name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
+		}, goRows)
 		if strings.Count(pythonRows, " | ") < table.minSeparators {
 			t.Errorf("%s: too few rows compared:\n%s", table.name, pythonRows)
 		}
@@ -165,7 +165,8 @@ ORDER BY u.integration_id::text, u.source_id::text, u.dataset_key`, 14},
 
 	// Ruled divergences, both planes asked.
 	diverging := divergingRequests(venue, v)
-	pythonDiverging := venue.ServePython(t, diverging)
+	pythonDiverging := golden.Python(t, venue, diverging)
+	golden.Consumed(t, pythonDiverging...)
 	for index, request := range diverging {
 		goResponse := venueoracle.Do(t, base, request)
 		if pythonDiverging[index].Status != 202 || !strings.Contains(pythonDiverging[index].Body, `"status":"accepted"`) {
@@ -197,6 +198,7 @@ JOIN sync_manual_triggers m USING (occurrence_id) JOIN sync_configurations c ON 
 		t.Errorf("pending occurrence: status %s mode %s triggered_by %s", status, mode, triggeredBy)
 	}
 	paused.Store(false)
+	golden.Finish(t)
 }
 
 var anyUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)

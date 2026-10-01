@@ -33,13 +33,14 @@ import (
 // run in one order on each plane, so a write is visible to the reads after
 // it.
 func TestIntegrationsAdminVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("integrations-admin-venue-oracle", t.Name(), "a1deea919a93c3af0b118d7f3bb0eff69cd6f874b08196a3b0e606ee56908ff2"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-integrations-32b!"
 	v := newIDs()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Golden: golden, Root: golden.PythonRoot(t, root),
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -58,8 +59,8 @@ func TestIntegrationsAdminVenueOracle(t *testing.T) {
 	base := startGoServer(t, ctx, venue, jwtKey)
 
 	requests := integrationRequests(venue, v)
-	python := venue.ServePython(t, requests)
-	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{Normalize: normalize})
+	python := golden.Python(t, venue, requests)
+	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{Golden: golden, Normalize: normalize})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
 
 	// The rows both planes wrote, as raw column text. A row a request created
@@ -75,15 +76,15 @@ discovered_at, last_seen_at, last_sync_at, last_sync_success, last_sync_error FR
 		{"integration_datasets", `SELECT org_id, integration_id, dataset_key, is_enabled, options::text, unavailable_reason, unavailable_since, unavailable_last_seen_at
 FROM integration_datasets ORDER BY integration_id, dataset_key`},
 	} {
-		pythonRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
-		if pythonRows != goRows {
-			t.Errorf("%s differ\n python:\n%s\n go:\n%s", table.name, pythonRows, goRows)
-		}
+		pythonRows := golden.CompareRows(t, table.name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
+		}, goRows)
 		if strings.TrimSpace(pythonRows) == "" {
 			t.Errorf("%s: no rows compared", table.name)
 		}
 	}
+	golden.Finish(t)
 }
 
 var (

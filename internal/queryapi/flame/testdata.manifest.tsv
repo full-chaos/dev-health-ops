@@ -1,5 +1,6 @@
 # Every file under internal/queryapi/flame/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 bbcb9093cbffe392010c780305d16c231085e412b7984e0149fe28d630d1ae42	unclassified	deployment_pipeline_only.json
 d6997ae8c01ab99963036a61d1d75be0c9b2cf5964ae9bc1e8388d0dfc73b8df	unclassified	deployment_with_queue_and_deploy.json
 f211bfd4927ae8a179029a6b09c9483b882e67f34f190840f1cec273c61c04d0	unclassified	issue_no_backlog_wait.json

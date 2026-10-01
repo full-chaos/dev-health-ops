@@ -1,13 +1,13 @@
 package fixturesgen
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
 	"math/rand"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -65,21 +65,26 @@ func askPython(t *testing.T, golden *venueoracle.Golden, root string, requests [
 	}
 	env := map[string]string{"PYTHONHASHSEED": "0"}
 	request := venueoracle.ProgramRequest("generators", generatorsOracleProgram, []byte(input.String()), env)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
-		probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
-		pyoracle.RequireDeployed(t, python, probe, probeErr)
-		command := exec.Command(python, "-c", generatorsOracleProgram)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		ctx := context.Background()
+		version, err := producer.Command(ctx, nil, nil, pyoracle.VersionProbeArgs...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		probe, probeErr := version.Output()
+		pyoracle.RequireDeployed(t, version.Path, probe, probeErr)
+		command, err := producer.Command(ctx, env, nil, "-c", generatorsOracleProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
 		command.Stdin = strings.NewReader(input.String())
-		command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"),
-			"PYTHONDONTWRITEBYTECODE=1", "PYTHONHASHSEED=" + env["PYTHONHASHSEED"]}
 		output, err := command.Output()
 		if err != nil {
 			var stderr []byte
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				stderr = exitErr.Stderr
 			}
-			t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr))
+			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, stderr))
 		}
 		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}
 	})

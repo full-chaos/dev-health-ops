@@ -2,10 +2,9 @@ package fixturescli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -155,18 +154,19 @@ func TestOrderingStampMatchesThePythonProducer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("ordering cases", orderingOracleProgram, input, map[string]string{"OTEL_ENABLED": "false"})
-	answers := golden.Produce(t, pythonRoot, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
-		command := exec.Command(python, "-c", orderingOracleProgram)
-		command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"),
-			"PYTHONDONTWRITEBYTECODE=1", "OTEL_ENABLED=false"}
+	env := map[string]string{"OTEL_ENABLED": "false"}
+	request := venueoracle.ProgramRequest("ordering cases", orderingOracleProgram, input, env)
+	answers := golden.Produce(t, pythonRoot, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		command, err := producer.Command(context.Background(), env, nil, "-c", orderingOracleProgram)
+		if err != nil {
+			t.Fatal(err)
+		}
 		command.Stdin = bytes.NewReader(input)
 		var stderr bytes.Buffer
 		command.Stderr = &stderr
 		output, err := command.Output()
 		if err != nil {
-			t.Fatalf("live Python producer: %v", pyoracle.RunError(python, err, stderr.Bytes()))
+			t.Fatalf("live Python producer: %v", pyoracle.RunError(command.Path, err, stderr.Bytes()))
 		}
 		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}
 	})

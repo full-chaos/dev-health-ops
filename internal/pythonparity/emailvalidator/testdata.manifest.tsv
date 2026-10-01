@@ -1,4 +1,5 @@
 # Every file under internal/pythonparity/emailvalidator/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	golden/validate-email.golden.json
+# header-before-stamp set: 74ac095db8338c9ee615191b776abe86ecfc093f3946fc96326c555d9d67ea3e (1 files)
+d687712e2b612ebc2cbc9cad9b834ec92fbeb51be49fedc040eaacb74031f4aa	header-before-stamp	golden/validate-email.golden.json
 93ab280fa74335e4c27c7373273887e7d30f0101f68610b8f215e0b8801723b3	unclassified	validate_email_golden.jsonl

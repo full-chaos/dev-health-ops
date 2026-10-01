@@ -1,5 +1,6 @@
 # Every file under internal/queryapi/home/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 2405a0f8afb56504cc3730c49a877234dec26c78e09fe653a770b3fc653fb3ea	unclassified	org_default.json
 14ccae3387d58da8ba7e2ecb7ad6eec057079525f3af890bdd51f63cfe2703ef	unclassified	repo_scoped.json
 26cb789d87c04c4816964b7adb33c5be85cb47a0db73fd6d8c91f57952971566	unclassified	team_scoped.json

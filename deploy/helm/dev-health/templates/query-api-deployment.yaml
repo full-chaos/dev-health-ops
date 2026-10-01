@@ -33,6 +33,9 @@ the release-wide policy admits every pod in the namespace).
 {{- if eq .name "QUERY_API_MCP_ADDR" }}
 {{- fail "queryApi.extraEnv must not set QUERY_API_MCP_ADDR: the chart owns the MCP listener (queryApi.mcp.port); a second value moves it onto a port the MCP Service and NetworkPolicy do not gate" }}
 {{- end }}
+{{- if eq .name "QUERY_API_MCP_BOUNDARY" }}
+{{- fail "queryApi.extraEnv must not set QUERY_API_MCP_BOUNDARY: the chart sets the MCP boundary marker only beside the MCP NetworkPolicy (queryApi.mcp.enabled); a marker from extraEnv would defeat the process's refusal to start an MCP address that arrived without the boundary" }}
+{{- end }}
 {{- end }}
 {{- if .Values.queryApi.mcp.enabled }}
 {{- $mcpPort := int .Values.queryApi.mcp.port }}

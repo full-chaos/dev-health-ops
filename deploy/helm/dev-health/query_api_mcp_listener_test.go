@@ -195,6 +195,16 @@ func TestQueryAPIMCPListenerChart(t *testing.T) {
 // listener with no boundary at all (the release-wide policy admits every pod).
 func TestQueryAPIMCPAddrInExtraEnvFailsTheRenderEvenWhenMCPIsDisabled(t *testing.T) {
 	envs := `queryApi.extraEnv=[{"name":"QUERY_API_MCP_ADDR","value":":8092"}]`
+	marker := `queryApi.extraEnv=[{"name":"QUERY_API_MCP_BOUNDARY","value":"networkpolicy"}]`
+	for _, args := range [][]string{
+		{"--set", "queryApi.enabled=true", "--set-json", marker},
+		{"--set", "queryApi.enabled=true", "--set", "queryApi.mcp.enabled=true", "--set-json", marker},
+	} {
+		out, err := exec.Command("helm", append([]string{"template", "b", "."}, args...)...).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "must not set QUERY_API_MCP_BOUNDARY") {
+			t.Errorf("extraEnv QUERY_API_MCP_BOUNDARY must fail the render: err=%v\n%s", err, out)
+		}
+	}
 	for name, args := range map[string][]string{
 		"mcp disabled":                 {"--set", "queryApi.enabled=true", "--set-json", envs},
 		"mcp disabled, release policy": {"--set", "queryApi.enabled=true", "--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", envs},

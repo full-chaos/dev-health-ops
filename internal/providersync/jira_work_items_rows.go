@@ -17,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/google/uuid"
 )
 
 type jiraWorkItemRow = githubWorkItemRow
@@ -35,6 +36,8 @@ type jiraWorkItemRows struct {
 	Sprints            []jiraSprintRow
 	ProjectMemberships []projectmembership.Row
 	Projects           []projectmembership.CatalogRow
+	// MembershipCreation counts the CHAOS-7361 creation-time ADD decisions.
+	MembershipCreation membershipCreationStats
 }
 
 type jiraIdentityResolver func(email, accountID, displayName string) string
@@ -894,4 +897,60 @@ func utf8RuneCount(value string) int {
 		count++
 	}
 	return count
+}
+
+// jiraIssueCreatedAt is fields.created and nothing else. normalizeJiraWorkItem
+// falls back to the sync clock for a missing value; the creation ADD must not,
+// because occurred_at is a sorting-key member.
+func jiraIssueCreatedAt(issue jiraWorkItemFixtureInput) *time.Time {
+	fields, ok := jiraMapValue(issue.Raw["fields"])
+	if !ok {
+		return nil
+	}
+	return jiraTime(jiraField(fields, "created", issue.ObjectShape))
+}
+
+// jiraCreationMembership is CHAOS-7361's creation-time ADD for one issue.
+// history is the issue's project rows already derived from the FULL changelog.
+// The key written is the key work_items.project_key carries whenever the
+// creation project is the issue's current project, so the presence view's
+// project_key does not change when the item moves from the column arm to the
+// transition arm.
+func jiraCreationMembership(
+	claim Claim,
+	item jiraWorkItemRow,
+	issue jiraWorkItemFixtureInput,
+	history []projectmembership.Row,
+	stats *membershipCreationStats,
+	normalizedAt time.Time,
+) (projectmembership.Row, bool) {
+	createdAt := jiraIssueCreatedAt(issue)
+	if createdAt == nil {
+		if derefString(item.ProjectID) != "" || len(history) > 0 {
+			stats.skip(projectmembership.SkipCreatedAtUnparseable)
+		}
+		return projectmembership.Row{}, false
+	}
+	template := projectmembership.Row{
+		OrgID: claim.OrgID, RepoID: uuid.Nil, SubjectKind: projectmembership.SubjectWorkItem,
+		SubjectID: item.WorkItemID, Provider: "jira", LastSynced: normalizedAt.UTC(),
+	}
+	row, outcome := projectmembership.CreationAdd(
+		template, history, derefString(item.ProjectID), derefString(item.ProjectKey), *createdAt,
+	)
+	stats.record(outcome)
+	if outcome != projectmembership.CreationAdded || validateJiraProjectMembership(row, claim) != nil {
+		return projectmembership.Row{}, false
+	}
+	return row, true
+}
+
+// jiraCreationProjectName is the name for the creation project's catalog row:
+// the issue's own project name when it is the current project, "" otherwise
+// (a from-side project that no live lookup was made for).
+func jiraCreationProjectName(item jiraWorkItemRow, projectID string) string {
+	if projectID != "" && projectID == derefString(item.ProjectID) {
+		return derefString(item.ProjectName)
+	}
+	return ""
 }

@@ -41,9 +41,15 @@ import (
 //   - the output format: Python prints a text list and a log line, dho prints
 //     one JSON document; the applied and pending versions are read out of both;
 //   - dho refuses what Python would apply on top: a database below the head
-//     (some baseline versions unrecorded), a database holding objects the
-//     baseline does not create and no versions (foreign) and an ordering
-//     contract other than 2 -- all before writing anything;
+//     (some baseline versions unrecorded) and a database holding objects the
+//     baseline does not create and no versions (foreign) -- before writing
+//     anything;
+//   - the ordering contract (D3635, CHAOS-7421): Python reads unset and "1" as
+//     contract 1 and applies the chain without the 067 rebuild; dho reads unset
+//     as contract 2 and REFUSES "1" (and "", "3", "x") as unsupported. Every
+//     frozen scenario below passes "2" to BOTH planes, so none of the compared
+//     cases depends on this divergence; the divergence itself is pinned only in
+//     the dho-only block marked DIVERGENCE FROM PYTHON;
 //   - `status --check` on a database whose versions are all recorded but
 //     lacks a baseline object: dho reports schema_mismatch and exits 1
 //     (it reads the schema), Python reports nothing pending and exits 0.
@@ -554,16 +560,20 @@ func runMigrateScenarios(t *testing.T, live bool) *migrateEnv {
 		t.Errorf("python over a foreign database: %+v, want exit 0 with the unrelated table kept", pyForeign)
 	}
 
-	// ---- an ordering contract other than 2: dho refuses before connecting ----
-	for _, contract := range []string{"", "1", "3", "x"} {
+	// ---- DIVERGENCE FROM PYTHON (D3635, CHAOS-7421): the ordering contract ----
+	// Not compared with the frozen Python answer: Python reads unset and "1" as
+	// contract 1 and applies the chain; dho reads unset as contract 2 and refuses
+	// "1", "3" and "x" before connecting, with the one resolver's text. Contract 1
+	// is unsupported (D3635).
+	for _, contract := range []string{"1", "3", "x"} {
 		code, stdout, stderr := e.goVerb(t, e.newDatabase(t), "upgrade", contract)
-		wantCode := `"code":"settings_mismatch"` // unset and 1 are the legacy contract
-		if contract == "3" || contract == "x" {
-			wantCode = `"code":"configuration_error"`
+		if code != cli.ExitFailure || stdout != "" || !strings.Contains(stderr, `"code":"configuration_error"`) || !strings.Contains(stderr, "only contract 2 is supported") {
+			t.Errorf("dho upgrade with OPERATIONAL_ORDERING_CONTRACT=%s: exit %d, stdout %q, stderr %q, want a configuration_error naming that only contract 2 is supported", contract, code, stdout, stderr)
 		}
-		if code != cli.ExitFailure || stdout != "" || !strings.Contains(stderr, wantCode) {
-			t.Errorf("dho upgrade with OPERATIONAL_ORDERING_CONTRACT=%s: exit %d, stdout %q, stderr %q, want a refusal with %s", contract, code, stdout, stderr, wantCode)
-		}
+	}
+	// Unset is contract 2: the verb applies the head and reports contract 2.
+	if code, stdout, stderr := e.goVerb(t, e.newDatabase(t), "upgrade", ""); code != 0 || !strings.Contains(stdout, `"operational_ordering_contract":2`) {
+		t.Errorf("dho upgrade with the contract unset: exit %d, stdout %q, stderr %q, want exit 0 and contract 2", code, stdout, stderr)
 	}
 	return e
 }

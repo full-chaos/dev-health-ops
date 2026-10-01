@@ -57,15 +57,70 @@ func UpgradeWithHistory(ctx context.Context, conn *pgx.Conn, baseline Baseline, 
 	return upgrade(ctx, conn, baseline, chain, KnownRevisions(history, baseline, chain), logger)
 }
 
+// upgrade brings the database to the head in ONE transaction: the advisory lock,
+// the baseline of an empty database and every pending chain revision, each recorded
+// in alembic_version, commit together or not at all. That is Python's Alembic walk
+// (alembic/env.py: one `begin_transaction()` around `run_migrations()`): a failing
+// revision rolls the whole walk back to the head the run started from (CHAOS-7291).
+//
+// One recovery stays: another migrator that takes no dho lock (the Python Alembic
+// upgrade) may commit a revision after this run planned and before this run's SQL
+// for it ran, so the SQL fails although the database is where this run wants it. The
+// failed walk is rolled back whole; when the revision it was applying is now
+// recorded, the walk is planned again under the lock, once.
 func upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, known map[string]bool, logger *slog.Logger) (Result, error) {
 	result := Result{Heads: Heads(baseline, chain)}
-	var plan Plan
+	done, err := walkWithRetry(
+		func() (walked, error) { return walkOnce(ctx, conn, baseline, chain, known) },
+		func(revision string) bool { return revisionRecordedSince(ctx, conn, baseline, chain, known, revision) },
+		logger)
+	if err != nil {
+		return result, err
+	}
+	result.Action, result.Applied = done.action, done.applied
+	return result, nil
+}
+
+// walkWithRetry runs one walk and, when it failed while applying a revision another
+// migrator has since recorded, plans and runs it once more. Any other failure, and a
+// second failure, is the run's.
+func walkWithRetry(walk func() (walked, error), recorded func(revision string) bool, logger *slog.Logger) (walked, error) {
+	for attempt := 0; ; attempt++ {
+		done, err := walk()
+		if err == nil {
+			return done, nil
+		}
+		if attempt == 0 && done.attempted != "" && recorded(done.attempted) {
+			// Not silent: a run that recovers reports success, so this line is the only
+			// trace that another migrator applied the revision under it (and that the two
+			// migrators ran together, against the runbook).
+			logger.Info("migrate chain walk planned again: another migrator recorded the revision",
+				"revision", done.attempted, "sqlstate", sqlState(err))
+			continue
+		}
+		return done, err
+	}
+}
+
+// walked is what one walk did: the action, the revisions it applied, and the revision
+// it was applying when it failed ("" when it failed before it chose one).
+type walked struct {
+	action    string
+	applied   []string
+	attempted string
+}
+
+// walkOnce is one transaction: plan under the lock, apply the baseline of an empty
+// database, apply every pending chain revision in order.
+func walkOnce(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, known map[string]bool) (walked, error) {
+	var done walked
 	err := inTransaction(ctx, conn, func(tx pgx.Tx) error {
+		done = walked{}
 		observation, err := observe(ctx, tx)
 		if err != nil {
 			return err
 		}
-		plan = Decide(observation, baseline, chain, known)
+		plan := Decide(observation, baseline, chain, known)
 		switch plan.State {
 		case StateAheadOfBuild:
 			return AheadOfBuildError{Recorded: observation.Versions, Unknown: plan.Unknown}
@@ -96,110 +151,35 @@ func upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Cha
 			if !sameSet(after.Versions, baseline.Heads) {
 				return fmt.Errorf("the baseline recorded alembic_version %v, want %v", after.Versions, baseline.Heads)
 			}
-			result.Action = "baseline_applied"
-		default:
-			result.Action = "up_to_date"
-		}
-		return nil
-	})
-	if err != nil {
-		return result, err
-	}
-	applied, err := applyChain(ctx, dbChain{conn: conn, baseline: baseline, chain: chain, known: known}, logger)
-	result.Applied = applied
-	if err != nil {
-		return result, err
-	}
-	if result.Action == "up_to_date" && len(result.Applied) > 0 {
-		result.Action = "chain_applied"
-	}
-	return result, nil
-}
-
-// chainSteps is what applyChain drives: one planned-and-applied chain revision at
-// a time, and a fresh look at whether a revision is recorded. dbChain is the real
-// one; the loop's decisions are tested against a stub.
-type chainSteps interface {
-	// step plans again under the migration lock and applies the first pending
-	// revision in its own transaction. applied is "" when nothing was pending;
-	// attempted is "" when the step failed before it chose a revision.
-	step(ctx context.Context) (applied, attempted string, err error)
-	// recorded reports, from a fresh read, whether the database now records the
-	// revision (or a later one).
-	recorded(ctx context.Context, revision string) bool
-}
-
-// applyChain applies the pending chain one revision per transaction, each planned
-// again UNDER the lock: a concurrent run may have applied revisions since an
-// earlier plan, and its non-idempotent SQL must not run twice. It returns what this
-// run applied.
-func applyChain(ctx context.Context, steps chainSteps, logger *slog.Logger) ([]string, error) {
-	var applied []string
-	for {
-		done, attempted, err := steps.step(ctx)
-		if err != nil {
-			// Another migrator that takes no dho lock (the Python Alembic upgrade)
-			// may have committed this revision after the plan and before this SQL
-			// ran: the SQL fails (a column it adds is there) although the database
-			// is where this run wants it. When the revision is now recorded, carry
-			// on with a fresh plan; any other failure is the step's own, and so is
-			// a failure before a revision was chosen.
-			if attempted == "" || !steps.recorded(ctx, attempted) {
-				return applied, err
+			// The chain continues the baseline in this same transaction.
+			plan = Decide(after, baseline, chain, known)
+			if plan.State != StateAtHead {
+				return fmt.Errorf("the database is not at the baseline head after the baseline was applied (state %d, alembic_version %v)", plan.State, after.Versions)
 			}
-			// Not silent: a run that recovers reports success, so this line is the
-			// only trace that another migrator applied the revision under it (and
-			// that the two migrators ran together, against the runbook).
-			logger.Info("migrate chain step recovered: another migrator recorded the revision",
-				"revision", attempted, "sqlstate", sqlState(err))
-			continue
+			done.action = "baseline_applied"
+		default:
+			done.action = "up_to_date"
 		}
-		if done == "" {
-			return applied, nil
+		previous := plan.ApplicationHead
+		for _, file := range plan.Pending {
+			done.attempted = file.Revision
+			if err := applyChainFile(ctx, tx, file, previous); err != nil {
+				return err
+			}
+			previous = file.Revision
+			done.applied = append(done.applied, file.Revision)
 		}
-		applied = append(applied, done)
-	}
-}
-
-// dbChain is chainSteps over a database.
-type dbChain struct {
-	conn     *pgx.Conn
-	baseline Baseline
-	chain    []ChainFile
-	known    map[string]bool
-}
-
-func (d dbChain) step(ctx context.Context) (string, string, error) {
-	var progress stepProgress
-	err := inTransaction(ctx, d.conn, func(tx pgx.Tx) error {
-		observation, err := observe(ctx, tx)
-		if err != nil {
-			return err
+		done.attempted = ""
+		if done.action == "up_to_date" && len(done.applied) > 0 {
+			done.action = "chain_applied"
 		}
-		current := Decide(observation, d.baseline, d.chain, d.known)
-		if current.State != StateAtHead {
-			return fmt.Errorf("the database changed while the chain was applied: it is no longer at a known revision (state %d, alembic_version %v)", current.State, observation.Versions)
-		}
-		if len(current.Pending) == 0 {
-			return nil
-		}
-		file := current.Pending[0]
-		progress.attempted = file.Revision
-		if err := applyChainFile(ctx, tx, file, current.ApplicationHead); err != nil {
-			return err
-		}
-		progress.applied = file.Revision
 		return nil
 	})
-	return progress.applied, progress.attempted, err
-}
-
-// stepProgress is what one step got to: the revision it tried and the one it
-// committed (revision numbers, never pointers: a step that failed early has none).
-type stepProgress struct{ applied, attempted string }
-
-func (d dbChain) recorded(ctx context.Context, revision string) bool {
-	return revisionRecordedSince(ctx, d.conn, d.baseline, d.chain, d.known, revision)
+	if err != nil {
+		// A rolled-back walk applied nothing.
+		done.applied = nil
+	}
+	return done, err
 }
 
 // applyChainFile runs one revision and moves the application head it

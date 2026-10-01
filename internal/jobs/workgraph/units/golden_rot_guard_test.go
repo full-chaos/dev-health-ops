@@ -31,7 +31,7 @@ import (
 // than querying ClickHouse), so this runs anywhere the interpreter does.
 func TestWorkgraphComponentsGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/workgraph_components_rot_guard.json", "PIN:workgraph_components_rot_guard",
+	spec := rotguard.Spec("testdata/golden/workgraph_components_rot_guard.json", "03f9fcfca79dd1b6a845c488386e3f9ac60b0f670b7cf9fc871c6fda4c320603",
 		"./internal/jobs/workgraph/units/", "^TestWorkgraphComponentsGoldenMatchesLivePython$")
 	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
 		Name: "workgraph components golden generator",
@@ -71,7 +71,7 @@ func TestWorkgraphComponentsGoldenMatchesLivePython(t *testing.T) {
 // NaN words), so it is the last place to rely on a shared marker.
 func TestConfidenceCoercionGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/confidence_coercion_rot_guard.json", "PIN:confidence_coercion_rot_guard",
+	spec := rotguard.Spec("testdata/golden/confidence_coercion_rot_guard.json", "d415002f628fbab23ed593cf445905831f85f90fd3308e64f6fd26b5b2caa033",
 		"./internal/jobs/workgraph/units/", "^TestConfidenceCoercionGoldenMatchesLivePython$")
 	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
 		Name: "confidence coercion golden generator",
@@ -122,7 +122,7 @@ func TestConfidenceCoercionGoldenMatchesLivePython(t *testing.T) {
 // no local cue that the investment port depends on its NaN behaviour.
 func TestInvestmentQualityGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/investment_quality_rot_guard.json", "PIN:investment_quality_rot_guard",
+	spec := rotguard.Spec("testdata/golden/investment_quality_rot_guard.json", "14ac5576ae7a172223555a36058f90e3daf1d13acf403988efe8b8297a0c03ef",
 		"./internal/jobs/workgraph/units/", "^TestInvestmentQualityGoldenMatchesLivePython$")
 	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
 		Name: "investment quality golden generator",
@@ -181,7 +181,7 @@ func TestInvestmentQualityGoldenMatchesLivePython(t *testing.T) {
 // rather than a formatting one.
 func TestMaxComponentNodesGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/max_component_nodes_rot_guard.json", "PIN:max_component_nodes_rot_guard",
+	spec := rotguard.Spec("testdata/golden/max_component_nodes_rot_guard.json", "4ce4c6a2fefffc0d25ae762d1c4f747c130226d737121d6ff92697a17e2c9e2e",
 		"./internal/jobs/workgraph/units/", "^TestMaxComponentNodesGoldenMatchesLivePython$")
 	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
 		Name: "max component nodes golden generator",
@@ -229,7 +229,7 @@ func TestMaxComponentNodesGoldenMatchesLivePython(t *testing.T) {
 // the new one -- green tests, wrong parser.
 func TestDecimalDigitsGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/decimal_digits_rot_guard.json", "PIN:decimal_digits_rot_guard",
+	spec := rotguard.Spec("testdata/golden/decimal_digits_rot_guard.json", "f204cdfc890bdaead2e47b5e11fe0729f0aeaa245cd39740fb817e6268575d06",
 		"./internal/jobs/workgraph/units/", "^TestDecimalDigitsGoldenMatchesLivePython$")
 	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
 		Name: "decimal digits golden generator",
@@ -460,7 +460,7 @@ func marshalGoldenDocument(t *testing.T, fields map[string]any) []byte {
 // re-date work units.
 func TestTimeBoundsGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/time_bounds_rot_guard.json", "PIN:time_bounds_rot_guard",
+	spec := rotguard.Spec("testdata/golden/time_bounds_rot_guard.json", "aa4d13fc9bed1978b7471d3f66b3245f0f82dda163adcd75683bd26a68c4bd05",
 		"./internal/jobs/workgraph/units/", "^TestTimeBoundsGoldenMatchesLivePython$")
 	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
 		Name: "time bounds golden generator",

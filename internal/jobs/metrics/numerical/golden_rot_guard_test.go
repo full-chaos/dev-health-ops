@@ -41,7 +41,7 @@ import (
 // the guard still fails when the fixture is edited without recording the producer again.
 func TestRemainingMetricsGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRoot(t)
-	spec := rotguard.Spec("testdata/golden/remaining_metrics_rot_guard.json", "PIN:remaining_metrics_rot_guard",
+	spec := rotguard.Spec("testdata/golden/remaining_metrics_rot_guard.json", "22d5bf8fe0990e9a6b14993844854c2fafb52ece749ed1e790f7cbdce8fec033",
 		"./internal/jobs/metrics/numerical/", "^TestRemainingMetricsGoldenMatchesLivePython$")
 	rendered := []byte(rotguard.Run(t, spec, root, rotguard.Generator{
 		Name: "remaining metrics golden generator",

@@ -30,7 +30,7 @@ import (
 // frozen run makes the same comparison on the recorded stdout (no Python runs).
 func TestCapacityForecastGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRoot(t)
-	spec := rotguard.Spec("testdata/golden/capacity_forecast_rot_guard.json", "PIN:capacity_forecast_rot_guard",
+	spec := rotguard.Spec("testdata/golden/capacity_forecast_rot_guard.json", "86706927c108cea189fa3e80795081026fd6abdb8531dcd1a02d5b94cdce830f",
 		"./internal/jobs/metrics/numerical/", "^TestCapacityForecastGoldenMatchesLivePython$")
 	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
 		Name: "capacity forecast golden generator",

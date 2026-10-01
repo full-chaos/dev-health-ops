@@ -1,0 +1,4 @@
+# Every file under internal/maintenancecli/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: 94e8215424b784cae84c9ca55074ca79c17e87703d5fa76e4cdc11605cafc112 (2 files)
+8a919c0c6cc835eb61c36ab9555388368db663c7aaff5dcc212c0e60ec1eb95e	python-recorded	housekeeping_golden.json
+92f7427eb65311ee628d5fcd3f621c549d5844a0a5fc0e456e1118bcca40a699	python-recorded	scrub_golden.json

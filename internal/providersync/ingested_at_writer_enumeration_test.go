@@ -3,6 +3,7 @@ package providersync
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,7 +15,16 @@ import (
 // a list kept here: a new writer is covered the day it appears.
 func TestNoWriterOfTheIngestedAtTablesSendsIngestedAt(t *testing.T) {
 	insert := regexp.MustCompile("INSERT INTO (project_membership_transitions|work_items)\\b[^`\"]*")
-	var found []string
+	// The production writers, by file. A new writer fails the test until it is reviewed and added here;
+	// a lost one fails it too (the count is exact, not a floor).
+	want := map[string]int{
+		"projectmembership/membership.go":                             1,
+		"providersync/github_work_items_direct_effects_clickhouse.go": 1,
+		"providersync/linear_work_items_effects.go":                   1,
+		"streamhandlers/internal_ingest.go":                           1,
+		"streamhandlers/external_clickhouse.go":                       1,
+	}
+	got := map[string]int{}
 	root := filepath.Join("..", "..", "internal")
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -27,7 +37,7 @@ func TestNoWriterOfTheIngestedAtTablesSendsIngestedAt(t *testing.T) {
 		// A statement can be split across concatenated string literals (TransitionsInsert is).
 		flat := regexp.MustCompile("[`\"] *\\+\\s*[`\"]").ReplaceAllString(string(data), "")
 		for _, statement := range insert.FindAllString(flat, -1) {
-			found = append(found, path+": "+statement)
+			got[filepath.ToSlash(strings.TrimPrefix(path, root+string(filepath.Separator)))]++
 			if !strings.Contains(statement, "(") {
 				t.Errorf("%s: %q does not name its columns", path, statement)
 			}
@@ -40,7 +50,30 @@ func TestNoWriterOfTheIngestedAtTablesSendsIngestedAt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(found) < 4 {
-		t.Fatalf("the scan found %d INSERT statement(s), want at least the 4 work_items + 1 transitions writers: %v", len(found), found)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("INSERT statements into the ingested_at tables by file = %v, want exactly %v", got, want)
+	}
+}
+
+// The Python writers of work_items name their columns and never name ingested_at.
+func TestPythonWorkItemsWritersNeverNameIngestedAt(t *testing.T) {
+	for _, path := range []string{"storage/clickhouse.py", "metrics/sinks/clickhouse/work_graph.py"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", "src", "dev_health_ops", path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "ingested_at") && path == "storage/clickhouse.py" {
+			// storage/clickhouse.py also writes other tables that carry their own ingested_at; only
+			// the work_items column list matters.
+			start := strings.Index(string(data), "async def insert_work_items(")
+			end := strings.Index(string(data[start:]), "async def insert_work_item_transitions(")
+			if start < 0 || end < 0 || strings.Contains(string(data[start:start+end]), "ingested_at") {
+				t.Fatalf("%s: insert_work_items names ingested_at (or the function moved)", path)
+			}
+			continue
+		}
+		if strings.Contains(string(data), "ingested_at") {
+			t.Fatalf("%s names ingested_at", path)
+		}
 	}
 }

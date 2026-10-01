@@ -398,7 +398,9 @@ func TestGenerateVenueOracleMatchesThePythonProducer(t *testing.T) {
 		pythonStart := time.Now().UTC().Add(-time.Second)
 		pythonGenerate(t, ch.httpDSN, set.Org, set.Params)
 		// CHAOS-7265 executed cell: the Python work_items writers name their columns and omit
-		// ingested_at, so the server stamps every row they write (insert_work_items / write_work_items).
+		// ingested_at, so every row they write has a value at or after the run start (the column exists, the DEFAULT applied, no insert broke).
+		// NOT pinned here: server time vs a client clock, which this predicate cannot tell apart; that is
+		// pinned statically by TestPythonWorkItemsWritersNeverNameIngestedAt (providersync).
 		stamped := strings.Fields(strings.TrimSpace(clickHouseHTTP(t, ch.httpDSN, fmt.Sprintf("SELECT count(), countIf(ingested_at >= toDateTime64(%d, 3, 'UTC')) FROM work_items FORMAT TSV", pythonStart.Unix()))))
 		if len(stamped) != 2 || stamped[0] == "0" || stamped[0] != stamped[1] {
 			t.Fatalf("Python producer work_items rows / rows server-stamped at write = %v, want all, and at least one", stamped)
@@ -738,6 +740,22 @@ func TestLoadWorldStampsServerStampedColumnsAtLoadTime(t *testing.T) {
 					replayed.Tables[index] = table
 				}
 			}
+			// The generator writes no project_membership_transitions rows, so a replayed capture of that
+			// table is built here: without it the table's server-stamped mapping would go unexercised.
+			replayed.Tables = append(replayed.Tables, WorldTable{FrozenTable: FrozenTable{
+				Name: "project_membership_transitions",
+				Columns: []FrozenColumn{
+					{Name: "org_id", Type: "String"}, {Name: "source_id", Type: "Nullable(UUID)"}, {Name: "repo_id", Type: "UUID"},
+					{Name: "subject_kind", Type: "LowCardinality(String)"}, {Name: "subject_id", Type: "String"},
+					{Name: "provider", Type: "LowCardinality(String)"}, {Name: "from_project_id", Type: "String"},
+					{Name: "to_project_id", Type: "String"}, {Name: "from_project_key", Type: "String"},
+					{Name: "to_project_key", Type: "String"}, {Name: "actor", Type: "String"},
+					{Name: "occurred_at", Type: "DateTime64(3)"}, {Name: "last_synced", Type: "DateTime64(3)"},
+					{Name: "event_id", Type: "String"}, {Name: "ingested_at", Type: "DateTime64(3, 'UTC')"},
+				},
+				Rows: [][]any{{world.OrgID, nil, "00000000-0000-0000-0000-000000000000", "pull_request", "1", "github", "", "ghprojv2:acme:1", "", "1", "",
+					"2020-01-01 00:00:00.000", "2020-01-01 00:00:00.000", "event-1", "2020-01-01 00:00:00.000"}},
+			}})
 			startedAt := time.Now().UTC().Add(-time.Second)
 			if _, err := load(context.Background(), replayed, world.OrgID, frozenAt); err != nil {
 				t.Fatalf("load: %v", err)

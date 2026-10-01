@@ -1,0 +1,21 @@
+{
+  "header": {
+    "test": "TestRemainingMetricsGoldenMatchesLivePython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/metrics/numerical/ -test '^TestRemainingMetricsGoldenMatchesLivePython$' -python-root $DIR",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "remaining metrics golden generator",
+      "method": "PYTHON",
+      "path": "program sha256 192f1919e9186820114705b5562dd8104d25b41daff3bb41e74be7d75130b035 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\n  \"capacity\": [\n    {\n      \"expected\": [\n        1,\n        1,\n        1,\n        4,\n        6,\n        6,\n        7\n      ],\n      \"history\": [\n        0,\n        1,\n        2,\n        3,\n        8\n      ],\n      \"mean\": 2.8,\n      \"percentiles\": [\n        0,\n        5,\n        15,\n        50,\n        85,\n        95,\n        100\n      ],\n      \"stddev\": 2.7856776554368237,\n      \"values\": [\n        1,\n        2,\n        3,\n        4,\n        5,\n        6,\n        7\n      ]\n    },\n    {\n      \"expected\": [\n        0,\n        0,\n        0\n      ],\n      \"history\": [\n        5\n      ],\n      \"mean\": 5,\n      \"percentiles\": [\n        50,\n        85,\n        95\n      ],\n      \"stddev\": 0.0,\n      \"values\": []\n    }\n  ],\n  \"release_confidence\": [\n    {\n      \"concurrent_deploys\": 0,\n      \"coverage\": 1.0,\n      \"expected\": 1.0,\n      \"minimum_sessions\": 300,\n      \"total_sessions\": 300\n    },\n    {\n      \"concurrent_deploys\": 1,\n      \"coverage\": 0.5,\n      \"expected\": 0.5,\n      \"minimum_sessions\": 300,\n      \"total_sessions\": 150\n    },\n    {\n      \"concurrent_deploys\": 5,\n      \"coverage\": -1.0,\n      \"expected\": 0.0,\n      \"minimum_sessions\": 300,\n      \"total_sessions\": 0\n    },\n    {\n      \"concurrent_deploys\": 0,\n      \"coverage\": 2.0,\n      \"expected\": 1.0,\n      \"minimum_sessions\": 0,\n      \"total_sessions\": 1\n    }\n  ],\n  \"schema_version\": 1\n}\n"
+    }
+  ]
+}

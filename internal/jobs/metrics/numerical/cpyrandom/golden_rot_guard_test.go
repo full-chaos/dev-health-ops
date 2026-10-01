@@ -1,19 +1,14 @@
 package cpyrandom
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
+	"reflect"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-)
-
-const (
-	livePythonOraclesEnv     = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
-	livePythonOracleProofDir = "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"
-	cpyRandomProofFile       = "cpython-random-golden"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
 // TestGoldenStillDescribesLiveCPython is the rot guard for the frozen vectors.
@@ -33,52 +28,48 @@ const (
 // Only both together mean "Go reproduces CPython". If CPython ever changes its
 // stream -- a seeding change, a _randbelow change -- this fails loudly rather
 // than letting the capacity port keep matching a stale artefact.
+//
+// The generator's stdout was executed once on the last build's interpreter and is
+// frozen in testdata/golden/cpython_random_rot_guard.json; a frozen run makes the same
+// comparison its --check mode made (the "cases" section) on the recorded stdout, with no
+// interpreter. A CPython that moves is therefore found by recording again, not by this
+// test failing on its own: the recording is the final record of the stream.
+
 func TestGoldenStillDescribesLiveCPython(t *testing.T) {
-	if os.Getenv(livePythonOraclesEnv) != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv(livePythonOracleProofDir)
-	if proofDirectory == "" {
-		t.Fatalf("%s is required", livePythonOracleProofDir)
-	}
-
 	root := repoRoot(t)
-	generator := filepath.Join(root, "tests", "fixtures", "generate_cpython_random_golden.py")
-	golden := filepath.Join(root, "tests", "fixtures", "cpython_random_golden.json")
+	spec := rotguard.Spec("testdata/golden/cpython_random_rot_guard.json", "576ad15d045dab250d239710c6f7d64a5aef539f02e6b8ba450458d1a48fe4e3",
+		"./internal/jobs/metrics/numerical/cpyrandom/", "^TestGoldenStillDescribesLiveCPython$")
+	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+		Name: "cpython random golden generator",
+		Path: "tests/fixtures/generate_cpython_random_golden.py",
+	})[0]
 
-	python := pyoracle.Resolve(t, root)
-
-	// --check re-derives every vector from the LIVE interpreter and compares.
-	// The generator owns that comparison so there is only one definition of
-	// what the vectors are, rather than a second copy here that could drift
-	// from the producer in its own way.
-	command := exec.Command(python, generator, "--check", golden)
-	command.Dir = root
-	output, err := command.CombinedOutput()
+	frozen, err := os.ReadFile(filepath.Join(root, "tests", "fixtures", "cpython_random_golden.json"))
 	if err != nil {
-		t.Fatalf(
-			"the recorded CPython vectors no longer match this interpreter.\n"+
-				"Either CPython changed its random stream (in which case the "+
-				"capacity port's parity claim needs re-examining, not just a "+
-				"regenerated file) or the generator was edited.\n%v",
-			pyoracle.RunError(python, err, output),
+		t.Fatal(err)
+	}
+	live, checkedIn := decodeExact(t, []byte(rendered), "recorded generator output"), decodeExact(t, frozen, "checked-in golden")
+	if _, present := live["cases"]; !present {
+		t.Fatal("the recorded generator output has no \"cases\" section: the comparison would pass on nothing")
+	}
+	if !reflect.DeepEqual(checkedIn["cases"], live["cases"]) {
+		t.Errorf(
+			"the recorded CPython vectors no longer match the checked-in golden.\n" +
+				"Either the golden was edited by hand, CPython changed its random stream (in which case the " +
+				"capacity port's parity claim needs re-examining, not just a regenerated file) or the generator " +
+				"was edited; record the producer again (the golden's recipe).",
 		)
 	}
-	if !strings.Contains(string(output), "CPYTHON_RANDOM_GOLDEN_CURRENT") {
-		t.Fatalf(
-			"the check produced no positive marker, so a silent no-op cannot be "+
-				"distinguished from a pass:\n%s", output)
-	}
+}
 
-	// Only on a PASS. t.Fatalf above already halts, but an added t.Errorf
-	// later would not, and a marker that can mean either outcome is not
-	// evidence.
-	if t.Failed() {
-		return
+// decodeExact decodes JSON without collapsing numbers into float64.
+func decodeExact(t *testing.T, raw []byte, label string) map[string]any {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil {
+		t.Fatalf("decode %s: %v", label, err)
 	}
-	if err := os.WriteFile(
-		filepath.Join(proofDirectory, cpyRandomProofFile), []byte("executed\n"), 0o600,
-	); err != nil {
-		t.Fatalf("write live Python oracle proof: %v", err)
-	}
+	return value
 }

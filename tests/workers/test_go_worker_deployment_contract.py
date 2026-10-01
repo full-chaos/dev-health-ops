@@ -727,6 +727,71 @@ def test_helm_api_deployment_carries_expected_worker_groups_only_when_go_workers
     assert entry["value"] == _EXPECTED_WORKER_GROUPS_VALUE
 
 
+_HELM_GO_WORKER_SETS = [
+    "--set",
+    "goWorkers.enabled=true",
+    "--set",
+    "goWorkers.pgbouncer.enabled=true",
+    "--set-string",
+    "goWorkers.pgbouncer.postgres.host=pg",
+    "--set-string",
+    "goWorkers.pgbouncer.postgres.database=db",
+    "--set-string",
+    "goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD=x",
+    "--set-string",
+    "goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD=x",
+    "--set-string",
+    "goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD=x",
+]
+
+
+@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
+def test_helm_every_go_worker_group_names_itself_for_otel() -> None:
+    """Every rendered Go worker Deployment carries its own OTEL_SERVICE_NAME
+    (dev-health-go-<group>) as an explicit env entry, so it wins over the
+    shared ConfigMap's OTEL_SERVICE_NAME (the python api's name) that every
+    group also reads through envFrom. Without it all groups report as one
+    service. The names are distinct and none is the python api's."""
+    rendered = subprocess.run(
+        [
+            "helm",
+            "template",
+            "phase1",
+            str(_HELM_CHART),
+            *_HELM_GO_WORKER_SETS,
+            "--show-only",
+            "templates/go-workers.yaml",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    deployments = {
+        document["metadata"]["labels"]["dev-health.io/worker-group"]: document
+        for document in yaml.safe_load_all(rendered.stdout)
+        if document and document.get("kind") == "Deployment"
+    }
+    assert set(deployments) >= {
+        "heavy",
+        "ops",
+        "sync",
+        "sync-provider",
+        "reconciler",
+        "scheduler",
+        "stream-external",
+        "stream-ingest",
+        "stream-pagerduty",
+    }, f"the walk did not reach every group: {sorted(deployments)}"
+    names = {}
+    for group, document in deployments.items():
+        container = document["spec"]["template"]["spec"]["containers"][0]
+        env = {item["name"]: item.get("value") for item in container["env"]}
+        assert env.get("OTEL_SERVICE_NAME") == f"dev-health-go-{group}", group
+        names[group] = env["OTEL_SERVICE_NAME"]
+    assert len(set(names.values())) == len(names), f"two groups share a name: {names}"
+    assert "dev-health-ops" not in names.values()
+
+
 def test_compose_go_worker_heavy_alone_owns_the_metrics_queue() -> None:
     """CHAOS-4351: `go-worker-heavy` is the only worker group whose queue
     set includes `metrics` (verified below, not just asserted -- a future

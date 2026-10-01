@@ -1,0 +1,9 @@
+# Every file under internal/jobs/workgraph/units/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/confidence_coercion_rot_guard.json
+-	header	golden/corpus_discovery_rot_guard.json
+-	header	golden/decimal_digits_rot_guard.json
+-	header	golden/investment_quality_rot_guard.json
+-	header	golden/max_component_nodes_rot_guard.json
+-	header	golden/time_bounds_rot_guard.json
+-	header	golden/workgraph_components_rot_guard.json

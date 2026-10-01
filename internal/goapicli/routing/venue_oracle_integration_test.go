@@ -505,8 +505,8 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {
 		t.Fatal(err)
 	}
-	if len(frozen.Scenarios) != len(scenarios) || len(frozen.Status) != 4 {
-		t.Fatalf("the golden holds %d scenarios and %d status runs, the test runs %d and 4", len(frozen.Scenarios), len(frozen.Status), len(scenarios))
+	if len(frozen.Scenarios) != len(scenarios) || len(frozen.Status) != 5 {
+		t.Fatalf("the golden holds %d scenarios and %d status runs, the test runs %d and 5", len(frozen.Scenarios), len(frozen.Status), len(scenarios))
 	}
 
 	mismatches, applied := 0, 0
@@ -560,6 +560,26 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 	oracleStatus(t, goPlane, catalogPath, catalog, ops, live, stale, frozen.Status)
 	golden.SkipDiff(t)
 	golden.Finish(t)
+}
+
+// censusLines is the `rows by schema_digest:` block of a text `status`: the heading and the digest lines up to
+// the first blank line, which both producers print alike.
+func censusLines(text string) string {
+	lines := strings.Split(text, "\n")
+	var out []string
+	in := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "rows by schema_digest:") {
+			in = true
+		}
+		if in {
+			if strings.TrimSpace(line) == "" {
+				break
+			}
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // normalizeStatus reduces a Python `status --json` document to what the comparison reads: the per-run volatile
@@ -620,6 +640,9 @@ func routingStatusPython(t *testing.T, root string, py oraclePlane, catalog map[
 	code, out, _ := oraclePython(t, root, py, "status", "--json", "--query-api-url", server.URL)
 	var recorded []recordedStatus
 	recorded = append(recorded, record(code, out))
+	// The text form of the same planes-agree state: the census lines an operator reads (live / STALE markers).
+	textCode, textOut, _ := oraclePython(t, root, py, "status", "--query-api-url", server.URL)
+	recorded = append(recorded, recordedStatus{Code: textCode, Out: censusLines(textOut)})
 	server.Close()
 	code, out, _ = oraclePython(t, root, py, "status", "--json")
 	recorded = append(recorded, record(code, out))
@@ -658,10 +681,14 @@ func oracleStatus(t *testing.T, goPlane oraclePlane, catalogPath string, catalog
 	server := startQueryAPI(t, live, catalog)
 	goCode, goOut, goErr := oracleGo(t, goPlane, catalogPath, "status", "-json", "-registry-url", server.URL+"/registry")
 	compareStatus(t, "planes agree", false, pyStatus[0].Code, pyStatus[0].Out, "", goCode, goOut, goErr)
+	textCode, textOut, textErr := oracleGo(t, goPlane, catalogPath, "status", "-registry-url", server.URL+"/registry")
+	if textCode != pyStatus[1].Code || censusLines(textOut) != pyStatus[1].Out || !strings.Contains(pyStatus[1].Out, "<- live") || !strings.Contains(pyStatus[1].Out, "<- STALE") {
+		t.Errorf("the text census of the planes-agree state differs (python exit %d, go exit %d):\n python: %q\n go: %q\n%.200s", pyStatus[1].Code, textCode, pyStatus[1].Out, censusLines(textOut), textErr)
+	}
 	server.Close()
 	// No query-api at all: both report it and exit 0.
 	goCode, goOut, goErr = oracleGo(t, goPlane, catalogPath, "status", "-json")
-	compareStatus(t, "no query-api", true, pyStatus[1].Code, pyStatus[1].Out, "", goCode, goOut, goErr)
+	compareStatus(t, "no query-api", true, pyStatus[2].Code, pyStatus[2].Out, "", goCode, goOut, goErr)
 
 	// Named differences. A live row serving a document the catalog does not name, a live row of an
 	// operation the catalog does not register, and a deployed plane on another schema digest.
@@ -674,7 +701,7 @@ func oracleStatus(t *testing.T, goPlane oraclePlane, catalogPath string, catalog
 	goPlane.seed(t, rows)
 	server = startQueryAPI(t, live, catalog)
 	defer server.Close()
-	pyCode, pyOut := pyStatus[2].Code, pyStatus[2].Out
+	pyCode, pyOut := pyStatus[3].Code, pyStatus[3].Out
 	goCode, goOut, goErr = oracleGo(t, goPlane, catalogPath, "status", "-json", "-registry-url", server.URL+"/registry")
 	if pyCode != 0 || goCode != 0 {
 		t.Fatalf("status must never refuse: python %d go %d\n%.300s", pyCode, goCode, goErr)
@@ -729,7 +756,7 @@ func oracleStatus(t *testing.T, goPlane oraclePlane, catalogPath string, catalog
 	// The planes disagree: dho classifies against the deployed plane's digest.
 	other := startQueryAPI(t, stale, catalog)
 	defer other.Close()
-	pyCode, pyOut = pyStatus[3].Code, pyStatus[3].Out
+	pyCode, pyOut = pyStatus[4].Code, pyStatus[4].Out
 	goCode, goOut, _ = oracleGo(t, goPlane, catalogPath, "status", "-json", "-registry-url", other.URL+"/registry")
 	var pyTop, goTop map[string]any
 	if pyCode != 0 || goCode != 0 || json.Unmarshal([]byte(pyOut), &pyTop) != nil || json.Unmarshal([]byte(goOut), &goTop) != nil {

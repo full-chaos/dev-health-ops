@@ -49,9 +49,10 @@ type ChunkPolicy struct {
 // continuation between attempts costs a 1 s River snooze plus the fetch and
 // completion hand-off, and the unit's cap slot stays held through it
 // (dispatch_guard.go countActiveBucketUnits counts a fresh `dispatching` unit).
-// CHAOS-7692 measured on prod: a heavy unit (blame, commit-stats, files) is
-// ~380-880 chunks at ~0.66 s each, 8 chunks ended an attempt after ~5 s, and
-// ~80 % of the unit's slot time was spent between attempts. At ~0.66 s a chunk
+// CHAOS-7692 measured: a chunked unit (the chunked routes are the cicd and tests
+// datasets, see execution_registry.go) is ~380-880 chunks at ~0.66 s each, 8
+// chunks ended an attempt after ~5 s, and ~80 % of the heavy-unit slot time on
+// prod was spent between attempts. At ~0.66 s a chunk
 // 64 chunks is ~42 s, so the count bound now sits just under the 45 s wall and
 // still ends an attempt of very fast chunks; memory stays bounded per chunk
 // (MaxSourceItems, MaxEffectRows, MaxPreparedBytes), not per attempt.

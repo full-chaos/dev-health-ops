@@ -296,7 +296,9 @@ queryApi:
   #    containerPort, a ClusterIP Service `<fullname>-query-api-mcp` and a NetworkPolicy
   #    admitting `mcp.allowedFrom` ONLY (not the api pods). Refused together with
   #    networkPolicy.enabled (that policy opens every port to every in-namespace pod).
-  #    Prod renders its own Service and NetworkPolicy from the umbrella deploy chart.
+  #    Prod turns this on through the umbrella values (`ops.queryApi.mcp.*`): this chart
+  #    renders the Service and the NetworkPolicy itself; the umbrella deploy chart has no
+  #    template for the MCP listener (unlike the internal listener's query-api-internal).
   mcp:
     enabled: false
     port: 8092

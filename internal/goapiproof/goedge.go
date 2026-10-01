@@ -47,6 +47,11 @@ import (
 const (
 	EdgeModePython = "python"
 	EdgeModeGo     = "go"
+	// EdgeModeUndetermined is the mode of a run that stopped before a mode
+	// was selected (its flags did not parse). It is a value of its own
+	// because the absence of -go-edge on a command line that was not read
+	// to its end does not say the run was a Python-reference one.
+	EdgeModeUndetermined = "undetermined"
 )
 
 // UnregisteredDocumentCode is the error code query-api's /graphql answers an
@@ -209,11 +214,24 @@ func admitGoEdge(in AdmissionInput) Admission {
 	return Admission{Admitted: true, EdgeBuildBinding: build.EdgeBuildBinding, GoOnly: true, GoOnlyCitation: citation}
 }
 
-// isJSONContentType reports whether a content type is application/json, with
-// or without parameters.
+// graphQLJSONMediaTypes are the media types a GraphQL response is served
+// under: application/json, and application/graphql-response+json, the type
+// the GraphQL-over-HTTP specification names for the same JSON body. query-api
+// serves the first today; an edge that serves the second is as valid, and
+// refusing it would report a working operation as unproven.
+var graphQLJSONMediaTypes = []string{"application/json", "application/graphql-response+json"}
+
+// isJSONContentType reports whether a content type is one of the GraphQL
+// JSON media types, with or without parameters.
 func isJSONContentType(contentType string) bool {
 	mediaType, _, _ := strings.Cut(contentType, ";")
-	return strings.EqualFold(strings.TrimSpace(mediaType), "application/json")
+	mediaType = strings.TrimSpace(mediaType)
+	for _, accepted := range graphQLJSONMediaTypes {
+		if strings.EqualFold(mediaType, accepted) {
+			return true
+		}
+	}
+	return false
 }
 
 // verifyGoEdge is the pre-run check of Go-edge mode: every edge credential

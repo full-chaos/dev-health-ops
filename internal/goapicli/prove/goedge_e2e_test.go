@@ -3,6 +3,7 @@ package prove
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -268,5 +269,122 @@ func TestAPythonReferenceRunIsUnchangedExceptForItsModeLine(t *testing.T) {
 		if _, present := outcome["edge_mode"]; present {
 			t.Errorf("a Python-reference outcome carries edge_mode: %v", outcome)
 		}
+	}
+}
+
+// preflightRefusal runs the command with a command line that is refused
+// before anything is measured, and returns stdout, the error and the report.
+func preflightRefusal(t *testing.T, args ...string) (string, error, map[string]any) {
+	t.Helper()
+	reportPath := filepath.Join(t.TempDir(), "report.json")
+	var runErr error
+	stdout := captureStdout(t, func() {
+		runErr = run(append([]string{"-report=" + reportPath}, args...))
+	})
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("a refused run must still write its report: %v (run error %v)", err, runErr)
+	}
+	var report map[string]any
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("report: %v\n%s", err, raw)
+	}
+	return stdout, runErr, report
+}
+
+// TestARunRefusedBeforeMeasuringNamesItsMode: the mode is on every exit, not
+// only on the exits that reach the runner. A command line refused before
+// anything is measured still says which proof was refused, on stdout and in
+// the report, and a command line that did not parse says that no mode was
+// selected instead of naming one.
+func TestARunRefusedBeforeMeasuringNamesItsMode(t *testing.T) {
+	complete := []string{
+		"-registry-url=http://127.0.0.1:1/registry",
+		"-buildinfo-url=http://127.0.0.1:1/buildinfo",
+		"-edge-url=://not-a-url",
+		"-documents=" + filepath.Join(t.TempDir(), "documents.json"),
+		"-postgres-uri=postgres://fake/ignored",
+		"-org=70d529e0",
+		"-artifact-dir=" + t.TempDir(),
+		"-recorded-by=harness",
+		"-review-evidence=preflight refusal",
+	}
+	for name, tc := range map[string]struct {
+		args []string
+		mode string
+	}{
+		"go-edge, refused after the flags parsed":          {append([]string{"-go-edge"}, complete...), goapiproof.EdgeModeGo},
+		"python-reference, refused after the flags parsed": {complete, goapiproof.EdgeModePython},
+		"go-edge, a required flag is missing":              {[]string{"-go-edge"}, goapiproof.EdgeModeGo},
+		"the command line did not parse":                   {[]string{"-no-such-flag", "-go-edge"}, goapiproof.EdgeModeUndetermined},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stdout, runErr, report := preflightRefusal(t, tc.args...)
+			if runErr == nil {
+				t.Fatalf("the command line must be refused\nstdout:\n%s", stdout)
+			}
+			if report["exit_cause"] != exitRefusedBeforeMeasuring {
+				t.Fatalf("exit_cause %v, want %s: this test is about the exit before the runner", report["exit_cause"], exitRefusedBeforeMeasuring)
+			}
+			summary, _ := report["summary"].(map[string]any)
+			if summary["edge_mode"] != tc.mode {
+				t.Errorf("report summary edge_mode %v, want %q", summary["edge_mode"], tc.mode)
+			}
+			for _, want := range []string{
+				"go-api-prove: edge_mode=" + tc.mode + " (",
+				"go-api-prove: exit_cause=" + exitRefusedBeforeMeasuring,
+			} {
+				if !strings.Contains(stdout, want) {
+					t.Errorf("stdout lacks %q:\n%s", want, stdout)
+				}
+			}
+			for _, other := range []string{goapiproof.EdgeModeGo, goapiproof.EdgeModePython, goapiproof.EdgeModeUndetermined} {
+				if other != tc.mode && strings.Contains(stdout, "edge_mode="+other) {
+					t.Errorf("stdout names a second mode (%s):\n%s", other, stdout)
+				}
+			}
+		})
+	}
+}
+
+// TestAskingForHelpIsNotARefusedRun: -h is not a run, so it names no mode and
+// writes no report.
+func TestAskingForHelpIsNotARefusedRun(t *testing.T) {
+	reportPath := filepath.Join(t.TempDir(), "report.json")
+	var runErr error
+	stdout := captureStdout(t, func() { runErr = run([]string{"-report=" + reportPath, "-h"}) })
+	if !errors.Is(runErr, flag.ErrHelp) {
+		t.Fatalf("run(-h) = %v, want flag.ErrHelp", runErr)
+	}
+	if strings.Contains(stdout, "edge_mode=") || strings.Contains(stdout, "exit_cause=") {
+		t.Errorf("-h printed a run line:\n%s", stdout)
+	}
+	if _, err := os.Stat(reportPath); !os.IsNotExist(err) {
+		t.Errorf("-h wrote a report (stat error %v)", err)
+	}
+}
+
+// TestEveryReportNamesAMode: the report constructor never writes an empty
+// mode, whatever summary it is handed, and it keeps a mode that was named.
+func TestEveryReportNamesAMode(t *testing.T) {
+	if got := newReport(flags{}, goapiproof.Summary{}, nil, exitRefusedBeforeMeasuring); got.Summary.EdgeMode != goapiproof.EdgeModeUndetermined || got.Outcomes == nil {
+		t.Errorf("a summary with no mode: edge_mode %q outcomes nil=%v, want undetermined and an empty list", got.Summary.EdgeMode, got.Outcomes == nil)
+	}
+	for _, mode := range []string{goapiproof.EdgeModeGo, goapiproof.EdgeModePython} {
+		if got := newReport(flags{}, goapiproof.Summary{EdgeMode: mode}, nil, exitRefusedBeforeMeasuring); got.Summary.EdgeMode != mode {
+			t.Errorf("a summary that names %q was recorded as %q", mode, got.Summary.EdgeMode)
+		}
+	}
+	if line := edgeModeLine(goapiproof.EdgeModeUndetermined); !strings.HasPrefix(line, "edge_mode=undetermined (") {
+		t.Errorf("undetermined mode line %q", line)
+	}
+	if line := edgeModeLine(""); !strings.HasPrefix(line, "edge_mode=undetermined (") {
+		t.Errorf("a mode that was never set must read as undetermined, got %q", line)
+	}
+	if selectedEdgeMode(flags{goEdge: true}) != goapiproof.EdgeModeUndetermined {
+		t.Error("flags that were not parsed to the end select no mode, whatever was read before the error")
+	}
+	if selectedEdgeMode(flags{parsed: true, goEdge: true}) != goapiproof.EdgeModeGo || selectedEdgeMode(flags{parsed: true}) != goapiproof.EdgeModePython {
+		t.Error("parsed flags select the mode -go-edge names")
 	}
 }

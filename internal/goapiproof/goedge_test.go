@@ -367,3 +367,68 @@ func TestTheDocNamesEveryGoEdgeRefusal(t *testing.T) {
 		t.Errorf("ErrGoEdge reads %q, and the note names go_edge_mode_refused", ErrGoEdge)
 	}
 }
+
+// TestGoEdgeAcceptsEveryGraphQLJSONMediaType: a GraphQL answer is served as
+// application/json or as application/graphql-response+json, and a candidate
+// under either is proven, through the runner. Every other type is refused by
+// name: no other leg is compared in this mode to catch a body that is not a
+// GraphQL answer.
+func TestGoEdgeAcceptsEveryGraphQLJSONMediaType(t *testing.T) {
+	for _, contentType := range []string{
+		"application/json",
+		"application/json; charset=utf-8",
+		"Application/JSON",
+		"application/graphql-response+json",
+		"application/graphql-response+json; charset=utf-8",
+		" Application/GraphQL-Response+JSON ;charset=utf-8",
+	} {
+		edge := queryAPIAlone()
+		edge.candidate.contentType = contentType
+		outcomes, summary, err := newGoEdgeRunner(t, edge).Run(context.Background())
+		if err != nil || len(outcomes) != 1 || !outcomes[0].Executed || outcomes[0].RefusalReason != "" || summary.ProvenGoOnly != 1 {
+			t.Errorf("content type %q: err %v outcomes %+v proven %d; want one go-only proof", contentType, err, outcomes, summary.ProvenGoOnly)
+		}
+	}
+	for _, contentType := range []string{
+		"",
+		"text/html",
+		"text/plain",
+		"text/json",
+		"application/graphql",
+		"application/graphql-response",
+		"application/jsonx",
+		"application/json-seq",
+		"application/xml+json",
+		"application/graphql-response+jsonp",
+	} {
+		edge := queryAPIAlone()
+		edge.candidate.contentType = contentType
+		outcomes, summary, _ := newGoEdgeRunner(t, edge).Run(context.Background())
+		if len(outcomes) != 1 || outcomes[0].Executed || outcomes[0].RefusalReason != RefusalGoEdgeCandidateContentType || summary.ProvenGoOnly != 0 {
+			t.Errorf("content type %q: outcomes %+v proven %d; want refused %s and nothing proven", contentType, outcomes, summary.ProvenGoOnly, RefusalGoEdgeCandidateContentType)
+		}
+	}
+}
+
+// TestIsJSONContentTypeIsCaseInsensitive: a media type has no case. The
+// runner lower-cases the header before this check, so the check's own
+// handling of case is asserted on the function, where it can be observed.
+func TestIsJSONContentTypeIsCaseInsensitive(t *testing.T) {
+	for contentType, want := range map[string]bool{
+		"Application/JSON":                            true,
+		"APPLICATION/GRAPHQL-RESPONSE+JSON":           true,
+		" Application/GraphQL-Response+Json ; a=b":    true,
+		"application/graphql-response+json;charset=x": true,
+		"TEXT/HTML":                         false,
+		"Application/JSONX":                 false,
+		"application/json+graphql-response": false,
+		"json":                              false,
+		";application/json":                 false,
+		"application/graphql-response+json+something": false,
+		"something/application/graphql-response+json": false,
+	} {
+		if got := isJSONContentType(contentType); got != want {
+			t.Errorf("isJSONContentType(%q) = %v, want %v", contentType, got, want)
+		}
+	}
+}

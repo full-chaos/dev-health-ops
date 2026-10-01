@@ -40,8 +40,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/hotspots"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/reviewedges"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // dailyFamilyReaderKeys is the key each table's readers deduplicate on
@@ -350,13 +350,14 @@ func dailyFamilyPerColumnArgMax(ctx context.Context, t *testing.T, raw stdclickh
 // rather than a copy of it.
 func dailyFamilyPythonDedupSources(ctx context.Context, t *testing.T) map[string]string {
 	t.Helper()
-	python, rule, err := chschema.Interpreter()
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Join(filepath.Dir(file), "..", "..", "..")
+	python, rule, err := pyoracle.Interpreter(root)
 	if err != nil {
 		t.Fatalf("resolve python: %v", err)
 	}
 	t.Logf("pyoracle: resolved interpreter %s (%s)", python, rule)
-	_, file, _, _ := runtime.Caller(0)
-	source := filepath.Join(filepath.Dir(file), "..", "..", "..", "src")
+	source := filepath.Join(root, "src")
 	tables, err := json.Marshal(dailyFamilyTableNames())
 	if err != nil {
 		t.Fatal(err)
@@ -367,7 +368,7 @@ from dev_health_ops.clickhouse_dedup import dedup_from
 tables = json.loads(sys.argv[1])
 print(json.dumps({t: dedup_from(t) for t in tables if dedup_from(t) != t}))
 `
-	// The interpreter path comes from chschema.Interpreter (test support, a
+	// The interpreter path comes from pyoracle.Interpreter (test support, a
 	// developer-set override or the checked-out venv), never request data.
 	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	command := exec.CommandContext(ctx, python, "-c", script, string(tables))

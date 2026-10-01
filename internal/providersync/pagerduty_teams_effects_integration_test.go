@@ -92,7 +92,7 @@ func TestPagerDutyTeamsEffectUsesMigratedClickHouseTombstonesAndExactReplay(t *t
 	var deletedAt time.Time
 	if err := conn.QueryRow(ctx, `
 SELECT is_deleted, deleted_at
-FROM operational_teams FINAL
+FROM `+currentOperationalRows(ctx, t, conn, "operational_teams")+`
 WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND external_id = ?`,
 		claim.OrgID, "pagerduty", "acme", "team", "PT2",
 	).Scan(&deleted, &deletedAt); err != nil {

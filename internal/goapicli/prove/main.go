@@ -132,7 +132,10 @@ type flags struct {
 	adminPrincipal       bool
 	// goEdge selects Go-edge mode: -edge-url is query-api's own /graphql,
 	// with no Python plane behind it (goapiproof/goedge.go).
-	goEdge      bool
+	goEdge bool
+	// parsed is true once the whole command line was read: only then does
+	// goEdge say which mode the run is in (selectedEdgeMode).
+	parsed      bool
 	timeout     time.Duration
 	window      goapiproof.Window
 	reportPath  string
@@ -216,6 +219,7 @@ func parseFlags(args []string) (flags, error) {
 		return *fp, cli.WrapFlagParseError(err)
 	}
 	f := *fp
+	f.parsed = true
 	secrets.ResolveFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar)
 
 	missing := map[string]string{
@@ -240,18 +244,27 @@ func parseFlags(args []string) (flags, error) {
 
 func run(args []string) (err error) {
 	var f flags
-	// Every exit before emitReport runs still writes -report (when one
-	// was given), with exit_cause refused_before_measuring and the
-	// redacted error: registered first, so it runs last.
+	// Every exit before emitReport runs still says which mode was refused
+	// and why the run ended, and still writes -report (when one was given),
+	// with exit_cause refused_before_measuring and the redacted error:
+	// registered first, so it runs last. Asking for help is not a run.
 	reported := false
 	// resolved is both builds once /buildinfo has named the candidate:
 	// every report written after that carries them.
 	var resolved *goapiproof.ProverBuild
 	defer func() {
-		if err == nil || reported || f.reportPath == "" {
+		if err == nil || reported || errors.Is(err, flag.ErrHelp) {
 			return
 		}
-		refused := report{OrgID: f.orgID, Window: f.window, Stage: goapiproof.Stage, Outcomes: []goapiproof.Outcome{}, ExitCause: exitRefusedBeforeMeasuring, ExitDetail: err.Error()}
+		// The mode is stated on this exit too, on stdout and in the report:
+		// a refusal read later must say which proof was refused.
+		refused := newReport(f, goapiproof.Summary{EdgeMode: selectedEdgeMode(f)}, nil, exitRefusedBeforeMeasuring)
+		refused.ExitDetail = err.Error()
+		fmt.Printf("go-api-prove: %s\n", edgeModeLine(refused.Summary.EdgeMode))
+		fmt.Printf("go-api-prove: exit_cause=%s\n", exitRefusedBeforeMeasuring)
+		if f.reportPath == "" {
+			return
+		}
 		if resolved != nil {
 			refused.ProverBuild, refused.CandidateBuild = resolved, resolved.Candidate
 		}
@@ -805,17 +818,8 @@ func emitReport(f flags, registry goapiproof.RegistryView, builds goapiproof.Pro
 	if f.reportPath == "" {
 		return nil
 	}
-	r := report{
-		SchemaDigest:   registry.SchemaDigest,
-		CandidateBuild: registry.BuildIdentity,
-		ProverBuild:    &builds,
-		Stage:          goapiproof.Stage,
-		OrgID:          f.orgID,
-		Window:         f.window,
-		Summary:        summary,
-		Outcomes:       outcomes,
-		ExitCause:      exitCause,
-	}
+	r := newReport(f, summary, outcomes, exitCause)
+	r.SchemaDigest, r.CandidateBuild, r.ProverBuild = registry.SchemaDigest, registry.BuildIdentity, &builds
 	if runErr != nil {
 		r.ExitDetail = pgstorage.Boundary(f.postgresURI).Redact(runErr).Error()
 	}
@@ -937,12 +941,44 @@ func validateEndpointFlags(f flags) error {
 	return nil
 }
 
+// selectedEdgeMode is the mode the command line selected. A command line
+// that did not parse selected none: flag parsing stops at the first error, so
+// a -go-edge after that point was never read.
+func selectedEdgeMode(f flags) string {
+	switch {
+	case !f.parsed:
+		return goapiproof.EdgeModeUndetermined
+	case f.goEdge:
+		return goapiproof.EdgeModeGo
+	default:
+		return goapiproof.EdgeModePython
+	}
+}
+
+// newReport is the one place a report is built, for every way a run ends, so
+// no exit can leave out a field another exit carries. A summary that names no
+// mode is recorded as undetermined, never as an empty field: a report always
+// says which proof it is a report of.
+func newReport(f flags, summary goapiproof.Summary, outcomes []goapiproof.Outcome, exitCause string) report {
+	if summary.EdgeMode == "" {
+		summary.EdgeMode = goapiproof.EdgeModeUndetermined
+	}
+	if outcomes == nil {
+		outcomes = []goapiproof.Outcome{}
+	}
+	return report{Stage: goapiproof.Stage, OrgID: f.orgID, Window: f.window, Summary: summary, Outcomes: outcomes, ExitCause: exitCause}
+}
+
 // edgeModeLine is the run's one statement of which proof it is.
 func edgeModeLine(mode string) string {
-	if mode == goapiproof.EdgeModeGo {
+	switch mode {
+	case goapiproof.EdgeModeGo:
 		return "edge_mode=go (Go-edge: the edge is query-api with no Python plane behind it; every proof is the candidate alone, NOT a two-plane comparison)"
+	case goapiproof.EdgeModePython:
+		return "edge_mode=python (Python-reference: the control document is answered by the Python plane)"
+	default:
+		return "edge_mode=undetermined (no mode was selected: the command line did not parse, and nothing was measured)"
 	}
-	return "edge_mode=python (Python-reference: the control document is answered by the Python plane)"
 }
 
 // goEdgeCountNote marks the go-only count of a Go-edge run.

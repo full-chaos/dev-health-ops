@@ -28,6 +28,20 @@ X-DH-Internal-* identity headers from whoever can connect, so the NetworkPolicy
 below (queryApi.mcp.allowedFrom only) IS its authentication boundary. Every guard
 here keeps that boundary from being bypassed by configuration.
 */}}
+{{- /*
+Outside the enabled conditional on purpose: with queryApi.mcp.enabled=false there
+is no MCP Service and no MCP NetworkPolicy, so an extraEnv QUERY_API_MCP_ADDR
+would start the listener with neither (r-post on #3425; the render succeeded and
+the release-wide policy admits every pod in the namespace).
+*/}}
+{{- range .Values.queryApi.extraEnv }}
+{{- if eq .name "QUERY_API_MCP_ADDR" }}
+{{- fail "queryApi.extraEnv must not set QUERY_API_MCP_ADDR: the chart owns the MCP listener (queryApi.mcp.port); a second value moves it onto a port the MCP Service and NetworkPolicy do not gate" }}
+{{- end }}
+{{- if eq .name "QUERY_API_MCP_BOUNDARY" }}
+{{- fail "queryApi.extraEnv must not set QUERY_API_MCP_BOUNDARY: the chart sets the MCP boundary marker only beside the MCP NetworkPolicy (queryApi.mcp.enabled); a marker from extraEnv would defeat the process's refusal to start an MCP address that arrived without the boundary" }}
+{{- end }}
+{{- end }}
 {{- if .Values.queryApi.mcp.enabled }}
 {{- $mcpPort := int .Values.queryApi.mcp.port }}
 {{- if eq $mcpPort (int .Values.queryApi.port) }}
@@ -38,11 +52,6 @@ here keeps that boundary from being bypassed by configuration.
 {{- end }}
 {{- if .Values.networkPolicy.enabled }}
 {{- fail "queryApi.mcp.enabled with networkPolicy.enabled: the release-wide NetworkPolicy also selects the query-api pods and admits every pod in the namespace on every port; NetworkPolicies are additive, so it would open the MCP port to every pod. Disable one of them" }}
-{{- end }}
-{{- range .Values.queryApi.extraEnv }}
-{{- if eq .name "QUERY_API_MCP_ADDR" }}
-{{- fail "queryApi.extraEnv must not set QUERY_API_MCP_ADDR: the chart owns the MCP listener (queryApi.mcp.port); a second value moves it onto a port the MCP Service and NetworkPolicy do not gate" }}
-{{- end }}
 {{- end }}
 {{- range .Values.queryApi.mcp.allowedFrom }}
 {{- if not (or .matchLabels .matchExpressions) }}
@@ -155,6 +164,8 @@ spec:
             */}}
             - name: QUERY_API_MCP_ADDR
               value: {{ printf ":%v" .Values.queryApi.mcp.port | quote }}
+            - name: QUERY_API_MCP_BOUNDARY
+              value: "networkpolicy"
             {{- end }}
             {{- /*
             Native ClickHouse wire protocol (9000), not the HTTP 8123 port the

@@ -62,9 +62,4 @@ func (d discoverCredentials) resolve(ctx context.Context, orgID, provider, crede
 const discoveryPerAttemptTimeout = 30 * time.Second
 
 // discoveryHTTPClient is the *http.Client every discovery call shares.
-//
-// It never follows a redirect (Python's httpx does not by default): every discovery call carries a stored
-// provider credential, which must not be replayed to another host (CHAOS-7454).
-var discoveryHTTPClient providerfoundation.HTTPDoer = &http.Client{Timeout: discoveryPerAttemptTimeout, CheckRedirect: refuseRedirects}
-
-func refuseRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+var discoveryHTTPClient providerfoundation.HTTPDoer = &http.Client{Timeout: discoveryPerAttemptTimeout}

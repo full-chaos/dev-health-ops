@@ -122,13 +122,12 @@ type deps struct {
 	decryptor func(env cli.Env) (providerfoundation.CredentialDecryptor, error)
 }
 
-// productionDoer is the HTTP client the verb talks to providers with: the worker's own shape (45 s, no redirect
-// followed, so a stored credential is never replayed to another host).
+// productionDoer is the HTTP client the verb talks to providers with (45 s). It follows redirects, as the
+// tenant lookup (unauthenticated) needs when a tenant answers with its canonical host, but never replays a
+// credential to another host (providerfoundation.DropCredentialsOnHostChange); the provider clients also
+// guard their own credential origin.
 func productionDoer() *http.Client {
-	return &http.Client{
-		Timeout:       45 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	return &http.Client{Timeout: 45 * time.Second, CheckRedirect: providerfoundation.DropCredentialsOnHostChange}
 }
 
 func defaultDeps() deps {

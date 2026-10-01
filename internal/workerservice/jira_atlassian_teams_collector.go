@@ -213,7 +213,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	cloudID := strings.TrimSpace(credential.Config["atlassian_cloud_id"])
 	doer := collector.Doer
 	if doer == nil {
-		doer = &http.Client{Timeout: 45 * time.Second, CheckRedirect: atlassianteams.RefuseRedirects}
+		doer = &http.Client{Timeout: 45 * time.Second, CheckRedirect: providerfoundation.DropCredentialsOnHostChange}
 	}
 	if cloudID == "" {
 		cloudID, err = atlassianteams.ResolveCloudID(ctx, doer, tenant)

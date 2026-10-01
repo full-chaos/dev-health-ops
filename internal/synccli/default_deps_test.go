@@ -1,7 +1,10 @@
 package synccli
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,6 +12,7 @@ import (
 	"atlassian/atlassian"
 	"atlassian/atlassian/graph"
 
+	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
@@ -44,12 +48,31 @@ func TestDefaultInlineDepsLeavesNoDependencyNil(t *testing.T) {
 	}
 }
 
-// The doer production runs with never follows a redirect: a stored credential must not be replayed to
-// another host (the worker's own doer has the same CheckRedirect).
-func TestProductionDoerDoesNotFollowRedirects(t *testing.T) {
-	doer := productionDoer()
-	if doer.CheckRedirect == nil || doer.CheckRedirect(nil, nil) == nil {
-		t.Fatal("the production doer follows redirects")
+// The doer production runs with follows redirects (the unauthenticated tenant lookup needs it) but never
+// replays a credential to another host.
+func TestProductionDoerDropsCredentialsOnAHostChange(t *testing.T) {
+	var gotAuthorization, gotPrivateToken string
+	var hits int
+	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		hits++
+		gotAuthorization, gotPrivateToken = r.Header.Get("Authorization"), r.Header.Get("Private-Token")
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
+	defer origin.Close()
+	request, _ := http.NewRequest(http.MethodGet, origin.URL, nil)
+	request.Header.Set("Authorization", "Bearer not-a-real-credential")
+	request.Header.Set("Private-Token", "not-a-real-credential")
+	response, err := productionDoer().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if hits != 1 {
+		t.Fatalf("the redirect was not followed (hits=%d)", hits)
+	}
+	if gotAuthorization != "" || gotPrivateToken != "" {
+		t.Fatalf("a credential header reached the other host: Authorization=%q Private-Token=%q", gotAuthorization, gotPrivateToken)
 	}
 }
 
@@ -94,5 +117,26 @@ func TestCatalogClientRefusalNamesItsCause(t *testing.T) {
 		if strings.Contains(stderr.String(), "tok-not-real") || strings.Contains(stderr.String(), "not a url") {
 			t.Errorf("%s: the refusal carries a value: %q", provider, stderr.String())
 		}
+	}
+}
+
+// r2 P1: the tenant lookup is unauthenticated and a tenant may answer with a redirect to its canonical host:
+// the production doer must still follow it (a refused redirect silently produced the hostname fallback id).
+func TestProductionDoerLetsTheTenantLookupFollowItsRedirect(t *testing.T) {
+	canonical := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"cloudId":"actual-cloud-id"}`))
+	}))
+	defer canonical.Close()
+	tenant := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, canonical.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer tenant.Close()
+	base, err := url.Parse(tenant.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := atlassianteams.ResolveCloudID(context.Background(), productionDoer(), base)
+	if err != nil || id != "actual-cloud-id" {
+		t.Fatalf("cloud id %q err %v, want the canonical host's answer", id, err)
 	}
 }

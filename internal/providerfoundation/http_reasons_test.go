@@ -5,7 +5,9 @@ import (
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // CHAOS-7132 follow-up: NewHTTPClient used to refuse with a bare ErrCredentialInvalid for five different
@@ -56,8 +58,9 @@ func TestClientConstructorsRefuseWithAReason(t *testing.T) {
 			t.Errorf("%s: another provider's credential: reason %q (%v), want provider_mismatch", provider, FailureReason(err), err)
 		}
 		_, err = build(Credential{Provider: provider}, &http.Client{}, DefaultRetryPolicy(), LeaseGuardFunc(func(context.Context) error { return nil }))
-		if err == nil || !errors.Is(err, ErrCredentialInvalid) || FailureReason(err) == "" {
-			t.Errorf("%s: an empty credential: %v reason %q, want a refusal that names its cause", provider, err, FailureReason(err))
+		// FailureReason answers "credential_invalid" for ANY bare refusal: that is the fallback, not a cause.
+		if err == nil || !errors.Is(err, ErrCredentialInvalid) || FailureReason(err) == "" || FailureReason(err) == "credential_invalid" {
+			t.Errorf("%s: an empty credential: %v reason %q, want a refusal that names its specific cause", provider, err, FailureReason(err))
 		}
 	}
 }
@@ -80,5 +83,68 @@ func TestAuthHelpersNameTheirRefusals(t *testing.T) {
 	}
 	if _, err := NewGitHubAppAuth(gapGitHub, "https://api.github.com", nil); FailureReason(err) != "http_client_missing" {
 		t.Errorf("github app, nil doer: reason %q (%v)", FailureReason(err), err)
+	}
+}
+
+// r2 P1: DropCredentialsOnHostChange follows like net/http but never replays a credential off the first
+// request's host (net/http alone keeps Authorization for a subdomain; both servers here are 127.0.0.1 with
+// different ports, which net/http treats as the same host).
+func TestDropCredentialsOnHostChange(t *testing.T) {
+	seen := map[string]string{}
+	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		seen["target"] = r.Header.Get("Authorization") + "|" + r.Header.Get("Private-Token")
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/same" {
+			seen["same"] = r.Header.Get("Authorization")
+			return
+		}
+		if r.URL.Path == "/hop" {
+			http.Redirect(w, r, "/same", http.StatusFound)
+			return
+		}
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer origin.Close()
+	client := &http.Client{CheckRedirect: DropCredentialsOnHostChange}
+	get := func(url string) {
+		request, _ := http.NewRequest(http.MethodGet, url, nil)
+		request.Header.Set("Authorization", "Bearer fake")
+		request.Header.Set("Private-Token", "fake")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+	}
+	get(origin.URL + "/cross")
+	if got, hit := seen["target"]; !hit || got != "|" {
+		t.Errorf("other host: followed=%v credentials %q, want followed with none", hit, got)
+	}
+	get(origin.URL + "/hop")
+	if seen["same"] != "Bearer fake" {
+		t.Errorf("same host: Authorization %q, want it kept", seen["same"])
+	}
+}
+
+// r2 P1: the PagerDuty validation client (nil doer, follows redirects like httpx) must not replay the
+// candidate token to another host.
+func TestPagerDutyValidationClientDropsTheTokenOnAHostChange(t *testing.T) {
+	var got string
+	var hit bool
+	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { hit, got = true, r.Header.Get("Authorization") }))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
+	defer origin.Close()
+	request, _ := http.NewRequest(http.MethodGet, origin.URL, nil)
+	request.Header.Set("Authorization", "Token token=fake")
+	response, err := pagerDutyClient(nil, true, 5*time.Second).Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if !hit || got != "" {
+		t.Fatalf("followed=%v, Authorization on the other host %q: want followed with none", hit, got)
 	}
 }

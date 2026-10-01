@@ -131,6 +131,26 @@ func sameOrigin(u, base *url.URL) bool {
 	return u != nil && base != nil && u.Scheme == base.Scheme && u.Host == base.Host
 }
 
+// credentialHeaders are the request headers that carry a credential.
+var credentialHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "Private-Token", "X-Api-Key", "X-Auth-Token"}
+
+// DropCredentialsOnHostChange is an http.Client CheckRedirect for a client that must follow redirects (it
+// also makes unauthenticated reads) but must never replay a credential to another host: it follows like
+// net/http (at most 10), and removes every credential header from a request whose scheme or host (with
+// port) differs from the first request's. Go's own rule keeps Authorization for a SUBDOMAIN of the original
+// host; this one does not.
+func DropCredentialsOnHostChange(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if len(via) > 0 && !sameOrigin(req.URL, via[0].URL) {
+		for _, name := range credentialHeaders {
+			req.Header.Del(name)
+		}
+	}
+	return nil
+}
+
 // originGuardedDoer makes the credential origin a property of HTTPClient, not
 // of whichever Doer was injected. A stock http.Client follows redirects and
 // copies custom auth headers (GitLab's PRIVATE-TOKEN) to the new origin, so for

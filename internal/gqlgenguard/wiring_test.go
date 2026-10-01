@@ -1,6 +1,7 @@
 package gqlgenguard
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -97,7 +98,9 @@ func TestTheGuardsInputsAreClassifiedRelevantByTheRelevanceScript(t *testing.T) 
 	// classifier itself, over the real files, rather than the YAML text.
 	script := filepath.Join(repoRoot(t), "ci", "go_relevance.py")
 	if _, err := os.Stat(script); err != nil {
-		t.Skipf("ci/go_relevance.py is not present: %v", err)
+		// A missing classifier is a failure, never a skip: a skip reads as coverage
+		// for a measurement that did not happen (CHAOS-7387).
+		t.Fatalf("ci/go_relevance.py is not present: %v", err)
 	}
 
 	for _, changed := range []string{
@@ -142,19 +145,42 @@ func TestTheDriftRecordIsCommittedAndReadable(t *testing.T) {
 // disagree with what CI does.
 func runRelevance(t *testing.T, script, changed string) (string, error) {
 	t.Helper()
-	python := ""
-	for _, candidate := range []string{"python3", "python"} {
-		if _, err := exec.LookPath(candidate); err == nil {
-			python = candidate
-			break
-		}
-	}
-	if python == "" {
-		t.Skip("neither python3 nor python is on PATH; the relevance classifier cannot be asked")
+	python, err := relevancePython(exec.LookPath)
+	if err != nil {
+		// Not a skip (CHAOS-7387): a Python-free environment must FAIL this test,
+		// loudly, rather than pass it without ever asking the classifier.
+		t.Fatalf("the relevance classifier cannot be asked: %v", err)
 	}
 	cmd := exec.Command(python, script)
 	cmd.Dir = repoRoot(t)
 	cmd.Stdin = strings.NewReader(changed + "\n")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// relevancePython picks the interpreter that runs ci/go_relevance.py, or says
+// that there is none. lookPath is exec.LookPath in production; the test of the
+// missing-interpreter case passes a lookup that finds nothing.
+func relevancePython(lookPath func(string) (string, error)) (string, error) {
+	for _, candidate := range []string{"python3", "python"} {
+		if _, err := lookPath(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", errors.New("neither python3 nor python is on PATH")
+}
+
+// TestAMissingPythonIsAFailureNotASkip plants the defect CHAOS-7387 is about: an
+// environment with no interpreter. The lookup must report it as an error (the
+// callers fail the test on it); before this change the test skipped, so a
+// Python-free job passed without ever asking the classifier.
+func TestAMissingPythonIsAFailureNotASkip(t *testing.T) {
+	if _, err := relevancePython(func(string) (string, error) { return "", exec.ErrNotFound }); err == nil {
+		t.Fatal("a lookup that finds no interpreter must be an error")
+	}
+	// The real lookup over an empty PATH: the same answer through exec.LookPath.
+	t.Setenv("PATH", t.TempDir())
+	if _, err := relevancePython(exec.LookPath); err == nil {
+		t.Fatal("with an empty PATH the real lookup must find no interpreter")
+	}
 }

@@ -6,6 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,5 +134,61 @@ func TestPostgresEntitlementStoreReadyFailsWhenAnyEntitlementTableIsUnreadable(t
 		if _, err := pool.Exec(ctx, fmt.Sprintf(`ALTER TABLE %q RENAME TO %q`, table+"_gone", table)); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestPostgresEntitlementStoreLookupMapsADecisionReadFailureToUnavailable pins the
+// second read of Lookup (store.go): the organization exists but the entitlement
+// decision cannot be read, the shape of a partly broken database. It is
+// ErrUnavailable and the route's 503, never the raw error (500) and never a
+// closed or open decision.
+func TestPostgresEntitlementStoreLookupMapsADecisionReadFailureToUnavailable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	schemaFor(ctx, t, pool)
+	org := uuid.NewString()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier) VALUES ($1::uuid, 'acr-503', 'acr 503', 'community')`, org); err != nil {
+		t.Fatal(err)
+	}
+	store := PostgresEntitlementStore{Pool: pool}
+	if _, err := store.Lookup(ctx, org); err != nil {
+		t.Fatalf("Lookup with every table readable = %v, want nil", err)
+	}
+	if _, err := pool.Exec(ctx, `ALTER TABLE feature_flags RENAME TO feature_flags_gone`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Lookup(ctx, org)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Lookup with the decision unreadable = %v, want ErrUnavailable", err)
+	}
+	if errors.Is(err, ErrOrgNotFound) {
+		t.Fatalf("Lookup with the decision unreadable = %v, must not read as a missing organization", err)
+	}
+	server := newTestServer(store)
+	defer server.Close()
+	response, err := http.Get(server.URL + "/api/v1/internal/acr/entitlements/" + org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	raw, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusServiceUnavailable || strings.TrimSpace(string(raw)) != `{"detail":"Service unavailable"}` {
+		t.Fatalf("GET entitlement with the decision unreadable = %d %q, want 503 {\"detail\":\"Service unavailable\"}", response.StatusCode, raw)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // TestSchemaBundleMatchesLivePython is the live-Python oracle team-lead's
@@ -30,29 +31,34 @@ import (
 // golden has not drifted from what Python would generate today, and that
 // this package's Go-side merge (schemaDocument) + ETag computation
 // (computeETag) agree with Python's on the full document, not just a hash.
-func TestSchemaBundleMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
+func TestSchemaBundleMatchesFrozenPython(t *testing.T) {
+	frozen := venueoracle.OpenGolden(t, programGolden("schema-bundle", t.Name(), "c96c4a203c46909b88988216a290c0af91c10a03b07ae87559a77fdc21ebde0b"))
 	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "testdata/python_schema_bundle_oracle.py")
-	command.Dir = filepath.Join(root, "internal", "api", "externalingest")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("execute production Python schema-bundle oracle: %v\nstdout:\n%s",
-			pyoracle.RunError(python, err, stderr.Bytes()), stdout.Bytes())
+	root = frozen.PythonRoot(t, root)
+	program, err := os.ReadFile("testdata/python_schema_bundle_oracle.py")
+	if err != nil {
+		t.Fatal(err)
 	}
+	request := venueoracle.ProgramRequest("schema bundle producer", string(program), nil, producerEnv)
+	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		python := pyoracle.Resolve(t, root)
+		command := exec.Command(python, "testdata/python_schema_bundle_oracle.py")
+		command.Dir = filepath.Join(root, "internal", "api", "externalingest")
+		command.Env = producerCommandEnv(root)
+		var stdout, stderr bytes.Buffer
+		command.Stdout = &stdout
+		command.Stderr = &stderr
+		if err := command.Run(); err != nil {
+			t.Fatalf("execute production Python schema-bundle oracle: %v\nstdout:\n%s",
+				pyoracle.RunError(python, err, stderr.Bytes()), stdout.Bytes())
+		}
+		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(stdout.Bytes())}}
+	})
+	frozen.Consumed(t, answers...)
+	stdout := bytes.NewBufferString(answers[0].Body)
 
 	var oracle struct {
 		Body string `json:"body"`
@@ -84,9 +90,8 @@ func TestSchemaBundleMatchesLivePython(t *testing.T) {
 			len(goBody), len(oracle.Body), firstDifference(string(goBody), oracle.Body))
 	}
 
-	if err := os.WriteFile(filepath.Join(proofDirectory, "externalingest-schema-bundle"), []byte("executed\n"), 0o600); err != nil {
-		t.Fatalf("write externalingest schema-bundle live Python oracle proof: %v", err)
-	}
+	frozen.SkipDiff(t)
+	frozen.Finish(t)
 }
 
 func firstDifference(a, b string) int {

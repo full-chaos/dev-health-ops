@@ -45,20 +45,19 @@ var ErrOperationalTableContractUnknown = errors.New("operational table ordering 
 var operationalOrderingColumnNames = strings.Split(operationalOrderingColumns, ",")
 
 // configuredOperationalStorageContract reads the deployment's expected
-// contract: unset or "1" is legacy, "2" is current, anything else is a
-// configuration error.
+// contract through the one resolver every binary uses
+// (operationalordering.ResolveValue): unset or "2" is current; anything else,
+// "1" included, is a configuration error (contract 1 is unsupported, D3635). The
+// sink still sends the shape of the table it finds.
 func configuredOperationalStorageContract() (operationalStorageContract, string, error) {
 	raw, present := os.LookupEnv(operationalOrderingContractEnv)
+	if _, err := operationalordering.ResolveValue(raw, present); err != nil {
+		return 0, "invalid", ErrInvalidConfiguration
+	}
 	if !present {
-		return operationalLegacyContract, "unset", nil
+		return operationalCurrentContract, "unset", nil
 	}
-	switch raw {
-	case "1":
-		return operationalLegacyContract, raw, nil
-	case "2":
-		return operationalCurrentContract, raw, nil
-	}
-	return 0, "invalid", ErrInvalidConfiguration
+	return operationalCurrentContract, raw, nil
 }
 
 // classifyOperationalTableColumns maps a table's column names to its
@@ -152,7 +151,7 @@ func (cache *operationalTableContracts) resolve(
 			slog.Int("env_contract", int(configured)),
 			slog.Int("table_contract", int(contract)),
 			slog.String("used", "table"),
-			slog.String("remedy", "every topology defaults to contract 2: run the migrate Job (`dho migrate upgrade`) to bring ClickHouse to the head; a contract-1 table is unsupported and has no upgrade path: re-create the database from the head (deploy/go-workers/README.md)"))
+			slog.String("remedy", "the contract is 2 (unset or 2): run the migrate Job (`dho migrate upgrade`) to bring ClickHouse to the head; a contract-1 table is unsupported and has no upgrade path: re-create the database from the head (deploy/go-workers/README.md)"))
 	}
 	cache.store(table, contract)
 	return contract, nil

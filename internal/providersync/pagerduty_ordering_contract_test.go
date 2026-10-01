@@ -240,7 +240,7 @@ func TestEveryPagerDutySinkSendsOnlyTheTableShape(t *testing.T) {
 						_, err = sink.InspectEffect(context.Background(), sinkCase.claim, sinkCase.effect)
 					}
 					cells++
-					validEnv := env == "<unset>" || env == "1" || env == "2"
+					validEnv := env == "<unset>" || env == "2"
 					known := shape == probeTableLegacy || shape == probeTableCurrent
 					if !validEnv || !known {
 						if err == nil {
@@ -396,6 +396,14 @@ func TestOperationalTableContractMismatchLogsBothValues(t *testing.T) {
 			setProbeEnv(t, env)
 			contract, err := (*operationalTableContracts)(nil).resolve(
 				context.Background(), &contractProbeConn{shape: shape}, "operational_users")
+			if env == "1" {
+				// Contract 1 is unsupported (D3635): the one resolver refuses it,
+				// whichever table is found, and says so in the log.
+				if !errors.Is(err, ErrInvalidConfiguration) || !strings.Contains(buffer.String(), "operational_ordering_contract_env_invalid") {
+					t.Fatalf("env=1 table=%s: err=%v log=%s", shape, err, buffer.String())
+				}
+				continue
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -406,16 +414,13 @@ func TestOperationalTableContractMismatchLogsBothValues(t *testing.T) {
 			if contract != tableContract {
 				t.Fatalf("env=%s table=%s used contract %d", env, shape, contract)
 			}
-			envContract := operationalCurrentContract
 			envValue := env
-			if env != "2" {
-				envContract = operationalLegacyContract
-			}
 			if env == "<unset>" {
 				envValue = "unset"
 			}
 			logged := buffer.String()
-			if envContract == tableContract {
+			// Unset and "2" both mean contract 2: a mismatch is a legacy table.
+			if tableContract == operationalCurrentContract {
 				if strings.Contains(logged, "operational_ordering_contract_mismatch") {
 					t.Fatalf("env=%s table=%s logged a mismatch: %s", env, shape, logged)
 				}
@@ -423,7 +428,7 @@ func TestOperationalTableContractMismatchLogsBothValues(t *testing.T) {
 			}
 			for _, want := range []string{
 				"level=WARN", "operational_ordering_contract_mismatch", "table=operational_users",
-				"env_value=" + envValue, fmt.Sprintf("env_contract=%d", envContract),
+				"env_value=" + envValue, fmt.Sprintf("env_contract=%d", operationalCurrentContract),
 				fmt.Sprintf("table_contract=%d", tableContract), "used=table",
 				// The remedy names the way out: the migrate Job to the head, and
 				// that a contract-1 table has no upgrade path.

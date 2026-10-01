@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
@@ -120,7 +121,7 @@ func TestRunnerCountsAndLogsEachQuarantineWithoutThePayload(t *testing.T) {
 	if n := strings.Count(logs.String(), "stream message quarantined"); n != 2 {
 		t.Fatalf("quarantine log lines = %d, want 2:\n%s", n, logs.String())
 	}
-	if strings.Contains(logs.String(), secret) || !strings.Contains(logs.String(), "events_bytes=") || !strings.Contains(logs.String(), "events_count=1") {
+	if strings.Contains(logs.String(), secret) || !strings.Contains(logs.String(), "events_bytes=") || !strings.Contains(logs.String(), "row_bytes=") || !strings.Contains(logs.String(), "events_count=1") {
 		t.Fatalf("log line wrong:\n%s", logs.String())
 	}
 }
@@ -131,5 +132,75 @@ func TestQuarantineKeyBoundsItsLabels(t *testing.T) {
 	}
 	if got := newQuarantineKey("weird:org", "max_deliveries_exceeded"); got != (quarantineKey{"other", "max_deliveries_exceeded"}) {
 		t.Fatalf("key = %v", got)
+	}
+}
+
+func rowBytes(row map[string]string) int {
+	total := 0
+	for key, value := range row {
+		total += len(key) + len(value)
+	}
+	return total
+}
+
+// No dead-letter row exceeds the retained events bound by more than a fixed number of bounded
+// fields, whatever the other fields of the entry hold.
+func TestDeadLetterRowSizeIsBoundedWhateverTheFieldsHold(t *testing.T) {
+	huge := strings.Repeat("h", 300*1024)
+	message := telemetryMessage(`[{"name":"page_viewed"}]`)
+	message.Stream = "product-telemetry:" + huge + ":events"
+	message.Fields["org_id_hash"] = huge
+	message.Fields["ingestion_id"] = huge
+	row := DeadLetterFields(message, "invalid_telemetry_event", "t")
+	if got := rowBytes(row); got > MaxRetainedPayloadBytes+len(row)*(MaxDeadLetterFieldBytes+32) {
+		t.Fatalf("row is %d bytes", got)
+	}
+	for key, value := range row {
+		if key != eventsField && len(value) > MaxDeadLetterFieldBytes {
+			t.Fatalf("field %s is %d bytes, over the %d bound", key, len(value), MaxDeadLetterFieldBytes)
+		}
+	}
+	if row["events_retention"] != RetentionOverBound {
+		t.Fatalf("a row whose replay fields were cut says retention %q, want over_bound", row["events_retention"])
+	}
+	if _, ok := MessageFromDeadLetter(row); ok {
+		t.Fatal("a row with cut replay fields claimed to be replayable")
+	}
+	if cut := boundedField(strings.Repeat("é", 2000)); len(cut) > MaxDeadLetterFieldBytes || !utf8.ValidString(cut) {
+		t.Fatalf("cut field is %d bytes, valid utf8 %v", len(cut), utf8.ValidString(cut))
+	}
+	if short := boundedField("abc"); short != "abc" {
+		t.Fatalf("a short field was changed to %q", short)
+	}
+}
+
+// A product-telemetry tombstone (the source entry was trimmed before it was quarantined) says that
+// nothing was kept; other families still write no retention field.
+func TestDeadLetterTombstoneSaysThereIsNothingToReplay(t *testing.T) {
+	row := DeadLetterFields(Message{Stream: telemetryStream, ID: "1-0"}, "max_deliveries_exceeded", "t")
+	if row["events_retention"] != RetentionNone {
+		t.Fatalf("tombstone row = %v, want events_retention=none", row)
+	}
+	if _, ok := MessageFromDeadLetter(row); ok {
+		t.Fatal("a tombstone claimed to be replayable")
+	}
+	if _, present := DeadLetterFields(Message{Stream: "pagerduty-webhooks:b", ID: "1-0"}, "r", "t")["events_retention"]; present {
+		t.Fatal("a non-telemetry row gained a retention field")
+	}
+}
+
+// The identity fields and the reason are cut too when the events text is kept.
+func TestDeadLetterKeptRowCutsAnOversizedIdentityAndReason(t *testing.T) {
+	huge := strings.Repeat("i", 50*1024)
+	message := telemetryMessage(`[{"name":"page_viewed"}]`)
+	message.Fields["ingestion_id"] = huge
+	row := DeadLetterFields(message, huge, "t")
+	if row["events_retention"] != RetentionKept {
+		t.Fatalf("retention = %q, want kept (the replay fields fit)", row["events_retention"])
+	}
+	for key, value := range row {
+		if key != eventsField && len(value) > MaxDeadLetterFieldBytes {
+			t.Fatalf("field %s is %d bytes, over the bound", key, len(value))
+		}
 	}
 }

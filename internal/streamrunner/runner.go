@@ -392,7 +392,8 @@ func (r *Runner) quarantine(ctx context.Context, message Message, reason string)
 	r.logger().WarnContext(ctx, "stream message quarantined",
 		"reason", reason, "stream", message.Stream, "entry_id", message.ID,
 		"fields", len(message.Fields), "events_retention", retention.Mode,
-		"events_bytes", retention.Bytes, "events_count", retention.EventsCount)
+		"events_bytes", retention.Bytes, "events_count", retention.EventsCount,
+		"row_bytes", deadLetterRowBytes(message, reason))
 	return nil
 }
 
@@ -554,4 +555,13 @@ func waitForContext(ctx context.Context, duration time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+// deadLetterRowBytes is the size of the field names and values the dead-letter row carries.
+func deadLetterRowBytes(message Message, reason string) int {
+	total := 0
+	for key, value := range DeadLetterFields(message, reason, "") {
+		total += len(key) + len(value)
+	}
+	return total
 }

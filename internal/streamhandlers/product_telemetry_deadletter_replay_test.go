@@ -106,3 +106,16 @@ func TestEntryRefusedForABannedPayloadKeyIsNotCopiedIntoTheDeadLetterRow(t *test
 		t.Fatal("a withheld row claimed to be replayable")
 	}
 }
+
+// An orgIdHash the intake accepts without a length limit must not make the dead-letter row unbounded.
+func TestEntryWithAHugeOrgHashFromTheIntakeGivesABoundedRow(t *testing.T) {
+	huge := strings.Repeat("h", 300*1024)
+	entry := intakeEntry(t, `{"orgIdHash":"`+huge+`","events":[`+
+		`{"name":"page_viewed","schemaVersion":"1","eventId":"e1","ts":"2026-09-23T02:00:00Z","sessionId":"s","anonymousUserId":"a","payload":{}}]}`)
+	row := streamrunner.DeadLetterFields(entry, "max_deliveries_exceeded", "t")
+	for key, value := range row {
+		if key != "events" && len(value) > streamrunner.MaxDeadLetterFieldBytes {
+			t.Fatalf("field %s is %d bytes, over the bound", key, len(value))
+		}
+	}
+}

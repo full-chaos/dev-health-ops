@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // MaxRetainedPayloadBytes bounds the product-telemetry `events` text kept in a
@@ -26,6 +27,12 @@ const (
 	RetentionNone      = "none"
 )
 
+// MaxDeadLetterFieldBytes bounds every field of a dead-letter row other than the retained `events`
+// text. The intake accepts an unrestricted `orgIdHash` string and stream keys embed it, so without a
+// bound a single entry could write a row far larger than MaxRetainedPayloadBytes. A field over the
+// bound is cut and carries the length and digest of the full value after a marker.
+const MaxDeadLetterFieldBytes = 1024
+
 const (
 	productTelemetryPrefix = "product-telemetry:"
 	eventsField            = "events"
@@ -35,6 +42,21 @@ const (
 	// contract refuses, so such a row keeps the digest and the sizes only.
 	blockedPayloadReason = "blocked_telemetry_payload"
 )
+
+// boundedField returns value when it fits MaxDeadLetterFieldBytes, else a cut prefix (on a rune
+// boundary) followed by a marker with the full length and digest.
+func boundedField(value string) string {
+	if len(value) <= MaxDeadLetterFieldBytes {
+		return value
+	}
+	sum := sha256.Sum256([]byte(value))
+	marker := "...[cut " + strconv.Itoa(len(value)) + " bytes sha256:" + hex.EncodeToString(sum[:8]) + "]"
+	cut := MaxDeadLetterFieldBytes - len(marker)
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut] + marker
+}
 
 // retainedFields lists the product-telemetry entry fields, besides the durable
 // identities, that a dead-letter row keeps so the entry can be replayed.
@@ -62,7 +84,9 @@ func retentionFor(message Message, reason string) payloadRetention {
 	switch {
 	case reason == blockedPayloadReason:
 		retention.Mode = RetentionWithheld
-	case len(text) > MaxRetainedPayloadBytes:
+	case len(text) > MaxRetainedPayloadBytes || !replayFieldsFit(message):
+		// A row whose replay fields (stream, entry id, source, org hash) would be cut cannot rebuild
+		// the entry, so it keeps the digest and sizes instead of a text it could not replay.
 		retention.Mode = RetentionOverBound
 	default:
 		retention.Mode = RetentionKept
@@ -74,6 +98,18 @@ func retentionFor(message Message, reason string) payloadRetention {
 		}
 	}
 	return retention
+}
+
+func replayFieldsFit(message Message) bool {
+	if len(message.Stream) > MaxDeadLetterFieldBytes || len(message.ID) > MaxDeadLetterFieldBytes {
+		return false
+	}
+	for _, key := range retainedFields {
+		if len(message.Fields[key]) > MaxDeadLetterFieldBytes {
+			return false
+		}
+	}
+	return true
 }
 
 // DeadLetterFields is the field set of a dead-letter row for a message that is
@@ -92,19 +128,34 @@ func DeadLetterFields(message Message, reason, movedAt string) map[string]string
 	}
 	retention := retentionFor(message, reason)
 	if retention.Mode == RetentionNone {
-		return fields
+		if strings.HasPrefix(message.Stream, productTelemetryPrefix) {
+			// A product-telemetry entry with no `events` (its source entry was trimmed from the
+			// stream before it was quarantined) says plainly that there is nothing to replay.
+			fields["events_retention"] = RetentionNone
+		}
+		return boundedFields(fields)
 	}
 	fields["events_retention"] = retention.Mode
 	fields["events_bytes"] = strconv.Itoa(retention.Bytes)
 	fields["events_sha256"] = retention.SHA256
 	if retention.Mode != RetentionKept {
-		return fields
+		return boundedFields(fields)
 	}
-	fields[eventsField] = message.Fields[eventsField]
 	for _, key := range retainedFields {
 		if value, ok := message.Fields[key]; ok {
 			fields[key] = value
 		}
+	}
+	fields = boundedFields(fields)
+	fields[eventsField] = message.Fields[eventsField]
+	return fields
+}
+
+// boundedFields cuts every field to MaxDeadLetterFieldBytes, so the row is at most the retained
+// `events` text plus a fixed number of bounded fields.
+func boundedFields(fields map[string]string) map[string]string {
+	for key, value := range fields {
+		fields[key] = boundedField(value)
 	}
 	return fields
 }

@@ -89,6 +89,7 @@ func (a *accessRecorder) Unwrap() http.ResponseWriter { return a.ResponseWriter 
 type accessObserver struct {
 	logger   *slog.Logger
 	listener string
+	spans    spanObserver
 	requests metric.Int64Counter
 	duration metric.Float64Histogram
 }
@@ -96,8 +97,8 @@ type accessObserver struct {
 // newAccessObserver builds the instruments from the process's current meter
 // provider. A failure to create one leaves that instrument off (the log line
 // still flows): observability never stops the server.
-func newAccessObserver(logger *slog.Logger, listener string) *accessObserver {
-	observer := &accessObserver{logger: logger, listener: listener}
+func newAccessObserver(logger *slog.Logger, listener string, trustRemoteSampling bool) *accessObserver {
+	observer := &accessObserver{logger: logger, listener: listener, spans: spanObserver{listener: listener, trustRemoteSampling: trustRemoteSampling}}
 	meter := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/auth/httpapi")
 	if counter, err := meter.Int64Counter(requestsMetricName,
 		metric.WithDescription("HTTP requests served, by registered route pattern, method, status class and listener")); err == nil {
@@ -120,11 +121,15 @@ func (o *accessObserver) wrap(next http.Handler) http.Handler {
 		start := time.Now()
 		match := &observedRoute{}
 		recorder := &accessRecorder{ResponseWriter: w}
+		spanCtx, span := o.spans.start(r)
 		// The observation runs even when the handler aborts the response with
 		// http.ErrAbortHandler (Recover re-panics it): an aborted request is
 		// still a request that reached the route.
-		defer func() { o.observe(r, match.pattern, recorder.status, time.Now().Sub(start)) }()
-		next.ServeHTTP(recorder, r.WithContext(context.WithValue(r.Context(), observedRouteKey{}, match)))
+		defer func() {
+			o.spans.finish(span, boundedMethod(r.Method), match.pattern, recorder.status)
+			o.observe(r, match.pattern, recorder.status, time.Now().Sub(start))
+		}()
+		next.ServeHTTP(recorder, r.WithContext(context.WithValue(spanCtx, observedRouteKey{}, match)))
 		// net/http answers 200 for a handler that returns without writing;
 		// only an aborted handler (no return) leaves the status unset.
 		if recorder.status == 0 {

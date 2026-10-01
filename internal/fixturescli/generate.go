@@ -56,9 +56,9 @@ var worldFiles embed.FS
 // load silently. A file changes only by re-running TestFreezeGenerateWorlds against the live Python
 // producer, and then its digest here is updated in the same commit.
 var frozenWorldDigests = map[string]string{
-	"testdata/generate/synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz":             "adbe9087c45014c8a95e9c016459a372f751272c9501ee4458e4668438c3a750",
-	"testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz":               "62e5019c04394e9774b085119c43b82342a98aad9d43a5cfbfbfda2409b8a742",
-	"testdata/generate/synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz": "fb176a3b73231208617360cee70375c98f8b274a74a1f059626fbb1a463db4fd",
+	"testdata/generate/synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz":             "4767e3ae066bfa89336bc37d19644f137ef1cf0ce60e568468c55783a3400833",
+	"testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz":               "317334daef77b2599258ee9701a04beef37b328e12492c768b4c0c8a6b12f8eb",
+	"testdata/generate/synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz": "8470b539f55e1ecd22b8ba9b52dd0921a9b51222dfd6a7d5a8050139e9f2abd8",
 }
 
 // GenerateParams are the parameters of one frozen `fixtures generate` run: the flags that change

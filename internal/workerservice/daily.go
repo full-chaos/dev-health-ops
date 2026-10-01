@@ -1416,7 +1416,7 @@ func doraRefusalRemedy(reason string) string {
 			"upgrade path for it, so re-create it from the head (deploy/go-workers/README.md). " +
 			"`dho migrate clickhouse status` reports where the database stands."
 	case jobruntime.DORARefusedContractUnparseable:
-		return "set OPERATIONAL_ORDERING_CONTRACT to 1 or 2"
+		return "unset OPERATIONAL_ORDERING_CONTRACT or set it to 2 (contract 1 is unsupported)"
 	case jobruntime.DORARefusedUnknownSchema:
 		return "an operational table's sorting key matches no contract; something changed it outside the migration chain"
 	default:

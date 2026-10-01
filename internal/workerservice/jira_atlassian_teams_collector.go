@@ -15,8 +15,10 @@ import (
 	"atlassian/atlassian/graph"
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 )
 
 // jiraCombinedTeamCatalogCollector composes the existing project-as-team
@@ -126,7 +128,7 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 		// and never a clean success (CHAOS-7132): a Warn line and a degraded leg that the discovery
 		// ledger and the run's result carry, with a value-free reason.
 		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID,
-			"strict", ref.Strict, "reason", atlassianLegReason(err), "error", err)
+			"strict", ref.Strict, "reason", atlassianLegReason(err), "error", syncdispatchruntime.SanitizeErrorText(err.Error()))
 		result.DegradedLegs = append(result.DegradedLegs, newDegradedAtlassianLeg(err))
 		return result, nil
 	}
@@ -149,7 +151,7 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 func newDegradedAtlassianLeg(err error) providersync.DegradedLeg {
 	return providersync.DegradedLeg{
 		Dataset: "teams", Leg: "jira_atlassian_teams", Outcome: "failed",
-		Reason: atlassianLegReason(err), Detail: err.Error(),
+		Reason: atlassianLegReason(err), Detail: syncdispatchruntime.SanitizeErrorText(err.Error()),
 	}
 }
 
@@ -169,6 +171,28 @@ func atlassianLegReason(err error) string {
 	return "unclassified"
 }
 
+// redactedLegError is an Atlassian-leg error whose text has the credential removed: the gateway can
+// echo the credential it was sent (CHAOS-7132). It unwraps to the original, so the reason and the
+// sentinel checks (errors.Is) are unchanged.
+type redactedLegError struct {
+	text  string
+	cause error
+}
+
+func (e *redactedLegError) Error() string { return e.text }
+func (e *redactedLegError) Unwrap() error { return e.cause }
+
+func redactLegError(err error, values ...string) error {
+	if err == nil {
+		return nil
+	}
+	text := secrets.RedactValues(err.Error(), values...)
+	if text == err.Error() {
+		return err
+	}
+	return &redactedLegError{text: text, cause: err}
+}
+
 func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	ctx context.Context,
 	ref providersync.TeamCatalogReference,
@@ -176,7 +200,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	client *providerfoundation.HTTPClient,
 	selections providersync.TeamCatalogSelections,
 	normalizedAt time.Time,
-) (atlassianteams.Result, error) {
+) (result atlassianteams.Result, err error) {
 	if collector.Conn == nil {
 		return atlassianteams.Result{}, providersync.ErrInvalidConfiguration
 	}
@@ -206,6 +230,8 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	if !email.Configured() || token == "" {
 		return atlassianteams.Result{}, providersync.ErrInvalidConfiguration
 	}
+	// From here on any error can carry what the gateway echoes back: strip the credential at the source.
+	defer func() { err = redactLegError(err, token, email.Reveal()) }()
 	gatewayURL := tenant.String() + "/gateway/api"
 	auth := atlassian.BasicAPITokenAuth{Email: email.Reveal(), Token: token}
 

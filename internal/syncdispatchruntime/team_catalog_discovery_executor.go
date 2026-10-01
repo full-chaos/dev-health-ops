@@ -251,7 +251,7 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 	return map[string]any{
 		"provider":             normalizedProvider,
 		"outcome":              outcome,
-		"degraded":             degradedLegsPayload(result.DegradedLegs),
+		"degraded":             DegradedLegsPayload(result.DegradedLegs),
 		"reference_team_keys":  result.TeamKeys,
 		"reference_sprint_ids": result.SprintIDs,
 		"rows_written": map[string]int{
@@ -273,10 +273,10 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 
 var _ DiscoveryExecutor = &TeamCatalogDiscoveryExecutor{}
 
-// degradedLegsPayload is the stored form of the failed additive legs: the dataset, the leg, a fixed
+// DegradedLegsPayload is the stored form of the failed additive legs: the dataset, the leg, a fixed
 // reason and the error text bounded and sanitized (CHAOS-7132). nil when nothing degraded, so a clean
 // run's result is unchanged.
-func degradedLegsPayload(legs []providersync.DegradedLeg) []map[string]string {
+func DegradedLegsPayload(legs []providersync.DegradedLeg) []map[string]string {
 	if len(legs) == 0 {
 		return nil
 	}

@@ -1,0 +1,1469 @@
+ internal/api/syncadmin/pins_test.go                |  17 +++
+ internal/atlassianteams/collect.go                 |  13 +-
+ internal/atlassianteams/collect_test.go            |   2 +-
+ internal/atlassianteams/organization_ari_test.go   |  51 +++++++
+ internal/providerfoundation/clients.go             |   4 +-
+ internal/providerfoundation/credentials.go         |  32 ++++-
+ .../providerfoundation/jira_shape_fields_test.go   |  64 +++++++++
+ .../providerfoundation/resolve_reasons_test.go     |  85 +++++++++++
+ internal/providerfoundation/types.go               |  56 +++++++-
+ internal/providersync/team_catalog_collector.go    |  15 ++
+ internal/synccli/jira_stored_credential.go         |  46 ++++++
+ .../synccli/jira_stored_credential_key_test.go     |  40 ++++++
+ ...ira_stored_credential_scope_integration_test.go | 117 +++++++++++++++
+ .../degraded_leg_integration_test.go               |  72 ++++++++++
+ .../syncdispatchruntime/failure_reason_test.go     |  47 ++++++
+ .../native_finalize_sync_run.go                    |  45 ++++++
+ .../native_reference_discovery.go                  |  19 ++-
+ .../team_catalog_discovery_executor.go             |  32 ++++-
+ .../team_catalog_discovery_executor_test.go        |  36 +++++
+ internal/synchandoff/handoff_integration_test.go   |  22 +++
+ .../jira_atlassian_teams_collector.go              |  47 ++++--
+ internal/workerservice/provider_sync.go            |   9 +-
+ internal/workerservice/team_catalog_clients.go     |  18 ++-
+ .../team_catalog_dropped_errors_test.go            | 158 +++++++++++++++++++++
+ 24 files changed, 1018 insertions(+), 29 deletions(-)
+
+diff --git a/internal/api/syncadmin/pins_test.go b/internal/api/syncadmin/pins_test.go
+index eafba6be45..518c54759f 100644
+--- a/internal/api/syncadmin/pins_test.go
++++ b/internal/api/syncadmin/pins_test.go
+@@ -344,3 +344,20 @@ func TestUnrenderableRunShapesAreLogged500s(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// CHAOS-7132: a run whose additive leg failed carries `degraded` in its stored result. The sync-run
++// response must pass it through unchanged: dropping or rejecting the key would hide the one place the
++// failure is recorded.
++func TestSyncRunResponsePassesTheDegradedLegsThrough(t *testing.T) {
++	result := `{"completed_units": 14, "failed_units": 0, "degraded": [{"dataset": "teams", "leg": "jira_atlassian_teams", "outcome": "failed", "reason": "unclassified", "detail": "Invalid Organization Ari"}]}`
++	body, err := syncRunResponse(&syncRun{ID: uuid.Nil, Status: "success", Result: &result})
++	if err != nil {
++		t.Fatalf("syncRunResponse: %v", err)
++	}
++	text := marshal(t, body)
++	for _, want := range []string{`"degraded"`, `"leg":"jira_atlassian_teams"`, `"outcome":"failed"`, `"dataset":"teams"`, `"status":"success"`} {
++		if !strings.Contains(text, want) {
++			t.Errorf("the response dropped %s: %s", want, text)
++		}
++	}
++}
+diff --git a/internal/atlassianteams/collect.go b/internal/atlassianteams/collect.go
+index 83d5b8fd41..29d0f5c8f1 100644
+--- a/internal/atlassianteams/collect.go
++++ b/internal/atlassianteams/collect.go
+@@ -172,6 +172,17 @@ func memberID(account string) string {
+ 	return "jira:" + strings.ToLower(strings.TrimSpace(account))
+ }
+ 
++// organizationARI is the organization id in the form teamSearchV2 accepts. tenantContexts answers a
++// bare UUID and the gateway refuses it ("Invalid Organization Ari", CHAOS-7132); an id that already is
++// an ARI is passed through unchanged.
++func organizationARI(id string) string {
++	id = strings.TrimSpace(id)
++	if strings.HasPrefix(strings.ToLower(id), "ari:") {
++		return id
++	}
++	return "ari:cloud:platform::org/" + id
++}
++
+ // Collect reads the selected dimensions of every Atlassian team and returns
+ // the rows to write. It is all or nothing: any read that fails fails the run
+ // (a membership list cut short by an error would read as members who left).
+@@ -192,7 +203,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
+ 		resolver = identityalias.LoadDefault()
+ 	}
+ 
+-	teams, err := client.SearchTeams(ctx, params.OrganizationID, params.SiteID, "", page)
++	teams, err := client.SearchTeams(ctx, organizationARI(params.OrganizationID), params.SiteID, "", page)
+ 	if err != nil {
+ 		return Rows{}, fmt.Errorf("search atlassian teams: %w", err)
+ 	}
+diff --git a/internal/atlassianteams/collect_test.go b/internal/atlassianteams/collect_test.go
+index 9a84a708bc..3089b305b4 100644
+--- a/internal/atlassianteams/collect_test.go
++++ b/internal/atlassianteams/collect_test.go
+@@ -248,7 +248,7 @@ func TestCollectSendsTheOrganizationSiteCredentialsAndOptIns(t *testing.T) {
+ 	for _, req := range g.requests {
+ 		switch req.Operation {
+ 		case "TeamSearchV2":
+-			if req.Variables["organizationId"] != "org-atlassian" || req.Variables["siteId"] != "site-uuid" {
++			if req.Variables["organizationId"] != "ari:cloud:platform::org/org-atlassian" || req.Variables["siteId"] != "site-uuid" {
+ 				t.Errorf("search variables = %v", req.Variables)
+ 			}
+ 			if got := strings.Join(req.Header.Values("X-ExperimentalApi"), ","); !strings.Contains(got, "teams-beta") {
+diff --git a/internal/atlassianteams/organization_ari_test.go b/internal/atlassianteams/organization_ari_test.go
+new file mode 100644
+index 0000000000..f939939ce2
+--- /dev/null
++++ b/internal/atlassianteams/organization_ari_test.go
+@@ -0,0 +1,51 @@
++package atlassianteams
++
++import (
++	"context"
++	"testing"
++	"time"
++
++	"atlassian/atlassian"
++)
++
++// CHAOS-7132: tenantContexts answers a BARE organization UUID and teamSearchV2 refuses it ("Invalid
++// Organization Ari: <uuid>"), which failed the whole jira sync on bigboy (0 of 14 units). The search
++// takes the ARI form; an ARI the operator stored is passed through unchanged.
++type organizationRecorder struct{ got string }
++
++func (r *organizationRecorder) SearchTeams(_ context.Context, organizationID, _, _ string, _ int) ([]atlassian.AtlassianTeam, error) {
++	r.got = organizationID
++	return nil, nil
++}
++func (*organizationRecorder) IterTeamUsers(context.Context, string, int) ([]atlassian.TeamworkUserRelation, error) {
++	return nil, nil
++}
++func (*organizationRecorder) IterTeamActiveProjects(context.Context, string, int) ([]atlassian.TeamworkProject, error) {
++	return nil, nil
++}
++
++func TestCollectSearchesWithTheOrganizationAsAnARI(t *testing.T) {
++	t.Parallel()
++	const uuid = "a6bfe849-d604-4c9a-bced-35ce5fe54856"
++	tests := []struct{ name, in, want string }{
++		{"a bare UUID from tenantContexts", uuid, "ari:cloud:platform::org/" + uuid},
++		{"a bare UUID with padding", "  " + uuid + " ", "ari:cloud:platform::org/" + uuid},
++		{"an ARI already", "ari:cloud:platform::org/" + uuid, "ari:cloud:platform::org/" + uuid},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			t.Parallel()
++			client := &organizationRecorder{}
++			_, err := Collect(context.Background(), client, Params{
++				OrgID: "org", OrganizationID: test.in, SiteID: "site",
++				Selections: Selections{Structure: true}, Now: time.Now(),
++			})
++			if err != nil {
++				t.Fatalf("Collect: %v", err)
++			}
++			if client.got != test.want {
++				t.Errorf("SearchTeams got organizationID %q, want %q", client.got, test.want)
++			}
++		})
++	}
++}
+diff --git a/internal/providerfoundation/clients.go b/internal/providerfoundation/clients.go
+index 8d8a8ab5b3..fa868ff134 100644
+--- a/internal/providerfoundation/clients.go
++++ b/internal/providerfoundation/clients.go
+@@ -75,8 +75,8 @@ func NewJiraClient(credential Credential, doer HTTPDoer, retry RetryPolicy, leas
+ 	if fields := jiraMappingFields(credential); !mappingComplete(fields) {
+ 		RecordCredentialMappingRejected(context.Background(), "jira", fields...)
+ 	}
+-	if ValidateCredentialShape(credential) != nil {
+-		return nil, ErrCredentialInvalid
++	if err := ValidateCredentialShape(credential); err != nil {
++		return nil, err
+ 	}
+ 	email, _ := credential.Secret("email")
+ 	token := firstConfiguredSecret(credential, jiraAPITokenAliases)
+diff --git a/internal/providerfoundation/credentials.go b/internal/providerfoundation/credentials.go
+index 2aa37ab7ed..e4424e754f 100644
+--- a/internal/providerfoundation/credentials.go
++++ b/internal/providerfoundation/credentials.go
+@@ -38,7 +38,7 @@ type FernetDecryptor struct {
+ 
+ func NewFernetDecryptor(key secrets.Value, salt string) (FernetDecryptor, error) {
+ 	if !key.Configured() {
+-		return FernetDecryptor{}, ErrCredentialInvalid
++		return FernetDecryptor{}, credentialInvalid("encryption_key_not_configured")
+ 	}
+ 	if salt == "" {
+ 		salt = defaultEncryptionSalt
+@@ -317,9 +317,11 @@ func ValidateCredentialShape(credential Credential) error {
+ 			return ErrCredentialInvalid
+ 		}
+ 	case "jira":
+-		// JiraCredentials requires api_token, email AND base_url.
+-		if !hasAny(credential, jiraAPITokenAliases) || !has("email") || jiraCredentialBaseURL(credential) == "" {
+-			return ErrCredentialInvalid
++		// JiraCredentials requires api_token, email AND base_url. The refusal names the missing
++		// FIELDS (never a value) so an operator can tell which one a stored credential lacks
++		// (CHAOS-7132); it still wraps ErrCredentialInvalid.
++		if missing := jiraMissingFields(credential); len(missing) > 0 {
++			return &credentialShapeError{missing: missing}
+ 		}
+ 	case "linear":
+ 		if !has("api_key") {
+@@ -365,3 +367,25 @@ func ValidateCredentialShape(credential Credential) error {
+ 	}
+ 	return nil
+ }
++
++// credentialShapeError is ErrCredentialInvalid with the NAMES of the required fields a stored
++// credential lacks. It never carries a value, and errors.Is(err, ErrCredentialInvalid) still holds.
++type credentialShapeError struct{ missing []string }
++
++func (e *credentialShapeError) Error() string {
++	return ErrCredentialInvalid.Error() + ": missing " + strings.Join(e.missing, ", ")
++}
++
++func (e *credentialShapeError) Unwrap() error { return ErrCredentialInvalid }
++
++// jiraMissingFields lists, in jira_credentials_from_mapping's order, the required fields (api_token,
++// email, base_url) the credential does not resolve to a non-empty value.
++func jiraMissingFields(credential Credential) []string {
++	var missing []string
++	for _, field := range jiraMappingFields(credential) {
++		if !field.Present {
++			missing = append(missing, field.Name)
++		}
++	}
++	return missing
++}
+diff --git a/internal/providerfoundation/jira_shape_fields_test.go b/internal/providerfoundation/jira_shape_fields_test.go
+new file mode 100644
+index 0000000000..593a7419ff
+--- /dev/null
++++ b/internal/providerfoundation/jira_shape_fields_test.go
+@@ -0,0 +1,64 @@
++package providerfoundation
++
++import (
++	"errors"
++	"strings"
++	"testing"
++)
++
++// CHAOS-7132: a stored Jira credential the client builder refuses used to read "provider credential
++// is invalid" and nothing else, so an operator could not tell which of the three required fields
++// (API token, email, base URL) was absent. The refusal still is ErrCredentialInvalid (errors.Is) and
++// now names the missing FIELDS (names only, never a value).
++func TestNewJiraClientRefusalNamesTheMissingFields(t *testing.T) {
++	t.Parallel()
++	const tokenValue, emailValue, urlValue = "tok-SECRET-123", "someone-SECRET@example.test", "https://secret-site.example.test"
++	full := map[string]string{"api_token": tokenValue, "email": emailValue, "url": urlValue}
++	tests := []struct {
++		name    string
++		drop    []string
++		missing []string
++	}{
++		{"no token", []string{"api_token"}, []string{"api_token"}},
++		{"no email", []string{"email"}, []string{"email"}},
++		{"no base url", []string{"url"}, []string{"base_url"}},
++		{"nothing but an empty payload", []string{"api_token", "email", "url"}, []string{"api_token", "email", "base_url"}},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			t.Parallel()
++			values := map[string]string{}
++			for key, value := range full {
++				values[key] = value
++			}
++			for _, key := range test.drop {
++				delete(values, key)
++			}
++			_, err := NewJiraClient(testCredential("jira", values), &headerCaptureDoer{}, jiraTestRetry(), jiraTestLease())
++			if !errors.Is(err, ErrCredentialInvalid) {
++				t.Fatalf("err = %v, want it to wrap ErrCredentialInvalid", err)
++			}
++			text := err.Error()
++			for _, name := range test.missing {
++				if !strings.Contains(text, name) {
++					t.Errorf("refusal %q does not name the missing field %q", text, name)
++				}
++			}
++			for _, present := range []string{"api_token", "email", "base_url"} {
++				named := strings.Contains(text, present)
++				wanted := false
++				for _, name := range test.missing {
++					wanted = wanted || name == present
++				}
++				if named && !wanted {
++					t.Errorf("refusal %q names %q, which is present", text, present)
++				}
++			}
++			for _, value := range []string{tokenValue, emailValue, urlValue} {
++				if strings.Contains(text, value) {
++					t.Fatalf("refusal %q leaks a credential value", text)
++				}
++			}
++		})
++	}
++}
+diff --git a/internal/providerfoundation/resolve_reasons_test.go b/internal/providerfoundation/resolve_reasons_test.go
+new file mode 100644
+index 0000000000..3971230007
+--- /dev/null
++++ b/internal/providerfoundation/resolve_reasons_test.go
+@@ -0,0 +1,85 @@
++package providerfoundation
++
++import (
++	"context"
++	"errors"
++	"strings"
++	"testing"
++
++	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
++)
++
++// CHAOS-7132: CredentialResolver.Resolve answered every failure with the same bare
++// ErrCredentialInvalid, so a missing encryption key, a wrong key, an unreadable payload and a missing
++// ciphertext read the same in a log, a CLI refusal and a run's error. Each now names its reason
++// (a fixed word, never a value) and still wraps ErrCredentialInvalid.
++type reasonRepository struct{ record EncryptedCredential }
++
++func (r reasonRepository) ResolveEncrypted(context.Context, TenantScope) (EncryptedCredential, error) {
++	return r.record, nil
++}
++
++func TestCredentialResolverNamesWhyACredentialIsInvalid(t *testing.T) {
++	t.Parallel()
++	key := secrets.NewValue("test-master-key")
++	decryptor, _ := NewFernetDecryptor(key, "salt")
++	wrongKey, _ := NewFernetDecryptor(secrets.NewValue("another-master-key"), "salt")
++	good := "v1:" + encryptForTest(t, []byte(`{"token":"secret-value-123"}`), key.Reveal(), "salt")
++	notObject := "v1:" + encryptForTest(t, []byte(`["secret-value-123"]`), key.Reveal(), "salt")
++	record := func(provider, cipher string) EncryptedCredential {
++		return EncryptedCredential{ID: "id", Provider: provider, Name: "default", Active: true, Ciphertext: secrets.NewValue(cipher)}
++	}
++	tests := []struct {
++		name      string
++		record    EncryptedCredential
++		decryptor CredentialDecryptor
++		reason    string
++	}{
++		{"no encryption key in this process", record("gitlab", good), FernetDecryptor{}, "encryption_key_not_configured"},
++		{"a key that does not open the ciphertext", record("gitlab", good), wrongKey, "decrypt_failed"},
++		{"a payload that is not a JSON object", record("gitlab", notObject), decryptor, "payload_not_a_json_object"},
++		{"no ciphertext stored", record("gitlab", ""), decryptor, "ciphertext_missing"},
++		{"a row of another provider", record("github", good), decryptor, "provider_mismatch"},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			t.Parallel()
++			resolver := CredentialResolver{Repository: reasonRepository{record: test.record}, Decryptor: test.decryptor}
++			_, err := resolver.Resolve(context.Background(), LeaseGuardFunc(func(context.Context) error { return nil }),
++				TenantScope{OrgID: "org", Provider: "gitlab", IntegrationID: "integration"})
++			if !errors.Is(err, ErrCredentialInvalid) {
++				t.Fatalf("err = %v, want it to wrap ErrCredentialInvalid", err)
++			}
++			if !strings.Contains(err.Error(), test.reason) {
++				t.Errorf("refusal %q does not name the reason %q", err.Error(), test.reason)
++			}
++			if strings.Contains(err.Error(), "secret-value-123") {
++				t.Fatalf("refusal %q leaks a payload value", err.Error())
++			}
++		})
++	}
++}
++
++func TestFailureReasonIsFixedVocabularyAndValueFree(t *testing.T) {
++	t.Parallel()
++	shape := ValidateCredentialShape(testCredential("jira", map[string]string{"email": "someone-SECRET@example.test"}))
++	tests := []struct {
++		name string
++		err  error
++		want string
++	}{
++		{"a credential reason", credentialInvalid("decrypt_failed"), "decrypt_failed"},
++		{"a refused jira shape", shape, "missing_fields:api_token,base_url"},
++		{"a provider authentication failure", &ProviderError{Class: ErrorAuthentication, StatusCode: 401}, "authentication:401"},
++		{"a wrapped credential reason", errors.Join(errors.New("context"), credentialInvalid("provider_mismatch")), "provider_mismatch"},
++		{"a plain error carries no reason", errors.New("something with a secret-value-123"), ""},
++	}
++	for _, test := range tests {
++		if got := FailureReason(test.err); got != test.want {
++			t.Errorf("%s: FailureReason = %q, want %q", test.name, got, test.want)
++		}
++	}
++	if _, err := NewFernetDecryptor(secrets.Value{}, ""); FailureReason(err) != "encryption_key_not_configured" {
++		t.Errorf("NewFernetDecryptor without a key: reason %q, want encryption_key_not_configured", FailureReason(err))
++	}
++}
+diff --git a/internal/providerfoundation/types.go b/internal/providerfoundation/types.go
+index 7a608bbad1..af38d3c8e9 100644
+--- a/internal/providerfoundation/types.go
++++ b/internal/providerfoundation/types.go
+@@ -12,6 +12,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"log/slog"
++	"strconv"
+ 	"strings"
+ 	"time"
+ 	"unicode/utf8"
+@@ -216,6 +217,42 @@ type EncryptedCredential struct {
+ 	RawConfig []byte
+ }
+ 
++// credentialInvalidError is ErrCredentialInvalid with a fixed reason word (never a value), so the
++// refusal says WHY (CHAOS-7132). errors.Is(err, ErrCredentialInvalid) still holds.
++type credentialInvalidError struct{ reason string }
++
++func (e *credentialInvalidError) Error() string {
++	return ErrCredentialInvalid.Error() + ": " + e.reason
++}
++
++func (e *credentialInvalidError) Unwrap() error { return ErrCredentialInvalid }
++
++func credentialInvalid(reason string) error { return &credentialInvalidError{reason: reason} }
++
++// FailureReason is a short, fixed-vocabulary, VALUE-FREE reason for an error, safe to store in a
++// durable row (CHAOS-7132): why a credential was invalid (decrypt_failed, ciphertext_missing, ...,
++// missing_fields:api_token,email), or the class and status of a provider failure
++// (authentication:401). "" when the error carries neither.
++func FailureReason(err error) string {
++	var invalid *credentialInvalidError
++	if errors.As(err, &invalid) {
++		return invalid.reason
++	}
++	var shape *credentialShapeError
++	if errors.As(err, &shape) {
++		return "missing_fields:" + strings.Join(shape.missing, ",")
++	}
++	var provider *ProviderError
++	if errors.As(err, &provider) {
++		reason := string(provider.Class)
++		if provider.StatusCode != 0 {
++			reason += ":" + strconv.Itoa(provider.StatusCode)
++		}
++		return reason
++	}
++	return ""
++}
++
+ type CredentialRepository interface {
+ 	ResolveEncrypted(context.Context, TenantScope) (EncryptedCredential, error)
+ }
+@@ -265,20 +302,29 @@ func (r CredentialResolver) Resolve(ctx context.Context, lease LeaseGuard, scope
+ 	if !record.Active {
+ 		return Credential{}, ErrCredentialInactive
+ 	}
+-	if record.Provider != scope.Provider || !record.Ciphertext.Configured() ||
+-		(scope.CredentialID != "" && record.ID != scope.CredentialID) {
+-		return Credential{}, ErrCredentialInvalid
++	switch {
++	case record.Provider != scope.Provider:
++		return Credential{}, credentialInvalid("provider_mismatch")
++	case !record.Ciphertext.Configured():
++		return Credential{}, credentialInvalid("ciphertext_missing")
++	case scope.CredentialID != "" && record.ID != scope.CredentialID:
++		return Credential{}, credentialInvalid("credential_id_mismatch")
+ 	}
+ 	if err := lease.Assert(ctx); err != nil {
+ 		return Credential{}, err
+ 	}
+ 	plain, err := r.Decryptor.Decrypt(record.Ciphertext)
+ 	if err != nil {
+-		return Credential{}, ErrCredentialInvalid
++		// A process with no encryption key and a key that does not open the ciphertext are different
++		// problems with different fixes; both used to read "provider credential is invalid".
++		if keyed, ok := r.Decryptor.(interface{ Configured() bool }); ok && !keyed.Configured() {
++			return Credential{}, credentialInvalid("encryption_key_not_configured")
++		}
++		return Credential{}, credentialInvalid("decrypt_failed")
+ 	}
+ 	credential, err := decodeCredential(record, plain)
+ 	if err != nil {
+-		return Credential{}, err
++		return Credential{}, credentialInvalid("payload_not_a_json_object")
+ 	}
+ 	if err := lease.Assert(ctx); err != nil {
+ 		return Credential{}, err
+diff --git a/internal/providersync/team_catalog_collector.go b/internal/providersync/team_catalog_collector.go
+index 02e59d44b1..04476b06a6 100644
+--- a/internal/providersync/team_catalog_collector.go
++++ b/internal/providersync/team_catalog_collector.go
+@@ -79,7 +79,22 @@ func (ref TeamCatalogReference) validate() error {
+ // TeamCatalogResult reports rows written per destination table plus an
+ // outcome label, the shape the telemetry layer (rows_written per table +
+ // outcome: native|bridge|skipped_selection) reports directly.
++// DegradedLeg names one ADDITIVE leg of a team-catalog collection that failed while the rest of the
++// collection succeeded (CHAOS-7132, D2778: the jira Atlassian Teams leg is independent of the
++// project-as-team catalog). It is never silent and never a clean success: it is recorded in the
++// discovery ledger and the run's result, with a fixed-vocabulary value-free Reason and the error text
++// as Detail (the recorder bounds and sanitizes it before it is stored).
++type DegradedLeg struct {
++	Dataset string `json:"dataset"`
++	Leg     string `json:"leg"`
++	Outcome string `json:"outcome"`
++	Reason  string `json:"reason"`
++	Detail  string `json:"detail,omitempty"`
++}
++
+ type TeamCatalogResult struct {
++	// DegradedLegs lists the additive legs that failed in an otherwise successful collection.
++	DegradedLegs       []DegradedLeg
+ 	TeamsWritten       int
+ 	MembersWritten     int
+ 	MembershipsWritten int
+diff --git a/internal/synccli/jira_stored_credential.go b/internal/synccli/jira_stored_credential.go
+index 4eed4338b5..947ed063f5 100644
+--- a/internal/synccli/jira_stored_credential.go
++++ b/internal/synccli/jira_stored_credential.go
+@@ -64,12 +64,25 @@ func resolveJiraStoredSettings(
+ 	if pool == nil {
+ 		return settings{}, errors.New(PostgresURIKey + " is not set: required to resolve the org's stored jira credential")
+ 	}
++	// A process with no encryption key cannot open ANY stored credential; say so up front instead of
++	// failing the first resolve with a bare "credential is invalid" (CHAOS-7132).
++	if keyed, ok := decryptor.(interface{ Configured() bool }); ok && !keyed.Configured() {
++		return settings{}, errors.New("encryption_key_not_configured: SETTINGS_ENCRYPTION_KEY is not set, so the org's stored jira credential cannot be opened")
++	}
+ 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+ 	resolver := providerfoundation.CredentialResolver{
+ 		Repository: providerfoundation.PostgresCredentialRepository{Pool: pool},
+ 		Decryptor:  decryptor,
+ 	}
+ 	scope := providerfoundation.TenantScope{OrgID: orgID, Provider: "jira", IntegrationID: jiraTeamsScopeIntegrationID}
++	// The credential is the one the org's jira integration points at -- the credential every sync
++	// of the org resolves -- not "the one named default, else the first" (CHAOS-7132: with two jira
++	// credentials the verb picked one no sync uses). No integration row keeps the by-name lookup.
++	credentialID, err := jiraIntegrationCredentialID(ctx, pool, orgID)
++	if err != nil {
++		return settings{}, err
++	}
++	scope.CredentialID = credentialID
+ 	credential, err := resolver.Resolve(ctx, lease, scope)
+ 	if err != nil {
+ 		return settings{}, fmt.Errorf("resolve the org's stored jira credential: %w", err)
+@@ -171,3 +184,36 @@ func pgxDSN(dsn string) string {
+ 	dsn = strings.Replace(dsn, "postgresql+asyncpg://", "postgresql://", 1)
+ 	return strings.Replace(dsn, "postgres+asyncpg://", "postgresql://", 1)
+ }
++
++// jiraIntegrationCredentialID returns the credential id of the org's active jira integration(s): "" when
++// there is none (the by-name lookup then applies), the id when every integration shares one credential,
++// and a loud refusal when integrations point at different credentials -- the verb must not guess.
++func jiraIntegrationCredentialID(ctx context.Context, pool *pgxpool.Pool, orgID string) (string, error) {
++	rows, err := pool.Query(ctx,
++		`SELECT DISTINCT credential_id::text FROM integrations
++		 WHERE org_id = $1 AND lower(provider) = 'jira' AND is_active = TRUE AND credential_id IS NOT NULL
++		 ORDER BY 1`, orgID)
++	if err != nil {
++		return "", fmt.Errorf("read the org's jira integrations: %w", err)
++	}
++	defer rows.Close()
++	var ids []string
++	for rows.Next() {
++		var id string
++		if err := rows.Scan(&id); err != nil {
++			return "", fmt.Errorf("read the org's jira integrations: %w", err)
++		}
++		ids = append(ids, id)
++	}
++	if err := rows.Err(); err != nil {
++		return "", fmt.Errorf("read the org's jira integrations: %w", err)
++	}
++	switch len(ids) {
++	case 0:
++		return "", nil
++	case 1:
++		return ids[0], nil
++	}
++	return "", fmt.Errorf("the org has %d active jira integrations with different credentials (%s); this verb cannot choose one",
++		len(ids), strings.Join(ids, ", "))
++}
+diff --git a/internal/synccli/jira_stored_credential_key_test.go b/internal/synccli/jira_stored_credential_key_test.go
+new file mode 100644
+index 0000000000..94c944129f
+--- /dev/null
++++ b/internal/synccli/jira_stored_credential_key_test.go
+@@ -0,0 +1,40 @@
++package synccli
++
++import (
++	"errors"
++
++	"context"
++	"github.com/full-chaos/dev-health-ops/internal/cli"
++	"net/http"
++	"strings"
++	"testing"
++
++	"github.com/jackc/pgx/v5/pgxpool"
++
++	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
++)
++
++// CHAOS-7132: with no SETTINGS_ENCRYPTION_KEY the verb refuses up front and says so, instead of failing
++// the first resolve with a bare "provider credential is invalid".
++func TestResolveJiraStoredSettingsRefusesWithoutAnEncryptionKey(t *testing.T) {
++	_, err := resolveJiraStoredSettings(context.Background(), new(pgxpool.Pool), providerfoundation.FernetDecryptor{},
++		http.DefaultClient, nil, "org", envOverrides{})
++	if err == nil || !strings.Contains(err.Error(), "encryption_key_not_configured") || !strings.Contains(err.Error(), "SETTINGS_ENCRYPTION_KEY") {
++		t.Fatalf("err = %v, want a refusal naming encryption_key_not_configured and SETTINGS_ENCRYPTION_KEY", err)
++	}
++}
++
++// The strict verb: there the Atlassian leg IS the work, so the failure that is only DEGRADED in the
++// worker's discovery (an "Invalid Organization Ari" from the gateway) must still exit non-zero and
++// say read_failed, with nothing written and no secret in the text (CHAOS-7132).
++func TestStrictVerbExitsNonZeroWhenTheAtlassianLegFails(t *testing.T) {
++	rec := &recorded{}
++	failure := errors.New("search atlassian teams: Exception while fetching data (/team/teamSearchV2) : Invalid Organization Ari: some-uuid")
++	code, stdout, stderr := run(t, validEnv(), stubDeps(rec, failingClient{err: failure}, nil), "--provider", "jira", "--org", "o")
++	if code != cli.ExitFailure {
++		t.Fatalf("exit %d, want %d: a failed Atlassian leg is a failed verb", code, cli.ExitFailure)
++	}
++	if stdout != "" || !strings.Contains(stderr, `"code":"read_failed"`) || strings.Contains(stderr, tokenValue) {
++		t.Errorf("stdout=%q stderr=%q", stdout, stderr)
++	}
++}
+diff --git a/internal/synccli/jira_stored_credential_scope_integration_test.go b/internal/synccli/jira_stored_credential_scope_integration_test.go
+new file mode 100644
+index 0000000000..8fef20ce82
+--- /dev/null
++++ b/internal/synccli/jira_stored_credential_scope_integration_test.go
+@@ -0,0 +1,117 @@
++//go:build integration
++
++package synccli
++
++import (
++	"context"
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/google/uuid"
++	"github.com/jackc/pgx/v5/pgxpool"
++
++	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
++	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
++	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
++	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
++)
++
++// CHAOS-7132: the verb used to resolve "the org's jira credential" by NAME (the one called default,
++// else the first), while the worker resolves the credential the org's jira INTEGRATION points at.
++// With two jira credentials the two disagreed: the verb picked a credential no sync uses.
++
++func seedNamedJiraCredential(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, name string, config, secretFields map[string]string) uuid.UUID {
++	t.Helper()
++	decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(testEncryptionKey), testEncryptionSalt)
++	if err != nil {
++		t.Fatal(err)
++	}
++	plaintext, _ := json.Marshal(secretFields)
++	ciphertext, err := decryptor.Encrypt(plaintext)
++	if err != nil {
++		t.Fatal(err)
++	}
++	configJSON, _ := json.Marshal(config)
++	id := uuid.New()
++	if _, err := pool.Exec(ctx,
++		`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
++		 VALUES ($1, $2, 'jira', $3, true, $4, $5::jsonb, now(), now())`, id, orgID, name, ciphertext.Reveal(), string(configJSON)); err != nil {
++		t.Fatal(err)
++	}
++	return id
++}
++
++func seedJiraIntegration(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, name string, credentialID uuid.UUID) {
++	t.Helper()
++	if _, err := pool.Exec(ctx,
++		`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
++		 VALUES ($1, $2, 'jira', $3, $4, '{}'::json, true, now(), now())`, uuid.New(), orgID, credentialID, name); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func scopeTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
++	t.Helper()
++	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
++	t.Cleanup(cancel)
++	instance, err := containers.StartPostgres(ctx)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = instance.Close(context.Background()) })
++	pool, err := pgxpool.New(ctx, instance.URI)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(pool.Close)
++	applyRealSchema(t, ctx, pool)
++	return ctx, pool
++}
++
++func TestResolveJiraStoredSettingsUsesTheCredentialTheIntegrationPointsAt(t *testing.T) {
++	ctx, pool := scopeTestPool(t)
++	tenant := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path != atlassianteams.TenantInfoPath {
++			t.Errorf("unexpected path %s", r.URL.Path)
++		}
++		_, _ = w.Write([]byte(`{"cloudId":"tenant-cloud"}`))
++	}))
++	defer tenant.Close()
++	const orgID = "org-two-credentials"
++	// A credential named default that no integration uses and that lacks every required field...
++	seedNamedJiraCredential(t, ctx, pool, orgID, "default", map[string]string{}, map[string]string{"unrelated": "x"})
++	// ...and the one the integration (and so every sync) really uses.
++	used := seedNamedJiraCredential(t, ctx, pool, orgID, "JIRA",
++		map[string]string{"base_url": tenant.URL, "atlassian_organization_id": "org-123"},
++		map[string]string{"email": "sync@example.test", "api_token": "s3cr3t-token"})
++	seedJiraIntegration(t, ctx, pool, orgID, "bigboy jira", used)
++
++	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), tenant.Client(), nil, orgID, envOverrides{})
++	if err != nil {
++		t.Fatalf("the verb must resolve the integration's credential, not the one named default: %v", err)
++	}
++	if settings.email != "sync@example.test" || settings.organizationID != "org-123" {
++		t.Errorf("resolved the wrong credential: email=%q organization=%q", settings.email, settings.organizationID)
++	}
++}
++
++func TestResolveJiraStoredSettingsRefusesTwoIntegrationsWithDifferentCredentials(t *testing.T) {
++	ctx, pool := scopeTestPool(t)
++	const orgID = "org-two-integrations"
++	first := seedNamedJiraCredential(t, ctx, pool, orgID, "alpha", map[string]string{"base_url": "https://a.example.test"}, map[string]string{"email": "a@example.test", "api_token": "tok-a"})
++	second := seedNamedJiraCredential(t, ctx, pool, orgID, "beta", map[string]string{"base_url": "https://b.example.test"}, map[string]string{"email": "b@example.test", "api_token": "tok-b"})
++	seedJiraIntegration(t, ctx, pool, orgID, "site a", first)
++	seedJiraIntegration(t, ctx, pool, orgID, "site b", second)
++
++	_, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), http.DefaultClient, nil, orgID, envOverrides{})
++	if err == nil {
++		t.Fatal("two jira integrations with different credentials must be refused, not resolved by a name default")
++	}
++	if text := err.Error(); !strings.Contains(text, "2 active jira integrations") || strings.Contains(text, "tok-") {
++		t.Errorf("the refusal must name the count and carry no secret: %q", text)
++	}
++}
+diff --git a/internal/syncdispatchruntime/degraded_leg_integration_test.go b/internal/syncdispatchruntime/degraded_leg_integration_test.go
+new file mode 100644
+index 0000000000..1bd92639a1
+--- /dev/null
++++ b/internal/syncdispatchruntime/degraded_leg_integration_test.go
+@@ -0,0 +1,72 @@
++//go:build integration
++
++package syncdispatchruntime
++
++import (
++	"context"
++	"encoding/json"
++	"testing"
++	"time"
++
++	"github.com/jackc/pgx/v5/pgxpool"
++
++	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
++	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
++)
++
++// CHAOS-7132: a discovery whose additive leg failed (the jira Atlassian Teams leg) leaves a degraded
++// entry in the ledger; the run still succeeds (its units did) but its result must not read as clean.
++func TestNativeFinalizeSyncRunCopiesTheDiscoveryLedgersDegradedLegsIntoTheRunResult(t *testing.T) {
++	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
++	defer cancel()
++	instance, err := containers.StartPostgres(ctx)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer instance.Close(context.Background())
++	pool, err := pgxpool.New(ctx, instance.URI)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer pool.Close()
++	createFinalizeTables(t, ctx, pool)
++	seedFinalizeRoute(t, ctx, pool)
++	insertFinalizeRun(t, ctx, pool, 1, "", "")
++	pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, finalizeTestSource)
++	since, before := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
++	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
++		ID: finalizeTestUnit, RunID: finalizeTestRun, OrgID: finalizeTestOrg, IntegrationID: finalizeTestIntegration,
++		SourceID: finalizeTestSource, Status: "success", SinceAt: &since, BeforeAt: &before, CostClass: "heavy",
++	})
++	ledger := `{"provider":"jira","outcome":"native_degraded","degraded":[{"dataset":"teams","leg":"jira_atlassian_teams","outcome":"failed","reason":"unclassified","detail":"Invalid Organization Ari"}]}`
++	if _, err := pool.Exec(ctx, `
++INSERT INTO public.sync_run_reference_discoveries (id, sync_run_id, org_id, status, attempts, available_at, created_at, updated_at, result)
++VALUES (gen_random_uuid(), $1::uuid, $2, 'success', 1, now(), now(), now(), $3::json)`, finalizeTestRun, finalizeTestOrg, ledger); err != nil {
++		t.Fatal(err)
++	}
++
++	service, err := NewNativeFinalizeSyncRunService(pool, nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := service.Finalize(ctx, newFinalizeArgs()); err != nil {
++		t.Fatalf("Finalize: %v", err)
++	}
++	var status string
++	var resultRaw []byte
++	if err := pool.QueryRow(ctx, `SELECT status, result::text FROM sync_runs WHERE id=$1`, finalizeTestRun).Scan(&status, &resultRaw); err != nil {
++		t.Fatal(err)
++	}
++	if status != syncRunStatusSuccess {
++		t.Fatalf("status = %q: a failed ADDITIVE leg must not fail a run whose units all succeeded", status)
++	}
++	var result struct {
++		Degraded []map[string]string `json:"degraded"`
++	}
++	if err := json.Unmarshal(resultRaw, &result); err != nil {
++		t.Fatal(err)
++	}
++	if len(result.Degraded) != 1 || result.Degraded[0]["leg"] != "jira_atlassian_teams" || result.Degraded[0]["outcome"] != "failed" || result.Degraded[0]["dataset"] != "teams" {
++		t.Fatalf("run result %s does not carry the degraded leg", resultRaw)
++	}
++}
+diff --git a/internal/syncdispatchruntime/failure_reason_test.go b/internal/syncdispatchruntime/failure_reason_test.go
+new file mode 100644
+index 0000000000..9529b21fcc
+--- /dev/null
++++ b/internal/syncdispatchruntime/failure_reason_test.go
+@@ -0,0 +1,47 @@
++package syncdispatchruntime
++
++import (
++	"encoding/json"
++	"errors"
++	"fmt"
++	"strings"
++	"testing"
++
++	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
++)
++
++// CHAOS-7132: a run failed by reference discovery used to read only error_category
++// "reference_discovery_failed". The unit result now also carries a fixed-vocabulary, value-free
++// reason and the run's result copies the first failed unit's.
++func TestUnitDiscoveryFailureResultCarriesAValueFreeReason(t *testing.T) {
++	cause := fmt.Errorf("resolve client: %w", providerfoundation.ValidateCredentialShape(providerfoundation.Credential{Provider: "jira"}))
++	raw, err := unitDiscoveryFailureResultJSON(cause)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var decoded map[string]any
++	if err := json.Unmarshal(raw, &decoded); err != nil {
++		t.Fatal(err)
++	}
++	if decoded["error_category"] != referenceDiscoveryErrorCategory {
++		t.Errorf("error_category = %v", decoded["error_category"])
++	}
++	if got, _ := decoded["reason"].(string); got != "missing_fields:api_token,email,base_url" {
++		t.Errorf("reason = %q, want the missing field names", got)
++	}
++	plain, _ := unitDiscoveryFailureResultJSON(errors.New("Invalid Organization Ari: some-uuid"))
++	if strings.Contains(string(plain), `"reason"`) {
++		t.Errorf("an unclassified error must carry no reason field: %s", plain)
++	}
++}
++
++func TestAggregateFinalizeUnitsCarriesTheFirstFailedUnitsReason(t *testing.T) {
++	aggregate := aggregateFinalizeUnits([]finalizeSyncRunUnit{
++		{status: syncRunUnitStatusSuccess},
++		{status: syncRunUnitStatusFailed, errorCategory: "reference_discovery_failed", reason: "decrypt_failed"},
++		{status: syncRunUnitStatusFailed, errorCategory: "reference_discovery_failed", reason: "ciphertext_missing"},
++	})
++	if aggregate.reason != "decrypt_failed" || aggregate.errorCategory != "reference_discovery_failed" {
++		t.Errorf("aggregate = %+v, want the first failed unit's category and reason", aggregate)
++	}
++}
+diff --git a/internal/syncdispatchruntime/native_finalize_sync_run.go b/internal/syncdispatchruntime/native_finalize_sync_run.go
+index d6feaadab4..8e12ab3dde 100644
+--- a/internal/syncdispatchruntime/native_finalize_sync_run.go
++++ b/internal/syncdispatchruntime/native_finalize_sync_run.go
+@@ -228,6 +228,20 @@ func (service *NativeFinalizeSyncRunService) finalize(
+ 	if aggregate.errorCategory != "" {
+ 		resultPayload["error_category"] = aggregate.errorCategory
+ 	}
++	if aggregate.reason != "" {
++		// The first failed unit's fixed-vocabulary, value-free reason (CHAOS-7132).
++		resultPayload["reason"] = aggregate.reason
++	}
++	// An additive leg of reference discovery that failed (CHAOS-7132, e.g. the jira Atlassian Teams leg)
++	// does not fail the run or its units, but the run must not read as a clean success: the ledger's
++	// degraded entries are copied into the run's result.
++	degraded, err := loadDiscoveryDegraded(ctx, tx, run.id)
++	if err != nil {
++		return err
++	}
++	if len(degraded) > 0 {
++		resultPayload["degraded"] = degraded
++	}
+ 	// Python: `if error_category == FEATURE_DISABLED_ERROR_CATEGORY and
+ 	// run.error is None:` -- a STRICT None check, not the whitespace-aware
+ 	// blank check the zero-unit branch below uses. An explicitly-empty-string
+@@ -533,6 +547,7 @@ type finalizeSyncRunUnit struct {
+ 	mode           string
+ 	errorText      *string
+ 	errorCategory  string
++	reason         string
+ 	processorFlags map[string]any
+ }
+ 
+@@ -567,6 +582,9 @@ ORDER BY id`, runID)
+ 				if category, ok := stringField(decoded, "error_category"); ok {
+ 					unit.errorCategory = category
+ 				}
++				if reason, ok := stringField(decoded, "reason"); ok {
++					unit.reason = reason
++				}
+ 			}
+ 		}
+ 		if len(processorRaw) > 0 {
+@@ -587,6 +605,7 @@ type finalizeAggregate struct {
+ 	successCount         int
+ 	failedCount          int
+ 	errorCategory        string
++	reason               string
+ 	firstFailedUnitError *string
+ }
+ 
+@@ -606,6 +625,9 @@ func aggregateFinalizeUnits(units []finalizeSyncRunUnit) finalizeAggregate {
+ 			if aggregate.errorCategory == "" && unit.errorCategory != "" {
+ 				aggregate.errorCategory = unit.errorCategory
+ 			}
++			if aggregate.reason == "" && unit.reason != "" {
++				aggregate.reason = unit.reason
++			}
+ 			if aggregate.firstFailedUnitError == nil && unit.errorText != nil && *unit.errorText != "" {
+ 				text := *unit.errorText
+ 				aggregate.firstFailedUnitError = &text
+@@ -1130,3 +1152,26 @@ func familyDatasetKeysFromFlags(flags map[string]any) []string {
+ 	}
+ 	return enabled
+ }
++
++// loadDiscoveryDegraded reads the degraded legs the run's reference discovery recorded (empty for a
++// clean discovery, a run without one, or a discovery that has no such key).
++func loadDiscoveryDegraded(ctx context.Context, tx pgx.Tx, runID string) ([]map[string]any, error) {
++	var raw []byte
++	err := tx.QueryRow(ctx, `
++SELECT result::text FROM public.sync_run_reference_discoveries
++WHERE sync_run_id = $1::uuid AND status = $2 AND result IS NOT NULL
++ORDER BY created_at DESC LIMIT 1`, runID, discoveryStatusSuccess).Scan(&raw)
++	if errors.Is(err, pgx.ErrNoRows) {
++		return nil, nil
++	}
++	if err != nil {
++		return nil, ErrFinalizeSyncRunUnavailable
++	}
++	var decoded struct {
++		Degraded []map[string]any `json:"degraded"`
++	}
++	if json.Unmarshal(raw, &decoded) != nil {
++		return nil, nil
++	}
++	return decoded.Degraded, nil
++}
+diff --git a/internal/syncdispatchruntime/native_reference_discovery.go b/internal/syncdispatchruntime/native_reference_discovery.go
+index be77a729ea..0a294d1b4b 100644
+--- a/internal/syncdispatchruntime/native_reference_discovery.go
++++ b/internal/syncdispatchruntime/native_reference_discovery.go
+@@ -531,6 +531,20 @@ func commitOrUnavailable(ctx context.Context, tx pgx.Tx) error {
+ 	return nil
+ }
+ 
++// unitDiscoveryFailureResultJSON is the result of a unit failed by reference discovery: the category,
++// the sanitized detail and a fixed-vocabulary, value-free reason (CHAOS-7132) that the run's own
++// result row carries too, so "Reference discovery failed" is no longer the whole story.
++func unitDiscoveryFailureResultJSON(discoverErr error) ([]byte, error) {
++	payload := map[string]any{
++		"error_category": referenceDiscoveryErrorCategory,
++		"detail":         discoveryErrorDetail(discoverErr),
++	}
++	if reason := providerfoundation.FailureReason(discoverErr); reason != "" {
++		payload["reason"] = reason
++	}
++	return json.Marshal(payload)
++}
++
+ func discoveryFailureResultJSON(retryable bool, attempts int, discoverErr error) []byte {
+ 	encoded, err := json.Marshal(map[string]any{
+ 		"error_category": referenceDiscoveryErrorCategory,
+@@ -599,10 +613,7 @@ func ledgerLeaseIsOwnedAndLive(status string, leaseExpiresAt *time.Time, ownedBy
+ // the same way feature_disabled_termination.go's fix does: take the SAME
+ // sorted per-bucket advisory locks before touching any row.
+ func failNonterminalUnits(ctx context.Context, tx pgx.Tx, runID string, now time.Time, message string, discoverErr error) error {
+-	resultJSON, err := json.Marshal(map[string]any{
+-		"error_category": referenceDiscoveryErrorCategory,
+-		"detail":         discoveryErrorDetail(discoverErr),
+-	})
++	resultJSON, err := unitDiscoveryFailureResultJSON(discoverErr)
+ 	if err != nil {
+ 		return ErrReferenceDiscoveryUnavailable
+ 	}
+diff --git a/internal/syncdispatchruntime/team_catalog_discovery_executor.go b/internal/syncdispatchruntime/team_catalog_discovery_executor.go
+index e4b4380e9d..5cf0391164 100644
+--- a/internal/syncdispatchruntime/team_catalog_discovery_executor.go
++++ b/internal/syncdispatchruntime/team_catalog_discovery_executor.go
+@@ -216,6 +216,11 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
+ 		// future one's deliberate soft-fail is never silently indistinguishable
+ 		// from a clean run.
+ 		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeRosterPreservationFailed)
++	} else if len(result.DegradedLegs) > 0 {
++		// An additive leg failed while the rest of the collection succeeded (CHAOS-7132): never a
++		// clean "native" success. The dedicated nonfatal outcome says so; the ledger result below
++		// names the leg and its reason.
++		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+ 	} else {
+ 		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeNative)
+ 	}
+@@ -239,9 +244,14 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
+ 			_ = executor.Observer.ObserveTeamCatalogRowsWritten(normalizedProvider, jobruntime.TeamCatalogTable(row.table), row.count)
+ 		}
+ 	}
++	outcome := "native"
++	if len(result.DegradedLegs) > 0 {
++		outcome = "native_degraded"
++	}
+ 	return map[string]any{
+ 		"provider":             normalizedProvider,
+-		"outcome":              "native",
++		"outcome":              outcome,
++		"degraded":             degradedLegsPayload(result.DegradedLegs),
+ 		"reference_team_keys":  result.TeamKeys,
+ 		"reference_sprint_ids": result.SprintIDs,
+ 		"rows_written": map[string]int{
+@@ -262,3 +272,23 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
+ }
+ 
+ var _ DiscoveryExecutor = &TeamCatalogDiscoveryExecutor{}
++
++// degradedLegsPayload is the stored form of the failed additive legs: the dataset, the leg, a fixed
++// reason and the error text bounded and sanitized (CHAOS-7132). nil when nothing degraded, so a clean
++// run's result is unchanged.
++func degradedLegsPayload(legs []providersync.DegradedLeg) []map[string]string {
++	if len(legs) == 0 {
++		return nil
++	}
++	out := make([]map[string]string, 0, len(legs))
++	for _, leg := range legs {
++		detail := sanitizeErrorText(leg.Detail)
++		if len(detail) > 500 {
++			detail = detail[:500]
++		}
++		out = append(out, map[string]string{
++			"dataset": leg.Dataset, "leg": leg.Leg, "outcome": leg.Outcome, "reason": leg.Reason, "detail": detail,
++		})
++	}
++	return out
++}
+diff --git a/internal/syncdispatchruntime/team_catalog_discovery_executor_test.go b/internal/syncdispatchruntime/team_catalog_discovery_executor_test.go
+index 56c24722dd..2d80ac8fb7 100644
+--- a/internal/syncdispatchruntime/team_catalog_discovery_executor_test.go
++++ b/internal/syncdispatchruntime/team_catalog_discovery_executor_test.go
+@@ -3,6 +3,7 @@ package syncdispatchruntime
+ import (
+ 	"context"
+ 	"errors"
++	"strings"
+ 	"testing"
+ 	"time"
+ 
+@@ -376,3 +377,38 @@ func TestTeamCatalogDiscoveryExecutorFailsClosedWhenUnconstructed(t *testing.T)
+ 		t.Fatalf("native executor with no Clients error=%v want=%v", err, ErrReferenceDiscoveryUnavailable)
+ 	}
+ }
++
++// CHAOS-7132: an additive leg that failed in an otherwise successful collection is never recorded as a
++// clean "native" success: the dispatch outcome is the nonfatal one and the ledger result names the leg,
++// with the detail sanitized and bounded.
++func TestTeamCatalogDiscoveryExecutorRecordsADegradedLeg(t *testing.T) {
++	collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{
++		TeamsWritten: 3,
++		DegradedLegs: []providersync.DegradedLeg{{Dataset: "teams", Leg: "jira_atlassian_teams", Outcome: "failed", Reason: "unclassified",
++			Detail: "Invalid Organization Ari: some-uuid Authorization: Bearer secret-token-value"}},
++	}}
++	observer := &fakeTeamCatalogObserver{}
++	executor := &TeamCatalogDiscoveryExecutor{
++		Native:     map[string]providersync.TeamCatalogCollector{"jira": collector},
++		Clients:    &fakeProviderClientResolver{credential: providerfoundation.Credential{Provider: "jira"}, integrationID: "integration-1"},
++		Selections: &fakeTeamCatalogSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
++		Observer:   observer,
++	}
++	summary, err := executor.Discover(context.Background(), testOrg, testRun, "jira")
++	if err != nil {
++		t.Fatalf("a failed additive leg must not fail discovery: %v", err)
++	}
++	if summary["outcome"] != "native_degraded" {
++		t.Errorf("outcome = %v, want native_degraded", summary["outcome"])
++	}
++	legs, _ := summary["degraded"].([]map[string]string)
++	if len(legs) != 1 || legs[0]["leg"] != "jira_atlassian_teams" || legs[0]["reason"] != "unclassified" {
++		t.Fatalf("degraded = %+v", summary["degraded"])
++	}
++	if strings.Contains(legs[0]["detail"], "secret-token-value") {
++		t.Errorf("the stored detail carries a token: %q", legs[0]["detail"])
++	}
++	if len(observer.dispatches) != 1 || observer.dispatches[0].outcome != jobruntime.TeamCatalogOutcomeNativeFailedNonfatal {
++		t.Errorf("dispatches = %+v, want one native_failed_nonfatal", observer.dispatches)
++	}
++}
+diff --git a/internal/synchandoff/handoff_integration_test.go b/internal/synchandoff/handoff_integration_test.go
+index 0d15d38961..b6f7a7b807 100644
+--- a/internal/synchandoff/handoff_integration_test.go
++++ b/internal/synchandoff/handoff_integration_test.go
+@@ -13,6 +13,7 @@ import (
+ 
+ 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
+ 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
++	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
+ )
+ 
+ // startHandoffDatabase builds the real schema (the pgmigrate baseline and
+@@ -158,3 +159,24 @@ func countJobs(ctx context.Context, t *testing.T, pool *pgxpool.Pool) int {
+ 	}
+ 	return count
+ }
++
++// CHAOS-7132: a run that carries `degraded` in its result (an additive leg failed) is still a
++// materialized run for the handoff: readRun reads only status/error/error_category and must not trip
++// over the new key.
++func TestReadRunIgnoresTheDegradedKeyOfARunResult(t *testing.T) {
++	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
++	defer cancel()
++	pool, _ := startHandoffDatabase(ctx, t, 2)
++	const runID = "00000000-0000-4000-8000-0000000000a1"
++	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{
++		ID: runID, OrgID: "org-1", Status: "success", TotalUnits: 14, CompletedUnits: 14,
++		ResultJSON: `{"completed_units":14,"failed_units":0,"degraded":[{"dataset":"teams","leg":"jira_atlassian_teams","outcome":"failed","reason":"unclassified"}]}`,
++	})
++	outcome, err := readRun(ctx, pool, runID)
++	if err != nil {
++		t.Fatalf("readRun: %v", err)
++	}
++	if outcome.State != StateMaterialized || outcome.TotalUnits != 14 {
++		t.Fatalf("outcome = %+v, want a materialized run of 14 units", outcome)
++	}
++}
+diff --git a/internal/workerservice/jira_atlassian_teams_collector.go b/internal/workerservice/jira_atlassian_teams_collector.go
+index a9d1c771a8..6f1fc2e590 100644
+--- a/internal/workerservice/jira_atlassian_teams_collector.go
++++ b/internal/workerservice/jira_atlassian_teams_collector.go
+@@ -2,6 +2,7 @@ package workerservice
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"log/slog"
+ 	"net/http"
+ 	"net/url"
+@@ -113,19 +114,20 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
+ 		return result, nil
+ 	}
+ 	if client == nil || client.BaseURL == nil {
++		// A skipped Atlassian Teams leg must say so (CHAOS-7132): this return used to leave no line,
++		// so an org with no real Atlassian Teams rows could not be told from one with none to write.
++		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID, "reason", "no_base_url")
+ 		return result, nil
+ 	}
+ 	atlassianResult, err := collector.collectAtlassianTeams(ctx, ref, credential, client, selections, normalizedAt)
+ 	if err != nil {
+-		if ref.Strict {
+-			return result, err
+-		}
+-		// Non-strict (post-sync dispatch): the project-as-team write above
+-		// already succeeded (or was itself skipped) and must not be undone
+-		// by an Atlassian Teams failure -- log and keep that result,
+-		// mirroring every other collector's non-strict walk-failure
+-		// discipline in this package.
+-		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "error", err)
++		// The Atlassian Teams leg is ADDITIVE and independent (D2778): its failure must neither fail
++		// reference discovery (strict) nor undo the project-as-team write above. It is never silent
++		// and never a clean success (CHAOS-7132): a Warn line and a degraded leg that the discovery
++		// ledger and the run's result carry, with a value-free reason.
++		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID,
++			"strict", ref.Strict, "reason", atlassianLegReason(err), "error", err)
++		result.DegradedLegs = append(result.DegradedLegs, newDegradedAtlassianLeg(err))
+ 		return result, nil
+ 	}
+ 	// Every count/key below comes from atlassianteams.Write's own Result --
+@@ -140,6 +142,33 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
+ 	return result, nil
+ }
+ 
++// newDegradedAtlassianLeg records a failed Atlassian Teams leg. Detail is err.Error(): for a provider
++// failure that is its class, status and request path only (ProviderError.Error never formats the
++// response body), for the gateway's GraphQL errors the gateway's own message (e.g. "Invalid Organization
++// Ari: <uuid>"). The recorder bounds and sanitizes it again before it is stored.
++func newDegradedAtlassianLeg(err error) providersync.DegradedLeg {
++	return providersync.DegradedLeg{
++		Dataset: "teams", Leg: "jira_atlassian_teams", Outcome: "failed",
++		Reason: atlassianLegReason(err), Detail: err.Error(),
++	}
++}
++
++// atlassianLegReason is the fixed-vocabulary, value-free reason an Atlassian Teams leg failed.
++func atlassianLegReason(err error) string {
++	switch {
++	case errors.Is(err, atlassianteams.ErrOrganizationPermission):
++		return "organization_permission"
++	case errors.Is(err, atlassianteams.ErrOrganizationNotFound):
++		return "organization_not_found"
++	case errors.Is(err, atlassianteams.ErrConfiguration), errors.Is(err, providersync.ErrInvalidConfiguration):
++		return "configuration"
++	}
++	if reason := providerfoundation.FailureReason(err); reason != "" {
++		return reason
++	}
++	return "unclassified"
++}
++
+ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
+ 	ctx context.Context,
+ 	ref providersync.TeamCatalogReference,
+diff --git a/internal/workerservice/provider_sync.go b/internal/workerservice/provider_sync.go
+index 8110c659d4..b9aa6d3947 100644
+--- a/internal/workerservice/provider_sync.go
++++ b/internal/workerservice/provider_sync.go
+@@ -776,10 +776,17 @@ func constructProviderSyncWorkerWithDependencies(
+ }
+ 
+ func newWorkerCredentialCipher(cfg config.Config) (providerfoundation.FernetDecryptor, error) {
+-	return providerfoundation.NewFernetDecryptor(
++	cipher, err := providerfoundation.NewFernetDecryptor(
+ 		cfg.SettingsEncryptionKey,
+ 		cfg.SettingsEncryptionSalt.Reveal(),
+ 	)
++	if err != nil {
++		// The family refuses to start; say why (CHAOS-7132). Without this the process reported only the
++		// generic "configure runtime dependencies" and the stored credentials failed one by one later.
++		slog.Default().Error("worker_credential_cipher_unavailable",
++			"reason", providerfoundation.FailureReason(err), "env", "SETTINGS_ENCRYPTION_KEY")
++	}
++	return cipher, err
+ }
+ 
+ type providerUnitTenantScope struct{}
+diff --git a/internal/workerservice/team_catalog_clients.go b/internal/workerservice/team_catalog_clients.go
+index 4b7222d47d..50ad8b12e8 100644
+--- a/internal/workerservice/team_catalog_clients.go
++++ b/internal/workerservice/team_catalog_clients.go
+@@ -5,6 +5,7 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
++	"log/slog"
+ 	"sort"
+ 	"strings"
+ 	"time"
+@@ -492,6 +493,14 @@ func (dispatcher *nativeTeamAutoimportDispatcher) observeDispatch(provider strin
+ 	_ = dispatcher.observer.ObserveTeamCatalogDispatch(provider, jobruntime.TeamCatalogEntryPointPostSync, outcome)
+ }
+ 
++// warnDropped leaves the cause of an error the non-strict post-sync seam degrades to a counter
++// outcome (CHAOS-7132): which stage failed and the error text. The errors on this path name fields
++// and classes, never a credential value.
++func (dispatcher *nativeTeamAutoimportDispatcher) warnDropped(ctx context.Context, orgID, runID, provider, stage string, err error) {
++	slog.Default().WarnContext(ctx, "team_catalog_dispatch_error_dropped",
++		"org_id", orgID, "sync_run_id", runID, "provider", provider, "stage", stage, "error", err)
++}
++
+ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
+ 	ctx context.Context, reference syncdispatchruntime.DomainReference,
+ ) error {
+@@ -530,6 +539,7 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
+ 	// decorator and keeps propagating every one of these.
+ 	selections, syncOptions, selectionsErr := dispatcher.selections.ResolveSelections(ctx, orgID, runID, provider, false)
+ 	if selectionsErr != nil {
++		dispatcher.warnDropped(ctx, orgID, runID, provider, "selections", selectionsErr)
+ 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+ 		return nil
+ 	}
+@@ -539,6 +549,7 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
+ 	}
+ 	credential, client, integrationID, clientErr := dispatcher.clients.ResolveClient(ctx, orgID, runID, provider)
+ 	if clientErr != nil {
++		dispatcher.warnDropped(ctx, orgID, runID, provider, "client", clientErr)
+ 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+ 		return nil
+ 	}
+@@ -547,6 +558,7 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
+ 		var sourcesErr error
+ 		sourceExternalIDs, sourcesErr = dispatcher.sources.ResolveSourceExternalIDs(ctx, orgID, runID)
+ 		if sourcesErr != nil {
++			dispatcher.warnDropped(ctx, orgID, runID, provider, "sources", sourcesErr)
+ 			dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+ 			return nil
+ 		}
+@@ -557,7 +569,8 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
+ 	}, credential, client, selections, dispatcher.nowUTC())
+ 	if collectErr != nil {
+ 		// The failure is still visible via the dedicated nonfatal outcome,
+-		// not silently dropped.
++		// not silently dropped; the log line carries the cause (CHAOS-7132).
++		dispatcher.warnDropped(ctx, orgID, runID, provider, "collect", collectErr)
+ 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+ 		return nil
+ 	}
+@@ -585,6 +598,9 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
+ 		// exists so that choice, if any collector ever makes it, is visible
+ 		// in telemetry rather than indistinguishable from a clean run.
+ 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeRosterPreservationFailed)
++	} else if len(result.DegradedLegs) > 0 {
++		// An additive leg failed in an otherwise successful collection: not a clean "native" (CHAOS-7132).
++		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+ 	} else {
+ 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNative)
+ 	}
+diff --git a/internal/workerservice/team_catalog_dropped_errors_test.go b/internal/workerservice/team_catalog_dropped_errors_test.go
+new file mode 100644
+index 0000000000..13c494edd8
+--- /dev/null
++++ b/internal/workerservice/team_catalog_dropped_errors_test.go
+@@ -0,0 +1,158 @@
++package workerservice
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"fmt"
++	"log/slog"
++	"net/url"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
++	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
++	"github.com/full-chaos/dev-health-ops/internal/providersync"
++	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
++)
++
++// CHAOS-7132: the post-sync team-catalog seam is non-strict, so a failure on its path degrades to a
++// counter outcome and the run stays a success. Before this, nothing named the CAUSE: an operator saw
++// `native_failed_nonfatal` and no line saying which stage failed or why. Each dropped error now
++// leaves one Warn line with the org, run, provider, stage and the error text (names only: the
++// errors on this path are credential-free by construction).
++
++func captureWarnings(t *testing.T) *bytes.Buffer {
++	t.Helper()
++	var buffer bytes.Buffer
++	previous := slog.Default()
++	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug})))
++	t.Cleanup(func() { slog.SetDefault(previous) })
++	return &buffer
++}
++
++type failingClientResolver struct{ err error }
++
++func (resolver failingClientResolver) ResolveClient(context.Context, string, string, string) (providerfoundation.Credential, *providerfoundation.HTTPClient, string, error) {
++	return providerfoundation.Credential{}, nil, "", resolver.err
++}
++
++func TestTeamAutoImportLogsTheCauseOfADroppedClientError(t *testing.T) {
++	logs := captureWarnings(t)
++	cause := errors.New("build a jira client from the stored credential: provider credential is invalid: missing base_url")
++	observer := &fakeTeamCatalogObserver{}
++	dispatcher := &nativeTeamAutoimportDispatcher{
++		resolveProvider: func(context.Context, string, string) (string, error) { return "jira", nil },
++		native:          map[string]providersync.TeamCatalogCollector{"jira": &linearCollectorSpy{}},
++		clients:         failingClientResolver{err: cause},
++		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
++		observer:        observer,
++	}
++	if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{OrganizationID: testOrg, SyncRunID: testRun}); err != nil {
++		t.Fatalf("a non-strict dropped error must not fail the job: %v", err)
++	}
++	if len(observer.dispatches) != 1 || observer.dispatches[0].outcome != jobruntime.TeamCatalogOutcomeNativeFailedNonfatal {
++		t.Fatalf("outcome = %+v, want native_failed_nonfatal", observer.dispatches)
++	}
++	text := logs.String()
++	for _, want := range []string{"level=WARN", "provider=jira", testOrg, testRun, "stage=client", "missing base_url"} {
++		if !strings.Contains(text, want) {
++			t.Errorf("the dropped client error left no log with %q; log = %q", want, text)
++		}
++	}
++}
++
++func TestTeamAutoImportLogsTheCauseOfADroppedCollectorError(t *testing.T) {
++	logs := captureWarnings(t)
++	observer := &fakeTeamCatalogObserver{}
++	dispatcher := &nativeTeamAutoimportDispatcher{
++		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
++		native:          map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{err: errors.New("linear API rate limited")}},
++		clients:         fakeAutoimportClientResolver{integrationID: "integration-1"},
++		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
++		observer:        observer,
++	}
++	if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{OrganizationID: testOrg, SyncRunID: testRun}); err != nil {
++		t.Fatal(err)
++	}
++	text := logs.String()
++	for _, want := range []string{"level=WARN", "provider=linear", "stage=collect", "linear API rate limited"} {
++		if !strings.Contains(text, want) {
++			t.Errorf("the dropped collector error left no log with %q; log = %q", want, text)
++		}
++	}
++}
++
++type projectAsTeamStub struct {
++	result providersync.TeamCatalogResult
++}
++
++func (stub projectAsTeamStub) CollectTeamCatalog(context.Context, providersync.TeamCatalogReference, providerfoundation.Credential, *providerfoundation.HTTPClient, providersync.TeamCatalogSelections, time.Time) (providersync.TeamCatalogResult, error) {
++	return stub.result, nil
++}
++
++// The Atlassian Teams leg used to return with no line at all when the client carried no base URL.
++func TestJiraCombinedCollectorLogsWhenTheAtlassianLegHasNoClient(t *testing.T) {
++	logs := captureWarnings(t)
++	collector := jiraCombinedTeamCatalogCollector{ProjectAsTeam: projectAsTeamStub{result: providersync.TeamCatalogResult{TeamsWritten: 3}}}
++	result, err := collector.CollectTeamCatalog(context.Background(),
++		providersync.TeamCatalogReference{OrgID: testOrg, SyncRunID: testRun},
++		providerfoundation.Credential{Provider: "jira"}, &providerfoundation.HTTPClient{},
++		providersync.TeamCatalogSelections{Teams: true}, time.Now())
++	if err != nil || result.TeamsWritten != 3 {
++		t.Fatalf("the project-as-team result must survive: %+v, %v", result, err)
++	}
++	text := logs.String()
++	for _, want := range []string{"level=WARN", "jira_atlassian_teams_walk_skipped", testOrg, "no_base_url"} {
++		if !strings.Contains(text, want) {
++			t.Errorf("the skipped Atlassian leg left no log with %q; log = %q", want, text)
++		}
++	}
++}
++
++// D2778 + CHAOS-7132: the Atlassian Teams leg is additive. Even in STRICT mode (reference discovery) its
++// failure must not fail the collection; it is recorded as a degraded leg with a fixed reason, and the
++// project-as-team result survives. Before this, `if ref.Strict { return result, err }` failed every
++// jira sync (0 of 14 units on bigboy) over an "Invalid Organization Ari".
++func TestJiraCombinedCollectorKeepsTheCatalogWhenTheAtlassianLegFailsInStrictMode(t *testing.T) {
++	logs := captureWarnings(t)
++	// No ClickHouse connection: the Atlassian leg refuses with a configuration error, a real failure of that leg.
++	collector := jiraCombinedTeamCatalogCollector{ProjectAsTeam: projectAsTeamStub{result: providersync.TeamCatalogResult{TeamsWritten: 3}}}
++	client := &providerfoundation.HTTPClient{BaseURL: &url.URL{Scheme: "https", Host: "site.example.test"}}
++	result, err := collector.CollectTeamCatalog(context.Background(),
++		providersync.TeamCatalogReference{OrgID: testOrg, SyncRunID: testRun, Strict: true},
++		providerfoundation.Credential{Provider: "jira"}, client, providersync.TeamCatalogSelections{Teams: true}, time.Now())
++	if err != nil {
++		t.Fatalf("a failed additive leg must not fail a strict collection: %v", err)
++	}
++	if result.TeamsWritten != 3 {
++		t.Errorf("the project-as-team result must survive: %+v", result)
++	}
++	if len(result.DegradedLegs) != 1 {
++		t.Fatalf("DegradedLegs = %+v, want exactly the Atlassian Teams leg", result.DegradedLegs)
++	}
++	leg := result.DegradedLegs[0]
++	if leg.Dataset != "teams" || leg.Leg != "jira_atlassian_teams" || leg.Outcome != "failed" || leg.Reason != "configuration" {
++		t.Errorf("degraded leg = %+v", leg)
++	}
++	if !strings.Contains(logs.String(), "jira_atlassian_teams_walk_skipped") || !strings.Contains(logs.String(), "strict=true") {
++		t.Errorf("no Warn line for the failed leg: %q", logs.String())
++	}
++}
++
++// The stored detail of a failed leg must not carry a provider response body: ProviderError keeps the body
++// out of Error() by design, and a wrapped one must not bring it back.
++func TestDegradedAtlassianLegDetailCarriesNoProviderResponseBody(t *testing.T) {
++	providerErr := &providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 401, Path: "/gateway/api/graphql", Body: `{"message":"token secret-body-fragment rejected"}`}
++	leg := newDegradedAtlassianLeg(fmt.Errorf("search atlassian teams: %w", providerErr))
++	if strings.Contains(leg.Detail, "secret-body-fragment") {
++		t.Fatalf("detail carries the response body: %q", leg.Detail)
++	}
++	if !strings.Contains(leg.Detail, "authentication") || !strings.Contains(leg.Detail, "401") {
++		t.Errorf("detail should name the class and status: %q", leg.Detail)
++	}
++	if leg.Reason != "authentication:401" || leg.Leg != "jira_atlassian_teams" || leg.Outcome != "failed" {
++		t.Errorf("leg = %+v", leg)
++	}
++}

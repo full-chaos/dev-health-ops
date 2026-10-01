@@ -477,6 +477,10 @@ type nativeTeamAutoimportDispatcher struct {
 	// convention every other telemetry hook in this codebase uses.
 	observer jobruntime.TeamCatalogObserver
 	now      func() time.Time
+	// recordDegraded writes the degraded legs of a finished collection into the run's result: the post-sync
+	// seam runs AFTER finalize, so the discovery ledger's copy (finalize) cannot reach it (CHAOS-7132).
+	// nil records nothing (tests).
+	recordDegraded func(ctx context.Context, orgID, runID string, legs []providersync.DegradedLeg) error
 }
 
 func (dispatcher *nativeTeamAutoimportDispatcher) nowUTC() time.Time {
@@ -498,7 +502,7 @@ func (dispatcher *nativeTeamAutoimportDispatcher) observeDispatch(provider strin
 // and classes, never a credential value.
 func (dispatcher *nativeTeamAutoimportDispatcher) warnDropped(ctx context.Context, orgID, runID, provider, stage string, err error) {
 	slog.Default().WarnContext(ctx, "team_catalog_dispatch_error_dropped",
-		"org_id", orgID, "sync_run_id", runID, "provider", provider, "stage", stage, "error", err)
+		"org_id", orgID, "sync_run_id", runID, "provider", provider, "stage", stage, "error", syncdispatchruntime.SanitizeErrorText(err.Error()))
 }
 
 func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
@@ -601,6 +605,11 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 	} else if len(result.DegradedLegs) > 0 {
 		// An additive leg failed in an otherwise successful collection: not a clean "native" (CHAOS-7132).
 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+		if dispatcher.recordDegraded != nil {
+			if recordErr := dispatcher.recordDegraded(ctx, orgID, runID, result.DegradedLegs); recordErr != nil {
+				dispatcher.warnDropped(ctx, orgID, runID, provider, "record_degraded", recordErr)
+			}
+		}
 	} else {
 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNative)
 	}
@@ -689,3 +698,25 @@ WHERE sru.sync_run_id = $1::uuid`, runID)
 }
 
 var _ syncdispatchruntime.SourceExternalIDsResolver = teamCatalogSourceResolver{}
+
+// recordSyncRunDegradedLegs merges the degraded legs into sync_runs.result under "degraded" (the detail
+// bounded and sanitized), leaving every other key of the result as it is.
+func recordSyncRunDegradedLegs(pool *pgxpool.Pool) func(ctx context.Context, orgID, runID string, legs []providersync.DegradedLeg) error {
+	return func(ctx context.Context, orgID, runID string, legs []providersync.DegradedLeg) error {
+		payload, err := json.Marshal(syncdispatchruntime.DegradedLegsPayload(legs))
+		if err != nil {
+			return err
+		}
+		tag, err := pool.Exec(ctx, `
+UPDATE public.sync_runs
+SET result = (COALESCE(result::jsonb, '{}'::jsonb) || jsonb_build_object('degraded', $3::jsonb))::json
+WHERE id = $1::uuid AND org_id = $2`, runID, orgID, string(payload))
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return errors.New("no sync run row to record the degraded legs on")
+		}
+		return nil
+	}
+}

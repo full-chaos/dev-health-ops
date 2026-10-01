@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
@@ -46,7 +47,7 @@ var payloadNamedDivergences = map[string]struct{ goText, pythonText string }{
 
 // refusedBelowClickHouseMin are corpus shapes whose Python row holds the timestamp but whose Python
 // insert raised (ValueError, year 0001), so the Python consumer dead-lettered them: the Go consumer
-// refuses them as well, because its driver would store 1970 silently.
+// refuses them as well (it is below the range the driver encodes, see TestConsumerStoresTimestampsOnly...).
 var refusedBelowClickHouseMin = map[string]struct{}{"ts_year1": {}}
 
 type parityStreams struct{ fields map[string]string }
@@ -187,4 +188,52 @@ func intakeEntryFor(t *testing.T, raw map[string]any) streamrunner.Message {
 		t.Fatalf("intake did not accept the event: status %d fields %v", recorder.Code, streams.fields)
 	}
 	return streamrunner.Message{Stream: "product-telemetry:h:events", ID: "1-0", Fields: streams.fields}
+}
+
+// The consumer stores a timestamp only where the ClickHouse Go driver encodes it correctly (int64
+// nanoseconds, 1677-09-21 to 2262-04-11); outside it the stored time would silently differ (the
+// reviewer saw year 2500 stored as 1915). Inside it, the time handed to ClickHouse is the UTC instant sent.
+func TestConsumerStoresTimestampsOnlyInsideTheDriverRange(t *testing.T) {
+	base := map[string]any{"name": "page_viewed", "schemaVersion": "1", "eventId": "e1", "sessionId": "s", "anonymousUserId": "a", "payload": map[string]any{}}
+	for ts, want := range map[string]string{
+		"1900-01-01T00:00:00":         "1900-01-01T00:00:00",
+		"1899-12-31T00:00:00Z":        "1899-12-31T00:00:00",
+		"1678-01-01T00:00:00Z":        "1678-01-01T00:00:00",
+		"2262-04-11T23:47:16Z":        "2262-04-11T23:47:16",
+		"2262-04-11T23:47:16.854775Z": "2262-04-11T23:47:16",
+		"2026-09-23T02:00:00+05:30":   "2026-09-22T20:30:00",
+	} {
+		t.Run("stored/"+ts, func(t *testing.T) {
+			event := map[string]any{"ts": ts}
+			for k, v := range base {
+				event[k] = v
+			}
+			sink := &productSink{batch: &productBatch{}}
+			handler, err := NewProductTelemetryHandler(sink)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := handler.Handle(context.Background(), intakeEntryFor(t, event)); err != nil {
+				t.Fatalf("refused a timestamp inside the driver range: %v", err)
+			}
+			if got := sink.batch.rows[0][8].(time.Time).Format("2006-01-02T15:04:05"); got != want {
+				t.Fatalf("handed %s to ClickHouse, want %s", got, want)
+			}
+		})
+	}
+	for _, ts := range []string{"2262-04-11T23:47:17Z", "2300-01-01T00:00:00Z", "2500-01-01T00:00:00Z", "9999-12-31T23:59:59Z", "1677-09-21T00:12:43Z", "1600-01-01T00:00:00Z", "0001-01-01T00:00:00"} {
+		t.Run("refused/"+ts, func(t *testing.T) {
+			event := map[string]any{"ts": ts}
+			for k, v := range base {
+				event[k] = v
+			}
+			handler, err := NewProductTelemetryHandler(&productSink{batch: &productBatch{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := handler.Handle(context.Background(), intakeEntryFor(t, event)); !streamrunner.IsPermanent(err) {
+				t.Fatalf("a timestamp outside the driver range: err = %v, want a permanent refusal", err)
+			}
+		})
+	}
 }

@@ -358,7 +358,7 @@ func netPythonRun(t *testing.T, python, root string, cases []netCase, input []by
 	// The host alone is swapped: userinfo cases put "login:password@" between the scheme and the host.
 	live := bytes.ReplaceAll(bytes.ReplaceAll(input, []byte(netOracleHost), []byte(strings.TrimPrefix(server.URL, "http://"))), []byte(netOracleDir), []byte(dir))
 	command := exec.Command(python, "-c", pythonNetProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_ENABLED=false", "PYTHONHASHSEED=0", "PYTHONDONTWRITEBYTECODE=1")
+	command.Env = pushPythonEnv(root)
 	command.Stdin = bytes.NewReader(live)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -462,8 +462,7 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
-	request := venueoracle.ProgramRequest("push net corpus", pythonNetProgram, append(append([]byte{}, input...), script...), env)
+	request := venueoracle.ProgramRequest("push net corpus", pythonNetProgram, append(append([]byte{}, input...), script...), pushPythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		results := netPythonRun(t, python, root, cases, input)

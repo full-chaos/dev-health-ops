@@ -240,16 +240,22 @@ func TestEveryPagerDutySinkSendsOnlyTheTableShape(t *testing.T) {
 						_, err = sink.InspectEffect(context.Background(), sinkCase.claim, sinkCase.effect)
 					}
 					cells++
-					validEnv := env == "<unset>" || env == "1" || env == "2"
+					validEnv := env == "<unset>" || env == "2"
 					known := shape == probeTableLegacy || shape == probeTableCurrent
-					if !validEnv || !known {
+					legacy := shape == probeTableLegacy
+					if !validEnv || !known || legacy {
 						if err == nil {
-							t.Fatalf("%s: no error for an unestablished shape", label)
+							t.Fatalf("%s: no error for an unestablished or unsupported shape", label)
 						}
 						if !validEnv && !errors.Is(err, ErrInvalidConfiguration) {
 							t.Fatalf("%s: error=%v want invalid configuration", label, err)
 						}
-						if validEnv && !errors.Is(err, ErrOperationalTableContractUnknown) {
+						// DIVERGENCE FROM THE PYTHON SINKS (D3635, CHAOS-7421): a contract-1 table
+						// is refused by name (the sinks no longer write the legacy shape).
+						if validEnv && legacy && !errors.Is(err, ErrOperationalTableContractLegacy) {
+							t.Fatalf("%s: error=%v want the legacy-table refusal", label, err)
+						}
+						if validEnv && !known && !errors.Is(err, ErrOperationalTableContractUnknown) {
 							t.Fatalf("%s: error=%v want unknown table contract", label, err)
 						}
 						if len(conn.inserts) != 0 || len(conn.appends) != 0 || conn.sends != 0 {
@@ -297,12 +303,6 @@ func TestEveryPagerDutySinkSendsOnlyTheTableShape(t *testing.T) {
 						assertColumnShape(t, label+" select", probeSelectedColumns(query), current)
 						if strings.Contains(query, " FINAL ") == current {
 							t.Fatalf("%s: FINAL use does not match contract %v: %s", label, current, query)
-						}
-						// A legacy SELECT is valid SQL on a contract-2 table, so it
-						// must refuse itself on the executing server.
-						guarded := strings.Contains(query, " AND "+operationalLegacyShapeGuard(sinkCase.table))
-						if guarded == current {
-							t.Fatalf("%s: server-side shape guard present=%v for contract %v: %s", label, guarded, current, query)
 						}
 					}
 				}
@@ -372,8 +372,10 @@ func TestOperationalTableContractsCachesOnlySuccessfulReads(t *testing.T) {
 	var none *operationalTableContracts
 	uncached := &contractProbeConn{shape: probeTableLegacy}
 	for range 2 {
-		if contract, err := none.resolve(ctx, uncached, "operational_users"); err != nil || contract != operationalLegacyContract {
-			t.Fatalf("contract=%d err=%v", contract, err)
+		// A contract-1 table is refused every time (CHAOS-7421), and the refusal is
+		// read again on each call, never cached.
+		if contract, err := none.resolve(ctx, uncached, "operational_users"); !errors.Is(err, ErrOperationalTableContractLegacy) {
+			t.Fatalf("contract=%d err=%v, want the legacy-table refusal", contract, err)
 		}
 	}
 	if uncached.systemRead != 2 {
@@ -386,7 +388,9 @@ func TestOperationalTableContractsCachesOnlySuccessfulReads(t *testing.T) {
 	}
 }
 
-func TestOperationalTableContractMismatchLogsBothValues(t *testing.T) {
+// A legacy table is refused with the typed error and a loud ERROR line holding both
+// values and the remedy; a current table passes silently (CHAOS-7421).
+func TestOperationalTableContractLegacyRefusalLogsBothValuesAndTheRemedy(t *testing.T) {
 	previous := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	for _, env := range []string{"<unset>", "1", "2"} {
@@ -396,41 +400,37 @@ func TestOperationalTableContractMismatchLogsBothValues(t *testing.T) {
 			setProbeEnv(t, env)
 			contract, err := (*operationalTableContracts)(nil).resolve(
 				context.Background(), &contractProbeConn{shape: shape}, "operational_users")
-			if err != nil {
-				t.Fatal(err)
-			}
-			tableContract := operationalLegacyContract
-			if shape == probeTableCurrent {
-				tableContract = operationalCurrentContract
-			}
-			if contract != tableContract {
-				t.Fatalf("env=%s table=%s used contract %d", env, shape, contract)
-			}
-			envContract := operationalCurrentContract
-			envValue := env
-			if env != "2" {
-				envContract = operationalLegacyContract
-			}
-			if env == "<unset>" {
-				envValue = "unset"
-			}
 			logged := buffer.String()
-			if envContract == tableContract {
-				if strings.Contains(logged, "operational_ordering_contract_mismatch") {
-					t.Fatalf("env=%s table=%s logged a mismatch: %s", env, shape, logged)
+			switch {
+			case env == "1":
+				// Contract 1 is unsupported (D3635): the one resolver refuses it whichever
+				// table is found, and says so in the log.
+				if !errors.Is(err, ErrInvalidConfiguration) || !strings.Contains(logged, "operational_ordering_contract_env_invalid") {
+					t.Fatalf("env=1 table=%s: err=%v log=%s", shape, err, logged)
 				}
-				continue
-			}
-			for _, want := range []string{
-				"level=WARN", "operational_ordering_contract_mismatch", "table=operational_users",
-				"env_value=" + envValue, fmt.Sprintf("env_contract=%d", envContract),
-				fmt.Sprintf("table_contract=%d", tableContract), "used=table",
-				// The remedy names the way out: the migrate Job to the head, and
-				// that a contract-1 table has no upgrade path.
-				"dho migrate upgrade", "unsupported", "re-create the database from the head",
-			} {
-				if !strings.Contains(logged, want) {
-					t.Fatalf("env=%s table=%s log %q lacks %q", env, shape, logged, want)
+			case shape == probeTableCurrent:
+				if err != nil || contract != operationalCurrentContract || strings.Contains(logged, "level=ERROR") {
+					t.Fatalf("env=%s table=current: contract=%d err=%v log=%s", env, contract, err, logged)
+				}
+			default:
+				envValue := env
+				if env == "<unset>" {
+					envValue = "unset"
+				}
+				if !errors.Is(err, ErrOperationalTableContractLegacy) {
+					t.Fatalf("env=%s table=legacy: err=%v, want the legacy-table refusal", env, err)
+				}
+				for _, want := range []string{
+					"level=ERROR", "operational_ordering_contract_table_legacy", "table=operational_users",
+					"env_value=" + envValue, fmt.Sprintf("env_contract=%d", operationalCurrentContract),
+					fmt.Sprintf("table_contract=%d", operationalLegacyContract),
+					// The remedy: the migrate Job to the head, and that a contract-1 database
+					// has no upgrade path.
+					"migrate the database to the head", "dho migrate upgrade", "re-create it from the head",
+				} {
+					if !strings.Contains(logged, want) {
+						t.Fatalf("env=%s table=legacy log %q lacks %q", env, logged, want)
+					}
 				}
 			}
 		}
@@ -574,8 +574,10 @@ func TestPagerDutySinkRereadsTheTableShapeOnEveryCall(t *testing.T) {
 				return err
 			}
 			label := sinkCase.name + " " + operation
-			if err := run(); err != nil {
-				t.Fatalf("%s legacy call: %v", label, err)
+			// DIVERGENCE FROM THE PYTHON SINKS (D3635, CHAOS-7421): the legacy-shape call
+			// is refused by name and writes nothing; after the migration the next call works.
+			if err := run(); !errors.Is(err, ErrOperationalTableContractLegacy) || len(conn.inserts) != 0 {
+				t.Fatalf("%s legacy call: err=%v inserts=%v, want the legacy-table refusal and no write", label, err, conn.inserts)
 			}
 			perCall := 1
 			if conn.systemRead != perCall {

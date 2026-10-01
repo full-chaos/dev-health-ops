@@ -605,3 +605,18 @@ enumerate -- reproduced: a bare `postgres` image used to render clean here).
 {{- end -}}
 {{- include "dev-health.lockstepImageCheck" (dict "context" .context "image" $image "labelWithValue" (printf "%s (%s)" .flagLabel $image) "reason" (printf "%s must run the same build as the application it is targeting." .verb)) -}}
 {{- end }}
+
+{{/*
+The ordering contract every workload carries (CHAOS-7421): "2", or the operator's
+goWorkers.operationalOrderingContract when it is "2". Contract 1 is unsupported
+(D3635), so any other value fails the render instead of reaching a workload (the Go
+processes refuse it at start, and Python, which still reads "1" as legacy, would
+serve it).
+*/}}
+{{- define "dev-health.operationalOrderingContract" -}}
+{{- $value := .Values.goWorkers.operationalOrderingContract | default "2" | toString -}}
+{{- if ne $value "2" -}}
+{{- fail (printf "goWorkers.operationalOrderingContract=%q: only contract 2 is supported (contract 1 is unsupported, CHAOS-7421); leave it unset or set it to 2" $value) -}}
+{{- end -}}
+{{- $value -}}
+{{- end -}}

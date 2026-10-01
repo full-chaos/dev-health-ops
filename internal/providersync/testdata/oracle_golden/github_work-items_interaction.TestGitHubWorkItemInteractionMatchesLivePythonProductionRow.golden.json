@@ -14,7 +14,7 @@
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
-      "body": "{\"cases\": [{\"id\": \"unicode_comment\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"gh:acme/api#42\"}, \"provider\": {\"t\": \"str\", \"v\": \"github\"}, \"interaction_type\": {\"t\": \"str\", \"v\": \"comment\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T08:30:00Z\"}, \"actor\": {\"t\": \"str\", \"v\": \"github:reviewer\"}, \"body_length\": {\"t\": \"int\", \"v\": \"12\"}, \"last_synced\": {\"t\": \"datetime\", \"v\": \"2026-10-01T01:36:40.648626Z\"}, \"org_id\": {\"t\": \"str\", \"v\": \"77777777-7777-4777-8777-777777777777\"}}}], \"excluded_fields\": {\"last_synced\": \"the production constructor stamps wall-clock now and has no clock parameter; Go stamps the complete unit normalizedAt and its retry stability is asserted separately\"}}\n"
+      "body": "{\"cases\": [{\"id\": \"unicode_comment\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"gh:acme/api#42\"}, \"provider\": {\"t\": \"str\", \"v\": \"github\"}, \"interaction_type\": {\"t\": \"str\", \"v\": \"comment\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T08:30:00Z\"}, \"actor\": {\"t\": \"str\", \"v\": \"github:reviewer\"}, \"body_length\": {\"t\": \"int\", \"v\": \"12\"}, \"last_synced\": {\"t\": \"datetime\", \"v\": \"2026-10-01T01:56:34.914878Z\"}, \"org_id\": {\"t\": \"str\", \"v\": \"77777777-7777-4777-8777-777777777777\"}}}], \"excluded_fields\": {\"last_synced\": \"the production constructor stamps wall-clock now and has no clock parameter; Go stamps the complete unit normalizedAt and its retry stability is asserted separately\"}}\n"
     }
   ]
 }

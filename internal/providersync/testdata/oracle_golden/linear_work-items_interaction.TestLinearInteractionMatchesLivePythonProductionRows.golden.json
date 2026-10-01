@@ -14,7 +14,7 @@
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": null,
-      "body": "{\"cases\": [{\"id\": \"unicode_comment\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"linear:ENG-42\"}, \"provider\": {\"t\": \"str\", \"v\": \"linear\"}, \"interaction_type\": {\"t\": \"str\", \"v\": \"comment\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-07-27T12:00:00Z\"}, \"actor\": {\"t\": \"str\", \"v\": \"alice@example.com\"}, \"body_length\": {\"t\": \"int\", \"v\": \"7\"}, \"last_synced\": {\"t\": \"datetime\", \"v\": \"2026-10-01T01:37:19.740942Z\"}, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}], \"excluded_fields\": {\"last_synced\": \"Python's interaction constructor stamps wall-clock time; Go uses the unit normalizedAt for retry-stable effects.\"}}\n"
+      "body": "{\"cases\": [{\"id\": \"unicode_comment\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"linear:ENG-42\"}, \"provider\": {\"t\": \"str\", \"v\": \"linear\"}, \"interaction_type\": {\"t\": \"str\", \"v\": \"comment\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-07-27T12:00:00Z\"}, \"actor\": {\"t\": \"str\", \"v\": \"alice@example.com\"}, \"body_length\": {\"t\": \"int\", \"v\": \"7\"}, \"last_synced\": {\"t\": \"datetime\", \"v\": \"2026-10-01T01:57:42.241657Z\"}, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}], \"excluded_fields\": {\"last_synced\": \"Python's interaction constructor stamps wall-clock time; Go uses the unit normalizedAt for retry-stable effects.\"}}\n"
     }
   ]
 }

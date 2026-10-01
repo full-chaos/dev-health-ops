@@ -184,13 +184,26 @@ func runCarry(argv []string) (err error) {
 	// of the deployment being rolled to is refused before any plane is
 	// contacted. An empty or separator-only value is refused rather than
 	// widened to everything (goapiproof.SplitOperations).
-	operationFilter, err := goapiproof.SplitOperations(common.operations)
+	//
+	// MCP class rows (CHAOS-7214) are named "mcp:<root>" (or all-mcp) and are not in
+	// any catalog: a filter that names them is resolved by the class's own rules,
+	// and one that mixes them with document operations is refused.
+	classScope, isClass, err := resolveClassScope(common.operations)
 	if err != nil {
-		return refuse("%v", err)
+		return err
 	}
-	if operationFilter != nil {
-		if _, err := goapiproof.ResolveOperations(common.operations, catalog); err != nil {
+	var operationFilter []string
+	if isClass {
+		operationFilter = classScope.Operations
+	} else {
+		operationFilter, err = goapiproof.SplitOperations(common.operations)
+		if err != nil {
 			return refuse("%v", err)
+		}
+		if operationFilter != nil {
+			if _, err := goapiproof.ResolveOperations(common.operations, catalog); err != nil {
+				return refuse("%v", err)
+			}
 		}
 	}
 	targetDigests, err := targetDocumentDigests(documentsPath)

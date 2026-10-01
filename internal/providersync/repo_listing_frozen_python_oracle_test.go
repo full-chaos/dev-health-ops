@@ -155,12 +155,8 @@ func TestRepoListingMatchesFrozenPython(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := frozenScriptAnswer(t, scriptOracle{name: "repo-listing", program: repoListingOracleProgram, input: input})
-	// UseNumber: a project id is compared by its literal text, never through
-	// float64.
-	decoder := json.NewDecoder(bytes.NewReader(output))
-	decoder.UseNumber()
-	var want []listingOutcome
-	if err := decoder.Decode(&want); err != nil {
+	want, err := decodeListingOutcomes(output)
+	if err != nil {
 		t.Fatalf("decode python answer: %v", err)
 	}
 	if len(want) != len(corpus) {
@@ -185,6 +181,37 @@ func TestRepoListingMatchesFrozenPython(t *testing.T) {
 	t.Logf("%d listings compared (%d ended in a provider error), %d mismatches", len(corpus), errored, mismatches)
 	if mismatches > 0 {
 		t.Fatalf("%d of %d listings differ", mismatches, len(corpus))
+	}
+}
+
+// decodeListingOutcomes decodes the Python listing answer. Numbers stay
+// json.Number, so a project id is compared by its literal text and never
+// passes through float64.
+func decodeListingOutcomes(output []byte) ([]listingOutcome, error) {
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	decoder.UseNumber()
+	var outcomes []listingOutcome
+	if err := decoder.Decode(&outcomes); err != nil {
+		return nil, err
+	}
+	return outcomes, nil
+}
+
+// TestListingOutcomesCompareNumbersByLiteralText pins the number rule of the
+// frozen listing answer: an id beyond float64's exact range equals the same Go
+// id and differs from its neighbour.
+func TestListingOutcomesCompareNumbersByLiteralText(t *testing.T) {
+	want, err := decodeListingOutcomes([]byte(`[{"results":[["api","acme/api",9007199254740993]],"requests":[],"error":null}]`))
+	if err != nil || len(want) != 1 {
+		t.Fatalf("decode: %v (%d outcomes)", err, len(want))
+	}
+	exact := listingOutcome{Results: [][3]any{{"api", "acme/api", int64(9007199254740993)}}}
+	neighbour := listingOutcome{Results: [][3]any{{"api", "acme/api", int64(9007199254740992)}}}
+	if !equalListingOutcome(exact, want[0]) {
+		t.Errorf("the same id compares unequal: python %v", want[0].Results[0][2])
+	}
+	if equalListingOutcome(neighbour, want[0]) {
+		t.Errorf("a neighbouring id compares equal: python %v", want[0].Results[0][2])
 	}
 }
 

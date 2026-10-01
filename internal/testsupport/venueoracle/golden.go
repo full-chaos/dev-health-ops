@@ -92,6 +92,12 @@ type GoldenSpec struct {
 	// request is projected without it. Like Scrub it must be deterministic and
 	// idempotent, and it is not applied to the authorization header.
 	KeyScrub func(text string) string
+	// RawSink, set, is called while RECORDING with each Python answer as the
+	// Python plane gave it, before it is projected, for a test whose later
+	// requests must carry what the Python plane issued earlier (a refresh token).
+	// It is never called on a replay, and what it is given must stay in memory:
+	// the golden holds the projected answer only.
+	RawSink func(request Request, answer Response)
 }
 
 // Golden is an opened GoldenSpec.
@@ -928,6 +934,11 @@ func (g *Golden) answer(t *testing.T, call, callEnv string, requests []Request, 
 			t.Fatal(err)
 		}
 		answers = live()
+		if g.spec.RawSink != nil && len(answers) == len(requests) {
+			for index := range answers {
+				g.spec.RawSink(requests[index], clone(answers[index]))
+			}
+		}
 		for index := range answers {
 			projected, err := g.projectResponseAt(requests[index].Name, answers[index])
 			if err != nil {

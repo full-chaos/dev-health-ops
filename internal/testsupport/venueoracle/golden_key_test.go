@@ -189,3 +189,21 @@ func TestTwoRequestsOfOneNameThatDifferInTheirBodyAreNotOneKey(t *testing.T) {
 		t.Fatalf("two requests that differ in their body were taken for one key: %v", err)
 	}
 }
+
+func TestTheRawSinkSeesTheAnswersWhileRecordingOnlyAndTheGoldenHoldsTheProjectedOnes(t *testing.T) {
+	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":1,"exp":61}`, "sig")
+	var seen []string
+	g := keyGolden(t, nil)
+	g.spec.RawSink = func(request Request, answer Response) { seen = append(seen, request.Name+":"+answer.Body) }
+	g.verifiedRoot = "x"
+	requests := []Request{{Name: "login", Method: "POST", Path: "/login"}}
+	answers := g.answer(t, "Python", "", requests, func() error { return nil }, func() []Response {
+		return []Response{{Status: 200, Body: `{"refresh_token":"` + token + `"}`}}
+	}, nil)
+	if len(seen) != 1 || !strings.Contains(seen[0], token) {
+		t.Fatalf("the sink did not see the raw answer: %v", seen)
+	}
+	if strings.Contains(answers[0].Body, token) || strings.Contains(g.recorded.Requests[0].Body, token) {
+		t.Fatalf("the answer or the recorded request holds the raw token: %q", answers[0].Body)
+	}
+}

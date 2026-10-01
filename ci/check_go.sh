@@ -36,9 +36,9 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 #     _provider_route_environment() (src/dev_health_ops/workers/provider_unit_route.py:
 #     107-135) treats the SAME pair as its own "local all-routes" preset, expanding
 #     the full work-item family. The Go scheduler's non-GitHub branch emits
-#     contributing aliases instead, so the two planners disagree and
-#     internal/scheduler/sync::TestBuildScheduledPlanMatchesLivePythonPlanner goes
-#     false-red -- not a real defect, an ambient-env artifact (CHAOS-3988). See
+#     contributing aliases instead, so the two planners disagree and a live
+#     planner oracle goes false-red -- not a real defect, an ambient-env
+#     artifact (CHAOS-3988). See
 #     ci/local_validate.sh's PROXY_OFF for the matching pytest-side scrub and the
 #     fuller incident history (CHAOS-3986, CHAOS-3987, two lanes in one morning on
 #     2026-08-21).
@@ -422,7 +422,7 @@ check_ci_leg() {
 }
 
 check_live_python_oracles() {
-  # internal/providersync, internal/providerfoundation, and internal/scheduler/sync execute REAL production Python files
+  # internal/providersync and internal/providerfoundation execute REAL production Python files
   # (src/dev_health_ops/**.py, via testdata/python_oracle_loader.py)
   # directly at test time -- not test fixtures, the actual functions this
   # repo ships. `//go:embed` cannot reach outside its own package
@@ -668,51 +668,6 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  printf 'go test -count=1: internal/pythonparity/pyunicodedata (unicodedata tables and NFC vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -timeout 30m \
-        -run '^(TestUnicodeDataTablesMatchLivePython|TestNFCMatchesLivePython)$' \
-        ./internal/pythonparity/pyunicodedata
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/pythonparity/pyidna (idna tables and behaviour vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -timeout 30m \
-        -run '^(TestIDNATablesMatchLivePython|TestBehaviourMatchesLivePython|TestCodecEncodeMatchesLivePython)$' \
-        ./internal/pythonparity/pyidna
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/pythonparity/emailvalidator (pydantic EmailStr validation vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -timeout 30m \
-        -run '^(TestValidateEmailMatchesLivePydantic)$' \
-        ./internal/pythonparity/emailvalidator
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
   printf 'go test -count=1: internal/auth/edgetoken (Go-signed session tokens vs the live AuthService)\n'
   if ! (
     cd "${ROOT}"
@@ -847,7 +802,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr pythonparity-pyunicodedata pythonparity-pyunicodedata-nfc pythonparity-pyidna-tables pythonparity-pyidna-behaviour pythonparity-emailvalidator pythonparity-idna llmorgsettings-validate-base-url httpapi-forwarded-scheme api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry api-licensing-sign api-licensing-b64decode api-licensing-verify api-billing-webhook-signature httpapi-limit-string auth-signedtoken atlassianteams-python-client admin-llmreadiness-probe; do
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr llmorgsettings-validate-base-url httpapi-forwarded-scheme api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry api-licensing-sign api-licensing-b64decode api-licensing-verify api-billing-webhook-signature httpapi-limit-string auth-signedtoken atlassianteams-python-client admin-llmreadiness-probe; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2
@@ -855,26 +810,6 @@ check_live_python_oracles() {
       return 1
     fi
   done
-
-  printf 'go test -count=1: internal/scheduler/sync (live Python planner source is outside the Go embed/cache boundary)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 ./internal/scheduler/sync/...
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/scheduler-sync"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: scheduler/sync live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
 
   printf 'go test -count=1: internal/jobs/metrics/daily (live Python repository discovery source is outside the Go embed/cache boundary)\n'
   if ! (

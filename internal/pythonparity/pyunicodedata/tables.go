@@ -1,4 +1,4 @@
-// Code generated from CPython 3.14.7 (unicodedata 16.0.0) by TestUnicodeDataTablesMatchLivePython; DO NOT EDIT.
+// Code generated from CPython 3.14.7 (unicodedata 16.0.0) by TestUnicodeDataTablesMatchFrozenPython; DO NOT EDIT.
 
 package pyunicodedata
 

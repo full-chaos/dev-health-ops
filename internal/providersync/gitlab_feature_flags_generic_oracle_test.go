@@ -348,7 +348,7 @@ func oracleGitLabFeatureFlagsCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonGitLabFeatureFlagsRoute(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonGitLabFeatureFlagsRoute(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "gitlab/feature/flags", oracleGitLabFeatureFlagsCases(),
 		buildGitLabFeatureFlagsOracleTrace, nil,

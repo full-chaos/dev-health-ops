@@ -27,7 +27,7 @@ func linearAIAttributionOracleInput() map[string]any {
 	}
 }
 
-func TestLinearAIAttributionMatchesLivePythonProductionRow(t *testing.T) {
+func TestLinearAIAttributionMatchesFrozenPythonProductionRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "linear/work-items/ai-attribution",
 		[]oracleCase{{ID: "explicit_codex_issue_label", Input: linearAIAttributionOracleInput()}},

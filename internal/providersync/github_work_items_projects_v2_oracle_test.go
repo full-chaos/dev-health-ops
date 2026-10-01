@@ -33,7 +33,7 @@ type gitHubProjectV2PaginationOracleRow struct {
 	ChangeAfter  []string `json:"change_after"`
 }
 
-func TestGitHubProjectV2WorkItemMatchesLivePythonProductionRow(t *testing.T) {
+func TestGitHubProjectV2WorkItemMatchesFrozenPythonProductionRow(t *testing.T) {
 	input := gitHubProjectV2OracleInput()
 	compareRowsAgainstPythonOracle(
 		t, "github/work-items-project-v2/row",
@@ -48,7 +48,7 @@ func TestGitHubProjectV2WorkItemMatchesLivePythonProductionRow(t *testing.T) {
 	)
 }
 
-func TestGitHubProjectV2DraftIssueMatchesLivePythonProductionRow(t *testing.T) {
+func TestGitHubProjectV2DraftIssueMatchesFrozenPythonProductionRow(t *testing.T) {
 	input := gitHubProjectV2DraftOracleInput()
 	row, _, emitted := buildGitHubProjectV2OracleRows(t, input)
 	if !emitted || row.WorkItemID != "ghproj:PVTI_DRAFT_1" {
@@ -67,7 +67,7 @@ func TestGitHubProjectV2DraftIssueMatchesLivePythonProductionRow(t *testing.T) {
 	)
 }
 
-func TestGitHubProjectV2TransitionMatchesLivePythonProductionRow(t *testing.T) {
+func TestGitHubProjectV2TransitionMatchesFrozenPythonProductionRow(t *testing.T) {
 	input := gitHubProjectV2OracleInput()
 	input["transition_index"] = 1
 	compareRowsAgainstPythonOracle(
@@ -83,7 +83,7 @@ func TestGitHubProjectV2TransitionMatchesLivePythonProductionRow(t *testing.T) {
 	)
 }
 
-// TestGitHubProjectV2PullRequestEmissionDivergesFromLivePythonDecision is a
+// TestGitHubProjectV2PullRequestEmissionDivergesFromFrozenPythonDecision is a
 // DOCUMENTED DIVERGENCE, and it used to be a parity pin.
 //
 // Python drops a PullRequest board item outright (normalize.py:514) and so did
@@ -98,14 +98,14 @@ func TestGitHubProjectV2TransitionMatchesLivePythonProductionRow(t *testing.T) {
 // The pin is not deleted, and that matters. `transition_count` stays compared,
 // so the other half of the decision -- that a PR board item still contributes
 // no status transitions, its `changes` history being CHAOS-4221's problem --
-// remains pinned to live Python. Deleting the pair would have thrown that away
+// remains pinned to the recorded Python answer. Deleting the pair would have thrown that away
 // to record one divergence.
 //
 // The case input gained a repository and a createdAt so the divergence is real
 // rather than incidental. Without them Go would decline to emit for lack of a
 // subject identity, the two sides would agree by accident, and the exclusion
 // below would be documenting a disagreement that never happened.
-func TestGitHubProjectV2PullRequestEmissionDivergesFromLivePythonDecision(t *testing.T) {
+func TestGitHubProjectV2PullRequestEmissionDivergesFromFrozenPythonDecision(t *testing.T) {
 	input := map[string]any{
 		"project_scope_id": "ghprojv2:acme#3",
 		"item_node": map[string]any{
@@ -177,7 +177,7 @@ func withOracleOrg(input map[string]any) map[string]any {
 	return copied
 }
 
-func TestGitHubProjectV2TargetParserMatchesLivePythonValidTargetSemantics(t *testing.T) {
+func TestGitHubProjectV2TargetParserMatchesFrozenPythonValidTargetSemantics(t *testing.T) {
 	input := map[string]any{"raw": " acme:3, labs:12, acme:3 "}
 	compareRowsAgainstPythonOracle(
 		t, "github/work-items-project-v2/target-parser", []oracleCase{{ID: "ordered_duplicates", Input: input}},
@@ -201,7 +201,7 @@ func TestGitHubProjectV2TargetParserMatchesLivePythonValidTargetSemantics(t *tes
 	)
 }
 
-func TestMergeGitHubProjectV2RowsMatchesLivePythonComposition(t *testing.T) {
+func TestMergeGitHubProjectV2RowsMatchesFrozenPythonComposition(t *testing.T) {
 	input := map[string]any{
 		"repository_items":       []any{map[string]any{"work_item_id": "same", "title": "repository"}, map[string]any{"work_item_id": "repo-only", "title": "repo"}},
 		"project_items":          []any{map[string]any{"work_item_id": "same", "title": "project"}, map[string]any{"work_item_id": "project-only", "title": "project"}},
@@ -227,7 +227,7 @@ func TestMergeGitHubProjectV2RowsMatchesLivePythonComposition(t *testing.T) {
 	)
 }
 
-func TestGitHubProjectV2PaginationMatchesLivePythonProducer(t *testing.T) {
+func TestGitHubProjectV2PaginationMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "github/work-items-project-v2/pagination", []oracleCase{{ID: "outer_and_nested", Input: map[string]any{}}},
 		func(t *testing.T, _ map[string]any) gitHubProjectV2PaginationOracleRow {

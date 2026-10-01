@@ -73,7 +73,7 @@ func oracleJiraIncidentCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForJiraIncidentRow(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForJiraIncidentRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "jira/incidents/row", oracleJiraIncidentCases(), buildJiraIncidentRowForOracle, nil,
 	)

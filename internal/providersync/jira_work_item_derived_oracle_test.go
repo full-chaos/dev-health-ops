@@ -60,7 +60,7 @@ func jiraDerivedOracleRows(
 	return claim, rows, derived
 }
 
-func TestJiraWorkItemMetricTripletMatchesLivePythonProduction(t *testing.T) {
+func TestJiraWorkItemMetricTripletMatchesFrozenPythonProduction(t *testing.T) {
 	cases := jiraDerivedOracleCases(githubWorkItemMetricTripletOracleCases())
 	// CHAOS-5310/CHAOS-3092 (R6): compute_work_item_metrics_daily is deleted
 	// (native Go executor + providersync own work_item_metrics_daily now) --
@@ -103,7 +103,7 @@ func TestJiraWorkItemMetricTripletMatchesLivePythonProduction(t *testing.T) {
 		}, nil)
 }
 
-func TestJiraDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
+func TestJiraDerivedSurfacesMatchFrozenPythonProduction(t *testing.T) {
 	cases := jiraDerivedOracleCases(githubDerivedOracleCases())
 	// CHAOS-5323/CHAOS-3092: no "jira/work-items/estimate-coverage" oracle
 	// pair here anymore -- compute_estimate_coverage_metrics_daily is
@@ -208,11 +208,11 @@ func jiraRowsFromGitHub(rows githubWorkItemRows) jiraWorkItemRows {
 	}
 }
 
-// TestJiraWorkItemsRouteIncludesLivePythonMetricEffect is baseline capability
+// TestJiraWorkItemsRouteIncludesFrozenPythonMetricEffect is baseline capability
 // proof, not a destination-count assertion. It feeds the concrete rows emitted
 // by the Jira Atlassian route into Python's checked-in job computation, then
 // compares those produced rows with the route's actual effect ledger.
-func TestJiraWorkItemsRouteIncludesLivePythonMetricEffect(t *testing.T) {
+func TestJiraWorkItemsRouteIncludesFrozenPythonMetricEffect(t *testing.T) {
 	claim := jiraAtlassianClaim()
 	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	before := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)

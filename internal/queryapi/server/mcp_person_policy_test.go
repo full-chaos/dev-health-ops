@@ -153,3 +153,39 @@ func TestMCPCheckRequestInputsRefusesAFieldWithoutDefinitions(t *testing.T) {
 		t.Fatalf("status %d reason %q, want 403 %s", status, reason, mcpReasonUnclassifiedInput)
 	}
 }
+
+// r1 on #3447: an explicit null at an unlisted position is still an unlisted
+// position. Argument and input-object member, null and absent-but-declared.
+func TestMCPNullAtAnUnclassifiedPositionIsRefused(t *testing.T) {
+	for name, key := range map[string]string{
+		"argument":           "arg Query.catalog.filters",
+		"input member":       "input FilterInput.scope",
+		"nested input field": "input WhatFilterInput.repos",
+	} {
+		class, ok := mcpInputClasses[key]
+		if !ok {
+			t.Fatalf("%s: %s is not in the table", name, key)
+		}
+		delete(mcpInputClasses, key)
+		ch := &countingMCPClient{}
+		l := newMCPTestListeners(t, ch, allMCPRootsEnabled(), mcpDefaultLimits())
+		var query string
+		switch name {
+		case "argument":
+			query = fmt.Sprintf("query { catalog(orgId: %q, filters: null) { values { value } } }", mcpTestOrg)
+		case "input member":
+			query = fmt.Sprintf("query { catalog(orgId: %q, filters: {scope: null}) { values { value } } }", mcpTestOrg)
+		default:
+			query = fmt.Sprintf("query { catalog(orgId: %q, filters: {what: {repos: null}}) { values { value } } }", mcpTestOrg)
+		}
+		rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, query, nil))
+		mcpInputClasses[key] = class
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s: explicit null at an unlisted position: status %d, want 403; body %s", name, rec.Code, rec.Body.String())
+			continue
+		}
+		if reason, _ := mcpReason(t, rec); reason != mcpReasonUnclassifiedInput {
+			t.Errorf("%s: reason %q, want %s", name, reason, mcpReasonUnclassifiedInput)
+		}
+	}
+}

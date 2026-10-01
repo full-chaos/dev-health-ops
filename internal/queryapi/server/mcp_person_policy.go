@@ -156,9 +156,11 @@ func mcpClassifyValue(schema *ast.Schema, t *ast.Type, value any) mcpInputVerdic
 		verdict := mcpInputOK
 		for _, field := range definition.Fields {
 			member, present := object[field.Name]
-			if !present || member == nil {
+			if !present {
 				continue
 			}
+			// An explicit null still sits at a position: an unlisted one is
+			// refused, null or not (r1 on #3447).
 			switch mcpInputClasses["input "+definition.Name+"."+field.Name] {
 			case "person":
 				if !mcpValueIsEmpty(member) {
@@ -178,7 +180,7 @@ func mcpClassifyValue(schema *ast.Schema, t *ast.Type, value any) mcpInputVerdic
 // mcpClassifyArgument is mcpClassifyValue for a field argument; the object is
 // the type that declares the field.
 func mcpClassifyArgument(schema *ast.Schema, object, field string, definition *ast.ArgumentDefinition, value any) mcpInputVerdict {
-	if definition == nil || value == nil {
+	if definition == nil {
 		return mcpInputOK
 	}
 	verdict := mcpInputOK

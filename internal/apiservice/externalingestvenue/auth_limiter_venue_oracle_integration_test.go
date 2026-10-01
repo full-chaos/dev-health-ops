@@ -60,10 +60,11 @@ func roundRobinBackends(t *testing.T, backends ...string) string {
 // 127.0.0.1). No request carries a bearer, so each is an auth failure that
 // never reaches the database.
 func TestExternalIngestAuthLimiterVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("external-ingest-auth-limiter-venue-oracle", t.Name(), "be5c6856f7ad6ae8454ddd631c2f8b27de3cf3cd2e99a98648d5b2129d0c725e"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:      root,
+		Golden: golden, Root: golden.PythonRoot(t, root),
 		JWTKey:    "venue-oracle-jwt-signing-key-32-bytes-min",
 		PythonEnv: []string{"TRUSTED_PROXIES=testclient"},
 	})
@@ -109,8 +110,8 @@ func TestExternalIngestAuthLimiterVenueOracle(t *testing.T) {
 	// Another address has its own budget on both throttles.
 	requests = append(requests, burst("no credentials, other address", 3, "10.201.0.2")...)
 
-	python := venue.ServePython(t, requests)
-	receipt := venueoracle.Diff(t, balanced, requests, python, venueoracle.DiffOptions{})
+	python := golden.Python(t, venue, requests)
+	receipt := venueoracle.Diff(t, balanced, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Logf("%d requests compared\n%s", len(requests), receipt)
 
 	// A burst of simultaneous credential-less requests from one address: auth.py
@@ -120,7 +121,8 @@ func TestExternalIngestAuthLimiterVenueOracle(t *testing.T) {
 	// store, must admit exactly as many. The comparison is the histogram of
 	// (status, body) -- the order of simultaneous requests is not defined.
 	const simultaneous = 90
-	pythonBurst := venue.ServePython(t, burst("simultaneous", simultaneous, "10.201.0.9"))
+	pythonBurst := golden.Python(t, venue, burst("simultaneous", simultaneous, "10.201.0.9"))
+	golden.Consumed(t, pythonBurst...)
 	want := map[string]int{}
 	for _, response := range pythonBurst {
 		want[fmt.Sprintf("%d %s", response.Status, response.Body)]++
@@ -165,4 +167,5 @@ func TestExternalIngestAuthLimiterVenueOracle(t *testing.T) {
 			t.Errorf("simultaneous burst: go answered %q x%d, python never", key, got[key])
 		}
 	}
+	golden.Finish(t)
 }

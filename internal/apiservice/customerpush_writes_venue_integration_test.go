@@ -33,11 +33,11 @@ type customerPushWriteFixture struct {
 func customerPushWriteSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) customerPushWriteFixture {
 	t.Helper()
 	f := customerPushWriteFixture{customerPushFixture: customerPushSeed(t, ctx, pool)}
-	f.sourceClash, f.sourceDisabledPush, f.tokenToRevoke = uuid.New(), uuid.New(), uuid.New()
+	f.sourceClash, f.sourceDisabledPush, f.tokenToRevoke = stableVenueID("cp-write-source-clash"), stableVenueID("cp-write-source-disabled-push"), stableVenueID("cp-write-token-to-revoke")
 	team := f.orgTeam.String()
 	var (
-		githubLegacy, gitlabInactive, linearActive, gheOperational, gitlabCredential = uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-		credentialConfigured, credentialBare                                         = uuid.New(), uuid.New()
+		githubLegacy, gitlabInactive, linearActive, gheOperational, gitlabCredential = stableVenueID("cp-write-github-legacy"), stableVenueID("cp-write-gitlab-inactive"), stableVenueID("cp-write-linear-active"), stableVenueID("cp-write-ghe-operational"), stableVenueID("cp-write-gitlab-credential")
+		credentialConfigured, credentialBare                                         = stableVenueID("cp-write-credential-configured"), stableVenueID("cp-write-credential-bare")
 	)
 	statements := []struct {
 		sql  string
@@ -58,16 +58,16 @@ func customerPushWriteSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 			($3, $8, 'linear', NULL, 'lin', '{}', true, now(), now()),
 			($4, $8, 'github', NULL, 'ghe', '{"github_instance_url": "https://GHE.acme.test", "github_url": "https://ignored.test"}', true, now(), now()),
 			($5, $8, 'gitlab', $6, 'gl-cred', '{}', true, now(), now()),
-			(gen_random_uuid(), $8, 'gitlab', $7, 'gl-bare', '{"gitlab_instance_url": 0, "gitlab_url": "  "}', false, now(), now())`,
+			(md5('customerpush_w-row-1')::uuid, $8, 'gitlab', $7, 'gl-bare', '{"gitlab_instance_url": 0, "gitlab_url": "  "}', false, now(), now())`,
 			[]any{githubLegacy, gitlabInactive, linearActive, gheOperational, gitlabCredential, credentialConfigured, credentialBare, team}},
 		{`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata,
 			is_enabled, discovered_at, last_seen_at) VALUES
-			(gen_random_uuid(), $6, $1, 'github', 'repository', 'acme/managed', 'managed', 'Acme/Managed', '{}', true, now(), now()),
-			(gen_random_uuid(), $6, $1, 'github', 'repository', '12345', 'dormant', 'Acme/Dormant', '{}', false, now(), now()),
-			(gen_random_uuid(), $6, $2, 'gitlab', 'project', '77', 'sub', 'Group/Sub', '{"path_with_namespace": "grp/sub"}', true, now(), now()),
-			(gen_random_uuid(), $6, $3, 'Linear', 'team', 'linear', 'all', 'All teams', '{}', true, now(), now()),
-			(gen_random_uuid(), $6, $4, 'github', 'repository', 'ghe-1', 'ghe', 'ghe/repo', '{}', true, now(), now()),
-			(gen_random_uuid(), $6, $5, 'gitlab', 'project', 'gl-1', 'glc', 'glc/repo', '{}', true, now(), now())`,
+			(md5('customerpush_w-row-2')::uuid, $6, $1, 'github', 'repository', 'acme/managed', 'managed', 'Acme/Managed', '{}', true, now(), now()),
+			(md5('customerpush_w-row-3')::uuid, $6, $1, 'github', 'repository', '12345', 'dormant', 'Acme/Dormant', '{}', false, now(), now()),
+			(md5('customerpush_w-row-4')::uuid, $6, $2, 'gitlab', 'project', '77', 'sub', 'Group/Sub', '{"path_with_namespace": "grp/sub"}', true, now(), now()),
+			(md5('customerpush_w-row-5')::uuid, $6, $3, 'Linear', 'team', 'linear', 'all', 'All teams', '{}', true, now(), now()),
+			(md5('customerpush_w-row-6')::uuid, $6, $4, 'github', 'repository', 'ghe-1', 'ghe', 'ghe/repo', '{}', true, now(), now()),
+			(md5('customerpush_w-row-7')::uuid, $6, $5, 'gitlab', 'project', 'gl-1', 'glc', 'glc/repo', '{}', true, now(), now())`,
 			[]any{githubLegacy, gitlabInactive, linearActive, gheOperational, gitlabCredential, team}},
 		// A disabled customer-push source that a managed source owns (its
 		// enable is refused), a disabled push source nothing owns, and a
@@ -238,7 +238,7 @@ func customerPushNormalizer(seeded map[string]bool, start time.Time) func(string
 		return venueTimestamp.ReplaceAllStringFunc(body, func(match string) string {
 			for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999"} {
 				if at, err := time.Parse(layout, match); err == nil {
-					if !at.Before(start.Add(-time.Minute)) && at.Before(start.Add(400*24*time.Hour)) {
+					if isRunTime(at) {
 						return "<now>"
 					}
 					return match
@@ -255,6 +255,7 @@ func customerPushNormalizer(seeded map[string]bool, start time.Time) func(string
 // values blanked, and on each plane every minted token hashes to its
 // stored hash and prefix.
 func TestVenueOracleCustomerPushWrites(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-customer-push-writes", t.Name(), "5cbbbb9fd2e21c8e3f0eb34160efa8dd6174e8c8b511f132db8dde4f7e09d7d4"))
 	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
 	// the header's first hop. Trust this test's loopback peer so both planes agree.
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient,10.0.0.1")
@@ -263,14 +264,14 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	start := time.Now().UTC()
 	var seed customerPushWriteFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = customerPushWriteSeed(t, ctx, admin)
 			return seed.tokenSpecs()
 		},
 	})
 	seeded := map[string]bool{}
-	admin, err := pgxpool.New(ctx, venue.AdminURI(t, venue.SourceDB))
+	admin, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,10 +299,11 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := customerPushWriteRequests(seed, venue.Tokens)
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	normalize := customerPushNormalizer(seeded, start)
 	var goMinted []string
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		Golden:    golden,
 		Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
 		Inspect: func(_ venueoracle.Request, response venueoracle.Response) {
 			goMinted = append(goMinted, response.Body)
@@ -313,23 +315,37 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	}
 
 	// Minted tokens: sha256(token) is the stored hash, token[:12] the
-	// stored prefix, on each plane's own database.
-	minted := 0
-	for _, plane := range []struct {
-		name, uri string
-		bodies    []string
-	}{{"python", venue.AdminURI(t, venue.SourceDB), pythonMinted}, {"go", venue.AdminURI(t, venue.GoDB), goMinted}} {
-		for _, body := range plane.bodies {
+	// stored prefix, on each plane's own database. The Python plane's check
+	// runs while recording (its database is gone once frozen) and is frozen
+	// as the check's lines.
+	mintedCheck := func(uri string, bodies []string) (lines []string) {
+		for _, body := range bodies {
 			var created struct{ ID, Token string }
 			if json.Unmarshal([]byte(body), &created) != nil || created.Token == "" {
 				continue
 			}
 			sum := sha256.Sum256([]byte(created.Token))
-			row := venueoracle.TableRows(t, ctx, plane.uri, fmt.Sprintf(
+			row := venueoracle.TableRows(t, ctx, uri, fmt.Sprintf(
 				`SELECT token_hash = '%s', token_prefix = '%s' FROM external_ingest_tokens WHERE id = '%s'`,
 				hex.EncodeToString(sum[:]), created.Token[:12], created.ID))
+			lines = append(lines, row)
+		}
+		return lines
+	}
+	pythonChecks := strings.Split(golden.InspectRows(t, "python minted token checks", func() string {
+		return strings.Join(mintedCheck(venue.AdminURI(t, venue.SourceDB), pythonMinted), "\n")
+	}), "\n")
+	minted := 0
+	for _, plane := range []struct {
+		name   string
+		checks []string
+	}{{"python", pythonChecks}, {"go", mintedCheck(venue.AdminURI(t, venue.GoDB), goMinted)}} {
+		for _, row := range plane.checks {
+			if row == "" {
+				continue
+			}
 			if row != "true true" {
-				t.Errorf("%s: token %s does not match its stored hash and prefix: %q", plane.name, created.ID, row)
+				t.Errorf("%s: a minted token does not match its stored hash and prefix: %q", plane.name, row)
 			}
 			minted++
 		}
@@ -356,19 +372,18 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	pythonIDs, goIDs := map[string]string{}, map[string]string{}
 	for _, table := range tables {
 		name := table.name
-		pythonRows := normalizeRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query), seeded, pythonIDs, start)
 		goRows := normalizeRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query), seeded, goIDs, start)
-		mark := venueoracle.Mark(pythonRows == goRows)
-		receipt += fmt.Sprintf("%s rows after writes: %s\n", name, mark)
-		if pythonRows != goRows {
-			t.Errorf("%s rows differ:\n python %s\n go     %s", name, pythonRows, goRows)
-		}
+		pythonRows := golden.CompareRows(t, name+" rows", func() string {
+			return normalizeRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query), seeded, pythonIDs, start)
+		}, goRows)
+		receipt += fmt.Sprintf("%s rows after writes: %s\n", name, venueoracle.Mark(pythonRows == goRows))
 	}
 	receipt += fmt.Sprintf("minted tokens checked against stored hash and prefix: %d\n", minted)
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	golden.Finish(t)
 }
 
 var venueGoTime = regexp.MustCompile(`\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)? \+0000 UTC`)
@@ -400,9 +415,24 @@ func normalizeRows(rows string, seeded map[string]bool, labels map[string]string
 	})
 	return venueGoTime.ReplaceAllStringFunc(rows, func(match string) string {
 		at, err := time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", match)
-		if err == nil && !at.Before(start.Add(-time.Minute)) && at.Before(start.Add(400*24*time.Hour)) {
+		if err == nil && isRunTime(at) {
 			return "<now>"
 		}
 		return match
 	})
+}
+
+// customerPushRunFloor is a date before the recording of the goldens and after
+// every fixed time the seed writes: a stored or returned time at or after it
+// (and before every expiry a request supplies, all at the end of 2030 or later) was taken from the clock during
+// the run. A window anchored at the replay's own clock would not blank the
+// Python plane's times, which were taken when the golden was recorded.
+var customerPushRunFloor = time.Date(2026, time.September, 30, 0, 0, 0, 0, time.UTC)
+
+// customerPushRunCeiling is before the earliest expiry a request supplies
+// (2030-12-31 UTC): the clock reaches it only in 2030.
+var customerPushRunCeiling = time.Date(2030, time.December, 1, 0, 0, 0, 0, time.UTC)
+
+func isRunTime(at time.Time) bool {
+	return !at.Before(customerPushRunFloor) && at.Before(customerPushRunCeiling)
 }

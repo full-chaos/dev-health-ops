@@ -1,0 +1,383 @@
+{
+  "header": {
+    "test": "TestWebhookIntakeVenueOraclePagerDuty",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/ -test '^TestWebhookIntakeVenueOraclePagerDuty$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+  },
+  "requests": [
+    {
+      "name": "pagerduty valid signature active",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "4108b00353b17ea7f03e27508a0163ada887c04ad51872835eeab2f377a7cbed",
+      "request_headers_sha256": "c96b69da9d91e011746539e310c6a6c1e4798822c7eb8c6f77f0d40f289a387d",
+      "status": 202,
+      "headers": {
+        "content-length": "0",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9f65457e-04c2-4b25-95cc-4fd59561d81c"
+      },
+      "body": ""
+    },
+    {
+      "name": "pagerduty candidate ping to ready",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/61f266f3-403a-5378-a8e7-01ad72bd4604",
+      "body_sha256": "c0c5f695852a60c22ac1eef3198099f2622095110ea7a3115e367b11341e3d44",
+      "request_headers_sha256": "adcaf23dbaff17c8e5995be6666dc1fb8c481c04743b53b77949da91a2d10231",
+      "status": 204,
+      "headers": {
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f04edf9c-79bb-4613-b94c-2e3b0076a6a4"
+      },
+      "body": ""
+    },
+    {
+      "name": "pagerduty replayed delivery (first)",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "5902fd16bbc47698d72185592b48e8ec91f21212a5a74603220178cfc1908004",
+      "request_headers_sha256": "21d3d800dab074700fb8c98a9227a7a45ce994ac52df6d47d36e0043f00044e2",
+      "status": 202,
+      "headers": {
+        "content-length": "0",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6d2b90f2-46f4-4bee-95b7-c5dceb3d7aab"
+      },
+      "body": ""
+    },
+    {
+      "name": "pagerduty replayed delivery (replay)",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "5902fd16bbc47698d72185592b48e8ec91f21212a5a74603220178cfc1908004",
+      "request_headers_sha256": "21d3d800dab074700fb8c98a9227a7a45ce994ac52df6d47d36e0043f00044e2",
+      "status": 202,
+      "headers": {
+        "content-length": "0",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a1f9c6d8-8e59-458f-9538-4da33451c497"
+      },
+      "body": ""
+    },
+    {
+      "name": "pagerduty bad signature",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "4108b00353b17ea7f03e27508a0163ada887c04ad51872835eeab2f377a7cbed",
+      "request_headers_sha256": "b24702c73a87f743965f39d4d57a27896ad52eb965f7d3932bf52b75a4188e6c",
+      "status": 401,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "48cecce3-0494-4362-b07b-ffae301ff5c7"
+      },
+      "body": "{\"detail\":\"Invalid signature\"}"
+    },
+    {
+      "name": "pagerduty fractional timestamp",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "e59929000db003503ce4efd327be05e87f59def2f078bbb9c8b123e3ba7d9156",
+      "request_headers_sha256": "b043122073005222af65cb8c0686226c019a58edb50bb14b4236e8e6b90d880a",
+      "status": 202,
+      "headers": {
+        "content-length": "0",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3ebc7a26-52dd-406e-8ffd-d8b72d0068fe"
+      },
+      "body": ""
+    },
+    {
+      "name": "pagerduty gated feature",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/e59962b4-2486-5d14-b532-85f5782b2262",
+      "body_sha256": "a4b04ae779746dc7267466e2db7f61fec8055a3754c5d161b2fb1e3ee525e402",
+      "request_headers_sha256": "dee7db208127807abbe94e545b218b76f57117d2fa0a224e7270c5f27de97f07",
+      "status": 403,
+      "headers": {
+        "content-length": "78",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e4507dcd-99df-4daf-80e0-a625a8319ce5"
+      },
+      "body": "{\"detail\":\"Canonical incident ingestion is not enabled for this organization\"}"
+    },
+    {
+      "name": "pagerduty occurred_at numeric string",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "cb1034bfd79e4116b51267630e56645e9021b92360a6c7de3132e05f6c42588a",
+      "request_headers_sha256": "568cdcb6394413100f591e3853c2ce5d8791ab433a0df0c56ddae6a6454d9f7a",
+      "status": 202,
+      "headers": {
+        "content-length": "0",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d21b0214-e5d3-4896-a047-d602ac168860"
+      },
+      "body": ""
+    },
+    {
+      "name": "pagerduty occurred_at exponent string",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "7686777bc189384bffe510657bad7f89303bc59fe38994c39ff19bf550d9a399",
+      "request_headers_sha256": "7be474a986463ecd8b6f2a39ab2d326dbc10899b06384da20c0d351ad680f2a0",
+      "status": 400,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "22efa0bb-6df9-45e2-a23f-fb2ffbf4cffd"
+      },
+      "body": "{\"detail\":\"Invalid PagerDuty V3 event\"}"
+    },
+    {
+      "name": "pagerduty occurred_at integer",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "c80730b5d0ee1c451f0d5ac4895832e9906c7f80654dee5964a338ceac621cba",
+      "request_headers_sha256": "73bf8a809629909220ef5e6e146ad344b972328f15ad9f6f21fabba5aa2045ab",
+      "status": 202,
+      "headers": {
+        "content-length": "0",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "711d4050-6764-49e5-8611-41c08764dec6"
+      },
+      "body": ""
+    },
+    {
+      "name": "pagerduty occurred_at float",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "99318b239f54ab786822b889ba153a3def97f7d802cc1b58bc2b6bc6229a2759",
+      "request_headers_sha256": "5c8745ed0c68b75fc5590b8c0b90144d814bbea0a16db389d8542786d6f1ec83",
+      "status": 202,
+      "headers": {
+        "content-length": "0",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5f619e93-85ba-4cd7-a827-36693be63bf8"
+      },
+      "body": ""
+    },
+    {
+      "name": "pagerduty occurred_at milliseconds",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "83ced3effcbe2b92e4268606bb8faecece746be761c276151e389278901b5b92",
+      "request_headers_sha256": "908dba7733622966367afd0b08c5c54fe7bc677b29d00e18287c35a14b412ec4",
+      "status": 202,
+      "headers": {
+        "content-length": "0",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c8aea57d-3018-40f1-92b9-b78e0a631112"
+      },
+      "body": ""
+    },
+    {
+      "name": "pagerduty occurred_at naive iso",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "c639fc0a2c307427b4f4c55eafcbf603f33c64088b2fb17cf44540443f101428",
+      "request_headers_sha256": "bab1007c35c41ff7228f11f3f55f2a8d5f22db30be66585a86d07c96b76907af",
+      "status": 400,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a15d5ed6-d071-409f-96ac-4378394882ad"
+      },
+      "body": "{\"detail\":\"Invalid PagerDuty V3 event\"}"
+    },
+    {
+      "name": "pagerduty occurred_at date only",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "8c7c1cf9a0eb993fb3c55f0b9b3f5ef4a9de44dd5dac3d7029f2b6d1c1ff0793",
+      "request_headers_sha256": "ae8d8fc487ff5cdf98881d93b90c9e52ef62f02558f5bd6f707f48e415abcc18",
+      "status": 400,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7419576d-751c-4688-ba0a-33494cfbbed7"
+      },
+      "body": "{\"detail\":\"Invalid PagerDuty V3 event\"}"
+    },
+    {
+      "name": "pagerduty occurred_at non-utc offset",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "98f9ae800fd16f36708727b2ad6b9fc03fed574a879a4e6fbd5c1312e0d6d8a5",
+      "request_headers_sha256": "03e893db3d7b16983f9d4ada968f879845b99772cb660198d3fb20682418b56c",
+      "status": 202,
+      "headers": {
+        "content-length": "0",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c06fca2d-4d8b-409b-bedc-f459eabd5e35"
+      },
+      "body": ""
+    },
+    {
+      "name": "pagerduty occurred_at bool",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "879097b9285833357d97678691f00b04092d8d75345b4dc3479ea2d467215b32",
+      "request_headers_sha256": "60c93710a0d0e754276ba464033b5f92c3d1362776ebc947711a630dbf16ead8",
+      "status": 400,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a8ca85c0-ec1c-4338-9b68-52d691b790e5"
+      },
+      "body": "{\"detail\":\"Invalid PagerDuty V3 event\"}"
+    },
+    {
+      "name": "pagerduty occurred_at null",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "be7d49bbc156e75df4a2b1dc98a7ecc0c90bdcde9fa611ce1d51638ae7194829",
+      "request_headers_sha256": "81e81b20c01637d6f8254d1cb8bc00922f15b5f128f35f80867a49375f96cb1a",
+      "status": 400,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3bb1117f-e020-4fef-8009-4a83f66022fa"
+      },
+      "body": "{\"detail\":\"Invalid PagerDuty V3 event\"}"
+    },
+    {
+      "name": "pagerduty occurred_at garbage",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "b6c25ee129b5854599d47e8e89e380d1dea38efd2aa5b813cd355d30f01a507e",
+      "request_headers_sha256": "0584401a0f393aeec965ce5af269f842fca6e418df61f37cb1a048c4a510811b",
+      "status": 400,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "45f164dd-085e-43c8-b24f-4edfd0a267dc"
+      },
+      "body": "{\"detail\":\"Invalid PagerDuty V3 event\"}"
+    },
+    {
+      "name": "pagerduty integer past the digit limit",
+      "method": "POST",
+      "path": "/api/v1/webhooks/pagerduty/1f233496-3308-5c83-8270-d5acfbd1576c",
+      "body_sha256": "72eb0662b32dc60d2c14975cc6d4185a2b35b7b56ba2ab3c3cbde619c69cf3f1",
+      "request_headers_sha256": "fed5e96285982804cdf275f041c8129bb1807d7a4ad812344d9e35c927cbff03",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    }
+  ],
+  "rows": {
+    "pagerduty-webhook-replay keys": {
+      "rows": "pagerduty-webhook-replay:1f233496-3308-5c83-8270-d5acfbd1576c:14f4d9c25c3d78b01cfaaaa437330d2824c137bc0d262aed848a3726f0fd7072=accepted:f4b8f3227589a0c75c0b5cf44d446a0767b6a50ec504e5039f5f3cf232538b46 | pagerduty-webhook-replay:1f233496-3308-5c83-8270-d5acfbd1576c:2f80e326c3284354db28047b3a046abed19647860e2aba5700b3a79915606ac4=accepted:fd82abf03569e8c0ce606f2d4c768f58d30cfa937b0099472950d9ed60e0956f | pagerduty-webhook-replay:1f233496-3308-5c83-8270-d5acfbd1576c:54696021b3b1d267cd57c2f5cb78f5f89a7a3b4ab0319e8cec61f28512528694=accepted:74cd5752e4fee52995cf485c2d8f8d135b08f90cd726cc3e5a47ccd072819af8 | pagerduty-webhook-replay:1f233496-3308-5c83-8270-d5acfbd1576c:660bd0d2c8cbb2f07fb6f23fc239f185183790ffaba0e214a291633cc54b50b7=accepted:086f3e20b77eea89e9c736d74470eacdb01e40200a41f2baaeb582ed6c355ce9 | pagerduty-webhook-replay:1f233496-3308-5c83-8270-d5acfbd1576c:675e4937adf5125508f029541fcce023fcad273c0392a828886bcfc4e9a5699e=accepted:8e57aa6af242a926ff1779aeaf5b3ebef0be101382faa70818ac6fd4940d2e59 | pagerduty-webhook-replay:1f233496-3308-5c83-8270-d5acfbd1576c:8bbea9f89b1dcd0d202997bfb3c35a8b9ed400d817d1e17b9f44a6d1856bf02e=accepted:0dc5ba03df536fa20616e51273fae6b12067b95cd169011fc8463e47a9774ef4 | pagerduty-webhook-replay:1f233496-3308-5c83-8270-d5acfbd1576c:8ef6e88841e319590caedbbb79ffc68a459796f947f5eeb86ceb0b63c344ba0e=accepted:e2d1cdb4f08bc353f5846dd0c3eff88665c5a8b3178120bd57cddbaa61450e89 | pagerduty-webhook-replay:1f233496-3308-5c83-8270-d5acfbd1576c:de5e2982880c13287a3b2554a72c96078f43d561d57b98c89bbd6196b7e0e53c=accepted:9aad79d599440e6f9bb3bc61f793f568ae6e393cca63c57e0a1db2a65fcea31c"
+    },
+    "pagerduty-webhooks stream entries": {
+      "rows": "pagerduty-webhooks:1f233496-3308-5c83-8270-d5acfbd1576c: binding_id=1f233496-3308-5c83-8270-d5acfbd1576c event_id=PD-ACTIVE-1 event_type=incident.triggered occurred_at=2026-01-02T03:04:05+00:00 payload={\"event\":{\"id\":\"PD-ACTIVE-1\",\"event_type\":\"incident.triggered\",\"occurred_at\":\"2026-01-02T03:04:05Z\",\"data\":{\"incident\":{\"id\":\"I1\"}}}} raw_body_sha256=0dc5ba03df536fa20616e51273fae6b12067b95cd169011fc8463e47a9774ef4 received_at=\u003cblank\u003e | pagerduty-webhooks:1f233496-3308-5c83-8270-d5acfbd1576c: binding_id=1f233496-3308-5c83-8270-d5acfbd1576c event_id=PD-REPLAY-1 event_type=incident.triggered occurred_at=2026-01-02T03:04:05+00:00 payload={\"event\":{\"id\":\"PD-REPLAY-1\",\"event_type\":\"incident.triggered\",\"occurred_at\":\"2026-01-02T03:04:05Z\",\"data\":{}}} raw_body_sha256=8e57aa6af242a926ff1779aeaf5b3ebef0be101382faa70818ac6fd4940d2e59 received_at=\u003cblank\u003e | pagerduty-webhooks:1f233496-3308-5c83-8270-d5acfbd1576c: binding_id=1f233496-3308-5c83-8270-d5acfbd1576c event_id=PD-FRACTIONAL-1 event_type=incident.triggered occurred_at=2026-01-02T03:04:05.123400+00:00 payload={\"event\":{\"id\":\"PD-FRACTIONAL-1\",\"event_type\":\"incident.triggered\",\"occurred_at\":\"2026-01-02T03:04:05.123400Z\",\"data\":{}}} raw_body_sha256=f4b8f3227589a0c75c0b5cf44d446a0767b6a50ec504e5039f5f3cf232538b46 received_at=\u003cblank\u003e | pagerduty-webhooks:1f233496-3308-5c83-8270-d5acfbd1576c: binding_id=1f233496-3308-5c83-8270-d5acfbd1576c event_id=PD-OCC-0 event_type=incident.triggered occurred_at=1970-01-01T00:00:00.500000+00:00 payload={\"event\":{\"id\":\"PD-OCC-0\",\"event_type\":\"incident.triggered\",\"occurred_at\":\"1970-01-01T00:00:00.500000Z\",\"data\":{}}} raw_body_sha256=74cd5752e4fee52995cf485c2d8f8d135b08f90cd726cc3e5a47ccd072819af8 received_at=\u003cblank\u003e | pagerduty-webhooks:1f233496-3308-5c83-8270-d5acfbd1576c: binding_id=1f233496-3308-5c83-8270-d5acfbd1576c event_id=PD-OCC-2 event_type=incident.triggered occurred_at=2026-01-02T03:04:05+00:00 payload={\"event\":{\"id\":\"PD-OCC-2\",\"event_type\":\"incident.triggered\",\"occurred_at\":\"2026-01-02T03:04:05Z\",\"data\":{}}} raw_body_sha256=e2d1cdb4f08bc353f5846dd0c3eff88665c5a8b3178120bd57cddbaa61450e89 received_at=\u003cblank\u003e | pagerduty-webhooks:1f233496-3308-5c83-8270-d5acfbd1576c: binding_id=1f233496-3308-5c83-8270-d5acfbd1576c event_id=PD-OCC-3 event_type=incident.triggered occurred_at=2026-01-02T03:04:05.500000+00:00 payload={\"event\":{\"id\":\"PD-OCC-3\",\"event_type\":\"incident.triggered\",\"occurred_at\":\"2026-01-02T03:04:05.500000Z\",\"data\":{}}} raw_body_sha256=086f3e20b77eea89e9c736d74470eacdb01e40200a41f2baaeb582ed6c355ce9 received_at=\u003cblank\u003e | pagerduty-webhooks:1f233496-3308-5c83-8270-d5acfbd1576c: binding_id=1f233496-3308-5c83-8270-d5acfbd1576c event_id=PD-OCC-4 event_type=incident.triggered occurred_at=2026-01-02T03:04:05.123000+00:00 payload={\"event\":{\"id\":\"PD-OCC-4\",\"event_type\":\"incident.triggered\",\"occurred_at\":\"2026-01-02T03:04:05.123000Z\",\"data\":{}}} raw_body_sha256=fd82abf03569e8c0ce606f2d4c768f58d30cfa937b0099472950d9ed60e0956f received_at=\u003cblank\u003e | pagerduty-webhooks:1f233496-3308-5c83-8270-d5acfbd1576c: binding_id=1f233496-3308-5c83-8270-d5acfbd1576c event_id=PD-OCC-7 event_type=incident.triggered occurred_at=2026-01-01T21:34:05+00:00 payload={\"event\":{\"id\":\"PD-OCC-7\",\"event_type\":\"incident.triggered\",\"occurred_at\":\"2026-01-01T21:34:05Z\",\"data\":{}}} raw_body_sha256=9aad79d599440e6f9bb3bc61f793f568ae6e393cca63c57e0a1db2a65fcea31c received_at=\u003cblank\u003e"
+    },
+    "pagerduty_webhook_bindings": {
+      "rows": "sub-activeactive | sub-candidateready | sub-gatedactive"
+    }
+  }
+}

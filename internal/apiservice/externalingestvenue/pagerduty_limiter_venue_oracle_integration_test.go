@@ -9,8 +9,6 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
@@ -32,10 +30,11 @@ import (
 // subscription header: each answers the same non-429 from the endpoint after
 // its limit check, on both planes.
 func TestPagerDutyWebhookLimiterVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("pager-duty-webhook-limiter-venue-oracle", t.Name(), "2dc809c6c4dd92ff37d25026f8a379538af6a037a7ba100b318952211b90ee0d"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:      root,
+		Golden: golden, Root: golden.PythonRoot(t, root),
 		JWTKey:    "venue-oracle-jwt-signing-key-32-bytes-min",
 		PythonEnv: []string{"TRUSTED_PROXIES=testclient"},
 	})
@@ -74,7 +73,7 @@ func TestPagerDutyWebhookLimiterVenueOracle(t *testing.T) {
 	binding := func(id string) string { return "/api/v1/webhooks/pagerduty/" + id }
 	fixed := func(address string) func(int) string { return func(int) string { return address } }
 	distinct := func(index int) string { return fmt.Sprintf("10.9.%d.%d", index/256%256, index%256) }
-	bindingA, bindingB, bindingC := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	bindingA, bindingB, bindingC := venueoracle.StableUUID("pdlimit-a"), venueoracle.StableUUID("pdlimit-b"), venueoracle.StableUUID("pdlimit-c")
 
 	var requests []venueoracle.Request
 	// 65 deliveries to ONE binding from one address: 60 answered, then 429.
@@ -86,9 +85,12 @@ func TestPagerDutyWebhookLimiterVenueOracle(t *testing.T) {
 	// 65 addresses, one delivery each to one binding: none is limited.
 	requests = append(requests, burst("one binding, distinct addresses", 65, func(int) string { return binding(bindingC) }, distinct)...)
 	// 65 DISTINCT bindings from one address: each has its own budget, none is limited.
-	requests = append(requests, burst("distinct bindings, one address", 65, func(int) string { return binding(uuid.NewString()) }, fixed("10.200.0.3"))...)
+	requests = append(requests, burst("distinct bindings, one address", 65, func(index int) string {
+		return binding(venueoracle.StableUUID(fmt.Sprintf("pdlimit-distinct-%d", index)))
+	}, fixed("10.200.0.3"))...)
 
-	python := venue.ServePython(t, requests)
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	python := golden.Python(t, venue, requests)
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Logf("%d requests compared\n%s", len(requests), receipt)
+	golden.Finish(t)
 }

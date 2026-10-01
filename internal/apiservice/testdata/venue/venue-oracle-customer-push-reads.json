@@ -1,0 +1,2222 @@
+{
+  "header": {
+    "test": "TestVenueOracleCustomerPushReads",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/ -test '^TestVenueOracleCustomerPushReads$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+  },
+  "requests": [
+    {
+      "name": "anon /sources",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e787bf6e-267b-45fe-9170-8f0012f77c41"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member /sources",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "947fb3b323b8943637f1c9406e102e8806890c0c14594e4f9073404fa5d38aca",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1d0d18a3-13b7-429b-9730-401dbc134c38"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "admin /sources",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "1170",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c6b97805-2342-4b96-8502-e48b8f42405d"
+      },
+      "body": "[{\"id\":\"fe0171da-2d8d-50f5-8341-642190d5de46\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"gitlab\",\"instance\":\"grp/proj\",\"entity_family\":\"operational\",\"display_name\":null,\"mode\":\"managed_sync\",\"enabled\":false,\"webhook_mode\":\"customer_hosted\",\"matched_integration_source_id\":\"81e10ef1-4aa6-5fb6-9d0f-337b66922970\",\"created_at\":\"2026-09-03T10:00:00Z\",\"updated_at\":\"2026-09-03T10:00:00Z\",\"warnings\":[]},{\"id\":\"81e10ef1-4aa6-5fb6-9d0f-337b66922970\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"custom\",\"instance\":\"x é y\",\"entity_family\":\"legacy\",\"display_name\":\"Ünïcode\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-02T10:00:00Z\",\"updated_at\":\"2026-09-02T10:00:00.500000Z\",\"warnings\":[]},{\"id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"Acme/API\",\"entity_family\":\"legacy\",\"display_name\":\"Acme API\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-01T10:00:00.123456Z\",\"updated_at\":\"2026-09-02T11:00:00Z\",\"warnings\":[]}]"
+    },
+    {
+      "name": "community /sources",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2eaa40a5aa8681d751ec9ef2f6e098e44f7d8714567497532058149650ac613b",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a1e73032-cf70-4618-a75f-9f3f72a0a0a6"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "disabled /sources",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c0dabbed1130f74136572144b039910057527ab375af963e2c824d860bf859b8",
+      "status": 403,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "812ce44c-5cfa-4ac5-9ea7-a5f078c4f93b"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"customer_push_ingest\",\"message\":\"Customer push ingest is not enabled for this organization\"}}"
+    },
+    {
+      "name": "license wins /sources",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4bc16a52618082747eedf0364c5194ccac184e6da90b862cf6e82cd4be5d2050",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "30f3fbb6-8396-4a45-94bb-c0a5e0d21843"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "anon /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b0b96be3-121b-41d3-8edc-b0374a6d1e53"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "947fb3b323b8943637f1c9406e102e8806890c0c14594e4f9073404fa5d38aca",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1d6f9ffe-7f51-4014-93d3-9ec17c7a9575"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "admin /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "378",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2ed544e1-0ade-456d-a8da-0c71f77d90bf"
+      },
+      "body": "{\"id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"Acme/API\",\"entity_family\":\"legacy\",\"display_name\":\"Acme API\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-01T10:00:00.123456Z\",\"updated_at\":\"2026-09-02T11:00:00Z\",\"warnings\":[]}"
+    },
+    {
+      "name": "community /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2eaa40a5aa8681d751ec9ef2f6e098e44f7d8714567497532058149650ac613b",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "dc22148f-8b8a-4e18-9762-ac0c6f076003"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "disabled /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c0dabbed1130f74136572144b039910057527ab375af963e2c824d860bf859b8",
+      "status": 403,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6a6b100c-70b2-45c6-a04e-9ccc0c7b99cd"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"customer_push_ingest\",\"message\":\"Customer push ingest is not enabled for this organization\"}}"
+    },
+    {
+      "name": "license wins /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4bc16a52618082747eedf0364c5194ccac184e6da90b862cf6e82cd4be5d2050",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a02b8dae-aa12-4b6f-a7cf-18c052560220"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "anon /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f2642535-c619-4d8c-9805-ccc3481d1662"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "947fb3b323b8943637f1c9406e102e8806890c0c14594e4f9073404fa5d38aca",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "467a4c3b-9e9a-40e4-a4df-995e6f53a85a"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "admin /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "680",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2bf7bb36-fa79-42a4-8843-41033d0eb662"
+      },
+      "body": "[{\"id\":\"7ba9c604-2dfd-5a51-add2-79583c622ee3\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"bound\",\"token_prefix\":\"fcpush_aaaaa\",\"scopes\":[\"ingest:write\",\"schema:read\"],\"expires_at\":\"2027-01-01T00:00:00Z\",\"revoked_at\":null,\"last_used_at\":\"2026-09-20T01:02:03.000004Z\",\"created_at\":\"2026-09-10T00:00:00Z\"},{\"id\":\"4ec62e6e-b417-55d3-b688-2d09a6bcdd31\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"revoked\",\"token_prefix\":\"fcpush_ccccc\",\"scopes\":[],\"expires_at\":null,\"revoked_at\":\"2026-09-12T00:00:00Z\",\"last_used_at\":null,\"created_at\":\"2026-09-09T00:00:00Z\"}]"
+    },
+    {
+      "name": "community /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2eaa40a5aa8681d751ec9ef2f6e098e44f7d8714567497532058149650ac613b",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bce5aef2-4e08-4eba-992f-1f212bd1509e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "disabled /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c0dabbed1130f74136572144b039910057527ab375af963e2c824d860bf859b8",
+      "status": 403,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0b86d479-e4fe-40dc-8952-f93556386161"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"customer_push_ingest\",\"message\":\"Customer push ingest is not enabled for this organization\"}}"
+    },
+    {
+      "name": "license wins /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4bc16a52618082747eedf0364c5194ccac184e6da90b862cf6e82cd4be5d2050",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c05dd8a4-6416-4b0c-b43d-d425d441d01a"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "anon /tokens",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a26c951b-4b2a-4501-b78d-33077a109692"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member /tokens",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "947fb3b323b8943637f1c9406e102e8806890c0c14594e4f9073404fa5d38aca",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "29dc5925-8df3-47aa-8ab4-0f71fca10bd0"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "admin /tokens",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "956",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0358583d-9de5-4e2e-abe9-c19cc29551e7"
+      },
+      "body": "[{\"id\":\"45034bbd-ebf9-5dd5-87e7-ade069dbe237\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":null,\"name\":\"org wide\",\"token_prefix\":\"fcpush_bbbbb\",\"scopes\":[\"schema:read\"],\"expires_at\":null,\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"2026-09-11T00:00:00Z\"},{\"id\":\"7ba9c604-2dfd-5a51-add2-79583c622ee3\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"bound\",\"token_prefix\":\"fcpush_aaaaa\",\"scopes\":[\"ingest:write\",\"schema:read\"],\"expires_at\":\"2027-01-01T00:00:00Z\",\"revoked_at\":null,\"last_used_at\":\"2026-09-20T01:02:03.000004Z\",\"created_at\":\"2026-09-10T00:00:00Z\"},{\"id\":\"4ec62e6e-b417-55d3-b688-2d09a6bcdd31\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"revoked\",\"token_prefix\":\"fcpush_ccccc\",\"scopes\":[],\"expires_at\":null,\"revoked_at\":\"2026-09-12T00:00:00Z\",\"last_used_at\":null,\"created_at\":\"2026-09-09T00:00:00Z\"}]"
+    },
+    {
+      "name": "community /tokens",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2eaa40a5aa8681d751ec9ef2f6e098e44f7d8714567497532058149650ac613b",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f1ca14af-e96d-4224-a11a-c7594664adfd"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "disabled /tokens",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c0dabbed1130f74136572144b039910057527ab375af963e2c824d860bf859b8",
+      "status": 403,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "acc05351-79e6-4e78-abf1-44d5fca4d8e1"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"customer_push_ingest\",\"message\":\"Customer push ingest is not enabled for this organization\"}}"
+    },
+    {
+      "name": "license wins /tokens",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4bc16a52618082747eedf0364c5194ccac184e6da90b862cf6e82cd4be5d2050",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2d95bdab-296d-4845-bd43-4d31f9919e0e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "anon /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2beac4ba-fccd-47dd-9ecd-72dd53e0273a"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "947fb3b323b8943637f1c9406e102e8806890c0c14594e4f9073404fa5d38aca",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4dff86a1-a801-4a4d-868b-6af08ed980d3"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "admin /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "587",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9bed34c7-5a80-4caf-b3a0-28aad639aed7"
+      },
+      "body": "{\"items\":[{\"ingestion_id\":\"951c5989-485d-5610-a51e-6a5b2d253051\",\"status\":\"completed\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":\"ci\",\"items_received\":3,\"items_accepted\":2,\"items_rejected\":1,\"created_at\":\"2026-09-06T00:00:00.000001Z\",\"completed_at\":\"2026-09-06T00:06:00Z\"},{\"ingestion_id\":\"992e1af3-834e-5c39-adc0-2563c956e6fd\",\"status\":\"accepted\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":null,\"items_received\":1,\"items_accepted\":0,\"items_rejected\":0,\"created_at\":\"2026-09-04T00:00:00Z\",\"completed_at\":null}],\"total\":2,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "community /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2eaa40a5aa8681d751ec9ef2f6e098e44f7d8714567497532058149650ac613b",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "abf1fe35-1748-41bf-bcfe-81aba86a2e1c"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "disabled /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c0dabbed1130f74136572144b039910057527ab375af963e2c824d860bf859b8",
+      "status": 403,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "021bd853-87c2-4ca6-a364-b2d96910120e"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"customer_push_ingest\",\"message\":\"Customer push ingest is not enabled for this organization\"}}"
+    },
+    {
+      "name": "license wins /sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4bc16a52618082747eedf0364c5194ccac184e6da90b862cf6e82cd4be5d2050",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "df21fd0d-ec0c-40c0-8c7e-6ac1d24c9818"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "anon /batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8856c936-1e3d-4f3b-a3ad-d8e20a59f5b5"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member /batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "947fb3b323b8943637f1c9406e102e8806890c0c14594e4f9073404fa5d38aca",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "53313292-be05-4667-8c61-fc20c74d572e"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "admin /batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "1071",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "59658854-4779-4a5d-9526-243b8a3a88c7"
+      },
+      "body": "{\"ingestion_id\":\"951c5989-485d-5610-a51e-6a5b2d253051\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"status\":\"completed\",\"attempts\":2,\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":\"ci\",\"producer_version\":\"1.2\",\"schema_version\":\"external-ingest.v1\",\"window_started_at\":\"2026-09-05T00:00:00Z\",\"window_ended_at\":\"2026-09-05T01:00:00.250000Z\",\"items_received\":3,\"items_accepted\":2,\"items_rejected\":1,\"record_counts\":{\"work_item\":2,\"pull_request\":1},\"error_summary\":{\"zeta\":[\"b\"],\"alpha\":{\"n\":1}},\"created_at\":\"2026-09-06T00:00:00.000001Z\",\"updated_at\":\"2026-09-06T00:05:00Z\",\"completed_at\":\"2026-09-06T00:06:00Z\",\"rejected_records\":[{\"index\":0,\"kind\":\"pull_request\",\"external_id\":null,\"code\":\"missing_field\",\"message\":\"required\",\"path\":null},{\"index\":2,\"kind\":\"work_item\",\"external_id\":\"w-2\",\"code\":\"unknown_kind\",\"message\":\"nope\",\"path\":\"kind\"},{\"index\":4,\"kind\":\"work_item\",\"external_id\":\"w-4\",\"code\":\"invalid_field\",\"message\":\"bad \\\"value\\\"\",\"path\":\"payload.state\"}],\"rejected_records_total\":3,\"rejected_records_limit\":50,\"rejected_records_offset\":0}"
+    },
+    {
+      "name": "community /batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2eaa40a5aa8681d751ec9ef2f6e098e44f7d8714567497532058149650ac613b",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "274a0ed4-6924-4b56-80d5-4e77d4ded15a"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "disabled /batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c0dabbed1130f74136572144b039910057527ab375af963e2c824d860bf859b8",
+      "status": 403,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c9d6bb60-9b0f-449d-aeb4-425ccb8580de"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"customer_push_ingest\",\"message\":\"Customer push ingest is not enabled for this organization\"}}"
+    },
+    {
+      "name": "license wins /batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4bc16a52618082747eedf0364c5194ccac184e6da90b862cf6e82cd4be5d2050",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "82afd4a4-46da-46d0-b28c-8dec5ee371ea"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "anon /schemas",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "246be236-ec1d-4606-bd06-a74f8f1a8eb4"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member /schemas",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "947fb3b323b8943637f1c9406e102e8806890c0c14594e4f9073404fa5d38aca",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "663e4c56-64ac-409c-9c87-c1608ad6633a"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "admin /schemas",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "558",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a3f40601-c5cb-410b-8d60-413852ca5632"
+      },
+      "body": "{\"schemaVersions\":[\"external-ingest.v1\"],\"recordKinds\":[\"commit.v1\",\"escalation_policy.v1\",\"identity.v1\",\"incident_note.v1\",\"incident_responder.v1\",\"incident_timeline_event.v1\",\"on_call_assignment.v1\",\"on_call_schedule.v1\",\"operational_alert.v1\",\"operational_incident.v1\",\"operational_service.v1\",\"operational_team.v1\",\"operational_user.v1\",\"pull_request.v1\",\"repository.v1\",\"review.v1\",\"service_repository_mapping.v1\",\"team.v1\",\"work_item.v1\",\"work_item_dependency.v1\",\"work_item_transition.v1\"],\"limits\":{\"maxRecordsPerBatch\":2500,\"maxBodyBytes\":10000000}}"
+    },
+    {
+      "name": "community /schemas",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2eaa40a5aa8681d751ec9ef2f6e098e44f7d8714567497532058149650ac613b",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "aa7b55ce-aa0e-4b36-85aa-6cb91a6681c7"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "disabled /schemas",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c0dabbed1130f74136572144b039910057527ab375af963e2c824d860bf859b8",
+      "status": 403,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b41338cb-29e0-4982-bdda-7b4f4af043fb"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"customer_push_ingest\",\"message\":\"Customer push ingest is not enabled for this organization\"}}"
+    },
+    {
+      "name": "license wins /schemas",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4bc16a52618082747eedf0364c5194ccac184e6da90b862cf6e82cd4be5d2050",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "32ff1b4c-3b95-43d7-8b17-c4f6b6f66195"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "anon /schemas/external-ingest.v1",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas/external-ingest.v1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "582819bc-5a3d-47ba-bdc8-9e0bfad0a2bb"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member /schemas/external-ingest.v1",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas/external-ingest.v1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "947fb3b323b8943637f1c9406e102e8806890c0c14594e4f9073404fa5d38aca",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ecca16bf-8caf-4068-aa09-a84045a13433"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "admin /schemas/external-ingest.v1",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas/external-ingest.v1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "43451",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "58b0d09e-86c2-4b10-b4ed-a681551a3dfc"
+      },
+      "body": "{\"schemaVersion\":\"external-ingest.v1\",\"envelope\":{\"$defs\":{\"IngestWindow\":{\"additionalProperties\":false,\"properties\":{\"startedAt\":{\"format\":\"date-time\",\"title\":\"Startedat\",\"type\":\"string\"},\"endedAt\":{\"format\":\"date-time\",\"title\":\"Endedat\",\"type\":\"string\"}},\"required\":[\"startedAt\",\"endedAt\"],\"title\":\"IngestWindow\",\"type\":\"object\"},\"RecordEnvelope\":{\"additionalProperties\":false,\"description\":\"Generic wrapper: kind + externalId (for error correlation) + payload.\\n\\n``payload`` is validated per-kind against ``RECORD_KIND_MODELS`` in\\n``router.py``/``validate.py``, not here — a discriminated union at this\\nlevel would abort parsing the whole batch on one bad record (see\\ndocs/architecture/external-ingest-rest-contract.md D-payload-shape).\",\"properties\":{\"kind\":{\"title\":\"Kind\",\"type\":\"string\"},\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"payload\":{\"additionalProperties\":true,\"title\":\"Payload\",\"type\":\"object\"}},\"required\":[\"kind\",\"externalId\",\"payload\"],\"title\":\"RecordEnvelope\",\"type\":\"object\"},\"SourceDescriptor\":{\"additionalProperties\":false,\"properties\":{\"type\":{\"const\":\"customer_push\",\"default\":\"customer_push\",\"title\":\"Type\",\"type\":\"string\"},\"system\":{\"enum\":[\"github\",\"gitlab\",\"jira\",\"linear\",\"pagerduty\",\"atlassian\",\"custom\"],\"title\":\"System\",\"type\":\"string\"},\"instance\":{\"maxLength\":255,\"minLength\":1,\"title\":\"Instance\",\"type\":\"string\"},\"entityFamily\":{\"default\":\"legacy\",\"enum\":[\"legacy\",\"operational\"],\"title\":\"Entityfamily\",\"type\":\"string\"},\"producer\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Producer\"},\"producerVersion\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Producerversion\"}},\"required\":[\"system\",\"instance\"],\"title\":\"SourceDescriptor\",\"type\":\"object\"}},\"additionalProperties\":false,\"properties\":{\"schemaVersion\":{\"title\":\"Schemaversion\",\"type\":\"string\"},\"idempotencyKey\":{\"maxLength\":255,\"minLength\":1,\"title\":\"Idempotencykey\",\"type\":\"string\"},\"source\":{\"$ref\":\"#/$defs/SourceDescriptor\"},\"window\":{\"anyOf\":[{\"$ref\":\"#/$defs/IngestWindow\"},{\"type\":\"null\"}],\"default\":null},\"records\":{\"items\":{\"$ref\":\"#/$defs/RecordEnvelope\"},\"minItems\":1,\"title\":\"Records\",\"type\":\"array\"}},\"required\":[\"schemaVersion\",\"idempotencyKey\",\"source\",\"records\"],\"title\":\"BatchEnvelope\",\"type\":\"object\"},\"recordKinds\":{\"repository.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":1024,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceSystem\":{\"enum\":[\"github\",\"gitlab\",\"custom\"],\"title\":\"Sourcesystem\",\"type\":\"string\"},\"defaultRef\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Defaultref\"},\"tags\":{\"items\":{\"type\":\"string\"},\"maxItems\":50,\"title\":\"Tags\",\"type\":\"array\"},\"settings\":{\"additionalProperties\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"integer\"},{\"type\":\"number\"},{\"type\":\"boolean\"}]},\"title\":\"Settings\",\"type\":\"object\"}},\"required\":[\"externalId\",\"sourceSystem\"],\"title\":\"RepositoryV1\",\"type\":\"object\"},\"identity.v1\":{\"additionalProperties\":false,\"properties\":{\"canonicalId\":{\"maxLength\":255,\"minLength\":1,\"title\":\"Canonicalid\",\"type\":\"string\"},\"displayName\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Displayname\"},\"email\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Email\"},\"providerIdentities\":{\"additionalProperties\":{\"items\":{\"type\":\"string\"},\"type\":\"array\"},\"title\":\"Provideridentities\",\"type\":\"object\"},\"teamIds\":{\"items\":{\"type\":\"string\"},\"title\":\"Teamids\",\"type\":\"array\"},\"isActive\":{\"default\":true,\"title\":\"Isactive\",\"type\":\"boolean\"},\"updatedAt\":{\"format\":\"date-time\",\"title\":\"Updatedat\",\"type\":\"string\"}},\"required\":[\"canonicalId\",\"updatedAt\"],\"title\":\"IdentityV1\",\"type\":\"object\"},\"team.v1\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"maxLength\":255,\"minLength\":1,\"title\":\"Id\",\"type\":\"string\"},\"name\":{\"title\":\"Name\",\"type\":\"string\"},\"description\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Description\"},\"members\":{\"items\":{\"type\":\"string\"},\"title\":\"Members\",\"type\":\"array\"},\"projectKeys\":{\"items\":{\"type\":\"string\"},\"title\":\"Projectkeys\",\"type\":\"array\"},\"repoPatterns\":{\"items\":{\"type\":\"string\"},\"title\":\"Repopatterns\",\"type\":\"array\"},\"isActive\":{\"default\":true,\"title\":\"Isactive\",\"type\":\"boolean\"},\"updatedAt\":{\"format\":\"date-time\",\"title\":\"Updatedat\",\"type\":\"string\"},\"nativeTeamKey\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Nativeteamkey\"},\"parentTeamId\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Parentteamid\"}},\"required\":[\"id\",\"name\",\"updatedAt\"],\"title\":\"TeamV1\",\"type\":\"object\"},\"work_item.v1\":{\"additionalProperties\":false,\"properties\":{\"externalKey\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalkey\",\"type\":\"string\"},\"provider\":{\"enum\":[\"jira\",\"github\",\"gitlab\",\"linear\"],\"title\":\"Provider\",\"type\":\"string\"},\"title\":{\"title\":\"Title\",\"type\":\"string\"},\"type\":{\"default\":\"unknown\",\"enum\":[\"story\",\"task\",\"bug\",\"epic\",\"pr\",\"merge_request\",\"issue\",\"incident\",\"chore\",\"unknown\"],\"title\":\"Type\",\"type\":\"string\"},\"status\":{\"enum\":[\"backlog\",\"todo\",\"in_progress\",\"in_review\",\"blocked\",\"done\",\"canceled\",\"unknown\"],\"title\":\"Status\",\"type\":\"string\"},\"statusRaw\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Statusraw\"},\"description\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Description\"},\"repositoryExternalId\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Repositoryexternalid\"},\"nativeTeamKey\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Nativeteamkey\"},\"projectKey\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Projectkey\"},\"projectId\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Projectid\"},\"projectName\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Projectname\"},\"assignees\":{\"items\":{\"type\":\"string\"},\"title\":\"Assignees\",\"type\":\"array\"},\"reporter\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Reporter\"},\"createdAt\":{\"format\":\"date-time\",\"title\":\"Createdat\",\"type\":\"string\"},\"updatedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Updatedat\"},\"startedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Startedat\"},\"completedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Completedat\"},\"closedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Closedat\"},\"labels\":{\"items\":{\"type\":\"string\"},\"title\":\"Labels\",\"type\":\"array\"},\"storyPoints\":{\"anyOf\":[{\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Storypoints\"},\"sprintId\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sprintid\"},\"sprintName\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sprintname\"},\"parentId\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Parentid\"},\"epicId\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Epicid\"},\"url\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Url\"},\"priorityRaw\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Priorityraw\"},\"serviceClass\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Serviceclass\"},\"dueAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Dueat\"}},\"required\":[\"externalKey\",\"provider\",\"title\",\"status\",\"createdAt\"],\"title\":\"WorkItemV1\",\"type\":\"object\"},\"work_item_transition.v1\":{\"additionalProperties\":false,\"description\":\"Master-spec header item 2: takes ``externalKey`` (not the internal\\nnamespaced ``work_item_id``) + optional ``workItemType`` to disambiguate\\nthe issue vs. pr/merge_request namespace for github/gitlab.\",\"properties\":{\"externalKey\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalkey\",\"type\":\"string\"},\"provider\":{\"enum\":[\"jira\",\"github\",\"gitlab\",\"linear\"],\"title\":\"Provider\",\"type\":\"string\"},\"workItemType\":{\"anyOf\":[{\"enum\":[\"issue\",\"pr\",\"merge_request\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Workitemtype\"},\"occurredAt\":{\"format\":\"date-time\",\"title\":\"Occurredat\",\"type\":\"string\"},\"fromStatusRaw\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Fromstatusraw\"},\"toStatusRaw\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Tostatusraw\"},\"fromStatus\":{\"enum\":[\"backlog\",\"todo\",\"in_progress\",\"in_review\",\"blocked\",\"done\",\"canceled\",\"unknown\"],\"title\":\"Fromstatus\",\"type\":\"string\"},\"toStatus\":{\"enum\":[\"backlog\",\"todo\",\"in_progress\",\"in_review\",\"blocked\",\"done\",\"canceled\",\"unknown\"],\"title\":\"Tostatus\",\"type\":\"string\"},\"actor\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Actor\"}},\"required\":[\"externalKey\",\"provider\",\"occurredAt\",\"fromStatus\",\"toStatus\"],\"title\":\"WorkItemTransitionV1\",\"type\":\"object\"},\"work_item_dependency.v1\":{\"additionalProperties\":false,\"description\":\"Master-spec header item 2: source/target take ``externalKey`` pairs\\n(not internal namespaced work-item IDs) + optional per-side\\n``workItemType`` since source and target may be different namespaces\\n(e.g. an issue blocked by a PR).\",\"properties\":{\"sourceExternalKey\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Sourceexternalkey\",\"type\":\"string\"},\"sourceWorkItemType\":{\"anyOf\":[{\"enum\":[\"issue\",\"pr\",\"merge_request\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceworkitemtype\"},\"targetExternalKey\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Targetexternalkey\",\"type\":\"string\"},\"targetWorkItemType\":{\"anyOf\":[{\"enum\":[\"issue\",\"pr\",\"merge_request\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Targetworkitemtype\"},\"relationshipType\":{\"enum\":[\"blocks\",\"blocked_by\",\"relates_to\",\"duplicates\",\"parent_of\",\"child_of\"],\"title\":\"Relationshiptype\",\"type\":\"string\"},\"relationshipTypeRaw\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshiptyperaw\"}},\"required\":[\"sourceExternalKey\",\"targetExternalKey\",\"relationshipType\"],\"title\":\"WorkItemDependencyV1\",\"type\":\"object\"},\"pull_request.v1\":{\"additionalProperties\":false,\"properties\":{\"repositoryExternalId\":{\"title\":\"Repositoryexternalid\",\"type\":\"string\"},\"number\":{\"minimum\":1,\"title\":\"Number\",\"type\":\"integer\"},\"title\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Title\"},\"body\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Body\"},\"state\":{\"enum\":[\"open\",\"closed\",\"merged\"],\"title\":\"State\",\"type\":\"string\"},\"authorName\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Authorname\"},\"authorEmail\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Authoremail\"},\"createdAt\":{\"format\":\"date-time\",\"title\":\"Createdat\",\"type\":\"string\"},\"mergedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Mergedat\"},\"closedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Closedat\"},\"headBranch\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Headbranch\"},\"baseBranch\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Basebranch\"},\"additions\":{\"anyOf\":[{\"minimum\":0,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Additions\"},\"deletions\":{\"anyOf\":[{\"minimum\":0,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Deletions\"},\"changedFiles\":{\"anyOf\":[{\"minimum\":0,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Changedfiles\"},\"firstReviewAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Firstreviewat\"},\"firstCommentAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Firstcommentat\"},\"changesRequestedCount\":{\"anyOf\":[{\"minimum\":0,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":0,\"title\":\"Changesrequestedcount\"},\"reviewsCount\":{\"anyOf\":[{\"minimum\":0,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":0,\"title\":\"Reviewscount\"},\"commentsCount\":{\"anyOf\":[{\"minimum\":0,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":0,\"title\":\"Commentscount\"},\"url\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Url\"}},\"required\":[\"repositoryExternalId\",\"number\",\"state\",\"createdAt\"],\"title\":\"PullRequestV1\",\"type\":\"object\"},\"review.v1\":{\"additionalProperties\":false,\"properties\":{\"repositoryExternalId\":{\"title\":\"Repositoryexternalid\",\"type\":\"string\"},\"pullRequestNumber\":{\"minimum\":1,\"title\":\"Pullrequestnumber\",\"type\":\"integer\"},\"reviewId\":{\"minLength\":1,\"title\":\"Reviewid\",\"type\":\"string\"},\"reviewer\":{\"title\":\"Reviewer\",\"type\":\"string\"},\"state\":{\"enum\":[\"APPROVED\",\"CHANGES_REQUESTED\",\"COMMENTED\",\"DISMISSED\",\"PENDING\"],\"title\":\"State\",\"type\":\"string\"},\"submittedAt\":{\"format\":\"date-time\",\"title\":\"Submittedat\",\"type\":\"string\"}},\"required\":[\"repositoryExternalId\",\"pullRequestNumber\",\"reviewId\",\"reviewer\",\"state\",\"submittedAt\"],\"title\":\"ReviewV1\",\"type\":\"object\"},\"commit.v1\":{\"additionalProperties\":false,\"properties\":{\"repositoryExternalId\":{\"title\":\"Repositoryexternalid\",\"type\":\"string\"},\"hash\":{\"maxLength\":64,\"minLength\":7,\"title\":\"Hash\",\"type\":\"string\"},\"message\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Message\"},\"authorName\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Authorname\"},\"authorEmail\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Authoremail\"},\"authorWhen\":{\"format\":\"date-time\",\"title\":\"Authorwhen\",\"type\":\"string\"},\"committerName\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Committername\"},\"committerEmail\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Committeremail\"},\"committerWhen\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Committerwhen\"},\"parents\":{\"default\":1,\"minimum\":0,\"title\":\"Parents\",\"type\":\"integer\"}},\"required\":[\"repositoryExternalId\",\"hash\",\"authorWhen\"],\"title\":\"CommitV1\",\"type\":\"object\"},\"operational_service.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceVersionAt\":{\"format\":\"date-time\",\"title\":\"Sourceversionat\",\"type\":\"string\"},\"sourceUrl\":{\"anyOf\":[{\"maxLength\":2048,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceurl\"},\"sourceEventAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventat\"},\"sourceEventId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventid\"},\"rawStatus\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawstatus\"},\"rawSeverity\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawseverity\"},\"rawPriority\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawpriority\"},\"normalizedStatus\":{\"anyOf\":[{\"enum\":[\"active\",\"open\",\"acknowledged\",\"resolved\",\"closed\",\"suppressed\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedstatus\"},\"normalizedSeverity\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\",\"info\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedseverity\"},\"normalizedPriority\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedpriority\"},\"relationshipProvenance\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipprovenance\"},\"relationshipConfidence\":{\"anyOf\":[{\"maximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipconfidence\"},\"name\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Name\",\"type\":\"string\"},\"description\":{\"anyOf\":[{\"maxLength\":20000,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Description\"},\"serviceType\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Servicetype\"},\"owningTeamExternalId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Owningteamexternalid\"},\"escalationPolicyExternalId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Escalationpolicyexternalid\"},\"isDeleted\":{\"default\":false,\"title\":\"Isdeleted\",\"type\":\"boolean\"},\"deletedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Deletedat\"}},\"required\":[\"externalId\",\"sourceVersionAt\",\"name\"],\"title\":\"OperationalServiceV1\",\"type\":\"object\"},\"operational_incident.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceVersionAt\":{\"format\":\"date-time\",\"title\":\"Sourceversionat\",\"type\":\"string\"},\"sourceUrl\":{\"anyOf\":[{\"maxLength\":2048,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceurl\"},\"sourceEventAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventat\"},\"sourceEventId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventid\"},\"rawStatus\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawstatus\"},\"rawSeverity\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawseverity\"},\"rawPriority\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawpriority\"},\"normalizedStatus\":{\"anyOf\":[{\"enum\":[\"active\",\"open\",\"acknowledged\",\"resolved\",\"closed\",\"suppressed\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedstatus\"},\"normalizedSeverity\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\",\"info\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedseverity\"},\"normalizedPriority\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedpriority\"},\"relationshipProvenance\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipprovenance\"},\"relationshipConfidence\":{\"anyOf\":[{\"maximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipconfidence\"},\"title\":{\"maxLength\":1024,\"minLength\":1,\"title\":\"Title\",\"type\":\"string\"},\"description\":{\"anyOf\":[{\"maxLength\":20000,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Description\"},\"serviceExternalId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Serviceexternalid\"},\"escalationPolicyExternalId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Escalationpolicyexternalid\"},\"startedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Startedat\"},\"resolvedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Resolvedat\"},\"isDeleted\":{\"default\":false,\"title\":\"Isdeleted\",\"type\":\"boolean\"},\"deletedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Deletedat\"}},\"required\":[\"externalId\",\"sourceVersionAt\",\"title\"],\"title\":\"OperationalIncidentV1\",\"type\":\"object\"},\"operational_alert.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceVersionAt\":{\"format\":\"date-time\",\"title\":\"Sourceversionat\",\"type\":\"string\"},\"sourceUrl\":{\"anyOf\":[{\"maxLength\":2048,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceurl\"},\"sourceEventAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventat\"},\"sourceEventId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventid\"},\"rawStatus\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawstatus\"},\"rawSeverity\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawseverity\"},\"rawPriority\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawpriority\"},\"normalizedStatus\":{\"anyOf\":[{\"enum\":[\"active\",\"open\",\"acknowledged\",\"resolved\",\"closed\",\"suppressed\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedstatus\"},\"normalizedSeverity\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\",\"info\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedseverity\"},\"normalizedPriority\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedpriority\"},\"relationshipProvenance\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipprovenance\"},\"relationshipConfidence\":{\"anyOf\":[{\"maximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipconfidence\"},\"title\":{\"maxLength\":1024,\"minLength\":1,\"title\":\"Title\",\"type\":\"string\"},\"description\":{\"anyOf\":[{\"maxLength\":20000,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Description\"},\"serviceExternalId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Serviceexternalid\"},\"incidentExternalId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Incidentexternalid\"},\"triggeredAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Triggeredat\"},\"acknowledgedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Acknowledgedat\"},\"resolvedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Resolvedat\"},\"isDeleted\":{\"default\":false,\"title\":\"Isdeleted\",\"type\":\"boolean\"},\"deletedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Deletedat\"}},\"required\":[\"externalId\",\"sourceVersionAt\",\"title\"],\"title\":\"OperationalAlertV1\",\"type\":\"object\"},\"incident_timeline_event.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceVersionAt\":{\"format\":\"date-time\",\"title\":\"Sourceversionat\",\"type\":\"string\"},\"sourceUrl\":{\"anyOf\":[{\"maxLength\":2048,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceurl\"},\"sourceEventAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventat\"},\"sourceEventId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventid\"},\"rawStatus\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawstatus\"},\"rawSeverity\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawseverity\"},\"rawPriority\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawpriority\"},\"normalizedStatus\":{\"anyOf\":[{\"enum\":[\"active\",\"open\",\"acknowledged\",\"resolved\",\"closed\",\"suppressed\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedstatus\"},\"normalizedSeverity\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\",\"info\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedseverity\"},\"normalizedPriority\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedpriority\"},\"relationshipProvenance\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipprovenance\"},\"relationshipConfidence\":{\"anyOf\":[{\"maximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipconfidence\"},\"incidentExternalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Incidentexternalid\",\"type\":\"string\"},\"eventType\":{\"maxLength\":255,\"minLength\":1,\"title\":\"Eventtype\",\"type\":\"string\"},\"body\":{\"anyOf\":[{\"maxLength\":20000,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Body\"},\"actorType\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Actortype\"},\"actorExternalId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Actorexternalid\"},\"occurredAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Occurredat\"}},\"required\":[\"externalId\",\"sourceVersionAt\",\"incidentExternalId\",\"eventType\"],\"title\":\"IncidentTimelineEventV1\",\"type\":\"object\"},\"incident_note.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceVersionAt\":{\"format\":\"date-time\",\"title\":\"Sourceversionat\",\"type\":\"string\"},\"sourceUrl\":{\"anyOf\":[{\"maxLength\":2048,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceurl\"},\"sourceEventAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventat\"},\"sourceEventId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventid\"},\"rawStatus\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawstatus\"},\"rawSeverity\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawseverity\"},\"rawPriority\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawpriority\"},\"normalizedStatus\":{\"anyOf\":[{\"enum\":[\"active\",\"open\",\"acknowledged\",\"resolved\",\"closed\",\"suppressed\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedstatus\"},\"normalizedSeverity\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\",\"info\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedseverity\"},\"normalizedPriority\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedpriority\"},\"relationshipProvenance\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipprovenance\"},\"relationshipConfidence\":{\"anyOf\":[{\"maximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipconfidence\"},\"incidentExternalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Incidentexternalid\",\"type\":\"string\"},\"body\":{\"maxLength\":20000,\"minLength\":1,\"title\":\"Body\",\"type\":\"string\"},\"authorUserExternalId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Authoruserexternalid\"},\"createdAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Createdat\"}},\"required\":[\"externalId\",\"sourceVersionAt\",\"incidentExternalId\",\"body\"],\"title\":\"IncidentNoteV1\",\"type\":\"object\"},\"incident_responder.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceVersionAt\":{\"format\":\"date-time\",\"title\":\"Sourceversionat\",\"type\":\"string\"},\"sourceUrl\":{\"anyOf\":[{\"maxLength\":2048,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceurl\"},\"sourceEventAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventat\"},\"sourceEventId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventid\"},\"rawStatus\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawstatus\"},\"rawSeverity\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawseverity\"},\"rawPriority\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawpriority\"},\"normalizedStatus\":{\"anyOf\":[{\"enum\":[\"active\",\"open\",\"acknowledged\",\"resolved\",\"closed\",\"suppressed\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedstatus\"},\"normalizedSeverity\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\",\"info\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedseverity\"},\"normalizedPriority\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedpriority\"},\"relationshipProvenance\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipprovenance\"},\"relationshipConfidence\":{\"anyOf\":[{\"maximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipconfidence\"},\"incidentExternalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Incidentexternalid\",\"type\":\"string\"},\"userExternalId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Userexternalid\"},\"responderName\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Respondername\"},\"role\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Role\"},\"responderAssignmentId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Responderassignmentid\"},\"requestedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Requestedat\"},\"assignedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Assignedat\"},\"acknowledgedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Acknowledgedat\"},\"completedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Completedat\"}},\"required\":[\"externalId\",\"sourceVersionAt\",\"incidentExternalId\"],\"title\":\"IncidentResponderV1\",\"type\":\"object\"},\"escalation_policy.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceVersionAt\":{\"format\":\"date-time\",\"title\":\"Sourceversionat\",\"type\":\"string\"},\"sourceUrl\":{\"anyOf\":[{\"maxLength\":2048,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceurl\"},\"sourceEventAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventat\"},\"sourceEventId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventid\"},\"rawStatus\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawstatus\"},\"rawSeverity\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawseverity\"},\"rawPriority\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawpriority\"},\"normalizedStatus\":{\"anyOf\":[{\"enum\":[\"active\",\"open\",\"acknowledged\",\"resolved\",\"closed\",\"suppressed\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedstatus\"},\"normalizedSeverity\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\",\"info\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedseverity\"},\"normalizedPriority\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedpriority\"},\"relationshipProvenance\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipprovenance\"},\"relationshipConfidence\":{\"anyOf\":[{\"maximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipconfidence\"},\"name\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Name\",\"type\":\"string\"},\"description\":{\"anyOf\":[{\"maxLength\":20000,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Description\"},\"isDeleted\":{\"default\":false,\"title\":\"Isdeleted\",\"type\":\"boolean\"},\"deletedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Deletedat\"}},\"required\":[\"externalId\",\"sourceVersionAt\",\"name\"],\"title\":\"EscalationPolicyV1\",\"type\":\"object\"},\"on_call_schedule.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceVersionAt\":{\"format\":\"date-time\",\"title\":\"Sourceversionat\",\"type\":\"string\"},\"sourceUrl\":{\"anyOf\":[{\"maxLength\":2048,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceurl\"},\"sourceEventAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventat\"},\"sourceEventId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventid\"},\"rawStatus\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawstatus\"},\"rawSeverity\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawseverity\"},\"rawPriority\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawpriority\"},\"normalizedStatus\":{\"anyOf\":[{\"enum\":[\"active\",\"open\",\"acknowledged\",\"resolved\",\"closed\",\"suppressed\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedstatus\"},\"normalizedSeverity\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\",\"info\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedseverity\"},\"normalizedPriority\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedpriority\"},\"relationshipProvenance\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipprovenance\"},\"relationshipConfidence\":{\"anyOf\":[{\"maximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipconfidence\"},\"name\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Name\",\"type\":\"string\"},\"description\":{\"anyOf\":[{\"maxLength\":20000,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Description\"},\"isDeleted\":{\"default\":false,\"title\":\"Isdeleted\",\"type\":\"boolean\"},\"deletedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Deletedat\"},\"timezone\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Timezone\"}},\"required\":[\"externalId\",\"sourceVersionAt\",\"name\"],\"title\":\"OnCallScheduleV1\",\"type\":\"object\"},\"on_call_assignment.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceVersionAt\":{\"format\":\"date-time\",\"title\":\"Sourceversionat\",\"type\":\"string\"},\"sourceUrl\":{\"anyOf\":[{\"maxLength\":2048,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceurl\"},\"sourceEventAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventat\"},\"sourceEventId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventid\"},\"rawStatus\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawstatus\"},\"rawSeverity\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawseverity\"},\"rawPriority\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawpriority\"},\"normalizedStatus\":{\"anyOf\":[{\"enum\":[\"active\",\"open\",\"acknowledged\",\"resolved\",\"closed\",\"suppressed\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedstatus\"},\"normalizedSeverity\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\",\"info\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedseverity\"},\"normalizedPriority\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedpriority\"},\"relationshipProvenance\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipprovenance\"},\"relationshipConfidence\":{\"anyOf\":[{\"maximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipconfidence\"},\"scheduleExternalId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Scheduleexternalid\"},\"userExternalId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Userexternalid\"},\"escalationPolicyExternalId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Escalationpolicyexternalid\"},\"escalationLevel\":{\"anyOf\":[{\"maximum\":100,\"minimum\":0,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Escalationlevel\"},\"startsAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Startsat\"},\"endsAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Endsat\"}},\"required\":[\"externalId\",\"sourceVersionAt\"],\"title\":\"OnCallAssignmentV1\",\"type\":\"object\"},\"operational_team.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceVersionAt\":{\"format\":\"date-time\",\"title\":\"Sourceversionat\",\"type\":\"string\"},\"sourceUrl\":{\"anyOf\":[{\"maxLength\":2048,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceurl\"},\"sourceEventAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventat\"},\"sourceEventId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventid\"},\"rawStatus\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawstatus\"},\"rawSeverity\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawseverity\"},\"rawPriority\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawpriority\"},\"normalizedStatus\":{\"anyOf\":[{\"enum\":[\"active\",\"open\",\"acknowledged\",\"resolved\",\"closed\",\"suppressed\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedstatus\"},\"normalizedSeverity\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\",\"info\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedseverity\"},\"normalizedPriority\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedpriority\"},\"relationshipProvenance\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipprovenance\"},\"relationshipConfidence\":{\"anyOf\":[{\"maximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipconfidence\"},\"name\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Name\",\"type\":\"string\"},\"description\":{\"anyOf\":[{\"maxLength\":20000,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Description\"},\"isDeleted\":{\"default\":false,\"title\":\"Isdeleted\",\"type\":\"boolean\"},\"deletedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Deletedat\"}},\"required\":[\"externalId\",\"sourceVersionAt\",\"name\"],\"title\":\"OperationalTeamV1\",\"type\":\"object\"},\"operational_user.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceVersionAt\":{\"format\":\"date-time\",\"title\":\"Sourceversionat\",\"type\":\"string\"},\"sourceUrl\":{\"anyOf\":[{\"maxLength\":2048,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceurl\"},\"sourceEventAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventat\"},\"sourceEventId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventid\"},\"rawStatus\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawstatus\"},\"rawSeverity\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawseverity\"},\"rawPriority\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawpriority\"},\"normalizedStatus\":{\"anyOf\":[{\"enum\":[\"active\",\"open\",\"acknowledged\",\"resolved\",\"closed\",\"suppressed\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedstatus\"},\"normalizedSeverity\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\",\"info\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedseverity\"},\"normalizedPriority\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedpriority\"},\"relationshipProvenance\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipprovenance\"},\"relationshipConfidence\":{\"anyOf\":[{\"maximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipconfidence\"},\"displayName\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Displayname\",\"type\":\"string\"},\"email\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Email\"},\"isDeleted\":{\"default\":false,\"title\":\"Isdeleted\",\"type\":\"boolean\"},\"deletedAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Deletedat\"}},\"required\":[\"externalId\",\"sourceVersionAt\",\"displayName\"],\"title\":\"OperationalUserV1\",\"type\":\"object\"},\"service_repository_mapping.v1\":{\"additionalProperties\":false,\"properties\":{\"externalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Externalid\",\"type\":\"string\"},\"sourceVersionAt\":{\"format\":\"date-time\",\"title\":\"Sourceversionat\",\"type\":\"string\"},\"sourceUrl\":{\"anyOf\":[{\"maxLength\":2048,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceurl\"},\"sourceEventAt\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventat\"},\"sourceEventId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Sourceeventid\"},\"rawStatus\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawstatus\"},\"rawSeverity\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawseverity\"},\"rawPriority\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Rawpriority\"},\"normalizedStatus\":{\"anyOf\":[{\"enum\":[\"active\",\"open\",\"acknowledged\",\"resolved\",\"closed\",\"suppressed\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedstatus\"},\"normalizedSeverity\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\",\"info\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedseverity\"},\"normalizedPriority\":{\"anyOf\":[{\"enum\":[\"critical\",\"high\",\"medium\",\"low\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Normalizedpriority\"},\"relationshipProvenance\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipprovenance\"},\"relationshipConfidence\":{\"anyOf\":[{\"maximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Relationshipconfidence\"},\"serviceExternalId\":{\"maxLength\":512,\"minLength\":1,\"title\":\"Serviceexternalid\",\"type\":\"string\"},\"repoFullName\":{\"anyOf\":[{\"maxLength\":1024,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Repofullname\"},\"repoProvider\":{\"anyOf\":[{\"enum\":[\"github\",\"gitlab\",\"custom\"],\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Repoprovider\"},\"mappingKind\":{\"anyOf\":[{\"maxLength\":255,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Mappingkind\"},\"ruleId\":{\"anyOf\":[{\"maxLength\":512,\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Ruleid\"},\"validFrom\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Validfrom\"},\"validTo\":{\"anyOf\":[{\"format\":\"date-time\",\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Validto\"},\"isActive\":{\"default\":true,\"title\":\"Isactive\",\"type\":\"boolean\"}},\"required\":[\"externalId\",\"sourceVersionAt\",\"serviceExternalId\"],\"title\":\"ServiceRepositoryMappingV1\",\"type\":\"object\"}},\"limits\":{\"maxRecordsPerBatch\":2500,\"maxBodyBytes\":10000000}}"
+    },
+    {
+      "name": "community /schemas/external-ingest.v1",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas/external-ingest.v1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2eaa40a5aa8681d751ec9ef2f6e098e44f7d8714567497532058149650ac613b",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "33127364-2599-4d71-ac85-c218bd69141f"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "disabled /schemas/external-ingest.v1",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas/external-ingest.v1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c0dabbed1130f74136572144b039910057527ab375af963e2c824d860bf859b8",
+      "status": 403,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1ccc9602-afb1-44f7-bbdc-aa6848f85410"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"customer_push_ingest\",\"message\":\"Customer push ingest is not enabled for this organization\"}}"
+    },
+    {
+      "name": "license wins /schemas/external-ingest.v1",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas/external-ingest.v1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4bc16a52618082747eedf0364c5194ccac184e6da90b862cf6e82cd4be5d2050",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3a53da24-d84d-4d7e-9453-39d059a679e7"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "bad org claim",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "070f37db24a366ed7b142a093d1b0c1acc90d0a386c7129d2459e9d5b38be445",
+      "status": 404,
+      "headers": {
+        "content-length": "35",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3977515a-9fae-437d-88bc-f7f56800221a"
+      },
+      "body": "{\"detail\":\"Organization not found\"}"
+    },
+    {
+      "name": "superuser own org",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d5c14c28e77461a59825dbcf1d301132b1f87b295847298be96f8df6c9e976f0",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bb621125-c983-4637-8cc7-38939aafc158"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "superuser x-org team",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "6a3939c559d1901826f683b4dc4b91742dc5b61a97b0fd1c8d5d36df779f8f25",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5fe6ab0a-da99-4c91-a6be-2d13ba8659c6"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "admin x-org stranger",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ed07f4c1e7e6f9daedfb9ecaca04e286a16a96cfe4df37b692da352cf6144371",
+      "status": 403,
+      "headers": {
+        "content-length": "50",
+        "content-type": "application/json",
+        "x-request-id": "abd57796-3926-4c6b-ada3-84fab4f1870b"
+      },
+      "body": "{\"detail\": \"X-Org-Id not permitted for this user\"}"
+    },
+    {
+      "name": "source id braces",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/{24f9813e-6116-51fc-b9bc-16b92e3f5f3a}",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "378",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "da2eaea9-e992-4cab-ae1d-e972f53a5a37"
+      },
+      "body": "{\"id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"Acme/API\",\"entity_family\":\"legacy\",\"display_name\":\"Acme API\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-01T10:00:00.123456Z\",\"updated_at\":\"2026-09-02T11:00:00Z\",\"warnings\":[]}"
+    },
+    {
+      "name": "tokens source id braces",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/{24f9813e-6116-51fc-b9bc-16b92e3f5f3a}/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "680",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d9d8ed87-0ebb-49be-ae44-147329875d03"
+      },
+      "body": "[{\"id\":\"7ba9c604-2dfd-5a51-add2-79583c622ee3\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"bound\",\"token_prefix\":\"fcpush_aaaaa\",\"scopes\":[\"ingest:write\",\"schema:read\"],\"expires_at\":\"2027-01-01T00:00:00Z\",\"revoked_at\":null,\"last_used_at\":\"2026-09-20T01:02:03.000004Z\",\"created_at\":\"2026-09-10T00:00:00Z\"},{\"id\":\"4ec62e6e-b417-55d3-b688-2d09a6bcdd31\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"revoked\",\"token_prefix\":\"fcpush_ccccc\",\"scopes\":[],\"expires_at\":null,\"revoked_at\":\"2026-09-12T00:00:00Z\",\"last_used_at\":null,\"created_at\":\"2026-09-09T00:00:00Z\"}]"
+    },
+    {
+      "name": "source id no dashes",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e611651fcb9bc16b92e3f5f3a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "378",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c7495d11-5d2b-47e4-8920-1f0c34569525"
+      },
+      "body": "{\"id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"Acme/API\",\"entity_family\":\"legacy\",\"display_name\":\"Acme API\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-01T10:00:00.123456Z\",\"updated_at\":\"2026-09-02T11:00:00Z\",\"warnings\":[]}"
+    },
+    {
+      "name": "tokens source id no dashes",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e611651fcb9bc16b92e3f5f3a/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "680",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "95f885a6-4e1c-41a7-b8cc-4c25acca0dd8"
+      },
+      "body": "[{\"id\":\"7ba9c604-2dfd-5a51-add2-79583c622ee3\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"bound\",\"token_prefix\":\"fcpush_aaaaa\",\"scopes\":[\"ingest:write\",\"schema:read\"],\"expires_at\":\"2027-01-01T00:00:00Z\",\"revoked_at\":null,\"last_used_at\":\"2026-09-20T01:02:03.000004Z\",\"created_at\":\"2026-09-10T00:00:00Z\"},{\"id\":\"4ec62e6e-b417-55d3-b688-2d09a6bcdd31\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"revoked\",\"token_prefix\":\"fcpush_ccccc\",\"scopes\":[],\"expires_at\":null,\"revoked_at\":\"2026-09-12T00:00:00Z\",\"last_used_at\":null,\"created_at\":\"2026-09-09T00:00:00Z\"}]"
+    },
+    {
+      "name": "source id not uuid",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d416bf0c-b16d-43c4-b831-759991acaa8f"
+      },
+      "body": "{\"detail\":\"Source not found\"}"
+    },
+    {
+      "name": "tokens source id not uuid",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/nope/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "caac9ac4-305f-4843-a631-84cdd6b36e35"
+      },
+      "body": "{\"detail\":\"Source not found\"}"
+    },
+    {
+      "name": "source id other org",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/1faf2d54-ea65-553d-9bb4-7c8cdaa34555",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "de202636-e537-4b39-9b0b-cf13d40b3d57"
+      },
+      "body": "{\"detail\":\"Source not found\"}"
+    },
+    {
+      "name": "tokens source id other org",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/1faf2d54-ea65-553d-9bb4-7c8cdaa34555/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fc0f1753-20ef-4fc3-8e79-4cecc6e849d4"
+      },
+      "body": "{\"detail\":\"Source not found\"}"
+    },
+    {
+      "name": "source id short",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6f9cc5ba-a698-4c1b-bc05-78a436832baf"
+      },
+      "body": "{\"detail\":\"Source not found\"}"
+    },
+    {
+      "name": "tokens source id short",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cea4dbcd-fdb0-4e32-b823-9b080c3836fe"
+      },
+      "body": "{\"detail\":\"Source not found\"}"
+    },
+    {
+      "name": "source id upper",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24F9813E-6116-51FC-B9BC-16B92E3F5F3A",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "378",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "848d77c9-3100-4c47-becb-0a2588032766"
+      },
+      "body": "{\"id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"Acme/API\",\"entity_family\":\"legacy\",\"display_name\":\"Acme API\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-01T10:00:00.123456Z\",\"updated_at\":\"2026-09-02T11:00:00Z\",\"warnings\":[]}"
+    },
+    {
+      "name": "tokens source id upper",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24F9813E-6116-51FC-B9BC-16B92E3F5F3A/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "680",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "93bd287e-745f-4ffa-964e-c21bcde743ec"
+      },
+      "body": "[{\"id\":\"7ba9c604-2dfd-5a51-add2-79583c622ee3\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"bound\",\"token_prefix\":\"fcpush_aaaaa\",\"scopes\":[\"ingest:write\",\"schema:read\"],\"expires_at\":\"2027-01-01T00:00:00Z\",\"revoked_at\":null,\"last_used_at\":\"2026-09-20T01:02:03.000004Z\",\"created_at\":\"2026-09-10T00:00:00Z\"},{\"id\":\"4ec62e6e-b417-55d3-b688-2d09a6bcdd31\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"revoked\",\"token_prefix\":\"fcpush_ccccc\",\"scopes\":[],\"expires_at\":null,\"revoked_at\":\"2026-09-12T00:00:00Z\",\"last_used_at\":null,\"created_at\":\"2026-09-09T00:00:00Z\"}]"
+    },
+    {
+      "name": "source id urn",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/urn:uuid:24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "378",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "aee4267d-501e-4ce6-8325-ce77d6d14ad4"
+      },
+      "body": "{\"id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"Acme/API\",\"entity_family\":\"legacy\",\"display_name\":\"Acme API\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-01T10:00:00.123456Z\",\"updated_at\":\"2026-09-02T11:00:00Z\",\"warnings\":[]}"
+    },
+    {
+      "name": "tokens source id urn",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/urn:uuid:24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "680",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0c8f77ea-825d-4226-8091-ebe4b84069e1"
+      },
+      "body": "[{\"id\":\"7ba9c604-2dfd-5a51-add2-79583c622ee3\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"bound\",\"token_prefix\":\"fcpush_aaaaa\",\"scopes\":[\"ingest:write\",\"schema:read\"],\"expires_at\":\"2027-01-01T00:00:00Z\",\"revoked_at\":null,\"last_used_at\":\"2026-09-20T01:02:03.000004Z\",\"created_at\":\"2026-09-10T00:00:00Z\"},{\"id\":\"4ec62e6e-b417-55d3-b688-2d09a6bcdd31\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"revoked\",\"token_prefix\":\"fcpush_ccccc\",\"scopes\":[],\"expires_at\":null,\"revoked_at\":\"2026-09-12T00:00:00Z\",\"last_used_at\":null,\"created_at\":\"2026-09-09T00:00:00Z\"}]"
+    },
+    {
+      "name": "source gitlab",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/fe0171da-2d8d-50f5-8341-642190d5de46",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "411",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fc1f5403-1f50-4f0d-951c-33d8e47c2f2a"
+      },
+      "body": "{\"id\":\"fe0171da-2d8d-50f5-8341-642190d5de46\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"gitlab\",\"instance\":\"grp/proj\",\"entity_family\":\"operational\",\"display_name\":null,\"mode\":\"managed_sync\",\"enabled\":false,\"webhook_mode\":\"customer_hosted\",\"matched_integration_source_id\":\"81e10ef1-4aa6-5fb6-9d0f-337b66922970\",\"created_at\":\"2026-09-03T10:00:00Z\",\"updated_at\":\"2026-09-03T10:00:00Z\",\"warnings\":[]}"
+    },
+    {
+      "name": "source custom",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/81e10ef1-4aa6-5fb6-9d0f-337b66922970",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "377",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3fa8961a-13b1-40ca-aeda-a23dfc2a13ce"
+      },
+      "body": "{\"id\":\"81e10ef1-4aa6-5fb6-9d0f-337b66922970\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"custom\",\"instance\":\"x é y\",\"entity_family\":\"legacy\",\"display_name\":\"Ünïcode\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-02T10:00:00Z\",\"updated_at\":\"2026-09-02T10:00:00.500000Z\",\"warnings\":[]}"
+    },
+    {
+      "name": "batches all bad",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?from=x\u0026to=y\u0026limit=0\u0026offset=-1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 422,
+      "headers": {
+        "content-length": "634",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "53a303a1-6384-4dbc-83e3-26b7d2c5e3bd"
+      },
+      "body": "{\"detail\":[{\"type\":\"datetime_from_date_parsing\",\"loc\":[\"query\",\"from\"],\"msg\":\"Input should be a valid datetime or date, input is too short\",\"input\":\"x\",\"ctx\":{\"error\":\"input is too short\"}},{\"type\":\"datetime_from_date_parsing\",\"loc\":[\"query\",\"to\"],\"msg\":\"Input should be a valid datetime or date, input is too short\",\"input\":\"y\",\"ctx\":{\"error\":\"input is too short\"}},{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"0\",\"ctx\":{\"ge\":1}},{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":\"-1\",\"ctx\":{\"ge\":0}}]}"
+    },
+    {
+      "name": "batches empty status",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?status=",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "44",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "00ffcc69-9f8a-49f6-8cd5-16695f0bf5e1"
+      },
+      "body": "{\"items\":[],\"total\":0,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "batches from",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?from=2026-09-05T00:00:00Z",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "328",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5f16ed5f-f4a1-4ab8-844e-42b0240b0959"
+      },
+      "body": "{\"items\":[{\"ingestion_id\":\"951c5989-485d-5610-a51e-6a5b2d253051\",\"status\":\"completed\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":\"ci\",\"items_received\":3,\"items_accepted\":2,\"items_rejected\":1,\"created_at\":\"2026-09-06T00:00:00.000001Z\",\"completed_at\":\"2026-09-06T00:06:00Z\"}],\"total\":1,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "batches from bad",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?from=2026-13-01",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 422,
+      "headers": {
+        "content-length": "254",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "252d9cb2-b61e-4398-9e3a-ccd4a24b42ca"
+      },
+      "body": "{\"detail\":[{\"type\":\"datetime_from_date_parsing\",\"loc\":[\"query\",\"from\"],\"msg\":\"Input should be a valid datetime or date, month value is outside expected range of 1-12\",\"input\":\"2026-13-01\",\"ctx\":{\"error\":\"month value is outside expected range of 1-12\"}}]}"
+    },
+    {
+      "name": "batches from unix",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?from=1757030400",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "587",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d0b24148-cdce-4083-a3d8-0bd860cfe84e"
+      },
+      "body": "{\"items\":[{\"ingestion_id\":\"951c5989-485d-5610-a51e-6a5b2d253051\",\"status\":\"completed\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":\"ci\",\"items_received\":3,\"items_accepted\":2,\"items_rejected\":1,\"created_at\":\"2026-09-06T00:00:00.000001Z\",\"completed_at\":\"2026-09-06T00:06:00Z\"},{\"ingestion_id\":\"992e1af3-834e-5c39-adc0-2563c956e6fd\",\"status\":\"accepted\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":null,\"items_received\":1,\"items_accepted\":0,\"items_rejected\":0,\"created_at\":\"2026-09-04T00:00:00Z\",\"completed_at\":null}],\"total\":2,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "batches huge limit",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?limit=99999999999999999999999",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 422,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6533865c-df5e-423d-aa1f-c1293f8d2dd1"
+      },
+      "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be less than or equal to 200\",\"input\":\"99999999999999999999999\",\"ctx\":{\"le\":200}}]}"
+    },
+    {
+      "name": "batches huge offset",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?offset=99999999999999999999",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "batches limit 0",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?limit=0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 422,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "09d8aa48-2f8d-44ef-92c1-11d386ee98dc"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"0\",\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "batches limit 201",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?limit=201",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 422,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d50cea82-9e2a-4689-accc-dec10ed604ff"
+      },
+      "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be less than or equal to 200\",\"input\":\"201\",\"ctx\":{\"le\":200}}]}"
+    },
+    {
+      "name": "batches limit abc",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?limit=abc",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 422,
+      "headers": {
+        "content-length": "151",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7a3c38ec-a8dd-4b49-bf45-f9b980f430c4"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"abc\"}]}"
+    },
+    {
+      "name": "batches limit float zeros",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?limit=2.00",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "586",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ef62ab29-c6dc-4f2b-afc1-a91bddeb97bc"
+      },
+      "body": "{\"items\":[{\"ingestion_id\":\"951c5989-485d-5610-a51e-6a5b2d253051\",\"status\":\"completed\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":\"ci\",\"items_received\":3,\"items_accepted\":2,\"items_rejected\":1,\"created_at\":\"2026-09-06T00:00:00.000001Z\",\"completed_at\":\"2026-09-06T00:06:00Z\"},{\"ingestion_id\":\"992e1af3-834e-5c39-adc0-2563c956e6fd\",\"status\":\"accepted\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":null,\"items_received\":1,\"items_accepted\":0,\"items_rejected\":0,\"created_at\":\"2026-09-04T00:00:00Z\",\"completed_at\":null}],\"total\":2,\"limit\":2,\"offset\":0}"
+    },
+    {
+      "name": "batches limit spaced",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?limit=%201%20",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "327",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5773ecb6-0487-4dab-9747-75414fafdcc7"
+      },
+      "body": "{\"items\":[{\"ingestion_id\":\"951c5989-485d-5610-a51e-6a5b2d253051\",\"status\":\"completed\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":\"ci\",\"items_received\":3,\"items_accepted\":2,\"items_rejected\":1,\"created_at\":\"2026-09-06T00:00:00.000001Z\",\"completed_at\":\"2026-09-06T00:06:00Z\"}],\"total\":2,\"limit\":1,\"offset\":0}"
+    },
+    {
+      "name": "batches no producer match",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?producer=zz",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "44",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "04499fdd-51c4-4877-954a-498a6009687e"
+      },
+      "body": "{\"items\":[],\"total\":0,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "batches offset -1",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?offset=-1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 422,
+      "headers": {
+        "content-length": "146",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b0139a23-cd5d-41e3-b6ea-27da0fb0e969"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":\"-1\",\"ctx\":{\"ge\":0}}]}"
+    },
+    {
+      "name": "batches offset max int64",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?offset=9223372036854775807",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "62",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "691aafd5-3d34-4bd0-838f-3c770e6b0c12"
+      },
+      "body": "{\"items\":[],\"total\":2,\"limit\":50,\"offset\":9223372036854775807}"
+    },
+    {
+      "name": "batches page",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?limit=1\u0026offset=1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "301",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cc1bd9f5-5832-4a61-a85f-6c59450069c8"
+      },
+      "body": "{\"items\":[{\"ingestion_id\":\"992e1af3-834e-5c39-adc0-2563c956e6fd\",\"status\":\"accepted\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":null,\"items_received\":1,\"items_accepted\":0,\"items_rejected\":0,\"created_at\":\"2026-09-04T00:00:00Z\",\"completed_at\":null}],\"total\":2,\"limit\":1,\"offset\":1}"
+    },
+    {
+      "name": "batches producer",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?producer=ci",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "328",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "749cc712-18fc-48f1-8f70-1fb59e9be549"
+      },
+      "body": "{\"items\":[{\"ingestion_id\":\"951c5989-485d-5610-a51e-6a5b2d253051\",\"status\":\"completed\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":\"ci\",\"items_received\":3,\"items_accepted\":2,\"items_rejected\":1,\"created_at\":\"2026-09-06T00:00:00.000001Z\",\"completed_at\":\"2026-09-06T00:06:00Z\"}],\"total\":1,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "batches repeated limit",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?limit=1\u0026limit=2",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "586",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "67b8e02e-3c49-4385-9fd5-e49be223ea5d"
+      },
+      "body": "{\"items\":[{\"ingestion_id\":\"951c5989-485d-5610-a51e-6a5b2d253051\",\"status\":\"completed\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":\"ci\",\"items_received\":3,\"items_accepted\":2,\"items_rejected\":1,\"created_at\":\"2026-09-06T00:00:00.000001Z\",\"completed_at\":\"2026-09-06T00:06:00Z\"},{\"ingestion_id\":\"992e1af3-834e-5c39-adc0-2563c956e6fd\",\"status\":\"accepted\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":null,\"items_received\":1,\"items_accepted\":0,\"items_rejected\":0,\"created_at\":\"2026-09-04T00:00:00Z\",\"completed_at\":null}],\"total\":2,\"limit\":2,\"offset\":0}"
+    },
+    {
+      "name": "batches status",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?status=completed",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "328",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "45c469a0-8a86-4e69-9f42-429734ef1d28"
+      },
+      "body": "{\"items\":[{\"ingestion_id\":\"951c5989-485d-5610-a51e-6a5b2d253051\",\"status\":\"completed\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":\"ci\",\"items_received\":3,\"items_accepted\":2,\"items_rejected\":1,\"created_at\":\"2026-09-06T00:00:00.000001Z\",\"completed_at\":\"2026-09-06T00:06:00Z\"}],\"total\":1,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "batches to bad",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?to=x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 422,
+      "headers": {
+        "content-length": "189",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8f584be1-72e7-439a-8754-6c4177178de2"
+      },
+      "body": "{\"detail\":[{\"type\":\"datetime_from_date_parsing\",\"loc\":[\"query\",\"to\"],\"msg\":\"Input should be a valid datetime or date, input is too short\",\"input\":\"x\",\"ctx\":{\"error\":\"input is too short\"}}]}"
+    },
+    {
+      "name": "batches to date only",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?to=2026-09-05",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "302",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "195a6c67-d3ee-449f-87e1-b8628bcb8fbc"
+      },
+      "body": "{\"items\":[{\"ingestion_id\":\"992e1af3-834e-5c39-adc0-2563c956e6fd\",\"status\":\"accepted\",\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":null,\"items_received\":1,\"items_accepted\":0,\"items_rejected\":0,\"created_at\":\"2026-09-04T00:00:00Z\",\"completed_at\":null}],\"total\":1,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "batches unknown source",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/1faf2d54-ea65-553d-9bb4-7c8cdaa34555/batches",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e099053b-9c5c-49b0-95bd-9029a7093dae"
+      },
+      "body": "{\"detail\":\"Source not found\"}"
+    },
+    {
+      "name": "batches bad query and no auth",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?limit=0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "eb6b396c-b339-4ad9-90a3-d6c2a6e04458"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "batches bad query and gate refused",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/batches?limit=0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2eaa40a5aa8681d751ec9ef2f6e098e44f7d8714567497532058149650ac613b",
+      "status": 422,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0b79c41b-4de1-4b5a-b830-58a8b416d521"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"0\",\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "batch limit 0",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/951c5989-485d-5610-a51e-6a5b2d253051?rejected_records_limit=0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 422,
+      "headers": {
+        "content-length": "161",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a3032427-79df-4f60-ac73-5bdb6ca1e4bc"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"rejected_records_limit\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"0\",\"ctx\":{\"ge\":1}}]}"
+    },
+    {
+      "name": "batch main",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/951c5989-485d-5610-a51e-6a5b2d253051",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "1071",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e820aecf-e98e-4baf-afa5-e71258dd8f56"
+      },
+      "body": "{\"ingestion_id\":\"951c5989-485d-5610-a51e-6a5b2d253051\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"status\":\"completed\",\"attempts\":2,\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":\"ci\",\"producer_version\":\"1.2\",\"schema_version\":\"external-ingest.v1\",\"window_started_at\":\"2026-09-05T00:00:00Z\",\"window_ended_at\":\"2026-09-05T01:00:00.250000Z\",\"items_received\":3,\"items_accepted\":2,\"items_rejected\":1,\"record_counts\":{\"work_item\":2,\"pull_request\":1},\"error_summary\":{\"zeta\":[\"b\"],\"alpha\":{\"n\":1}},\"created_at\":\"2026-09-06T00:00:00.000001Z\",\"updated_at\":\"2026-09-06T00:05:00Z\",\"completed_at\":\"2026-09-06T00:06:00Z\",\"rejected_records\":[{\"index\":0,\"kind\":\"pull_request\",\"external_id\":null,\"code\":\"missing_field\",\"message\":\"required\",\"path\":null},{\"index\":2,\"kind\":\"work_item\",\"external_id\":\"w-2\",\"code\":\"unknown_kind\",\"message\":\"nope\",\"path\":\"kind\"},{\"index\":4,\"kind\":\"work_item\",\"external_id\":\"w-4\",\"code\":\"invalid_field\",\"message\":\"bad \\\"value\\\"\",\"path\":\"payload.state\"}],\"rejected_records_total\":3,\"rejected_records_limit\":50,\"rejected_records_offset\":0}"
+    },
+    {
+      "name": "batch main page",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/951c5989-485d-5610-a51e-6a5b2d253051?rejected_records_limit=1\u0026rejected_records_offset=1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "838",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5f9d9fce-2585-4991-bdd8-6011b3437a74"
+      },
+      "body": "{\"ingestion_id\":\"951c5989-485d-5610-a51e-6a5b2d253051\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"status\":\"completed\",\"attempts\":2,\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":\"ci\",\"producer_version\":\"1.2\",\"schema_version\":\"external-ingest.v1\",\"window_started_at\":\"2026-09-05T00:00:00Z\",\"window_ended_at\":\"2026-09-05T01:00:00.250000Z\",\"items_received\":3,\"items_accepted\":2,\"items_rejected\":1,\"record_counts\":{\"work_item\":2,\"pull_request\":1},\"error_summary\":{\"zeta\":[\"b\"],\"alpha\":{\"n\":1}},\"created_at\":\"2026-09-06T00:00:00.000001Z\",\"updated_at\":\"2026-09-06T00:05:00Z\",\"completed_at\":\"2026-09-06T00:06:00Z\",\"rejected_records\":[{\"index\":2,\"kind\":\"work_item\",\"external_id\":\"w-2\",\"code\":\"unknown_kind\",\"message\":\"nope\",\"path\":\"kind\"}],\"rejected_records_total\":3,\"rejected_records_limit\":1,\"rejected_records_offset\":1}"
+    },
+    {
+      "name": "batch not uuid",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "070d030a-281b-492f-a155-38d8937e92b9"
+      },
+      "body": "{\"detail\":\"Batch not found\"}"
+    },
+    {
+      "name": "batch offset bad",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/951c5989-485d-5610-a51e-6a5b2d253051?rejected_records_offset=x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 422,
+      "headers": {
+        "content-length": "167",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8574b7da-1a6c-4018-8ecc-4d6b2cc1401d"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"rejected_records_offset\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"x\"}]}"
+    },
+    {
+      "name": "batch offset huge",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/951c5989-485d-5610-a51e-6a5b2d253051?rejected_records_offset=99999999999999999999",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "batch old",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/992e1af3-834e-5c39-adc0-2563c956e6fd",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "612",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d2310317-9e9d-48fe-932d-6e96f7fb6b10"
+      },
+      "body": "{\"ingestion_id\":\"992e1af3-834e-5c39-adc0-2563c956e6fd\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"status\":\"accepted\",\"attempts\":1,\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":null,\"producer_version\":null,\"schema_version\":\"external-ingest.v1\",\"window_started_at\":null,\"window_ended_at\":null,\"items_received\":1,\"items_accepted\":0,\"items_rejected\":0,\"record_counts\":null,\"error_summary\":null,\"created_at\":\"2026-09-04T00:00:00Z\",\"updated_at\":\"2026-09-04T00:00:00Z\",\"completed_at\":null,\"rejected_records\":[],\"rejected_records_total\":0,\"rejected_records_limit\":50,\"rejected_records_offset\":0}"
+    },
+    {
+      "name": "batch other org",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/4430292e-7728-5677-b1a3-c237f67fd196",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ce17d348-7f02-4e01-a511-e8c7be234f1d"
+      },
+      "body": "{\"detail\":\"Batch not found\"}"
+    },
+    {
+      "name": "batch other source",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/15fa7929-c2e6-544c-a216-9bff38c0ce2c",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "618",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8740e2f7-e036-4504-aa85-7992b543aa82"
+      },
+      "body": "{\"ingestion_id\":\"15fa7929-c2e6-544c-a216-9bff38c0ce2c\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"status\":\"failed\",\"attempts\":1,\"source_system\":\"gitlab\",\"source_instance\":\"grp/proj\",\"producer\":\"ci\",\"producer_version\":null,\"schema_version\":\"external-ingest.v1\",\"window_started_at\":null,\"window_ended_at\":null,\"items_received\":1,\"items_accepted\":0,\"items_rejected\":1,\"record_counts\":null,\"error_summary\":{\"code\":\"x\"},\"created_at\":\"2026-09-07T00:00:00Z\",\"updated_at\":\"2026-09-07T00:00:00Z\",\"completed_at\":null,\"rejected_records\":[],\"rejected_records_total\":0,\"rejected_records_limit\":50,\"rejected_records_offset\":0}"
+    },
+    {
+      "name": "batch upper",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/batches/951C5989-485D-5610-A51E-6A5B2D253051",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 200,
+      "headers": {
+        "content-length": "1071",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a83d78fc-8f11-48f1-8607-9d70111c403f"
+      },
+      "body": "{\"ingestion_id\":\"951c5989-485d-5610-a51e-6a5b2d253051\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"status\":\"completed\",\"attempts\":2,\"source_system\":\"github\",\"source_instance\":\"Acme/API\",\"producer\":\"ci\",\"producer_version\":\"1.2\",\"schema_version\":\"external-ingest.v1\",\"window_started_at\":\"2026-09-05T00:00:00Z\",\"window_ended_at\":\"2026-09-05T01:00:00.250000Z\",\"items_received\":3,\"items_accepted\":2,\"items_rejected\":1,\"record_counts\":{\"work_item\":2,\"pull_request\":1},\"error_summary\":{\"zeta\":[\"b\"],\"alpha\":{\"n\":1}},\"created_at\":\"2026-09-06T00:00:00.000001Z\",\"updated_at\":\"2026-09-06T00:05:00Z\",\"completed_at\":\"2026-09-06T00:06:00Z\",\"rejected_records\":[{\"index\":0,\"kind\":\"pull_request\",\"external_id\":null,\"code\":\"missing_field\",\"message\":\"required\",\"path\":null},{\"index\":2,\"kind\":\"work_item\",\"external_id\":\"w-2\",\"code\":\"unknown_kind\",\"message\":\"nope\",\"path\":\"kind\"},{\"index\":4,\"kind\":\"work_item\",\"external_id\":\"w-4\",\"code\":\"invalid_field\",\"message\":\"bad \\\"value\\\"\",\"path\":\"payload.state\"}],\"rejected_records_total\":3,\"rejected_records_limit\":50,\"rejected_records_offset\":0}"
+    },
+    {
+      "name": "schema both quotes",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas/a'b\"c",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "47",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b50b3fc8-07fa-49be-8d92-c33fa61ed5fa"
+      },
+      "body": "{\"detail\":\"Unknown schema version: 'a\\\\'b\\\"c'\"}"
+    },
+    {
+      "name": "schema escaped",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas/%E2%80%A8x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "47",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "378251d4-4090-489e-ae4a-72c12c943b40"
+      },
+      "body": "{\"detail\":\"Unknown schema version: '\\\\u2028x'\"}"
+    },
+    {
+      "name": "schema quote",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas/it's",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "45",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2266d09b-b6d1-4839-babf-e7e1dc9fda5e"
+      },
+      "body": "{\"detail\":\"Unknown schema version: \\\"it's\\\"\"}"
+    },
+    {
+      "name": "schema tab",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas/a%09b",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "44",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8bfa9d18-0c18-43ac-bf07-c8bb70e3b042"
+      },
+      "body": "{\"detail\":\"Unknown schema version: 'a\\\\tb'\"}"
+    },
+    {
+      "name": "schema v2",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/schemas/external-ingest.v2",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 404,
+      "headers": {
+        "content-length": "57",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "60bfa059-e5f9-4279-a54b-98b863dc1b7d"
+      },
+      "body": "{\"detail\":\"Unknown schema version: 'external-ingest.v2'\"}"
+    },
+    {
+      "name": "PUT sources",
+      "method": "PUT",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9ad5e21c-9500-459f-8196-c453727fbc77"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "DELETE source",
+      "method": "DELETE",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2f3bd13b-465a-4207-af9b-41bbb8548750"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "HEAD schemas",
+      "method": "HEAD",
+      "path": "/api/v1/admin/customer-push/schemas",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5a65b058-3311-45b4-9120-9911cc68b2c9"
+      },
+      "body": ""
+    },
+    {
+      "name": "trailing slash",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
+      "status": 307,
+      "headers": {
+        "content-length": "0",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "location": "http://testserver/api/v1/admin/customer-push/sources",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7374193b-c151-4d5d-9eb2-420b2a8007c9"
+      },
+      "body": ""
+    }
+  ]
+}

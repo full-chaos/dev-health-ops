@@ -1,0 +1,617 @@
+{
+  "header": {
+    "test": "TestExternalIngestPayloadHashVenueOracle",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/ -test '^TestExternalIngestPayloadHashVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+  },
+  "requests": [
+    {
+      "name": "integer payload field",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "e820589f7572273940395bf8ebb10d01365885df62f7c37975ddc87c49b46562",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "97d49b5a-d5ed-479d-b435-85ac35c8fcc7"
+      },
+      "body": "{\"ingestionId\":\"bcee54ec-529e-47ec-ab4a-e8518fc78b3e\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "integer payload field replay",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "e820589f7572273940395bf8ebb10d01365885df62f7c37975ddc87c49b46562",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 200,
+      "headers": {
+        "content-length": "588",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "985a462f-4f53-4f9b-98d4-ae91c8409239"
+      },
+      "body": "{\"ingestionId\":\"bcee54ec-529e-47ec-ab4a-e8518fc78b3e\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo\"},\"window\":{\"startedAt\":null,\"endedAt\":null},\"producer\":null,\"producerVersion\":null,\"createdAt\":\"2026-10-01T00:02:46.139566Z\",\"updatedAt\":\"2026-10-01T00:02:46.139566Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "integer payload field to go",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "d06d3285ab65e25226df396e6e4975c9db1b8aa657eddf18b15a53ad41b1d80d",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3e1f16fc-57a4-4cd2-b2f1-41c8118f62bf"
+      },
+      "body": "{\"ingestionId\":\"a7bbecdf-143e-4b67-80ee-d6b5c627ff7d\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "integer payload field to python",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "87349553449dd1af5da3a40e503cd9721c2c735b97310c2ac28287414740590d",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 200,
+      "headers": {
+        "content-length": "588",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a6865cb0-ef5f-4e80-a6e8-ade37e1eadba"
+      },
+      "body": "{\"ingestionId\":\"645e9f8b-6701-42ea-b1d0-6b3df129d8dc\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo\"},\"window\":{\"startedAt\":null,\"endedAt\":null},\"producer\":null,\"producerVersion\":null,\"createdAt\":\"2026-10-01T00:03:11.621100Z\",\"updatedAt\":\"2026-10-01T00:03:11.621100Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "nan payload field",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "51cf8a44147b3995249e76b361ff033996280b19a9d28fd3ba4a24cad824a026",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c89214bf-d5c2-448b-8919-a7baf59822dc"
+      },
+      "body": "{\"ingestionId\":\"99d8bfc0-9adb-4e3f-95e0-e3220d15e059\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "nan payload field replay",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "51cf8a44147b3995249e76b361ff033996280b19a9d28fd3ba4a24cad824a026",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 200,
+      "headers": {
+        "content-length": "588",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "11041145-7386-43fa-ad93-77f13813c23e"
+      },
+      "body": "{\"ingestionId\":\"99d8bfc0-9adb-4e3f-95e0-e3220d15e059\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo\"},\"window\":{\"startedAt\":null,\"endedAt\":null},\"producer\":null,\"producerVersion\":null,\"createdAt\":\"2026-10-01T00:03:33.958743Z\",\"updatedAt\":\"2026-10-01T00:03:33.958743Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "nan payload field to go",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "31ea9a8474203f9003ffab00918e74d3f59944b26bb0367a7046770b1dc77850",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d3c3fca0-a903-4276-8979-2e85bbc056de"
+      },
+      "body": "{\"ingestionId\":\"600de35d-d5f4-4970-a0fc-e14809e42aff\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "nan payload field to python",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "3393d792c6597603596997a2d7d12760318224f3a50db3df57c09a28155a1f2f",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 200,
+      "headers": {
+        "content-length": "588",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bee68c1c-1942-456b-858f-5eb110bb6652"
+      },
+      "body": "{\"ingestionId\":\"cf318ab1-bc84-4e29-8b3e-f74632219c62\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo\"},\"window\":{\"startedAt\":null,\"endedAt\":null},\"producer\":null,\"producerVersion\":null,\"createdAt\":\"2026-10-01T00:03:59.989586Z\",\"updatedAt\":\"2026-10-01T00:03:59.989586Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "non-utc offset window with trailing-zero microseconds",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "ee53c1d6586a2b0c1493aec5c2aa0007f70b69135886ffaa23baaa0bde6b2327",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "df7d5746-ab0b-40d1-9e7c-985960f9893a"
+      },
+      "body": "{\"ingestionId\":\"a47ccfff-d5e9-4b6f-b81c-45e4f443035e\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "non-utc offset window with trailing-zero microseconds replay",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "ee53c1d6586a2b0c1493aec5c2aa0007f70b69135886ffaa23baaa0bde6b2327",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 200,
+      "headers": {
+        "content-length": "631",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b863c359-c1cb-405b-8e7d-22f1af6c15da"
+      },
+      "body": "{\"ingestionId\":\"a47ccfff-d5e9-4b6f-b81c-45e4f443035e\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo\"},\"window\":{\"startedAt\":\"2026-08-31T18:30:00.123400Z\",\"endedAt\":\"2026-09-07T18:30:00Z\"},\"producer\":null,\"producerVersion\":null,\"createdAt\":\"2026-10-01T00:04:22.783902Z\",\"updatedAt\":\"2026-10-01T00:04:22.783902Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "non-utc offset window with trailing-zero microseconds to go",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "862a179b96cc1b6d749e156ee3c8a166eb9473b83d5f2daa95567c15cb8bc99f",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cfb5bcb9-b9ab-4d94-86f0-64b3e6fc6651"
+      },
+      "body": "{\"ingestionId\":\"0039b4fa-7da0-434f-9d8b-f44f132d64cb\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "non-utc offset window with trailing-zero microseconds to python",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "3612cade347070a35a67d7d3a28a9dffe17b8c974524d69e4a8b8b1fc499f99a",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 200,
+      "headers": {
+        "content-length": "631",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "35af0f16-eb90-46fd-af2a-41db7f9e99ff"
+      },
+      "body": "{\"ingestionId\":\"5ce26add-4325-4a11-9352-9a43e8628bed\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo\"},\"window\":{\"startedAt\":\"2026-08-31T18:30:00.123400Z\",\"endedAt\":\"2026-09-07T18:30:00Z\"},\"producer\":null,\"producerVersion\":null,\"createdAt\":\"2026-10-01T00:04:48.667711Z\",\"updatedAt\":\"2026-10-01T00:04:48.667711Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "entity family operational",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "e5b6879777e1907eff80640211d7fe39d34e87502387a9e6987bcc66ade60662",
+      "request_headers_sha256": "57bba0877f43a050ec7e4f3445f10b4ff221b9e3ff759e42158af25773f42b49",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f559196f-2cca-439b-be07-cf34b30e3dac"
+      },
+      "body": "{\"ingestionId\":\"a80d0cc2-ef6a-487b-a3ca-d8e964d2ec6d\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "entity family operational replay",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "e5b6879777e1907eff80640211d7fe39d34e87502387a9e6987bcc66ade60662",
+      "request_headers_sha256": "57bba0877f43a050ec7e4f3445f10b4ff221b9e3ff759e42158af25773f42b49",
+      "status": 200,
+      "headers": {
+        "content-length": "592",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3390515d-490e-4a34-9470-d8cb9faebe68"
+      },
+      "body": "{\"ingestionId\":\"a80d0cc2-ef6a-487b-a3ca-d8e964d2ec6d\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo-ops\"},\"window\":{\"startedAt\":null,\"endedAt\":null},\"producer\":null,\"producerVersion\":null,\"createdAt\":\"2026-10-01T00:05:10.901872Z\",\"updatedAt\":\"2026-10-01T00:05:10.901872Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "entity family operational to go",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "465f4c1736cc34ed4fc51ee5ee0f2ecf4447cc22051c60c463cae3263880d385",
+      "request_headers_sha256": "57bba0877f43a050ec7e4f3445f10b4ff221b9e3ff759e42158af25773f42b49",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "141ad784-d8cf-4b74-8249-16b00c41b08b"
+      },
+      "body": "{\"ingestionId\":\"267b3814-86e2-4832-9950-75e22676ff74\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "entity family operational to python",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "4630d6cc0f0fea98b1f168e92b6ec251d95b6284899586e136e56119eab08e2b",
+      "request_headers_sha256": "57bba0877f43a050ec7e4f3445f10b4ff221b9e3ff759e42158af25773f42b49",
+      "status": 200,
+      "headers": {
+        "content-length": "592",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f083609d-aa66-4947-ba22-ba2eab5121b3"
+      },
+      "body": "{\"ingestionId\":\"99e95aea-946f-41f1-a13e-1bfcc5248aab\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo-ops\"},\"window\":{\"startedAt\":null,\"endedAt\":null},\"producer\":null,\"producerVersion\":null,\"createdAt\":\"2026-10-01T00:05:36.562135Z\",\"updatedAt\":\"2026-10-01T00:05:36.562135Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "entity family explicit legacy",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "bee855581ffb2352e70c7835543419b01ddc9cd4c08986d792fcef45afe0226d",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e9485fa2-0d66-4f67-ac5d-82da1031b735"
+      },
+      "body": "{\"ingestionId\":\"bf4c2cbf-c9ea-4ed0-b87a-52b1408074c3\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "entity family explicit legacy replay",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "bee855581ffb2352e70c7835543419b01ddc9cd4c08986d792fcef45afe0226d",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 200,
+      "headers": {
+        "content-length": "588",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ae2ac369-64c3-4a31-96f5-edf62ceeb70a"
+      },
+      "body": "{\"ingestionId\":\"bf4c2cbf-c9ea-4ed0-b87a-52b1408074c3\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo\"},\"window\":{\"startedAt\":null,\"endedAt\":null},\"producer\":null,\"producerVersion\":null,\"createdAt\":\"2026-10-01T00:05:58.806250Z\",\"updatedAt\":\"2026-10-01T00:05:58.806250Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "entity family explicit legacy to go",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "d82f176fa64e85704ddcc394cbd47c7fc1085f027f4e299d02500307de360cae",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7e56b901-b590-4356-9ac8-d03de97d77cf"
+      },
+      "body": "{\"ingestionId\":\"9c8c78e1-f2e5-4fd2-bca9-533a04c8d134\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "entity family explicit legacy to python",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "930432fa8ff9e07bed39c4a73f461a7447a82382926f5b67db42fc4d81b799b5",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 200,
+      "headers": {
+        "content-length": "588",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6d685af8-4a7d-4d02-823c-4ab76ded6efe"
+      },
+      "body": "{\"ingestionId\":\"b3de32f3-f291-4f97-8c40-8f52fe59080d\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo\"},\"window\":{\"startedAt\":null,\"endedAt\":null},\"producer\":null,\"producerVersion\":null,\"createdAt\":\"2026-10-01T00:06:24.636024Z\",\"updatedAt\":\"2026-10-01T00:06:24.636024Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "producer and producerVersion present",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "09150604a217475c896a58e2c93147f6becaf1d55885c833d5c58657b2c583d4",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "84549f12-a708-4d7e-8c37-ebfdc4853b23"
+      },
+      "body": "{\"ingestionId\":\"b3fae3a0-f319-46e6-957b-4296eeaa346e\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "producer and producerVersion present replay",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "09150604a217475c896a58e2c93147f6becaf1d55885c833d5c58657b2c583d4",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 200,
+      "headers": {
+        "content-length": "591",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cfa3ac48-9103-479c-9d4e-4f69979b89fa"
+      },
+      "body": "{\"ingestionId\":\"b3fae3a0-f319-46e6-957b-4296eeaa346e\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo\"},\"window\":{\"startedAt\":null,\"endedAt\":null},\"producer\":\"ci\",\"producerVersion\":\"1.2.3\",\"createdAt\":\"2026-10-01T00:06:47.150857Z\",\"updatedAt\":\"2026-10-01T00:06:47.150857Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "producer and producerVersion present to go",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "1df96c4a092d165881000fe7f21b068d84da7979aedf2897f0c963c6b1ae7bc3",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a76eab3f-46a8-453e-b34d-d790bb79bec4"
+      },
+      "body": "{\"ingestionId\":\"0ab28d1e-eed3-4678-aaac-589711857c70\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "producer and producerVersion present to python",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "f49d11873426d0b471b79984ba8007f82abb9645fb46e6d0fd54b21af05057bf",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 200,
+      "headers": {
+        "content-length": "591",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d7549519-0097-4f82-84fd-a03ad51c02df"
+      },
+      "body": "{\"ingestionId\":\"de6ccce6-b7a5-4b99-99a8-4f064f78e343\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo\"},\"window\":{\"startedAt\":null,\"endedAt\":null},\"producer\":\"ci\",\"producerVersion\":\"1.2.3\",\"createdAt\":\"2026-10-01T00:07:12.847970Z\",\"updatedAt\":\"2026-10-01T00:07:12.847970Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "non-ascii payload value",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "cd404fc2eb371713ccedad5dd01c12c6d04db921734c437738e0afe65795e949",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4a26a800-e3a3-4587-8c8d-05c0a2e1be13"
+      },
+      "body": "{\"ingestionId\":\"bfe8165b-87b0-4ab9-aa68-e852921629d0\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "non-ascii payload value replay",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "cd404fc2eb371713ccedad5dd01c12c6d04db921734c437738e0afe65795e949",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 200,
+      "headers": {
+        "content-length": "588",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e814c076-2550-4ed6-ad4f-d3ee05735856"
+      },
+      "body": "{\"ingestionId\":\"bfe8165b-87b0-4ab9-aa68-e852921629d0\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo\"},\"window\":{\"startedAt\":null,\"endedAt\":null},\"producer\":null,\"producerVersion\":null,\"createdAt\":\"2026-10-01T00:07:34.697635Z\",\"updatedAt\":\"2026-10-01T00:07:34.697635Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    },
+    {
+      "name": "non-ascii payload value to go",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "f3d962f59aee7ca7129c99eead2384787be4680374f81b58f3bfb2f49f3c1102",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 202,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "55d68fd7-e203-46d4-a64d-a762d6a4d7c8"
+      },
+      "body": "{\"ingestionId\":\"5abe695d-cc09-4d5d-8181-1e8137d39269\",\"status\":\"accepted\",\"itemsReceived\":1,\"stream\":\"external-ingest:1618cc4d-15d1-5f82-9599-45b3ac5d742d:batches\"}"
+    },
+    {
+      "name": "non-ascii payload value to python",
+      "method": "POST",
+      "path": "/api/v1/external-ingest/batches",
+      "body_sha256": "e275e443568f07a453a534c4d38a0de6cb66334d368fd2f023b48afde759f457",
+      "request_headers_sha256": "6c3209aa457e18b5bc3b4ae7334f6b45ea83e42244a8e9b31aa0d174dce6e5f3",
+      "status": 200,
+      "headers": {
+        "content-length": "588",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1922a039-0184-4d6b-92e1-81aa6135b2ce"
+      },
+      "body": "{\"ingestionId\":\"1ea729dc-95c4-401c-a78f-129ea733e2ad\",\"status\":\"accepted\",\"attempts\":1,\"itemsReceived\":1,\"itemsAccepted\":0,\"itemsRejected\":0,\"source\":{\"system\":\"github\",\"instance\":\"acme/payload-hash-repo\"},\"window\":{\"startedAt\":null,\"endedAt\":null},\"producer\":null,\"producerVersion\":null,\"createdAt\":\"2026-10-01T00:07:59.895183Z\",\"updatedAt\":\"2026-10-01T00:07:59.895183Z\",\"completedAt\":null,\"errorSummary\":null,\"errors\":[],\"errorsTotal\":0,\"errorsLimit\":50,\"errorsOffset\":0,\"recompute\":{\"status\":\"not_applicable\",\"scope\":null,\"dispatchedAt\":null,\"completedAt\":null,\"error\":null,\"jobs\":[]}}"
+    }
+  ],
+  "rows": {
+    "external_ingest_batches.payload_hash": {
+      "rows": "venue-hash-intafb89e596527eb6858d48af391be69f6fd2dbddac2818a77000c53e2b9c20c4d | venue-hash-int-cross-go63154918da34552373d206b149bf8d41fd4e92e8669725753eb27f9f09eebd26 | venue-hash-int-cross-pyb6884bdfc951cf9b28d82c1952357742c6382f0ad46bdb13ce556ec6bc44c730 | venue-hash-legacy89e4ac618f4ee402db173e31d02c237a5af7bdce775835b293e47c8a2229977f | venue-hash-legacy-cross-go484afba2f887dc9521cf252817772ecc89a59f68b5b892a9b4eface7ffcfc55c | venue-hash-legacy-cross-py7315fd86521ca31fc0842aa579450cd50290b139d9622c3bc965c1b6c92ea3ff | venue-hash-nan88225693dbef08d545df5faae9bbfddb3e69391d3f2f3e67a9ad99fbfa1f40ff | venue-hash-nan-cross-go84c55cbd343d76fb6c03e0aca59a85661538f018d547c6d84c841899aaf357ab | venue-hash-nan-cross-pye6d7ad912cbce7de6db54ed332f633e2eafc66e2ec773ba44adaac2b998eed1f | venue-hash-operationalcfc4d792cc507527660d02e8b65fb293996f6758018416fc02fc8bd8af0f6c32 | venue-hash-operational-cross-go9a484dcd1863ce57469dbae519c751b0c381f7b90f6da752a7fbf382c91abeb1 | venue-hash-operational-cross-py82dba2513a040b5b97967035dd23b5a0f909ea0240d50f4d4568ed31b04d39ef | venue-hash-producere91053ffc95a7fb353d46229385dced3aec69b7f93b62c186ff385db17909460 | venue-hash-producer-cross-go2e0e770947201954d90a1a5755862463406a0b8dc3574c24a71c1891f82cd998 | venue-hash-producer-cross-py76b66bad9e886a11bab632fa0a43ad183fb6409ad24a575e49efc4d389a1a2c4 | venue-hash-unicodec5bf397b9a33af1f5ab6a29238d9d2b25ecbaf30cb88b49858b7856536305a64 | venue-hash-unicode-cross-go85f97aac982082cf7fbaad23e9d0b6006d2bd2c11376a7b80f5d1bde2d520748 | venue-hash-unicode-cross-pyd9676a8207e3d9f1ae61ccbcb6d72ee622a613286bd8f9d5c71fc79830e52a60 | venue-hash-windowdb889a228ed540b70a22486a0ddb0163e6c16ef2a9cf92fc949d219a9ec1eec8 | venue-hash-window-cross-go4adf4d8a7ca5d2862f09e9922f1b15e2d21298745960a755e340da7a630ad1b2 | venue-hash-window-cross-py6ceff6b8274180e20c18476511812fbbe9ae221b72969ad933531bc65bb1d13f"
+    },
+    "python row venue-hash-int": {
+      "rows": "{\"IngestionID\":\"bcee54ec-529e-47ec-ab4a-e8518fc78b3e\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-int\",\"PayloadHash\":\"afb89e596527eb6858d48af391be69f6fd2dbddac2818a77000c53e2b9c20c4d\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo\",\"EntityFamily\":\"legacy\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":null,\"ProducerVersion\":null,\"WindowStartedAt\":null,\"WindowEndedAt\":null,\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:02:46.139566Z\",\"UpdatedAt\":\"2026-10-01T00:02:46.139566Z\"}"
+    },
+    "python row venue-hash-int-cross-go": {
+      "rows": "{\"IngestionID\":\"a7bbecdf-143e-4b67-80ee-d6b5c627ff7d\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-int-cross-go\",\"PayloadHash\":\"63154918da34552373d206b149bf8d41fd4e92e8669725753eb27f9f09eebd26\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo\",\"EntityFamily\":\"legacy\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":null,\"ProducerVersion\":null,\"WindowStartedAt\":null,\"WindowEndedAt\":null,\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:03:09.859255Z\",\"UpdatedAt\":\"2026-10-01T00:03:09.859255Z\"}"
+    },
+    "python row venue-hash-legacy": {
+      "rows": "{\"IngestionID\":\"bf4c2cbf-c9ea-4ed0-b87a-52b1408074c3\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-legacy\",\"PayloadHash\":\"89e4ac618f4ee402db173e31d02c237a5af7bdce775835b293e47c8a2229977f\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo\",\"EntityFamily\":\"legacy\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":null,\"ProducerVersion\":null,\"WindowStartedAt\":null,\"WindowEndedAt\":null,\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:05:58.80625Z\",\"UpdatedAt\":\"2026-10-01T00:05:58.80625Z\"}"
+    },
+    "python row venue-hash-legacy-cross-go": {
+      "rows": "{\"IngestionID\":\"9c8c78e1-f2e5-4fd2-bca9-533a04c8d134\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-legacy-cross-go\",\"PayloadHash\":\"484afba2f887dc9521cf252817772ecc89a59f68b5b892a9b4eface7ffcfc55c\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo\",\"EntityFamily\":\"legacy\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":null,\"ProducerVersion\":null,\"WindowStartedAt\":null,\"WindowEndedAt\":null,\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:06:22.916474Z\",\"UpdatedAt\":\"2026-10-01T00:06:22.916474Z\"}"
+    },
+    "python row venue-hash-nan": {
+      "rows": "{\"IngestionID\":\"99d8bfc0-9adb-4e3f-95e0-e3220d15e059\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-nan\",\"PayloadHash\":\"88225693dbef08d545df5faae9bbfddb3e69391d3f2f3e67a9ad99fbfa1f40ff\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo\",\"EntityFamily\":\"legacy\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":null,\"ProducerVersion\":null,\"WindowStartedAt\":null,\"WindowEndedAt\":null,\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:03:33.958743Z\",\"UpdatedAt\":\"2026-10-01T00:03:33.958743Z\"}"
+    },
+    "python row venue-hash-nan-cross-go": {
+      "rows": "{\"IngestionID\":\"600de35d-d5f4-4970-a0fc-e14809e42aff\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-nan-cross-go\",\"PayloadHash\":\"84c55cbd343d76fb6c03e0aca59a85661538f018d547c6d84c841899aaf357ab\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo\",\"EntityFamily\":\"legacy\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":null,\"ProducerVersion\":null,\"WindowStartedAt\":null,\"WindowEndedAt\":null,\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:03:58.278249Z\",\"UpdatedAt\":\"2026-10-01T00:03:58.278249Z\"}"
+    },
+    "python row venue-hash-operational": {
+      "rows": "{\"IngestionID\":\"a80d0cc2-ef6a-487b-a3ca-d8e964d2ec6d\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-operational\",\"PayloadHash\":\"cfc4d792cc507527660d02e8b65fb293996f6758018416fc02fc8bd8af0f6c32\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo-ops\",\"EntityFamily\":\"operational\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":null,\"ProducerVersion\":null,\"WindowStartedAt\":null,\"WindowEndedAt\":null,\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:05:10.901872Z\",\"UpdatedAt\":\"2026-10-01T00:05:10.901872Z\"}"
+    },
+    "python row venue-hash-operational-cross-go": {
+      "rows": "{\"IngestionID\":\"267b3814-86e2-4832-9950-75e22676ff74\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-operational-cross-go\",\"PayloadHash\":\"9a484dcd1863ce57469dbae519c751b0c381f7b90f6da752a7fbf382c91abeb1\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo-ops\",\"EntityFamily\":\"operational\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":null,\"ProducerVersion\":null,\"WindowStartedAt\":null,\"WindowEndedAt\":null,\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:05:34.848373Z\",\"UpdatedAt\":\"2026-10-01T00:05:34.848373Z\"}"
+    },
+    "python row venue-hash-producer": {
+      "rows": "{\"IngestionID\":\"b3fae3a0-f319-46e6-957b-4296eeaa346e\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-producer\",\"PayloadHash\":\"e91053ffc95a7fb353d46229385dced3aec69b7f93b62c186ff385db17909460\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo\",\"EntityFamily\":\"legacy\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":\"ci\",\"ProducerVersion\":\"1.2.3\",\"WindowStartedAt\":null,\"WindowEndedAt\":null,\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:06:47.150857Z\",\"UpdatedAt\":\"2026-10-01T00:06:47.150857Z\"}"
+    },
+    "python row venue-hash-producer-cross-go": {
+      "rows": "{\"IngestionID\":\"0ab28d1e-eed3-4678-aaac-589711857c70\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-producer-cross-go\",\"PayloadHash\":\"2e0e770947201954d90a1a5755862463406a0b8dc3574c24a71c1891f82cd998\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo\",\"EntityFamily\":\"legacy\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":\"ci\",\"ProducerVersion\":\"1.2.3\",\"WindowStartedAt\":null,\"WindowEndedAt\":null,\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:07:11.216652Z\",\"UpdatedAt\":\"2026-10-01T00:07:11.216652Z\"}"
+    },
+    "python row venue-hash-unicode": {
+      "rows": "{\"IngestionID\":\"bfe8165b-87b0-4ab9-aa68-e852921629d0\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-unicode\",\"PayloadHash\":\"c5bf397b9a33af1f5ab6a29238d9d2b25ecbaf30cb88b49858b7856536305a64\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo\",\"EntityFamily\":\"legacy\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":null,\"ProducerVersion\":null,\"WindowStartedAt\":null,\"WindowEndedAt\":null,\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:07:34.697635Z\",\"UpdatedAt\":\"2026-10-01T00:07:34.697635Z\"}"
+    },
+    "python row venue-hash-unicode-cross-go": {
+      "rows": "{\"IngestionID\":\"5abe695d-cc09-4d5d-8181-1e8137d39269\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-unicode-cross-go\",\"PayloadHash\":\"85f97aac982082cf7fbaad23e9d0b6006d2bd2c11376a7b80f5d1bde2d520748\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo\",\"EntityFamily\":\"legacy\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":null,\"ProducerVersion\":null,\"WindowStartedAt\":null,\"WindowEndedAt\":null,\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:07:58.21136Z\",\"UpdatedAt\":\"2026-10-01T00:07:58.21136Z\"}"
+    },
+    "python row venue-hash-window": {
+      "rows": "{\"IngestionID\":\"a47ccfff-d5e9-4b6f-b81c-45e4f443035e\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-window\",\"PayloadHash\":\"db889a228ed540b70a22486a0ddb0163e6c16ef2a9cf92fc949d219a9ec1eec8\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo\",\"EntityFamily\":\"legacy\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":null,\"ProducerVersion\":null,\"WindowStartedAt\":\"2026-08-31T18:30:00.1234Z\",\"WindowEndedAt\":\"2026-09-07T18:30:00Z\",\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:04:22.783902Z\",\"UpdatedAt\":\"2026-10-01T00:04:22.783902Z\"}"
+    },
+    "python row venue-hash-window-cross-go": {
+      "rows": "{\"IngestionID\":\"0039b4fa-7da0-434f-9d8b-f44f132d64cb\",\"OrgID\":\"1618cc4d-15d1-5f82-9599-45b3ac5d742d\",\"IdempotencyKey\":\"venue-hash-window-cross-go\",\"PayloadHash\":\"4adf4d8a7ca5d2862f09e9922f1b15e2d21298745960a755e340da7a630ad1b2\",\"SourceSystem\":\"github\",\"SourceInstance\":\"acme/payload-hash-repo\",\"EntityFamily\":\"legacy\",\"SchemaVersion\":\"external-ingest.v1\",\"Producer\":null,\"ProducerVersion\":null,\"WindowStartedAt\":\"2026-08-31T18:30:00.1234Z\",\"WindowEndedAt\":\"2026-09-07T18:30:00Z\",\"ItemsReceived\":1,\"CreatedAt\":\"2026-10-01T00:04:47.02575Z\",\"UpdatedAt\":\"2026-10-01T00:04:47.02575Z\"}"
+    }
+  }
+}

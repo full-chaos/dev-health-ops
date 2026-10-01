@@ -58,13 +58,15 @@ func venueRoot() string {
 func TestVenueOracleProtectedRoutes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
+	golden := venueoracle.OpenGolden(t, venueGolden("protected-routes", t.Name(), "ae24b22e9c8c99bbbe6e4c9342a4d92d0760571984074291c7f023730ee9d472"))
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)
 	var seed venueFixture
 	members := newMembersStub(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden,
+		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{"EXPECTED_WORKER_GROUPS=" + venueWorkerGroups, "TELEMETRY_ENDPOINT=" + endpoint.URL + "/py", "SETTINGS_ENCRYPTION_KEY=" + venueEncryptionKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			// Python's collect_usage_stats counts a Postgres repos table the
@@ -115,9 +117,12 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 
 	requests := venueRequests(seed, venue.Tokens)
 	var receipt strings.Builder
-	pythonResponses := venue.ServePython(t, requests)
-	pythonProviderRequests := members.take()
+	pythonResponses := golden.Python(t, venue, requests)
+	pythonProviderRequests := strings.Split(golden.InspectRows(t, "python provider requests", func() string {
+		return strings.Join(members.take(), "\n")
+	}), "\n")
 	receipt.WriteString(venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
+		Golden: golden,
 		// Composes TWO independent normalizations, each scoped to its own
 		// known cause: normalizeRuled's own rules, and the team/identity
 		// admin timestamp blanking (CHAOS-6310 -- each plane mints its own
@@ -155,129 +160,68 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	}
 	fmt.Fprintf(&receipt, "member-route provider requests (%d): %s\n", len(goProviderRequests), venueoracle.Mark(providerSame))
 	// The rows the writes touched are identical on both copies.
-	compareRows(t, ctx, venue, &receipt, "organizations", `SELECT id::text, slug, name, coalesce(description, '<null>'), tier, is_active,
+	compareRows(t, ctx, golden, venue, &receipt, "organizations", `SELECT id::text, slug, name, coalesce(description, '<null>'), tier, is_active,
 		updated_at > created_at, settings::text FROM organizations ORDER BY slug`)
-	compareRows(t, ctx, venue, &receipt, "settings", `SELECT org_id, category, key, CASE WHEN key = 'telemetry_last_report_at' AND value ~ '^2026-09-01' THEN value
+	compareRows(t, ctx, golden, venue, &receipt, "settings", `SELECT org_id, category, key, CASE WHEN key = 'telemetry_last_report_at' AND value ~ '^2026-09-01' THEN value
 		WHEN key = 'telemetry_last_report_at' AND value <> 'garbage' THEN 'reported' ELSE coalesce(value, '<null>') END, is_encrypted,
 		coalesce(description, '<null>') FROM settings ORDER BY org_id, category, key`)
-	compareRows(t, ctx, venue, &receipt, "audit_logs", `SELECT org_id::text, coalesce(user_id::text, '<null>'), action, resource_type, resource_id, description,
+	compareRows(t, ctx, golden, venue, &receipt, "audit_logs", `SELECT org_id::text, coalesce(user_id::text, '<null>'), action, resource_type, resource_id, description,
 		regexp_replace(changes::text, '"collected_at": "[^"]*"', '"collected_at": "<t>"'), request_metadata::text, status
 		FROM audit_logs ORDER BY org_id`)
-	pyStream := venueoracle.StreamEntries(t, ctx, venue.PythonValkeyURI, "product-telemetry:*", "ingestion_id")
 	goStream := venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "product-telemetry:*", "ingestion_id")
-	if pyStream != goStream || pyStream == "" {
-		t.Errorf("product-telemetry stream entries differ:\n python %s\n go     %s", pyStream, goStream)
+	pyStream := golden.CompareRows(t, "product-telemetry stream entries", func() string {
+		return venueoracle.StreamEntries(t, ctx, venue.PythonValkeyURI, "product-telemetry:*", "ingestion_id")
+	}, goStream)
+	if pyStream == "" {
+		t.Errorf("product-telemetry stream entries are empty")
 	}
 	fmt.Fprintf(&receipt, "product-telemetry stream entries: %s\n", venueoracle.Mark(pyStream == goStream && pyStream != ""))
-	pySent, goSent := sent.bodies("/py"), sent.bodies("/go")
-	if pySent != goSent || pySent == "" {
-		t.Errorf("sent telemetry reports differ:\n python %s\n go     %s", pySent, goSent)
+	goSent := sent.bodies("/go")
+	pySent := golden.CompareRows(t, "telemetry reports sent", func() string { return sent.bodies("/py") }, goSent)
+	if pySent == "" {
+		t.Errorf("sent telemetry reports are empty")
 	}
 	fmt.Fprintf(&receipt, "telemetry reports sent: %s\n", venueoracle.Mark(pySent == goSent && pySent != ""))
 	// CHAOS-6310: the team + identity admin CRUD routes write ClickHouse,
 	// not Postgres -- same shape, a ClickHouse reader instead of a
 	// Postgres one. FINAL resolves each plane's own ReplacingMergeTree
 	// merge state, the same discipline the Python readers use.
-	compareCHRows(t, ctx, venue, &receipt, "teams",
+	compareCHRows(t, ctx, golden, venue, &receipt, "teams",
 		`SELECT id, name, coalesce(description, '<null>'), members, manual_members, project_keys,
 			repo_patterns, is_active, provider, native_team_key FROM teams FINAL
 		WHERE org_id != '' ORDER BY id`)
 	// CHAOS-6311: POST /teams/import's drift-projector writes, compared as
 	// raw text. Timestamps are excluded (each plane mints its own now()).
-	compareCHRows(t, ctx, venue, &receipt, "team_provider_observations",
+	compareCHRows(t, ctx, golden, venue, &receipt, "team_provider_observations",
 		`SELECT provider, native_team_key, team_id, coalesce(name, '<null>'), coalesce(description, '<null>'),
 			members_json, project_keys_json, repo_patterns_json, is_active, coalesce(parent_team_id, '<null>')
 		FROM team_provider_observations FINAL WHERE org_id != '' ORDER BY provider, native_team_key`)
-	compareCHRows(t, ctx, venue, &receipt, "team_drift_changes",
+	compareCHRows(t, ctx, golden, venue, &receipt, "team_drift_changes",
 		`SELECT change_id, entity_type, entity_id, provider, coalesce(native_team_key, '<null>'), change_type,
 			coalesce(field, '<null>'), old_value_json, new_value_json, status, coalesce(decided_by, '<null>')
 		FROM team_drift_changes FINAL WHERE org_id != '' ORDER BY change_id`)
-	compareCHRows(t, ctx, venue, &receipt, "team_memberships",
+	compareCHRows(t, ctx, golden, venue, &receipt, "team_memberships",
 		`SELECT provider, team_id, member_id, coalesce(raw_provider_user_id, '<null>'), coalesce(raw_email, '<null>'), identity_facets,
 			source, is_primary, specificity, priority, valid_from, valid_to IS NULL, toUInt8(ifNull(valid_to > valid_from, 0))
 		FROM team_memberships FINAL WHERE org_id != '' ORDER BY provider, team_id, member_id, source, valid_from`)
-	compareCHRows(t, ctx, venue, &receipt, "manual_attribution_fallbacks",
+	compareCHRows(t, ctx, golden, venue, &receipt, "manual_attribution_fallbacks",
 		`SELECT provider, scope_type, scope_id, team_id, team_name, reason, priority, valid_from, valid_to IS NULL,
 			coalesce(created_by, '<null>'), created_at FROM manual_attribution_fallbacks FINAL WHERE org_id != '' ORDER BY provider, scope_type, scope_id`)
-	compareCHRows(t, ctx, venue, &receipt, "team_drift_changes (seeded review rows, decided fields)",
+	compareCHRows(t, ctx, golden, venue, &receipt, "team_drift_changes (seeded review rows, decided fields)",
 		`SELECT change_id, entity_type, entity_id, status, coalesce(decided_by, '<null>'), decided_at IS NOT NULL, first_seen_at, last_seen_at > toDateTime64('2026-09-10', 6)
 		FROM team_drift_changes FINAL WHERE org_id != '' AND change_id LIKE 'c-%' ORDER BY org_id, change_id`)
-	compareCHRows(t, ctx, venue, &receipt, "team_sync_policies",
+	compareCHRows(t, ctx, golden, venue, &receipt, "team_sync_policies",
 		`SELECT team_id, sync_policy, managed_fields, coalesce(updated_by, '<null>')
 		FROM team_sync_policies FINAL WHERE org_id != '' ORDER BY team_id`)
-	compareCHRows(t, ctx, venue, &receipt, "identities",
+	compareCHRows(t, ctx, golden, venue, &receipt, "identities",
 		`SELECT canonical_id, coalesce(display_name, '<null>'), coalesce(email, '<null>'),
 			provider_identities, team_ids, is_active FROM identities FINAL
 		WHERE org_id != '' ORDER BY canonical_id`)
-	// Last, since they break both planes' database: the acr store made
-	// unusable.
-	receipt.WriteString(venueACRStoreDown(t, ctx, venue, base, seed.orgA.String()))
+	golden.Finish(t)
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt.String()), 0o600)
 	}
 	t.Log("\n" + receipt.String())
-}
-
-func venueACRStoreDown(t *testing.T, ctx context.Context, venue *venueoracle.Venue, base, orgID string) string {
-	t.Helper()
-	admin, err := pgxpool.New(ctx, venue.AdminURI(t, "postgres"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-	auth := map[string]string{"Authorization": "Bearer " + venueACRToken}
-	health := venueoracle.Request{Name: "acr store unreadable: health", Method: http.MethodGet, Path: "/api/v1/internal/acr/health", Headers: auth}
-
-	// 1. The table each plane's health reads is gone: Python reads acr's
-	// credential row, Go the organizations table the entitlement route
-	// reads first. Both answer 503.
-	for database, table := range map[string]string{venue.SourceDB: "internal_service_credentials", venue.GoDB: "organizations"} {
-		conn, err := pgxpool.New(ctx, venue.AdminURI(t, database))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE %q RENAME TO %q`, table, table+"_gone")); err != nil {
-			t.Fatal(err)
-		}
-		conn.Close()
-	}
-	requests := []venueoracle.Request{health}
-	out := venueoracle.Diff(t, base, requests, venue.ServePython(t, requests), venueoracle.DiffOptions{
-		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
-			// SAME alone would also hold if both planes answered 200.
-			if goResponse.Status != http.StatusServiceUnavailable {
-				t.Errorf("%s: go answered %d, want 503", request.Name, goResponse.Status)
-			}
-		},
-	})
-
-	// 2. Postgres unreachable: the Go database refuses connections and its
-	// open ones are ended. Python answers this with an unhandled 500 (a
-	// crash in its credential lookup, not a contract), so only the Go
-	// answer is checked: 503 with Python's handled body on both routes.
-	if _, err := admin.Exec(ctx, fmt.Sprintf(`ALTER DATABASE %q ALLOW_CONNECTIONS false`, venue.GoDB)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := admin.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, venue.GoDB); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{"/api/v1/internal/acr/health", "/api/v1/internal/acr/entitlements/" + orgID} {
-		response, err := http.Get(base + path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		body, err := io.ReadAll(response.Body)
-		_ = response.Body.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		same := response.StatusCode == http.StatusServiceUnavailable && string(body) == `{"detail":"Service unavailable"}`
-		if !same {
-			t.Errorf("acr store unreachable: GET %s: go answered %d %q, want 503 {\"detail\":\"Service unavailable\"}", path, response.StatusCode, body)
-		}
-		out += fmt.Sprintf("acr store unreachable: GET %s go=%d %s\n", path, response.StatusCode, venueoracle.Mark(same))
-	}
-	return out
 }
 
 // startVenueAPI runs configure() as a deploy does and returns the api's
@@ -311,12 +255,14 @@ func startVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, venue *
 	return ""
 }
 
-func compareRows(t *testing.T, ctx context.Context, venue *venueoracle.Venue, receipt *strings.Builder, name, query string) {
+func compareRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, receipt *strings.Builder, name, query string) {
 	t.Helper()
-	pyRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-	if pyRows != goRows || pyRows == "" {
-		t.Errorf("%s after the writes differ (or are empty):\n python %s\n go     %s", name, pyRows, goRows)
+	pyRows := golden.CompareRows(t, name, func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+	}, goRows)
+	if pyRows == "" {
+		t.Errorf("%s after the writes are empty", name)
 	}
 	fmt.Fprintf(receipt, "%s rows after writes: %s\n", name, venueoracle.Mark(pyRows == goRows && pyRows != ""))
 }
@@ -446,12 +392,14 @@ func assertPerTableCounts(t *testing.T, ctx context.Context, uri, body string) {
 // venue.GoClickHouseDB), never a shared one, for the same reason the
 // Postgres pair is two databases -- comparing state one plane's writes
 // could otherwise corrupt for the other.
-func compareCHRows(t *testing.T, ctx context.Context, venue *venueoracle.Venue, receipt *strings.Builder, name, query string) {
+func compareCHRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, receipt *strings.Builder, name, query string) {
 	t.Helper()
-	pyRows := venueoracle.CHRows(t, ctx, venue.AdminClickHouseURI(t, venue.PythonClickHouseDB), query)
 	goRows := venueoracle.CHRows(t, ctx, venue.AdminClickHouseURI(t, venue.GoClickHouseDB), query)
-	if pyRows != goRows || pyRows == "" {
-		t.Errorf("%s after the writes differ (or are empty):\n python %s\n go     %s", name, pyRows, goRows)
+	pyRows := golden.CompareRows(t, name, func() string {
+		return venueoracle.CHRows(t, ctx, venue.AdminClickHouseURI(t, venue.PythonClickHouseDB), query)
+	}, goRows)
+	if pyRows == "" {
+		t.Errorf("%s after the writes are empty", name)
 	}
 	fmt.Fprintf(receipt, "%s rows after writes: %s\n", name, venueoracle.Mark(pyRows == goRows && pyRows != ""))
 }

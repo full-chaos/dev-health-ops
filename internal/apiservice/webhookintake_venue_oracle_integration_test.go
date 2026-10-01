@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -24,7 +23,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 )
@@ -90,6 +88,7 @@ func blankVenueEventID(_ venueoracle.Request, body string) string {
 // PagerDuty's own venue oracle (the state machine, replay claim, and
 // per-binding decryption) is TestWebhookIntakeVenueOraclePagerDuty, below.
 func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("webhook-intake-venue-oracle-git-hub-git-lab-jira-health", t.Name(), "794a764d4fa2610a2f860b1bb5513eb8a8e365cd0fe78d33d841255b53dd742c"))
 	ctx := context.Background()
 	root := webhookintakeRepoRoot(t)
 
@@ -101,7 +100,7 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 	)
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Golden: golden, Root: golden.PythonRoot(t, root),
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"GITHUB_WEBHOOK_SECRET=" + githubSecret,
@@ -256,25 +255,19 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 		},
 	)
 
-	python := venue.ServePython(t, requests)
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Normalize: blankVenueEventID})
+	python := golden.Python(t, venue, requests)
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden, Normalize: blankVenueEventID})
 	t.Log(receipt)
 
-	pythonRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB),
-		`SELECT provider, event_type, raw_event_type, org_ref, repo_name FROM webhook_deliveries ORDER BY provider, delivery_key`)
-	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB),
-		`SELECT provider, event_type, raw_event_type, org_ref, repo_name FROM webhook_deliveries ORDER BY provider, delivery_key`)
-	if pythonRows != goRows {
-		t.Errorf("webhook_deliveries rows differ:\n python: %s\n go:     %s", pythonRows, goRows)
-	}
+	deliveriesQuery := `SELECT provider, event_type, raw_event_type, org_ref, repo_name FROM webhook_deliveries ORDER BY provider, delivery_key`
+	golden.CompareRows(t, "webhook_deliveries", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), deliveriesQuery)
+	}, venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), deliveriesQuery))
 
-	pythonOutbox := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB),
-		`SELECT job_kind FROM worker_job_outbox ORDER BY job_kind, dedupe_key`)
-	goOutbox := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB),
-		`SELECT job_kind FROM worker_job_outbox ORDER BY job_kind, dedupe_key`)
-	if pythonOutbox != goOutbox {
-		t.Errorf("worker_job_outbox rows differ:\n python: %s\n go:     %s", pythonOutbox, goOutbox)
-	}
+	outboxQuery := `SELECT job_kind FROM worker_job_outbox ORDER BY job_kind, dedupe_key`
+	golden.CompareRows(t, "worker_job_outbox", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), outboxQuery)
+	}, venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), outboxQuery))
 	// args is stored JSON, compared as raw text. dedupe_key (the
 	// content-derived idempotency key) orders both planes' rows alike. The
 	// delivery ids inside are random per plane: each plane's stored
@@ -287,16 +280,16 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 	planeArgs := func(uri string) []string {
 		return blankedJSONRows(venueoracle.TableRows(t, ctx, uri, argsQuery), strings.Fields(venueoracle.TableRows(t, ctx, uri, deliveryIDs)))
 	}
-	pythonArgs := planeArgs(venue.AdminURI(t, venue.SourceDB))
 	goArgs := planeArgs(venue.AdminURI(t, venue.GoDB))
-	if len(pythonArgs) == 0 {
+	pythonArgs := golden.CompareRows(t, "worker_job_outbox.args", func() string {
+		return strings.Join(planeArgs(venue.AdminURI(t, venue.SourceDB)), venueoracle.JSONRowSeparator)
+	}, strings.Join(goArgs, venueoracle.JSONRowSeparator))
+	if len(goArgs) == 0 || pythonArgs == "" {
 		t.Error("worker_job_outbox.args: no rows compared; the check measured nothing")
-	}
-	if !slices.Equal(pythonArgs, goArgs) {
-		t.Errorf("worker_job_outbox.args differs:\n python: %q\n go:     %q", pythonArgs, goArgs)
 	}
 	// venueoracle.Start already wrote this test's own proof file (by
 	// t.Name()) once the venue genuinely built -- nothing to do here.
+	golden.Finish(t)
 }
 
 func pagerdutyVenueSign(secret string, body []byte) string {
@@ -319,11 +312,11 @@ type pagerdutyVenueSeed struct {
 
 func newPagerDutyVenueSeed() pagerdutyVenueSeed {
 	return pagerdutyVenueSeed{
-		orgLicensed:      uuid.New().String(),
-		orgGated:         uuid.New().String(),
-		bindingActive:    uuid.New().String(),
-		bindingCandidate: uuid.New().String(),
-		bindingGated:     uuid.New().String(),
+		orgLicensed:      stableVenueID("wh-orgLicensed").String(),
+		orgGated:         stableVenueID("wh-orgGated").String(),
+		bindingActive:    stableVenueID("wh-bindingActive").String(),
+		bindingCandidate: stableVenueID("wh-bindingCandidate").String(),
+		bindingGated:     stableVenueID("wh-bindingGated").String(),
 	}
 }
 
@@ -352,14 +345,14 @@ func seedPagerDutyVenue(t *testing.T, ctx context.Context, admin *pgxpool.Pool, 
 		t.Fatalf("decode encrypted gated secret: %v", err)
 	}
 
-	integrationLicensed := uuid.New().String()
-	integrationGated := uuid.New().String()
-	sourceActive := uuid.New().String()
-	sourceCandidate := uuid.New().String()
-	sourceGated := uuid.New().String()
-	overrideID := uuid.New().String()
-	credentialActive := uuid.New().String()
-	credentialGated := uuid.New().String()
+	integrationLicensed := stableVenueID("wh-integrationLicensed").String()
+	integrationGated := stableVenueID("wh-integrationGated").String()
+	sourceActive := stableVenueID("wh-sourceActive").String()
+	sourceCandidate := stableVenueID("wh-sourceCandidate").String()
+	sourceGated := stableVenueID("wh-sourceGated").String()
+	overrideID := stableVenueID("wh-overrideID").String()
+	credentialActive := stableVenueID("wh-credentialActive").String()
+	credentialGated := stableVenueID("wh-credentialGated").String()
 
 	statements := []struct {
 		sql  string
@@ -461,6 +454,7 @@ func replayKeys(t *testing.T, ctx context.Context, uri, pattern string) string {
 // cross-language artifact, proving the Go DECRYPT path against Python's
 // real ENCRYPT path, not a Go-side round-trip.
 func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("webhook-intake-venue-oracle-pager-duty", t.Name(), "6b243f31f31d62fd661d23b0a758239c593ba062bf30a69959fc683e785b9bc9"))
 	ctx := context.Background()
 	root := webhookintakeRepoRoot(t)
 
@@ -475,7 +469,7 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 	seed := newPagerDutyVenueSeed()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Golden: golden, Root: golden.PythonRoot(t, root),
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + encryptionKey,
@@ -641,30 +635,24 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 		Body: venueoracle.B64(string(hugeEvent)),
 	})
 
-	python := venue.ServePython(t, requests)
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	python := golden.Python(t, venue, requests)
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 
-	pythonStream := venueoracle.StreamEntries(t, ctx, venue.PythonValkeyURI, "pagerduty-webhooks:*", "received_at")
-	goStream := venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "pagerduty-webhooks:*", "received_at")
-	if pythonStream != goStream {
-		t.Errorf("pagerduty-webhooks stream entries differ:\n python: %s\n go:     %s", pythonStream, goStream)
-	}
+	golden.CompareRows(t, "pagerduty-webhooks stream entries", func() string {
+		return venueoracle.StreamEntries(t, ctx, venue.PythonValkeyURI, "pagerduty-webhooks:*", "received_at")
+	}, venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "pagerduty-webhooks:*", "received_at"))
 
-	pythonBindings := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB),
-		`SELECT provider_subscription_id, status FROM pagerduty_webhook_bindings ORDER BY provider_subscription_id`)
-	goBindings := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB),
-		`SELECT provider_subscription_id, status FROM pagerduty_webhook_bindings ORDER BY provider_subscription_id`)
-	if pythonBindings != goBindings {
-		t.Errorf("pagerduty_webhook_bindings rows differ:\n python: %s\n go:     %s", pythonBindings, goBindings)
-	}
+	bindingsQuery := `SELECT provider_subscription_id, status FROM pagerduty_webhook_bindings ORDER BY provider_subscription_id`
+	golden.CompareRows(t, "pagerduty_webhook_bindings", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), bindingsQuery)
+	}, venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), bindingsQuery))
 
-	pythonReplay := replayKeys(t, ctx, venue.PythonValkeyURI, "pagerduty-webhook-replay:*")
-	goReplay := replayKeys(t, ctx, venue.ValkeyURI, "pagerduty-webhook-replay:*")
-	if pythonReplay != goReplay {
-		t.Errorf("pagerduty-webhook-replay keys differ:\n python: %s\n go:     %s", pythonReplay, goReplay)
-	}
+	golden.CompareRows(t, "pagerduty-webhook-replay keys", func() string {
+		return replayKeys(t, ctx, venue.PythonValkeyURI, "pagerduty-webhook-replay:*")
+	}, replayKeys(t, ctx, venue.ValkeyURI, "pagerduty-webhook-replay:*"))
 	// venueoracle.Start already wrote this test's own proof file.
+	golden.Finish(t)
 }
 
 var venueUUIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)

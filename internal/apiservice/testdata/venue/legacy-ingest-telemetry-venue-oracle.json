@@ -1,0 +1,307 @@
+{
+  "header": {
+    "test": "TestLegacyIngestTelemetryVenueOracle",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/ -test '^TestLegacyIngestTelemetryVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+  },
+  "requests": [
+    {
+      "name": "accepted",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "e33e61027d3c571a9c36d25e5046c0d5adee9ec9f6555a7e34e9454b1a02e639",
+      "request_headers_sha256": "30525157c123a37e2ecc52ddce90b2d8109400533516e047ee20efa41ee11cda",
+      "status": 202,
+      "headers": {
+        "content-length": "129",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bf242eda-6b43-4b6b-925a-766c1e02fdcb"
+      },
+      "body": "{\"ingestion_id\":\"a083debd-fbfc-420a-884c-bd1b4e227177\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-t1:telemetry\"}"
+    },
+    {
+      "name": "two items, defaults and nulls",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "31611bc8530be5e25448ca1ec3b026ebba6b676be112383c91f54863592271a9",
+      "request_headers_sha256": "23abc5b99ff2c86e1ab7fbfc2dafedf87c86cb35c337fc3b91441b60bffe7cb4",
+      "status": 202,
+      "headers": {
+        "content-length": "129",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b784222f-ce6a-4ecb-870d-3a846216efcd"
+      },
+      "body": "{\"ingestion_id\":\"3c0e9848-9cca-48bb-9204-8e77f2f52919\",\"status\":\"accepted\",\"items_received\":2,\"stream\":\"ingest:org-t1:telemetry\"}"
+    },
+    {
+      "name": "milliseconds truncated, naive and aware times",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "f4c8f0ca6ae68307aa03c511fde464a2c595f61131e339b5b0ade460dc3030d9",
+      "request_headers_sha256": "69aa4514d038fad43dfa8d237a7716870c6777fbd63f3fdb061c185201d924bd",
+      "status": 202,
+      "headers": {
+        "content-length": "129",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "baf34b58-a404-4661-884e-95e0ba007484"
+      },
+      "body": "{\"ingestion_id\":\"6dbab40d-e100-48c8-88ab-2b5d49cbd126\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-t2:telemetry\"}"
+    },
+    {
+      "name": "timestamps as numbers",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "1c24bb01dc6e05819547668a32aae560935c37c9fcc4f9645530c4deb09992d9",
+      "request_headers_sha256": "e0a542bcefb785bb1bd0592e096e3446f2078034d14c050d7f14a04d8173e28e",
+      "status": 202,
+      "headers": {
+        "content-length": "129",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b16f3dc0-5218-4a6e-9e4d-8821cfa366e9"
+      },
+      "body": "{\"ingestion_id\":\"5e351833-121e-4054-8992-7b74d30387a1\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-t2:telemetry\"}"
+    },
+    {
+      "name": "lax ints and bool",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "f5d791edd6d865cc8ba06fae08b88fa391a9afb07d5fb179a091b22eac4c49fa",
+      "request_headers_sha256": "93ef75706e5d9953826952e89018aef6bcf2074b29e9d4a359b28b0b8e42db7f",
+      "status": 202,
+      "headers": {
+        "content-length": "129",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ab762311-ce1f-4965-ab50-b2b4416c2d04"
+      },
+      "body": "{\"ingestion_id\":\"7b9c7f41-9df7-4ed2-ae17-f4eca8833603\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-t3:telemetry\"}"
+    },
+    {
+      "name": "repo id forms",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "1f89e300c1ae1daafb0df08ec6706163a5906c1a124318eca0392dd837745d81",
+      "request_headers_sha256": "4164b55e9bbb38419f00cc2e045ca7dcaa4fc01879e9ecaeafe7db6f107f68c6",
+      "status": 202,
+      "headers": {
+        "content-length": "129",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f3fd4f6f-894a-4d07-aed6-17914e996bfc"
+      },
+      "body": "{\"ingestion_id\":\"5c4382d6-eae5-4ffa-b586-b0a6974ec40a\",\"status\":\"accepted\",\"items_received\":2,\"stream\":\"ingest:org-t3:telemetry\"}"
+    },
+    {
+      "name": "bad repo id",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "a23cc99837ad960e80dd6ec6df3282e84b3455e7ad86bc8fd92e2d17912d48e2",
+      "request_headers_sha256": "3b7d633809e30299245dcb9b84c533be050a1a5a07f10a589994dcc52f43e3b5",
+      "status": 422,
+      "headers": {
+        "content-length": "161",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3af0c2b7-081f-470e-87a7-75d3102eb039"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"items\",0,\"repo_id\"],\"msg\":\"Value error, repo_id must be a valid UUID, got: 'x'\",\"input\":\"x\",\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "non-string repo id",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "b33983b1c66eed9ae362dcd7a71ce34b37a96d8980cece3645a8c9e2a8ee6d1d",
+      "request_headers_sha256": "66c1dba6a7212dcbd4a1ba19cd41ffcc08547910bc669d28abb7d530dcc6ea34",
+      "status": 422,
+      "headers": {
+        "content-length": "161",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5a520cd0-fa26-448d-8e49-76f9692e14e0"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"items\",0,\"repo_id\"],\"msg\":\"Value error, repo_id must be a valid UUID, got: [1]\",\"input\":[1],\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "unicode text",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "311ae0329e69998f61fe90bbc47ead98ea6e44c146b3827049ea7c0a3496e275",
+      "request_headers_sha256": "78009827f0e2b5f7f04ea3504ef5d036a86995a21f13112f7a87e2e0b093dabd",
+      "status": 202,
+      "headers": {
+        "content-length": "133",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "dd190940-756f-438b-8fe3-3a712394c5e3"
+      },
+      "body": "{\"ingestion_id\":\"a51f14ab-15b7-4433-9e42-3a0e8250adda\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-é😀:telemetry\"}"
+    },
+    {
+      "name": "negative count",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "8e4d5040c27d205c0a869a4f2bb967fee6ce0b886eb3f37a23c633d954b1d534",
+      "request_headers_sha256": "25f8c728f10c81ab705d1f5237d670fae370e4e86e5543e4cb051d4d9878d1c3",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "count past UInt64",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "51aeb25bd1b0b90ce935614915bdbce62ba98842b5e9c62c1c4bc5f11d7be2c6",
+      "request_headers_sha256": "dddcc0fc2a09c7927177a379055a9e55fc84c10b4fee3efaa91d57bbbb60faa8",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "count at UInt64 max",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "2bd2a350391e099010997316947fc76c01529339bef69f92cf66a47df35feb47",
+      "request_headers_sha256": "8e89ed0fae2180eed1baa4eaf32201a489a3f2f604b7ff5f389701207cde1e83",
+      "status": 202,
+      "headers": {
+        "content-length": "129",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "85425dc1-19d4-4082-ba3d-332c863fc279"
+      },
+      "body": "{\"ingestion_id\":\"760bb16e-6598-48ef-85f5-806020c37297\",\"status\":\"accepted\",\"items_received\":1,\"stream\":\"ingest:org-t5:telemetry\"}"
+    },
+    {
+      "name": "negative unique count",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "2d7db71605c6f97d99e8acaa65639c6e3e51b9e63a6e459218ce5258e813d601",
+      "request_headers_sha256": "4dc4fc53894ed7b998c3e570d69458908cccd03e5cd826a93e971eafce30d4fb",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "lone surrogate text",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "704bf69348d459e8fdbe89f8be833bdfc2d4b38335c12ad5c7c322a5f9b7c168",
+      "request_headers_sha256": "68439fd135afc53b463d11a7c0c8b26c9d1fef23778822a47851036dbdcfd13a",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "no items",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "dd22782c1e4f48acaed3caea250d3675cebbc61e28e70a0e4f8bf6c2c962dc8a",
+      "request_headers_sha256": "3c333d2f96596a750d5bf5b1c3c0da62d39e6c588290af6a198c4093315f741d",
+      "status": 422,
+      "headers": {
+        "content-length": "193",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2d1093ea-f8d2-4bbf-aedf-ec712baa8c98"
+      },
+      "body": "{\"detail\":[{\"type\":\"too_short\",\"loc\":[\"body\",\"items\"],\"msg\":\"List should have at least 1 item after validation, not 0\",\"input\":[],\"ctx\":{\"field_type\":\"List\",\"min_length\":1,\"actual_length\":0}}]}"
+    },
+    {
+      "name": "bad credentials",
+      "method": "POST",
+      "path": "/api/v1/ingest/telemetry",
+      "body_sha256": "7c7c345f5d0b4e66d25c266b1cf69bef61e51a93e825d090648f06b89af01a57",
+      "request_headers_sha256": "bc39be0f5065950a77e0f50489ad643e0c40c58bce56833cedca86ee7c6e259d",
+      "status": 401,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e2718137-d46b-4a9c-9339-5d7db3f9ec1e"
+      },
+      "body": "{\"detail\":\"Invalid API key\"}"
+    }
+  ],
+  "rows": {
+    "telemetry_signal_bucket": {
+      "rows": "org-t1 friction.rage_click 4 2 3 /api/x prod 3f2504e0-4f89-11d3-9a0c-0305e82c3301 v1.2 2099-06-15 10:00:00.000 2099-06-15 11:00:00.615 1 1.0 d-1 | org-t1 friction.rage_click 4 2 \u003cnull\u003e  prod  v1.2 2099-06-15 10:00:00.000 2099-06-15 11:00:00.615 1 1.0 d-2 | org-t1 friction.rage_click 4 2 \u003cnull\u003e  prod   2099-06-15 10:00:00.000 2099-06-15 11:00:00.615 0 1.0 d-3 | org-t2 friction.rage_click 4 2 3 /api/x prod 3f2504e0-4f89-11d3-9a0c-0305e82c3301 v1.2 2099-06-15 09:00:00.987 2099-06-15 11:00:00.615 1 1.0 d-4 | org-t2 friction.rage_click 4 2 3 /api/x prod 3f2504e0-4f89-11d3-9a0c-0305e82c3301 v1.2 2099-06-15 11:00:00.000 2099-06-15 11:59:00.500 1 1.0 d-5 | org-t3 friction.rage_click 7 5 1 /api/x prod 3f2504e0-4f89-11d3-9a0c-0305e82c3301 v1.2 2099-06-15 10:00:00.000 2099-06-15 11:00:00.615 1 1.0 d-6 | org-t3 friction.rage_click 4 2 3 /api/x prod 3f2504e0-4f89-11d3-9a0c-0305e82c3301 v1.2 2099-06-15 10:00:00.000 2099-06-15 11:00:00.615 1 1.0 d-7 | org-t3 friction.rage_click 4 2 3 /api/x prod  v1.2 2099-06-15 10:00:00.000 2099-06-15 11:00:00.615 1 1.0 d-8 | org-t5 friction.rage_click 18446744073709551615 2 3 /api/x prod 3f2504e0-4f89-11d3-9a0c-0305e82c3301 v1.2 2099-06-15 10:00:00.000 2099-06-15 11:00:00.615 1 1.0 d-14 | org-é😀 é😀 4 2 3 /api/x prod 3f2504e0-4f89-11d3-9a0c-0305e82c3301 v1.2 2099-06-15 10:00:00.000 2099-06-15 11:00:00.615 1 1.0 d-é"
+    }
+  }
+}

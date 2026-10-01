@@ -1,0 +1,200 @@
+{
+  "header": {
+    "test": "TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/ -test '^TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+  },
+  "requests": [
+    {
+      "name": "github push accepted",
+      "method": "POST",
+      "path": "/api/v1/webhooks/github",
+      "body_sha256": "7400880c9a5c7fd33e2ebc236d89b1472b5db6e9cc4c46069149c5696e04c717",
+      "request_headers_sha256": "51784ecf8131fc38879945e25b70c5f1507981ef94efbee920ab2e21a9d81c20",
+      "status": 200,
+      "headers": {
+        "content-length": "105",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8952dd1c-d651-40ca-bc74-c134f6c7b8e7"
+      },
+      "body": "{\"status\":\"accepted\",\"event_id\":\"a4bf9106-3b24-4908-a3db-d9425d0c6f6d\",\"message\":\"Processing push event\"}"
+    },
+    {
+      "name": "github invalid signature",
+      "method": "POST",
+      "path": "/api/v1/webhooks/github",
+      "body_sha256": "7400880c9a5c7fd33e2ebc236d89b1472b5db6e9cc4c46069149c5696e04c717",
+      "request_headers_sha256": "da080ddf7ea27a94cf85580c3b1affc2c0facfc35b48e84a608ed8452a600a07",
+      "status": 401,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f83c1eed-2041-4f69-866f-41fe8dc95a5a"
+      },
+      "body": "{\"detail\":\"Invalid signature\"}"
+    },
+    {
+      "name": "github missing event header",
+      "method": "POST",
+      "path": "/api/v1/webhooks/github",
+      "body_sha256": "7400880c9a5c7fd33e2ebc236d89b1472b5db6e9cc4c46069149c5696e04c717",
+      "request_headers_sha256": "589341cfdec88dcc1d39ddd42891196f47be1071280bf54a8797e43726175218",
+      "status": 422,
+      "headers": {
+        "content-length": "193",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5d98da31-b7e6-4fbe-b1b7-b68a01e2d253"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"header\",\"x-github-event\"],\"msg\":\"Field required\",\"input\":null},{\"type\":\"missing\",\"loc\":[\"header\",\"x-github-delivery\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "gitlab push accepted",
+      "method": "POST",
+      "path": "/api/v1/webhooks/gitlab",
+      "body_sha256": "818d08831368580d7fb0d41198d54f8d7fae08039dac4b1999bf043aecea9542",
+      "request_headers_sha256": "a7f87bdf981af3ae0ce80752117af72c9c9f3661d42e48faf3e43b5f847ea880",
+      "status": 200,
+      "headers": {
+        "content-length": "105",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5873f6dc-f79c-4c3b-b3d2-d388e566ff9e"
+      },
+      "body": "{\"status\":\"accepted\",\"event_id\":\"bde6776d-1952-46e5-8be1-673925ee5af7\",\"message\":\"Processing push event\"}"
+    },
+    {
+      "name": "gitlab missing event header",
+      "method": "POST",
+      "path": "/api/v1/webhooks/gitlab",
+      "body_sha256": "818d08831368580d7fb0d41198d54f8d7fae08039dac4b1999bf043aecea9542",
+      "request_headers_sha256": "b08a684cd15f3ce9060e03c8d7d23c608aa598297b1c5adebdce7b7953e4d2bd",
+      "status": 422,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b5e945c9-743f-4f06-838c-5e3f5c9fec35"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"header\",\"x-gitlab-event\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "jira issue created accepted",
+      "method": "POST",
+      "path": "/api/v1/webhooks/jira",
+      "body_sha256": "50cb7278e3542c1cd8ba005402e32938467f507a1a2c1bdb2bd5730dd4c2075d",
+      "request_headers_sha256": "e1933280f0cbbd1dc61b949b6f313595a0c7823a2e3463ee1449d74c0ddb7c29",
+      "status": 200,
+      "headers": {
+        "content-length": "114",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a989bd01-a339-4828-b8f6-fb20724e7266"
+      },
+      "body": "{\"status\":\"accepted\",\"event_id\":\"ccb145ec-2ecd-4768-b588-fc5077a3812c\",\"message\":\"Processing issue_created event\"}"
+    },
+    {
+      "name": "webhooks health",
+      "method": "GET",
+      "path": "/api/v1/webhooks/health",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "103",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8a218271-191e-45f9-82e3-c0565d971c85"
+      },
+      "body": "{\"status\":\"ok\",\"secrets_configured\":{\"github\":true,\"gitlab\":true,\"jira\":true},\"celery_available\":false}"
+    },
+    {
+      "name": "github integer past the digit limit",
+      "method": "POST",
+      "path": "/api/v1/webhooks/github",
+      "body_sha256": "63496c7f32da8d7f34b0537dc232267135bcf3cb76059b7bd29f3df340bf80ec",
+      "request_headers_sha256": "dfb0540e8f290f6fdb353d8417063f1ab4a9562fe89628fa92254cbb5322199c",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "gitlab integer past the digit limit",
+      "method": "POST",
+      "path": "/api/v1/webhooks/gitlab",
+      "body_sha256": "63496c7f32da8d7f34b0537dc232267135bcf3cb76059b7bd29f3df340bf80ec",
+      "request_headers_sha256": "a7f87bdf981af3ae0ce80752117af72c9c9f3661d42e48faf3e43b5f847ea880",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "jira integer past the digit limit",
+      "method": "POST",
+      "path": "/api/v1/webhooks/jira",
+      "body_sha256": "63496c7f32da8d7f34b0537dc232267135bcf3cb76059b7bd29f3df340bf80ec",
+      "request_headers_sha256": "5ea5c6d378cf5316931583e7098e2823d426d8590712cbaa4569126381900b4b",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    }
+  ],
+  "rows": {
+    "webhook_deliveries": {
+      "rows": "githubpushpushacmeacme/venue-repo | gitlabpushPush Hookacmeacme/venue-repo | jiraissue_createdjira:issue_createdVEN\u003cnil\u003e"
+    },
+    "worker_job_outbox": {
+      "rows": "operational.webhook_delivery | operational.webhook_delivery | operational.webhook_delivery"
+    },
+    "worker_job_outbox.args": {
+      "rows": "{\"contract_version\": 1, \"correlation_id\": \"webhook-delivery:\u003cuuid-2\u003e\", \"idempotency_key\": \"webhook:1ef0238ae26f1e8d657e91cff9e15c8f9f5d30bba335a54a5dd7ac54e5cacc17\", \"domain\": {\"type\": \"webhook_delivery\", \"id\": \"\u003cuuid-2\u003e\"}, \"payload\": {\"delivery_id\": \"\u003cuuid-2\u003e\"}}\u001e{\"contract_version\": 1, \"correlation_id\": \"webhook-delivery:\u003cuuid-1\u003e\", \"idempotency_key\": \"webhook:784a9dc28f6779f06491e889b77c0e693882fc4300e0a367252e9b73ff4c80a2\", \"domain\": {\"type\": \"webhook_delivery\", \"id\": \"\u003cuuid-1\u003e\"}, \"payload\": {\"delivery_id\": \"\u003cuuid-1\u003e\"}}\u001e{\"contract_version\": 1, \"correlation_id\": \"webhook-delivery:\u003cuuid-3\u003e\", \"idempotency_key\": \"webhook:b70271d9d53e36c32ac32169730d9462ca39be483a22110ade0667ffb4eb5e8b\", \"domain\": {\"type\": \"webhook_delivery\", \"id\": \"\u003cuuid-3\u003e\"}, \"payload\": {\"delivery_id\": \"\u003cuuid-3\u003e\"}}"
+    }
+  }
+}

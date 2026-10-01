@@ -450,19 +450,21 @@ check_live_python_oracles() {
   # structurally needs it, and it would make skipping this specific
   # coverage possible again by construction.
   # The entries are one small file each under ci/live_python_oracles.d (CHAOS-7656),
-  # read in sorted order: a freeze PR DELETES the files of the oracle it freezes and
-  # never edits a line another freeze PR also edits, so two freeze PRs no longer
-  # conflict here. See live_oracle_entries below for the format.
-  local proof_dir proof_file entry
-  local -a runs proofs
-  live_oracle_files run || return 1
-  runs=("${LO_FILES[@]}")
-  live_oracle_files proof || return 1
-  proofs=("${LO_FILES[@]}")
+  # read in sorted order: a freeze PR DELETES the file of the oracle it freezes -- its
+  # command AND its proof checks live in that one file -- and never edits a line another
+  # freeze PR also edits, so two freeze PRs no longer conflict here. See
+  # live_oracle_read_entry below for the format.
+  local proof_dir proof_file entry index
+  local -a entries proof_names proof_messages proof_matches
+  live_oracle_files || return 1
+  entries=("${LO_FILES[@]}")
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-live-python-oracles.XXXXXX")"
 
-  for entry in "${runs[@]}"; do
-    live_oracle_read_run "${entry}" || { rm -rf -- "${proof_dir}"; return 1; }
+  for entry in "${entries[@]}"; do
+    live_oracle_read_entry "${entry}" || { rm -rf -- "${proof_dir}"; return 1; }
+    proof_names+=("${LO_PROOF_NAMES[@]}")
+    proof_messages+=("${LO_PROOF_MESSAGES[@]}")
+    proof_matches+=("${LO_PROOF_MATCHES[@]}")
     if [ -n "${LO_LABEL}" ]; then
       printf 'go test -count=1: %s\n' "${LO_LABEL}"
     fi
@@ -486,17 +488,16 @@ check_live_python_oracles() {
     fi
   done
 
-  for entry in "${proofs[@]}"; do
-    live_oracle_read_proof "${entry}" || { rm -rf -- "${proof_dir}"; return 1; }
-    proof_file="${proof_dir}/${LO_NAME}"
-    if [ -n "${LO_MATCH}" ]; then
-      if [ ! -f "${proof_file}" ] || ! grep -q "${LO_MATCH}" "${proof_file}"; then
-        printf 'ERROR: %s\n' "${LO_MESSAGE}" >&2
+  for index in "${!proof_names[@]}"; do
+    proof_file="${proof_dir}/${proof_names[index]}"
+    if [ -n "${proof_matches[index]}" ]; then
+      if [ ! -f "${proof_file}" ] || ! grep -q "${proof_matches[index]}" "${proof_file}"; then
+        printf 'ERROR: %s\n' "${proof_messages[index]}" >&2
         rm -rf -- "${proof_dir}"
         return 1
       fi
     elif [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-      printf 'ERROR: %s\n' "${LO_MESSAGE}" >&2
+      printf 'ERROR: %s\n' "${proof_messages[index]}" >&2
       rm -rf -- "${proof_dir}"
       return 1
     fi
@@ -504,12 +505,12 @@ check_live_python_oracles() {
   rm -rf -- "${proof_dir}"
 }
 
-# live_oracle_files KIND: fills the array LO_FILES with the entry files of
-# KIND (run | proof) under ${LIVE_PYTHON_ORACLES_DIR:-ci/live_python_oracles.d}, in sorted
-# order. A missing or unreadable directory, or one with no entry of a KIND, FAILS: an
-# empty list is a gate that checks nothing and passes.
+# live_oracle_files: fills the array LO_FILES with the entry files under
+# ${LIVE_PYTHON_ORACLES_DIR:-ci/live_python_oracles.d}, in sorted order. A missing or
+# unreadable directory, or one with no entry, FAILS: an empty list is a gate that checks
+# nothing and passes.
 live_oracle_files() {
-  local kind="$1" dir="${LIVE_PYTHON_ORACLES_DIR:-${ROOT}/ci/live_python_oracles.d}" file
+  local dir="${LIVE_PYTHON_ORACLES_DIR:-${ROOT}/ci/live_python_oracles.d}" file
   local -a oracle_entries=()
   if [ ! -d "${dir}" ] || [ ! -r "${dir}" ]; then
     printf 'ERROR: the live Python oracle entry directory %s is missing or unreadable\n' "${dir}" >&2
@@ -517,21 +518,32 @@ live_oracle_files() {
   fi
   while IFS= read -r file; do
     oracle_entries+=("${file}")
-  done < <(LC_ALL=C find "${dir}" -maxdepth 1 -type f -name "*.${kind}" | LC_ALL=C sort)
+  done < <(LC_ALL=C find "${dir}" -maxdepth 1 -type f -name '*.run' | LC_ALL=C sort)
   if [ "${#oracle_entries[@]}" -eq 0 ]; then
-    printf 'ERROR: %s holds no .%s entry: a live Python oracle gate with nothing to run measures nothing\n' "${dir}" "${kind}" >&2
+    printf 'ERROR: %s holds no .run entry: a live Python oracle gate with nothing to run measures nothing\n' "${dir}" >&2
     return 1
   fi
   LO_FILES=("${oracle_entries[@]}")
 }
 
-# live_oracle_read_run FILE sets LO_LABEL LO_PACKAGE LO_RUN LO_PYTHON LO_PYTHONPATH from a
-# .run entry (one key=value per line: label, package, run, python, pythonpath). A line
-# that is not one of those keys, or a missing package, FAILS. A run without a label
-# prints no heading (the second go test of one group).
-live_oracle_read_run() {
-  local file="$1" line key value
+# live_oracle_read_entry FILE sets LO_LABEL LO_PACKAGE LO_RUN LO_PYTHON LO_PYTHONPATH and
+# the index-aligned arrays LO_PROOF_NAMES LO_PROOF_MESSAGES LO_PROOF_MATCHES from a .run
+# entry, one key=value per line:
+#   label=      heading printed before the command (optional)
+#   package=    the go package argument (required)
+#   run=        the -run selector (optional)
+#   python=1    also export PYTHON (default python3)
+#   pythonpath=0  do not export PYTHONPATH
+#   proof=NAME|MESSAGE        the marker NAME must be "executed" in the proof directory
+#   proof_match=NAME|REGEX    the marker NAME must match REGEX instead
+# At least one proof is required: an oracle that proves nothing about having run is a
+# measurement that need not happen, and a freeze PR deletes the whole file. An unknown key,
+# a missing package, a proof_match for a name that is not a proof, or a duplicate proof
+# name FAILS.
+live_oracle_read_entry() {
+  local file="$1" line key value name index found
   LO_LABEL="" LO_PACKAGE="" LO_RUN="" LO_PYTHON=0 LO_PYTHONPATH=1
+  LO_PROOF_NAMES=() LO_PROOF_MESSAGES=() LO_PROOF_MATCHES=()
   while IFS= read -r line || [ -n "${line}" ]; do
     [ -n "${line}" ] || continue
     key="${line%%=*}"
@@ -542,6 +554,32 @@ live_oracle_read_run() {
       run) LO_RUN="${value}" ;;
       python) LO_PYTHON="${value}" ;;
       pythonpath) LO_PYTHONPATH="${value}" ;;
+      proof)
+        name="${value%%|*}"
+        for found in "${LO_PROOF_NAMES[@]}"; do
+          if [ "${found}" = "${name}" ]; then
+            printf 'ERROR: %s: proof %s is listed twice\n' "${file}" "${name}" >&2
+            return 1
+          fi
+        done
+        LO_PROOF_NAMES+=("${name}")
+        LO_PROOF_MESSAGES+=("${value#*|}")
+        LO_PROOF_MATCHES+=("")
+        ;;
+      proof_match)
+        name="${value%%|*}"
+        found=""
+        for index in "${!LO_PROOF_NAMES[@]}"; do
+          if [ "${LO_PROOF_NAMES[index]}" = "${name}" ]; then
+            LO_PROOF_MATCHES[index]="${value#*|}"
+            found=1
+          fi
+        done
+        if [ -z "${found}" ]; then
+          printf 'ERROR: %s: proof_match names %s, which no earlier proof line declares\n' "${file}" "${name}" >&2
+          return 1
+        fi
+        ;;
       *) printf 'ERROR: %s: unknown key %q\n' "${file}" "${key}" >&2; return 1 ;;
     esac
   done <"${file}"
@@ -549,27 +587,8 @@ live_oracle_read_run() {
     printf 'ERROR: %s needs a package\n' "${file}" >&2
     return 1
   fi
-}
-
-# live_oracle_read_proof FILE sets LO_NAME LO_MESSAGE LO_MATCH from a .proof entry (name,
-# message, match). The proof file ${proof_dir}/name must hold "executed", or match the
-# regular expression of match when it is given.
-live_oracle_read_proof() {
-  local file="$1" line key value
-  LO_NAME="" LO_MESSAGE="" LO_MATCH=""
-  while IFS= read -r line || [ -n "${line}" ]; do
-    [ -n "${line}" ] || continue
-    key="${line%%=*}"
-    value="${line#*=}"
-    case "${key}" in
-      name) LO_NAME="${value}" ;;
-      message) LO_MESSAGE="${value}" ;;
-      match) LO_MATCH="${value}" ;;
-      *) printf 'ERROR: %s: unknown key %q\n' "${file}" "${key}" >&2; return 1 ;;
-    esac
-  done <"${file}"
-  if [ -z "${LO_NAME}" ] || [ -z "${LO_MESSAGE}" ]; then
-    printf 'ERROR: %s needs a name and a message\n' "${file}" >&2
+  if [ "${#LO_PROOF_NAMES[@]}" -eq 0 ]; then
+    printf 'ERROR: %s declares no proof: a live oracle run that nothing proves executed measures nothing\n' "${file}" >&2
     return 1
   fi
 }
@@ -577,19 +596,14 @@ live_oracle_read_proof() {
 # live_python_oracles_list prints the resolved commands and proofs, one per line, exactly
 # as check_live_python_oracles would run and check them (no command is run).
 live_python_oracles_list() {
-  local entry
-  local -a runs proofs
-  live_oracle_files run || return 1
-  runs=("${LO_FILES[@]}")
-  live_oracle_files proof || return 1
-  proofs=("${LO_FILES[@]}")
-  for entry in "${runs[@]}"; do
-    live_oracle_read_run "${entry}" || return 1
+  local entry index
+  live_oracle_files || return 1
+  for entry in "${LO_FILES[@]}"; do
+    live_oracle_read_entry "${entry}" || return 1
     printf 'RUN label=%s python=%s pythonpath=%s run=%s package=%s\n' "${LO_LABEL}" "${LO_PYTHON}" "${LO_PYTHONPATH}" "${LO_RUN}" "${LO_PACKAGE}"
-  done
-  for entry in "${proofs[@]}"; do
-    live_oracle_read_proof "${entry}" || return 1
-    printf 'PROOF name=%s match=%s message=%s\n' "${LO_NAME}" "${LO_MATCH}" "${LO_MESSAGE}"
+    for index in "${!LO_PROOF_NAMES[@]}"; do
+      printf 'PROOF name=%s match=%s message=%s\n' "${LO_PROOF_NAMES[index]}" "${LO_PROOF_MATCHES[index]}" "${LO_PROOF_MESSAGES[index]}"
+    done
   done
 }
 

@@ -1,3 +1,4 @@
 label=internal/api/orgs (api decisions vs live Python)
 package=./internal/api/orgs
 run=^(TestRegistryMatchesLivePython)$
+proof=api-orgs-registry|api live Python oracle api-orgs-registry did not run

@@ -2,3 +2,6 @@ label=internal/api/externalingest (schema bundle, operational host, envelope val
 package=./internal/api/externalingest
 run=^(TestOperationalProviderInstanceMatchesLivePython|TestEnvelopeValidationMatchesLivePython|TestDataPlaneEnvelopeParseMatchesLivePython)$
 python=1
+proof=externalingest-operational-host|externalingest live Python oracle externalingest-operational-host did not run
+proof=externalingest-envelope-validation|externalingest live Python oracle externalingest-envelope-validation did not run
+proof=externalingest-parse-dataplane|externalingest live Python oracle externalingest-parse-dataplane did not run

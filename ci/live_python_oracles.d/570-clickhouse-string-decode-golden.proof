@@ -1,2 +1,0 @@
-name=clickhouse-string-decode-golden
-message=clickhouse String decode policy did not compare against live Python

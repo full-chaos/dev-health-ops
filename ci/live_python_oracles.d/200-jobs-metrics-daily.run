@@ -2,3 +2,4 @@ label=internal/jobs/metrics/daily (live Python repository discovery source is ou
 package=./internal/jobs/metrics/daily
 run=^TestPythonDiscoverReposOracle$
 python=1
+proof=daily-metrics-discover|daily metrics live Python repository-discovery measurement did not occur

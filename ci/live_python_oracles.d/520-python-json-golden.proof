@@ -1,2 +1,0 @@
-name=python-json-golden
-message=python json.dumps golden did not compare against live Python

@@ -1,3 +1,4 @@
 label=internal/pythonparity (float round/repr/format mirrors vs the live interpreter)
 package=./internal/pythonparity/...
 run=^TestFloatTextGoldenMatchesLivePython$
+proof=pythonparity-float-text|the CPython float round/repr/format golden was not re-derived from the live interpreter

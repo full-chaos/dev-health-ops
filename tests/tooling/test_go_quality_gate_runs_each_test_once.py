@@ -198,7 +198,9 @@ def _invocations() -> list[tuple[str | None, list[str]]]:
     # (check_live_python_oracles runs each with DEV_HEALTH_LIVE_PYTHON_ORACLES=1, no
     # build tag), not literal lines of check_go.sh any more.
     entries = sorted((REPO_ROOT / "ci" / "live_python_oracles.d").glob("*.run"))
-    assert entries, "ci/live_python_oracles.d holds no .run entry: the gate measures nothing"
+    assert entries, (
+        "ci/live_python_oracles.d holds no .run entry: the gate measures nothing"
+    )
     for entry in entries:
         fields = dict(
             line.split("=", 1) for line in entry.read_text("utf-8").splitlines() if line

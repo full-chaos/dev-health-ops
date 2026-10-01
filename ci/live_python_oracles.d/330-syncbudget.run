@@ -1,3 +1,4 @@
 label=internal/syncbudget (in-process budget estimator vs live Python, CHAOS-6243)
 package=./internal/syncbudget
 run=^TestBudgetEstimatorMatchesLivePython$
+proof=sync-budget-estimate|in-process budget estimator live Python oracle measurement did not occur

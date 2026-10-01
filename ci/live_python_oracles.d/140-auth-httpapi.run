@@ -1,3 +1,5 @@
 label=internal/auth/httpapi (redirect scheme vs live uvicorn, limit strings vs live limits)
 package=./internal/auth/httpapi
 run=^(TestForwardedSchemeMatchesLiveUvicorn|TestParseLimitMatchesLivePython)$
+proof=httpapi-forwarded-scheme|api live Python oracle httpapi-forwarded-scheme did not run
+proof=httpapi-limit-string|api live Python oracle httpapi-limit-string did not run

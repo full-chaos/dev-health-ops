@@ -1,3 +1,4 @@
 label=internal/apiservice/admin (CHAOS-6976 llm-settings readiness probe wire shape vs live Python AgentReadinessService.certify)
 package=./internal/apiservice/admin
 run=^(TestReadinessProbeMatchesLivePython)$
+proof=admin-llmreadiness-probe|api live Python oracle admin-llmreadiness-probe did not run

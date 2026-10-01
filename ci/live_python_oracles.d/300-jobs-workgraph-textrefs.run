@@ -1,3 +1,5 @@
 package=./internal/jobs/workgraph/textrefs
 run=^(TestEveryRuneMatchesLivePythonCharacterClasses|TestPythonDigitValueMatchesLivePythonForEveryDigit)$
 python=1
+proof=workgraph-textrefs-charclass-allrunes|the text-extractor character classes were not compared against live Python
+proof_match=workgraph-textrefs-charclass-allrunes|^executed ucd_python=.* ucd_go=

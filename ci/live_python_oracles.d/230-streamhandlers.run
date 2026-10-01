@@ -2,3 +2,4 @@ label=internal/streamhandlers (external-ingest worker normalize_batch orchestrat
 package=./internal/streamhandlers
 run=^TestNormalizeExternalRecordsMatchesLivePythonNormalizeBatch$
 python=1
+proof=streamhandlers-normalize-batch|streamhandlers normalize_batch live Python oracle did not run

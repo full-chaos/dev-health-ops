@@ -78,7 +78,9 @@ def test_every_live_oracle_test_is_run_by_ci() -> None:
     # that did not happen fails).
     assert len(oracles) >= 40, f"only {len(oracles)} live-oracle tests found"
     entries = entry_selectors(ORACLE_ENTRIES)
-    assert entries, f"{ORACLE_ENTRIES} holds no -run selector: the entries moved and this guard went blind"
+    assert entries, (
+        f"{ORACLE_ENTRIES} holds no -run selector: the entries moved and this guard went blind"
+    )
     missing = unregistered(ROOT, CHECK_GO.read_text() + "\n" + entries)
     assert not missing, (
         "live-Python oracle tests that ci/check_go.sh never runs (add the name to "

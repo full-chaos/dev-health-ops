@@ -2,3 +2,8 @@ label=internal/jobs/workgraph/edges (frozen issue<->issue edge golden vs live Py
 package=./internal/jobs/workgraph/edges
 run=^(TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython|TestEveryRuneLowercasesLikeLivePython)$
 python=1
+proof=workgraph-numeric-digit-table|the Numeric_Type=Digit table was not re-derived from live Python
+proof=workgraph-python-lower|pythonLower was not re-derived against live str.lower()
+proof=workgraph-python-lower-allrunes|the all-runes lowercase comparison was not run against live Python
+proof=workgraph-python-decimal-blocks|Python decimal-digit blocks were not re-derived from live Python
+proof=workgraph-int-max-str-digits|int_max_str_digits was not read back from live Python

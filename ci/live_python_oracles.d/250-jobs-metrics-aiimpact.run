@@ -2,3 +2,4 @@ label=internal/jobs/metrics/aiimpact (repo-team pattern resolver vs live Python,
 package=./internal/jobs/metrics/aiimpact
 run=^TestRepoPatternResolverMatchesLivePython$
 python=1
+proof=ai-impact-repo-teams-golden|ai_impact repo-team pattern resolver live Python oracle measurement did not occur

@@ -1,3 +1,8 @@
 label=internal/api/pytime (api decisions vs live Python)
 package=./internal/api/pytime
 run=^(TestParseDatetimeMatchesLivePydantic|TestParseDateMatchesLivePydantic|TestDatetimeReasonMatchesLivePydantic|TestFromISOFormatMatchesLivePython|TestPydanticMatchesLivePydanticDumpJSON)$
+proof=api-pytime|api live Python oracle api-pytime did not run
+proof=api-pytime-date|api live Python oracle api-pytime-date did not run
+proof=api-pytime-datereason|api live Python oracle api-pytime-datereason did not run
+proof=api-pytime-fromisoformat|api live Python oracle api-pytime-fromisoformat did not run
+proof=api-pytime-pydantic|api live Python oracle api-pytime-pydantic did not run

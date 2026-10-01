@@ -1,2 +1,3 @@
 label=internal/providersync (live Python oracle sources are outside the Go embed/cache boundary)
 package=./internal/providersync/...
+proof=linear-work-items-oracle-prep|the live Linear work-items producer probe (TestLinearWorkItemsOraclePrepExecutesLiveProducer) did not execute

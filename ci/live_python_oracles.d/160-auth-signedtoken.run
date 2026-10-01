@@ -1,3 +1,4 @@
 label=internal/auth/signedtoken (link tokens vs the live invite, verification and reset services)
 package=./internal/auth/signedtoken
 run=^(TestSignedTokenMatchesLivePython)$
+proof=auth-signedtoken|api live Python oracle auth-signedtoken did not run

@@ -1,3 +1,0 @@
-name=workgraph-textrefs-charclass-allrunes
-message=the text-extractor character classes were not compared against live Python
-match=^executed ucd_python=.* ucd_go=

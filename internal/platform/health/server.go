@@ -150,6 +150,9 @@ func (s *Server) handleMetrics(response http.ResponseWriter, request *http.Reque
 	if !allowRead(response, request) {
 		return
 	}
+	// The body is Prometheus text built from bounded names and numbers, never
+	// markup: tell the browser not to second-guess the declared type.
+	response.Header().Set("X-Content-Type-Options", "nosniff")
 	var output bytes.Buffer
 	s.registry.WriteRuntimeMetrics(request.Context(), s.service, s.version, &output)
 	// Degrade rather than fail: a source whose dependency is unreachable must
@@ -163,7 +166,9 @@ func (s *Server) handleMetrics(response http.ResponseWriter, request *http.Reque
 		writeJSON(response, http.StatusServiceUnavailable, map[string]any{"status": "metrics_unavailable"})
 		return
 	}
-	WriteSourceFailedMetrics(&output, outcomes)
+	if len(outcomes) > 0 {
+		WriteSourceFailedMetrics(&output, outcomes)
+	}
 
 	response.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	response.WriteHeader(http.StatusOK)

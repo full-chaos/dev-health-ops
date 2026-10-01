@@ -12,6 +12,13 @@ import (
 // pythonGoldenBuild is the 40-hex commit of the last build whose Python
 // ClickHouse chain produced the files below. Frozen: nothing after it can be
 // recorded, because the producer is deleted with the Python CLI.
+//
+// Build facts (CHAOS-7471): this commit is an ancestor of origin/main (`git merge-base
+// --is-ancestor acd02fb0a6... origin/main`, run 2026-10-01), so it stays fetchable. It produced
+// python_chain_contract2.json (recorder: TestRecordPythonChainContract2, closed environment) and
+// repair_golden.json. It did NOT produce migrate_golden.json or the operationalbackfill golden:
+// this build stops at migration 099 and dho's chain holds 100, so those two were recorded with
+// the Python src of main 7b5903cdfc72a100c19df267d90d88df1ce641e2 (see their pins).
 const pythonGoldenBuild = "acd02fb0a61f2d8648d3dee4e22534c426b00cc4"
 
 // freezePoint is the last migration a Python producer ran: the golden state

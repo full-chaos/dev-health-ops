@@ -531,6 +531,19 @@ type Config struct {
 	// two modes prove different things.
 	GoEdge bool
 
+	// DocRouteReference selects the doc-route reference mode (CHAOS-7442, the MCP class
+	// proof only): the baseline leg is the registered document, unchanged, sent to
+	// DocRouteURL (query-api's own /graphql), and must be served by plane go from the
+	// named build. The comparison is then between two Go pipelines on the same
+	// document, variables and identity -- which is what the MCP class adds over the
+	// document rows. Declared Python baseline defects do not apply to it and are
+	// dropped; exact comparison and the declared stochastic classes stay. Exclusive
+	// with GoEdge.
+	DocRouteReference bool
+	// DocRouteURL is query-api's /graphql (reached with EdgeCredential). Used only
+	// with DocRouteReference.
+	DocRouteURL string
+
 	// GoProofURL is the measurement-only route that can execute a
 	// SHADOW-mode operation on the deployed Go build. Empty means the
 	// route does not exist in this deployment, and shadow operations are
@@ -556,6 +569,9 @@ type Config struct {
 func edgeModeOf(config Config) string {
 	if config.GoEdge {
 		return EdgeModeGo
+	}
+	if config.DocRouteReference {
+		return EdgeModeDocRoute
 	}
 	return EdgeModePython
 }
@@ -617,6 +633,12 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 	}
 	sort.Strings(operations)
 
+	if r.Config.GoEdge && r.Config.DocRouteReference {
+		return nil, Summary{EdgeMode: EdgeModeUndetermined}, errors.New("goapiproof: GoEdge and DocRouteReference are exclusive: one run is one reference")
+	}
+	if r.Config.DocRouteReference && r.Config.DocRouteURL == "" {
+		return nil, Summary{EdgeMode: EdgeModeDocRoute}, errors.New("goapiproof: DocRouteReference needs DocRouteURL (query-api's /graphql)")
+	}
 	if r.Config.GoEdge {
 		if err := r.verifyGoEdge(ctx); err != nil {
 			return nil, Summary{EdgeMode: EdgeModeGo}, err
@@ -704,6 +726,16 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 		return outcomes, summary, ErrNothingMeasured
 	}
 	return outcomes, summary, nil
+}
+
+// goServedFor is the go-served ledger the admission may use: none in doc-route
+// reference mode, where the baseline is a Go answer and the go-only class (a
+// baseline that is the Python deletion error) does not exist.
+func (r *Runner) goServedFor() *GoServedLedger {
+	if r.Config.DocRouteReference {
+		return nil
+	}
+	return r.GoServed
 }
 
 // authFor is the auth-context SHAPE a request was made with: the run's own, plus the principal name when the operation was
@@ -953,6 +985,11 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	if r.Config.GoEdge {
 		outcome.EdgeMode = EdgeModeGo
 	}
+	if r.Config.DocRouteReference {
+		outcome.EdgeMode = EdgeModeDocRoute
+		// A Python baseline defect describes a difference from Python; this baseline is Go.
+		parity.BaselineDefects = nil
+	}
 	// Recorded on EVERY outcome, refused or not: a refusal taken while the
 	// enablement record was stale is exactly as worth knowing as a match
 	// taken then. Empty when the row agrees with what is running.
@@ -1064,7 +1101,13 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 
 	// The baseline ALWAYS goes through the Python edge, whatever route
 	// the candidate took, so it always uses the edge credential.
-	baseline, err := r.post(ctx, r.Config.PythonEdgeURL, document+baselineComment, edgeCredential, variables)
+	baselineURL, baselineDocument := r.Config.PythonEdgeURL, document+baselineComment
+	if r.Config.DocRouteReference {
+		// The REGISTERED text, exactly: the digest gate then serves it on Go. The inert
+		// comment is what sends a document to Python, which is not wanted here.
+		baselineURL, baselineDocument = r.Config.DocRouteURL, document
+	}
+	baseline, err := r.post(ctx, baselineURL, baselineDocument, edgeCredential, variables)
 	if err != nil {
 		return refuse(RefusalTransport, "baseline leg: "+err.Error())
 	}
@@ -1095,17 +1138,18 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	// through the function (see admission.go's opening comment for the ten
 	// instances that shape cost).
 	admission := Admit(AdmissionInput{
-		Route:         outcome.Route,
-		NamedBuild:    r.Registry.BuildIdentity,
-		ResponseRoot:  spec.ResponseRoot,
-		RootNullable:  spec.RootNullable,
-		Operation:     operation,
-		GoServed:      r.GoServed,
-		GoEdge:        r.Config.GoEdge,
-		Candidate:     candidate,
-		Baseline:      baseline,
-		CandidateSnap: candidateSnapshot,
-		BaselineSnap:  baselineSnapshot,
+		Route:             outcome.Route,
+		NamedBuild:        r.Registry.BuildIdentity,
+		ResponseRoot:      spec.ResponseRoot,
+		RootNullable:      spec.RootNullable,
+		Operation:         operation,
+		GoServed:          r.goServedFor(),
+		GoEdge:            r.Config.GoEdge,
+		DocRouteReference: r.Config.DocRouteReference,
+		Candidate:         candidate,
+		Baseline:          baseline,
+		CandidateSnap:     candidateSnapshot,
+		BaselineSnap:      baselineSnapshot,
 	})
 	if !admission.Admitted {
 		return refuse(admission.Reason, admission.Detail)

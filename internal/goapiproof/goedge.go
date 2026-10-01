@@ -47,6 +47,11 @@ import (
 const (
 	EdgeModePython = "python"
 	EdgeModeGo     = "go"
+	// EdgeModeDocRoute is the MCP class proof's reference mode (CHAOS-7442): the
+	// baseline is query-api's OWN /graphql answering the registered document, a
+	// second Go implementation of the same answer, because the Python reference
+	// no longer exists for most operations.
+	EdgeModeDocRoute = "doc_route"
 	// EdgeModeUndetermined is the mode of a run that stopped before a mode
 	// was selected (its flags did not parse). It is a value of its own
 	// because the absence of -go-edge on a command line that was not read

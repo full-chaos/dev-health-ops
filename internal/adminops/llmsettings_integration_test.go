@@ -8,13 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // `admin llm-settings get|set|delete` are compared with the real Python verbs on
@@ -199,26 +197,6 @@ func llmSession(t *testing.T, python bool) []llmResult {
 	return out
 }
 
-const llmGolden = "testdata/llmsettings_golden.json"
-
-// llmGoldenSHA256 pins testdata/llmsettings_golden.json (R24): what the real
-// `dev-hops admin llm-settings` verbs printed and left for every step. The
-// producer is deleted with the Python CLI, so this is a rot guard: the file is
-// only rewritten by TestLLMSettingsVenueOracleMatchesThePythonProducer with
-// DHO_LLM_GOLDEN_UPDATE=1, then this digest is updated.
-const llmGoldenSHA256 = "0a1da186f2dce31456ad1fd0e961a9fdd89a923e815405ffa41d82050bf0af92"
-
-func TestLLMSettingsGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile(llmGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != llmGoldenSHA256 {
-		t.Fatalf("%s digest = %s, want %s: the golden changed without its digest", llmGolden, got, llmGoldenSHA256)
-	}
-}
-
 func compareLLM(t *testing.T, got, want []llmResult, wantName string) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -238,13 +216,29 @@ func compareLLM(t *testing.T, got, want []llmResult, wantName string) {
 	}
 }
 
-// TestLLMSettingsMatchTheFrozenPythonOutput runs the script and compares every
-// step with what the real Python verbs did (frozen; no Python needed).
+// TestLLMSettingsMatchTheFrozenPythonOutput runs the script and compares every step (exit, stdout, the
+// settings rows left) with what the REAL `dev-hops admin llm-settings` verbs did. The answers were executed
+// once on adminPythonBuild and are frozen in testdata/golden/llmsettings.json (the recipe regenerates them by
+// execution); the script is part of the golden's key (the API keys by name and digest, never by value).
 func TestLLMSettingsMatchTheFrozenPythonOutput(t *testing.T) {
-	raw, err := os.ReadFile(llmGolden)
+	golden, root := adminGolden(t, "llmsettings", "22b5e4dda3bf3b7639b31eb6f0e606b305f7067647a948e128869eadcaae8742", "TestLLMSettingsMatchTheFrozenPythonOutput")
+	digest := func(text string) string {
+		sum := sha256.Sum256([]byte(text))
+		return hex.EncodeToString(sum[:8])
+	}
+	script := make([]map[string]any, len(llmScript))
+	for index, s := range llmScript {
+		script[index] = map[string]any{"args": shownArgs(s.args), "sql": s.sql, "noKey": s.noKey}
+	}
+	input, err := json.Marshal(map[string]any{
+		"script":    script,
+		"apiKeys":   map[string]string{"long": digest(apiKeyLong), "short": digest(apiKeyShort), "unicode": digest(apiKeyUni)},
+		"keySecret": digest(llmKeySecret), "salt": llmSalt,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := adminProduce(t, golden, root, "llm-settings script", input, func() any { return llmSession(t, true) })
 	var frozen []llmResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
@@ -263,30 +257,8 @@ func TestLLMSettingsMatchTheFrozenPythonOutput(t *testing.T) {
 	if stored < 3 || refused < 8 {
 		t.Fatalf("the golden has %d steps with a stored secret and %d refusals: it measures too little", stored, refused)
 	}
-}
-
-// TestLLMSettingsVenueOracleMatchesThePythonProducer runs the script through the
-// real Python verbs and through dho. With DHO_LLM_GOLDEN_UPDATE=1 it rewrites the
-// frozen file.
-func TestLLMSettingsVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	py := llmSession(t, true)
-	got := llmSession(t, false)
-	compareLLM(t, got, py, "python")
-	if os.Getenv("DHO_LLM_GOLDEN_UPDATE") == "1" {
-		raw, err := json.MarshalIndent(py, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(llmGolden, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 // A refusal Python prints can carry text the operator typed: an unparsable base

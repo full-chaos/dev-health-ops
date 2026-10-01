@@ -10,9 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -371,20 +369,19 @@ func credStderr(code int, text string, python bool) string {
 	return "<no error line>"
 }
 
+// credPythonProgram is the entry point the producer runs: the real dev-hops CLI.
+const credPythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
+
 func credPython(t *testing.T, db *database, args []string) (int, string, string) {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := pythonPlaneRoot(t)
 	python := pyoracle.Resolve(t, root)
-	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-	command := exec.Command(python, append([]string{"-c", program, "service-credentials"}, args...)...)
+	command := exec.Command(python, append([]string{"-c", credPythonProgram, "service-credentials"}, args...)...)
 	pyURI := strings.Replace(db.uri, "postgres://", "postgresql://", 1)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI, "OTEL_ENABLED=false", "DISABLE_DOTENV=1")
+	command.Env = append(adminPythonEnv(root), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err = command.Run()
+	err := command.Run()
 	code := 0
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
@@ -435,26 +432,34 @@ func compareCredentials(t *testing.T, got, want []stepResult, wantName string) {
 	}
 }
 
-const credGolden = "testdata/service_credentials_golden.json"
-
-func TestServiceCredentialsGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile(credGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != credGoldenSHA256 {
-		t.Fatalf("%s digest = %s, want %s: the golden changed without its digest", credGolden, got, credGoldenSHA256)
-	}
-}
-
+// TestServiceCredentialsMatchTheFrozenPythonOutput runs the script on a real PostgreSQL at the migration head
+// and compares every step (exit, stdout, stderr, the rows left) with what the REAL `dev-hops
+// service-credentials` verbs did. The answers were executed once on adminPythonBuild and are frozen in
+// testdata/golden/svc_verbs.json (the recipe regenerates them by execution); the script is part of
+// the golden's key. Printed tokens are stored as typed placeholders (<svc_acr_token>, <svc_worker_token>)
+// proven against the rows' hashes, never as values; clock times are one-minute buckets.
 func TestServiceCredentialsMatchTheFrozenPythonOutput(t *testing.T) {
-	raw, err := os.ReadFile(credGolden)
+	golden, root := adminGolden(t, "svc_verbs", "a5724d54fec6a597166225fb3d825b900e527b0cb2e1b3b40463be5031bfa853", "TestServiceCredentialsMatchTheFrozenPythonOutput")
+	script := make([]map[string]any, len(credScript))
+	for index, s := range credScript {
+		script[index] = map[string]any{"args": s.args, "sql": s.sql}
+	}
+	input, err := json.Marshal(script)
 	if err != nil {
 		t.Fatal(err)
 	}
+	request := venueoracle.ProgramRequest("service-credentials script", credPythonProgram, input, adminPythonSettings)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		pinPythonRoot(t, root)
+		body, err := json.Marshal(startDatabase(t).credSession(t, credPython))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(body)}}
+	})
+	golden.Consumed(t, answers...)
 	var frozen []stepResult
-	if err := json.Unmarshal(raw, &frozen); err != nil {
+	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {
 		t.Fatal(err)
 	}
 	db := startDatabase(t)
@@ -474,37 +479,8 @@ func TestServiceCredentialsMatchTheFrozenPythonOutput(t *testing.T) {
 	if refused < 20 || printed < 15 || usage < 8 {
 		t.Fatalf("the golden has %d refusals, %d usage errors and %d printed tokens: it measures too little", refused, usage, printed)
 	}
-}
-
-// TestServiceCredentialsVenueOracleMatchesThePythonProducer runs the script through the
-// real Python verbs and through dho and compares every step. With
-// DHO_SERVICE_CREDENTIALS_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestServiceCredentialsVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	db := startDatabase(t)
-	py := db.credSession(t, credPython)
-	got := db.credSession(t, credGo)
-	compareCredentials(t, got, py, "python")
-	if os.Getenv("DHO_SERVICE_CREDENTIALS_GOLDEN_UPDATE") == "1" {
-		raw, err := json.MarshalIndent(py, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(credGolden, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 var _ = admin.ServiceACR
-
-// credGoldenSHA256 pins the frozen golden; regenerate both with the live oracle.
-const credGoldenSHA256 = "4c4a081b59503540316f12653ffe8829cc46867fb2e8900a996dc7893e056657"

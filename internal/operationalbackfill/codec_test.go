@@ -174,6 +174,9 @@ func TestOperationalRefusesBeforeTouchingClickHouse(t *testing.T) {
 // not a freshness check: the file is only rewritten by
 // TestBackfillOperationalVenueOracleMatchesThePythonProducer with
 // DHO_BACKFILL_OPERATIONAL_GOLDEN_UPDATE=1, then this digest is updated.
+// The golden was recorded again in a closed environment (CHAOS-7471, byte-identical) with the
+// Python src of main 7b5903cdfc72a100c19df267d90d88df1ce641e2 (an ancestor of origin/main); chmigrate's pythonGoldenBuild
+// is not its origin.
 const goldenSHA256 = "c4b1ee9fa22868479cee3e1dfadda31ee963bc95c44ef6e5275de34d4c0941fe"
 
 func TestGoldenIsTheFileTheDigestPins(t *testing.T) {

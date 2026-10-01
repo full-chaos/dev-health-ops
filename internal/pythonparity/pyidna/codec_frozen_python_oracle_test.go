@@ -3,11 +3,12 @@ package pyidna_test
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyidna"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"math/rand"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyidna"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // The program encodes with the interpreter's own "idna" codec; "!" stands

@@ -3,9 +3,10 @@ package emailvalidator_test
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity/emailvalidator"
 	"os"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/emailvalidator"
 )
 
 // goldenPath holds a slice of pydantic's own answers as text, cut from

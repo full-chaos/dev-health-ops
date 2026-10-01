@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"go/format"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // tablesProgram dumps the idna package's data. Intranges become

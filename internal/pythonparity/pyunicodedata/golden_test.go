@@ -3,9 +3,10 @@ package pyunicodedata_test
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
 	"os"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
 )
 
 // nfcGoldenPath holds a slice of unicodedata.normalize("NFC", ...)'s own

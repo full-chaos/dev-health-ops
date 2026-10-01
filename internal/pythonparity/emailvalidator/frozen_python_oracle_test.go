@@ -4,15 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity/emailvalidator"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"math/rand"
 	"os"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/emailvalidator"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // oracleProgram runs pydantic's own validate_email (the function EmailStr

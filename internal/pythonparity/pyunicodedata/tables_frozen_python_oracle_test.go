@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"go/format"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // tablesProgram dumps, from the interpreter, every unicodedata answer this

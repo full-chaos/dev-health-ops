@@ -3,15 +3,15 @@ package pyidna_test
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyidna"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"math/rand"
 	"os"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyidna"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // behaviourProgram answers each call with the idna package: the result (code

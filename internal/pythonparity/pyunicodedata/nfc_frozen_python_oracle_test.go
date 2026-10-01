@@ -3,11 +3,12 @@ package pyunicodedata_test
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"math/rand"
 	"os"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // nfcProgram normalizes each input three ways. Its answers are frozen as block

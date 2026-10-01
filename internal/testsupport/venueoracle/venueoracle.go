@@ -979,6 +979,11 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 			if projectedPython.Body != pythonResponse.Body || projectedGo.Body != goResponse.Body {
 				compareOptions.SkipContentLength = func(r Request) bool { return true }
 			}
+			for _, projected := range []Response{projectedPython, projectedGo} {
+				if err := undecodableErr(request, projected); err != nil {
+					t.Fatal(err)
+				}
+			}
 			pythonResponse, goResponse = projectedPython, projectedGo
 		}
 		same, compared, pyShown, goShown := Compare(request, pythonResponse, goResponse, compareOptions)

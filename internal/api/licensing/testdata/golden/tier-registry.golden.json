@@ -1,0 +1,31 @@
+{
+  "header": {
+    "test": "TestTierFeaturesMatchFrozenPython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/licensing/ -test '^TestTierFeaturesMatchFrozenPython$' -python-root $DIR",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 c100cefee083c09651ebc6442533f07574f8d3e18cd1ac9ff142d58f54d47a43 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\naiosqlite 0.22.1\npydantic 2.13.5\npydantic-core 2.46.5\npynacl 1.6.2\nsqlalchemy 2.0.54\n"
+    },
+    {
+      "name": "tier registry",
+      "method": "PYTHON",
+      "path": "program sha256 39125fbcd6ff8389ce90decca1a58d6f4325832a6f6cad36e48cc58f89bbfb89 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"features\": {\"community\": [[\"git_sync\", true], [\"work_items_sync\", true], [\"basic_analytics\", true], [\"team_management\", true], [\"github_integration\", false], [\"gitlab_integration\", false], [\"jira_integration\", false], [\"investment_view\", false], [\"api_access\", false], [\"capacity_forecast\", false], [\"work_graph\", false], [\"quadrant_analysis\", false], [\"linear_integration\", false], [\"llm_categorization\", false], [\"webhooks\", false], [\"customer_push_ingest\", false], [\"canonical_incident_ingestion\", true], [\"agent_context_runtime\", false], [\"ask_dev\", false], [\"ask_dev_contextual_entrypoints\", false], [\"ask_dev_wave_3_1\", false], [\"scheduled_jobs\", false], [\"sso_saml\", false], [\"sso_oidc\", false], [\"audit_log\", false], [\"custom_retention\", false], [\"ip_allowlist\", false], [\"data_export\", false], [\"multi_org\", false], [\"custom_branding\", false], [\"priority_support\", false], [\"byo_llm\", false]], \"team\": [[\"git_sync\", true], [\"work_items_sync\", true], [\"basic_analytics\", true], [\"team_management\", true], [\"github_integration\", true], [\"gitlab_integration\", true], [\"jira_integration\", true], [\"investment_view\", true], [\"api_access\", true], [\"capacity_forecast\", true], [\"work_graph\", true], [\"quadrant_analysis\", true], [\"linear_integration\", true], [\"llm_categorization\", true], [\"webhooks\", true], [\"customer_push_ingest\", true], [\"canonical_incident_ingestion\", true], [\"agent_context_runtime\", false], [\"ask_dev\", false], [\"ask_dev_contextual_entrypoints\", false], [\"ask_dev_wave_3_1\", false], [\"scheduled_jobs\", true], [\"sso_saml\", false], [\"sso_oidc\", false], [\"audit_log\", false], [\"custom_retention\", false], [\"ip_allowlist\", false], [\"data_export\", false], [\"multi_org\", false], [\"custom_branding\", false], [\"priority_support\", false], [\"byo_llm\", true]], \"enterprise\": [[\"git_sync\", true], [\"work_items_sync\", true], [\"basic_analytics\", true], [\"team_management\", true], [\"github_integration\", true], [\"gitlab_integration\", true], [\"jira_integration\", true], [\"investment_view\", true], [\"api_access\", true], [\"capacity_forecast\", true], [\"work_graph\", true], [\"quadrant_analysis\", true], [\"linear_integration\", true], [\"llm_categorization\", true], [\"webhooks\", true], [\"customer_push_ingest\", true], [\"canonical_incident_ingestion\", true], [\"agent_context_runtime\", false], [\"ask_dev\", false], [\"ask_dev_contextual_entrypoints\", false], [\"ask_dev_wave_3_1\", false], [\"scheduled_jobs\", true], [\"sso_saml\", true], [\"sso_oidc\", true], [\"audit_log\", true], [\"custom_retention\", true], [\"ip_allowlist\", true], [\"data_export\", true], [\"multi_org\", true], [\"custom_branding\", true], [\"priority_support\", true], [\"byo_llm\", true]]}, \"limits\": {\"community\": [5, 3, 100], \"team\": [20, 10, 500], \"enterprise\": [-1, -1, -1]}, \"decision_keys\": [\"agent_context_runtime\", \"ask_dev\", \"ask_dev_contextual_entrypoints\", \"ask_dev_wave_3_1\", \"canonical_incident_ingestion\", \"customer_push_ingest\"]}\n"
+    }
+  ]
+}

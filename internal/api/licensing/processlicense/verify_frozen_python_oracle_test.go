@@ -2,32 +2,35 @@ package processlicense
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"math/rand"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonLicenseProgram is the real producer and the real verifier. Stdin is
 // {"sign": [[seed_b64, org, tier, issued_at, days], ...], "judge": [[public_b64,
 // license, now], ...]}; licenses naming "@<n>" are the n-th license the sign
-// step produced. Signing is licensing.generator.sign_license; judging is
+// step produced. The answer names each signed license by its digest only
+// ({"sha256", "length"}): the text is a signed token and is not stored.
+// Signing is licensing.generator.sign_license; judging is
 // what LicenseManager.initialize does with the pair (LicenseValidator(public)
 // then .validate(license)), at a fixed clock, with any exception -- which the
 // api lifespan swallows into the community tier -- answered as not in force.
 // Each judgement is [in_force, tier, in_grace_period, features].
 const pythonLicenseProgram = `
-import json, sys
+import hashlib, json, sys
 from dev_health_ops.licensing.generator import sign_license
 from dev_health_ops.licensing.validator import LicenseValidator
 request = json.loads(sys.stdin.read())
@@ -46,7 +49,8 @@ for public, license, now in request["judge"]:
         judged.append([False, None, False, None])
         continue
     judged.append([True, result.payload.tier.value, result.in_grace_period, result.payload.features])
-print(json.dumps({"signed": signed, "judged": judged}))
+digests = [{"sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "length": len(text.encode("utf-8"))} for text in signed]
+print(json.dumps({"signed": digests, "judged": judged}))
 `
 
 type judgeCase struct {
@@ -54,20 +58,13 @@ type judgeCase struct {
 	now                   int64
 }
 
-// TestVerifierMatchesLivePythonLicenseValidator holds Validate to the Python
+// TestVerifierMatchesFrozenPythonLicenseValidator holds Validate to the Python
 // LicenseValidator: licenses signed by the real sign_license with throwaway
 // keys, judged at clocks before expiry, in grace and past it; the same
 // licenses tampered with, under another key, and re-signed payloads that
 // probe pydantic's lax validation and libsodium's small-order refusals. The
 // verdict, tier, grace flag and feature map must agree case for case.
-func TestVerifierMatchesLivePythonLicenseValidator(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
-
+func TestVerifierMatchesFrozenPythonLicenseValidator(t *testing.T) {
 	random := rand.New(rand.NewSource(6663))
 	newKey := func() testKey {
 		seed := make([]byte, 32)
@@ -99,8 +96,12 @@ func TestVerifierMatchesLivePythonLicenseValidator(t *testing.T) {
 		key := keys[index/(len(signs)/len(keys))]
 		ref := fmt.Sprintf("@%d", index)
 		exp := s.issued + s.days*day
-		for label, now := range map[string]int64{"issued": s.issued, "at exp": exp, "exp+1": exp + 1, "grace end": exp + 14*day, "grace end+1": exp + 14*day + 1, "past enterprise grace": exp + 30*day + 1} {
-			add(fmt.Sprintf("%s/%d %s", s.tier, s.days, label), key.publicB64(), ref, now)
+		// The cases are the program's input: their order is the same in every run.
+		for _, clock := range []struct {
+			label string
+			now   int64
+		}{{"issued", s.issued}, {"at exp", exp}, {"exp+1", exp + 1}, {"grace end", exp + 14*day}, {"grace end+1", exp + 14*day + 1}, {"past enterprise grace", exp + 30*day + 1}} {
+			add(fmt.Sprintf("%s/%d %s", s.tier, s.days, clock.label), key.publicB64(), ref, clock.now)
 		}
 		add(fmt.Sprintf("%s/%d another key", s.tier, s.days), stranger.publicB64(), ref, s.issued)
 	}
@@ -279,23 +280,40 @@ func TestVerifierMatchesLivePythonLicenseValidator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, "-c", pythonLicenseProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(stdin))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the test source")
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
+	output := verifierGoldens.Outputs(t, root, "license-verifier.golden.json", programoracle.Program{Name: "license verifier", Text: pythonLicenseProgram, Stdin: stdin})[0]
 	var answer struct {
-		Signed []string            `json:"signed"`
+		Signed []struct {
+			SHA256 string `json:"sha256"`
+			Length int    `json:"length"`
+		} `json:"signed"`
 		Judged [][]json.RawMessage `json:"judged"`
 	}
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &answer); err != nil {
+	if err := json.Unmarshal([]byte(output), &answer); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(answer.Signed) != len(signs) || len(answer.Judged) != len(cases) {
 		t.Fatalf("python answered %d/%d signs and %d/%d judgements", len(answer.Signed), len(signs), len(answer.Judged), len(cases))
+	}
+	// The golden holds each Python-signed license as its digest only. The
+	// text the Go verifier judges is the Go-signed twin, and it is the same
+	// text: the same SHA-256 and length.
+	signedTexts := make([]string, len(signs))
+	for index, s := range signs {
+		text, err := licensing.SignLicense(s.seed, licensing.LicenseRequest{OrgID: s.org, Tier: s.tier, IssuedAt: s.issued, LicenseID: "lic", DurationDays: big.NewInt(s.days)})
+		if err != nil {
+			t.Fatalf("sign case %d: %v", index, err)
+		}
+		sum := sha256.Sum256([]byte(text))
+		if hex.EncodeToString(sum[:]) != answer.Signed[index].SHA256 || len(text) != answer.Signed[index].Length {
+			t.Fatalf("sign case %d (%s, %d days): the Go-signed license is not the Python-signed license (go %s, length %d; python sha256 %s, length %d)",
+				index, s.tier, s.days, text, len(text), answer.Signed[index].SHA256, answer.Signed[index].Length)
+		}
+		signedTexts[index] = text
 	}
 
 	mismatches, inForce, graced, refused := 0, 0, 0, 0
@@ -304,7 +322,7 @@ func TestVerifierMatchesLivePythonLicenseValidator(t *testing.T) {
 		if strings.HasPrefix(license, "@") {
 			var n int
 			fmt.Sscanf(license, "@%d", &n)
-			license = answer.Signed[n]
+			license = signedTexts[n]
 		}
 		got := goJudgement(c.public, license, c.now)
 		want := canonicalJudgement(t, answer.Judged[index])
@@ -327,11 +345,22 @@ func TestVerifierMatchesLivePythonLicenseValidator(t *testing.T) {
 		t.Fatalf("too little measured: %d in force (%d in grace), %d refused", inForce, graced, refused)
 	}
 	t.Logf("%d cases: %d in force (%d in grace), %d refused, %d mismatches", len(cases), inForce, graced, refused, mismatches)
-	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" && !t.Failed() {
-		if err := os.WriteFile(filepath.Join(proof, "api-licensing-verify"), []byte("executed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+}
+
+// verifierGoldens is the set of this package's frozen Python answers. The
+// producers are sign_license and LicenseValidator of the pinned build and the
+// distributions under them, so Identity names those distributions. A golden
+// recorded by another producer is refused.
+var verifierGoldens = programoracle.Set{
+	Package:       "./internal/api/licensing/processlicense/",
+	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity:      "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npydantic-core 2.46.5\npynacl 1.6.2",
+	Distributions: []string{"pydantic", "pydantic-core", "pynacl"},
+	// The goldenrecord verb writes each digest when it promotes a recording; a
+	// new golden starts as "PIN:" + its file name without ".json".
+	Pins: map[string]string{
+		"license-verifier.golden.json": "25c843bc72fdcf01f38e74e208b479dacd3f9c303eb30b3dad0bd49414dda4c7",
+	},
 }
 
 // goJudgement is Install's verification for one pair, in the oracle's shape.

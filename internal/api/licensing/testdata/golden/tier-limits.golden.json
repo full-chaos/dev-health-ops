@@ -1,0 +1,31 @@
+{
+  "header": {
+    "test": "TestTierLimitsMatchFrozenPython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/licensing/ -test '^TestTierLimitsMatchFrozenPython$' -python-root $DIR",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 c100cefee083c09651ebc6442533f07574f8d3e18cd1ac9ff142d58f54d47a43 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\naiosqlite 0.22.1\npydantic 2.13.5\npydantic-core 2.46.5\npynacl 1.6.2\nsqlalchemy 2.0.54\n"
+    },
+    {
+      "name": "tier limits",
+      "method": "PYTHON",
+      "path": "program sha256 cca19cc6403b5fb1790571145342e8ed2028b059261fc32d3d72c34741d57061 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "503462fffadc1f31716e690c12f4a745cc18fb100b8e27d849a60ec9ea5c1ff3",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "gzip+base64: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"
+    }
+  ]
+}

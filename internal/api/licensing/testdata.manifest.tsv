@@ -1,0 +1,8 @@
+# Every file under internal/api/licensing/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/b64decode.golden.json
+-	header	golden/big-duration-license.golden.json
+-	header	golden/org-feature.golden.json
+-	header	golden/sign-license.golden.json
+-	header	golden/tier-limits.golden.json
+-	header	golden/tier-registry.golden.json

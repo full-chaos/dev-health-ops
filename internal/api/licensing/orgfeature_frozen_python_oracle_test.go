@@ -3,17 +3,12 @@ package licensing
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonOrgFeatureProgram runs each case through licensing/gating.py's own
@@ -138,25 +133,15 @@ func orgFeatureCases() []orgFeatureCase {
 // TestOrgFeatureVenueOracleMatchesLivePython requires OrgHasFeature to
 // allow exactly where the api's _check_org_feature_async does, for the
 // same stored rows.
-func TestOrgFeatureVenueOracleMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the org feature oracle needs the full project Python environment; ci/check_go.sh venue-oracles runs it")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestOrgFeatureMatchesFrozenPython(t *testing.T) {
 	cases := orgFeatureCases()
-	input, _ := json.Marshal(cases)
-	command := exec.Command(python, "-c", pythonOrgFeatureProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
+	input, err := json.Marshal(cases)
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	output := frozenPython(t, "org-feature.golden.json", programoracle.Program{Name: "org feature", Text: pythonOrgFeatureProgram, Stdin: input})[0]
 	var want []bool
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil || len(want) != len(cases) {
+	if err := json.Unmarshal([]byte(output), &want); err != nil || len(want) != len(cases) {
 		t.Fatalf("decode: %v (%d of %d)\n%s", err, len(want), len(cases), output)
 	}
 	allowed := 0
@@ -177,5 +162,4 @@ func TestOrgFeatureVenueOracleMatchesLivePython(t *testing.T) {
 		t.Errorf("the corpus did not reach both outcomes: %d of %d allowed", allowed, len(cases))
 	}
 	t.Logf("%d cases compared, %d allowed", len(cases), allowed)
-	venueoracle.WriteProof(t)
 }

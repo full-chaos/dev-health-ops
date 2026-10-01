@@ -8,6 +8,7 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -134,5 +135,62 @@ func TestDocumentOperationsReceiptBackedReadsTheEnablementRule(t *testing.T) {
 	}
 	if !got["backed"] || got["otherbuild"] || got["unbound"] || got["none"] {
 		t.Fatalf("backed = %v, want only the operation with an admissible receipt for this build", got)
+	}
+}
+
+// status shows what a class root's proof rests on: the reference, the counted shapes and
+// every excluded shape by name, read from the ADMISSIBLE receipt of the build the live row
+// names (a receipt for another build or an unbound one shows nothing).
+func TestMCPClassStatusShowsWhatTheClassProofRestsOn(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+	op, digest := mcpclass.Operation("hotspots"), mcpclass.DocumentDigest()
+	if _, err := pool.Exec(ctx, registerCandidateBuildSQL, testSchemaDigest, digest, op, testCandidateBuild); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO go_api_routing_state
+		(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1,$2,$3,$4,'go','canary',100,'e','t')`, testSchemaDigest, digest, op, testCandidateBuild); err != nil {
+		t.Fatal(err)
+	}
+	evidence, _ := json.Marshal(ReceiptProvenance{
+		MeasurementRoute: RouteProof, EdgeBuildBinding: EdgeBuildPresent, EdgeMode: EdgeModeDocRoute,
+		MCPClass: &MCPClassProvenance{Root: "hotspots", Reference: "go_document_route", Executed: 3, Matched: 3,
+			Excluded: []string{"featureFlagTimeseries=doc_operation_not_receipt_backed"}},
+	})
+	write := func(binding string) {
+		t.Helper()
+		if _, err := Write(ctx, pool, Receipt{
+			SchemaDigest: testSchemaDigest, DocumentDigest: digest, SelectedOperation: op, CandidateBuild: testCandidateBuild,
+			RequestIdentity: "identity-" + binding, Stage: EnablementProofStage, TerminalState: EnablementProofTerminalState,
+			MeasurementRoute: RouteProof, BuildBinding: binding, OrgID: "70d529e0", RecordedBy: "test",
+			ReviewEvidence: string(evidence), ObservedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rootRow := func() MCPClassRootStatus {
+		t.Helper()
+		rows, err := MCPClassStatusRows(ctx, pool, testSchemaDigest, map[string]bool{"hotspots": true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			if row.Root == "hotspots" {
+				return row
+			}
+		}
+		t.Fatal("no hotspots row")
+		return MCPClassRootStatus{}
+	}
+	write(EdgeBuildAbsent) // inadmissible: shows nothing
+	if r := rootRow(); r.Proven || r.ProofReference != "" || len(r.ProofExcluded) != 0 {
+		t.Fatalf("an unbound receipt shows proof: %+v", r)
+	}
+	write(EdgeBuildPresent)
+	r := rootRow()
+	if !r.Proven || r.ProofReference != "go_document_route" || r.ProofExecuted != 3 || r.ProofMatched != 3 ||
+		len(r.ProofExcluded) != 1 || r.ProofExcluded[0] != "featureFlagTimeseries=doc_operation_not_receipt_backed" {
+		t.Fatalf("status = %+v, want the reference, the counts and the excluded shape named", r)
 	}
 }

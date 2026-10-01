@@ -251,9 +251,10 @@ spec:
               value: {{ include "dev-health.operationalOrderingContract" $ | quote }}
             # Each group is its own service in the trace and metric backend.
             # The shared ConfigMap (envFrom below) sets OTEL_SERVICE_NAME for
-            # the python api and every other workload, so without this entry
-            # all nine groups would report under the python api's name. An
-            # explicit env entry beats envFrom, so this wins over the ConfigMap.
+            # the python api and for every worker group, so without this entry
+            # all nine groups would report under the python api's name. (The Go
+            # api and the query-api do not read that ConfigMap.) An explicit
+            # env entry beats envFrom, so this wins over the ConfigMap.
             - name: OTEL_SERVICE_NAME
               value: {{ printf "dev-health-go-%s" $group.name | quote }}
             {{- if (include "dev-health.goWorkerClickhouseURI" $) }}

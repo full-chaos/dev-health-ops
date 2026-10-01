@@ -733,7 +733,7 @@ func runTarget(ctx context.Context, env cli.Env, target string, exec Executor, n
 	// errors through the process logger) passes through the same boundary as
 	// the error the verb prints.
 	redact := planBoundary(plan)
-	defer logging.InstallDefault(slog.New(logging.WithValueRedaction(slog.Default().Handler(), redact)))()
+	defer redactProcessLogger(redact)()
 	if err := exec(ctx, plan, env); err != nil {
 		var refused *Refusal
 		if errors.As(err, &refused) {
@@ -956,4 +956,12 @@ func planBoundary(plan Plan) func(string) string {
 		}
 		return text
 	}
+}
+
+// redactProcessLogger makes every text the process logger is given pass through
+// redact until the returned function is called: the sinks and collectors under
+// a verb log database errors through it, and its own redactor recognises
+// credential shapes, not a login name.
+func redactProcessLogger(redact func(string) string) (restore func()) {
+	return logging.InstallDefault(slog.New(logging.WithValueRedaction(slog.Default().Handler(), redact)))
 }

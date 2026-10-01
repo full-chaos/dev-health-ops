@@ -171,6 +171,9 @@ func buildCatalogCollector(env cli.Env, d deps, request catalogRequest, owner, t
 func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRequest) int {
 	boundary := secrets.NewBoundary(request.dsn)
 	redact := func(err error) string { return boundary.Redact(err).Error() }
+	// What the collector logs (the roster-preservation warnings carry the
+	// driver's error) is redacted with the same boundary.
+	defer redactProcessLogger(boundary.RedactText)()
 	spec, ok := catalogProviderSpecs[request.provider]
 	if !ok {
 		return writeError(env.Stderr, cli.ExitUsage, "unsupported_provider", "provider "+request.provider+" has no team catalog verb")

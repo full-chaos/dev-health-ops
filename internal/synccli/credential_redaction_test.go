@@ -5,8 +5,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
+
+	"atlassian/atlassian"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 
@@ -122,6 +125,64 @@ func TestSyncBatchPrintsNeitherClickHouseLoginNorPassword(t *testing.T) {
 			for _, secret := range []string{plantedLogin, plantedPassword} {
 				if strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
 					t.Errorf("%q printed:\nstdout %q\nstderr %q", secret, stdout, stderr)
+				}
+			}
+		})
+	}
+}
+
+// loggingClient and loggingDoer stand for the collector and the writer under
+// `dho sync teams`: they log a database error with the login and the password
+// through the process logger, as the providersync collectors do, then fail.
+type loggingClient struct{ failingClient }
+
+func (c loggingClient) SearchTeams(ctx context.Context, a, b, d string, n int) ([]atlassian.AtlassianTeam, error) {
+	slog.Default().WarnContext(ctx, "roster_preservation_failed", "error", errors.New(plantedServerText()))
+	return c.failingClient.SearchTeams(ctx, a, b, d, n)
+}
+
+type loggingDoer struct{}
+
+func (loggingDoer) Do(request *http.Request) (*http.Response, error) {
+	slog.Default().WarnContext(request.Context(), "roster_preservation_failed", "error", errors.New(plantedServerText()))
+	return nil, errors.New(plantedServerText())
+}
+
+// `dho sync teams` (the Atlassian verb and the GitHub/GitLab/Linear catalog
+// verb) logs nothing that holds the ClickHouse login or the password: the
+// collector's own log lines pass through the same boundary as the error the verb
+// prints.
+func TestSyncTeamsLogsNeitherClickHouseLoginNorPassword(t *testing.T) {
+	for name, build := range map[string]func() (map[string]string, deps, []string){
+		"atlassian": func() (map[string]string, deps, []string) {
+			env := validEnv()
+			env["CLICKHOUSE_URI"] = plantedEnv()["CLICKHOUSE_URI"]
+			d := stubDeps(&recorded{}, loggingClient{failingClient{err: errors.New(plantedServerText())}}, nil)
+			return env, d, []string{"--provider", "jira", "--org", "org-1"}
+		},
+		"catalog": func() (map[string]string, deps, []string) {
+			env := map[string]string{"CLICKHOUSE_URI": plantedEnv()["CLICKHOUSE_URI"]}
+			d := stubDeps(&recorded{}, failingClient{}, nil)
+			d.doer = loggingDoer{}
+			return env, d, []string{"--provider", "github", "--org", "org-1", "--owner", "acme", "--auth", "ghp-test"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{})))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			env, d, args := build()
+			code, stdout, stderr := run(t, env, d, args...)
+			if code == cli.ExitOK {
+				t.Fatalf("exit %d: the verb did not reach the failing collector; stderr %q", code, stderr)
+			}
+			if !strings.Contains(logs.String(), "roster_preservation_failed") || !strings.Contains(logs.String(), "Authentication failed") {
+				t.Fatalf("the collector logged nothing the test can check:\nlogs %s\nstderr %s", logs.String(), stderr)
+			}
+			for _, secret := range []string{plantedLogin, plantedPassword} {
+				if strings.Contains(logs.String(), secret) || strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
+					t.Errorf("%q printed or logged:\nlogs %s\nstdout %q\nstderr %q", secret, logs.String(), stdout, stderr)
 				}
 			}
 		})

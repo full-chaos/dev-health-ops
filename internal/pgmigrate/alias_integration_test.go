@@ -5,12 +5,9 @@ package pgmigrate_test
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
-	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -57,30 +54,10 @@ var aliasScenarios = []aliasScenario{
 	{name: "status of a revision the release does not contain", setup: "UPDATE alembic_version SET version_num = '9999' WHERE version_num = '{app}'", args: []string{"status"}, cutover: true},
 }
 
-const aliasGolden = "testdata/alias_golden.json"
-
-// aliasGoldenSHA256 pins testdata/alias_golden.json (R24): what the real `dev-hops
-// migrate heads|history|current|status` printed and exited with in every scenario.
-// The producer is deleted with the Python CLI, so this is a rot guard: the file is
-// only rewritten by TestAliasesVenueOracleMatchesTheFlatVerbs with
-// DHO_ALIAS_GOLDEN_UPDATE=1, then this digest is updated.
-const aliasGoldenSHA256 = "6b6e64da357cc1b41106003ef373b10f448f3c6fbebd504a0a269823209706ad"
-
 type aliasResult struct {
 	Name   string `json:"name"`
 	Exit   int    `json:"exit"`
 	Stdout string `json:"stdout"`
-}
-
-func TestAliasGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile(aliasGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != aliasGoldenSHA256 {
-		t.Fatalf("%s digest = %s, want %s: the golden changed without its digest", aliasGolden, got, aliasGoldenSHA256)
-	}
 }
 
 // aliasSetup fills the {app} and {below} names of a setup statement.
@@ -165,22 +142,70 @@ func normalizeAlias(s aliasScenario, text string) string {
 	return text
 }
 
-func pythonAlias(t *testing.T, uri string, s aliasScenario) (int, string) {
+func pythonAlias(t *testing.T, root, uri string, s aliasScenario) (int, string) {
 	t.Helper()
-	var env []string
+	// The cutover switch is part of the scenario; the hash seed is pinned (it orders Alembic's sets).
+	env := []string{"PYTHONHASHSEED=0"}
 	if s.cutover {
 		env = append(env, "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1")
 	}
-	return pythonCLI(t, env, uri, append([]string{"migrate"}, s.args...)...)
+	return pythonCLI(t, root, env, uri, append([]string{"migrate"}, s.args...)...)
 }
 
+// aliasPythonBuild is the build whose Python CLI answered the scenarios: a build that still carried it.
+const aliasPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// TestAliasesMatchTheFrozenPythonOutput runs the flat verbs on a real PostgreSQL in every scenario and
+// compares exit code and text with what the REAL `dev-hops migrate heads|history|current|status` printed
+// against a database in the same state. The answers were executed once on aliasPythonBuild and are frozen in
+// testdata/golden/alias.json (the recipe regenerates them by execution); the scenarios are part of the
+// golden's key.
 func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
-	raw, err := os.ReadFile(aliasGolden)
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/alias.json",
+		PythonBuild: aliasPythonBuild,
+		SHA256:      "62f6781dc12172ab2dbc7c964930a46352dffc890dda59b08efde1a33ceb16f5",
+		Recipe: "git worktree add --detach $DIR " + aliasPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestAliasesMatchTheFrozenPythonOutput$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+
+	scenarios := make([]map[string]any, len(aliasScenarios))
+	for index, scenario := range aliasScenarios {
+		scenarios[index] = map[string]any{"name": scenario.name, "setup": scenario.setup, "cutover": scenario.cutover, "args": scenario.args}
+	}
+	input, err := json.Marshal(scenarios)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
+	request := venueoracle.ProgramRequest("alias scenarios", pythonCLIProgram, input, env)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		uri, exec := revisionsDatabase(t)
+		exec("CREATE TABLE alembic_version_saved AS SELECT * FROM alembic_version")
+		var results []aliasResult
+		for _, scenario := range aliasScenarios {
+			if scenario.setup != "" {
+				exec(aliasSetup(t, scenario.setup))
+			}
+			code, text := pythonAlias(t, root, uri, scenario)
+			results = append(results, aliasResult{Name: scenario.name, Exit: code, Stdout: text})
+			exec("DROP TABLE IF EXISTS alembic_version")
+			exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")
+		}
+		body, err := json.Marshal(results)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(body)}}
+	})
+	golden.Consumed(t, answers...)
 	var frozen []aliasResult
-	if err := json.Unmarshal(raw, &frozen); err != nil {
+	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {
 		t.Fatal(err)
 	}
 	if len(frozen) != len(aliasScenarios) {
@@ -213,45 +238,6 @@ func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
 	if pending < 5 || unknown < 1 {
 		t.Errorf("the golden has %d pending states and %d refusals: it measures too little", pending, unknown)
 	}
-}
-
-// TestAliasesVenueOracleMatchesTheFlatVerbs runs the real `dev-hops migrate heads|
-// history|current|status` in every scenario and compares its exit code and text with
-// dho's. With DHO_ALIAS_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestAliasesVenueOracleMatchesTheFlatVerbs(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	uri, exec := revisionsDatabase(t)
-	exec("CREATE TABLE alembic_version_saved AS SELECT * FROM alembic_version")
-	var frozen []aliasResult
-	for _, scenario := range aliasScenarios {
-		if scenario.setup != "" {
-			exec(aliasSetup(t, scenario.setup))
-		}
-		wantCode, want := pythonAlias(t, uri, scenario)
-		gotCode, got := goAlias(t, uri, scenario)
-		if gotCode != wantCode || normalizeAlias(scenario, got) != normalizeAlias(scenario, want) {
-			t.Errorf("%s: dho exit %d printed %q, Python exit %d printed %q", scenario.name, gotCode, got, wantCode, want)
-		}
-		frozen = append(frozen, aliasResult{Name: scenario.name, Exit: wantCode, Stdout: want})
-		exec("DROP TABLE IF EXISTS alembic_version")
-		exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")
-	}
-	if os.Getenv("DHO_ALIAS_GOLDEN_UPDATE") == "1" {
-		body, err := json.MarshalIndent(frozen, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(aliasGolden, append(body, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
-	_ = fmt.Sprint
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }

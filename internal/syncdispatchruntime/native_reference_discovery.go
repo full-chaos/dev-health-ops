@@ -531,6 +531,20 @@ func commitOrUnavailable(ctx context.Context, tx pgx.Tx) error {
 	return nil
 }
 
+// unitDiscoveryFailureResultJSON is the result of a unit failed by reference discovery: the category,
+// the sanitized detail and a fixed-vocabulary, value-free reason (CHAOS-7132) that the run's own
+// result row carries too, so "Reference discovery failed" is no longer the whole story.
+func unitDiscoveryFailureResultJSON(discoverErr error) ([]byte, error) {
+	payload := map[string]any{
+		"error_category": referenceDiscoveryErrorCategory,
+		"detail":         discoveryErrorDetail(discoverErr),
+	}
+	if reason := providerfoundation.FailureReason(discoverErr); reason != "" {
+		payload["reason"] = reason
+	}
+	return json.Marshal(payload)
+}
+
 func discoveryFailureResultJSON(retryable bool, attempts int, discoverErr error) []byte {
 	encoded, err := json.Marshal(map[string]any{
 		"error_category": referenceDiscoveryErrorCategory,
@@ -599,10 +613,7 @@ func ledgerLeaseIsOwnedAndLive(status string, leaseExpiresAt *time.Time, ownedBy
 // the same way feature_disabled_termination.go's fix does: take the SAME
 // sorted per-bucket advisory locks before touching any row.
 func failNonterminalUnits(ctx context.Context, tx pgx.Tx, runID string, now time.Time, message string, discoverErr error) error {
-	resultJSON, err := json.Marshal(map[string]any{
-		"error_category": referenceDiscoveryErrorCategory,
-		"detail":         discoveryErrorDetail(discoverErr),
-	})
+	resultJSON, err := unitDiscoveryFailureResultJSON(discoverErr)
 	if err != nil {
 		return ErrReferenceDiscoveryUnavailable
 	}

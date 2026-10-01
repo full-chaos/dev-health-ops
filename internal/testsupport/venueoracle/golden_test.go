@@ -776,3 +776,44 @@ func TestFrozenPythonWithEnvAnswersEachScenarioByNameAndEnvironment(t *testing.T
 		t.Fatalf("the recorded file holds an entry of the environment, or a key for the venue's own: %s", raw)
 	}
 }
+
+// An Allow header is recorded in the order the comparison uses, whatever order
+// the producer's set gave it in this run: two recordings of the same answers
+// are then the same bytes, and the frozen comparison still treats it as a set.
+func TestARecordedAllowHeaderIsStoredInTheComparisonsOrder(t *testing.T) {
+	requests := []Request{{Name: "TRACE /health/", Method: "TRACE", Path: "/health/"}}
+	record := func(allow string) goldenRequest {
+		recording, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, t.Name(), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		live := func() []Response {
+			return []Response{{Status: 405, Headers: map[string]string{"allow": allow, "content-type": "application/json"}, Body: "{}"}}
+		}
+		answers := recording.answer(t, "Python", "", requests, func() error { return nil }, live, nil)
+		if got := answers[0].Headers["allow"]; got != recording.recorded.Requests[0].Headers["allow"] {
+			t.Fatalf("the test was handed %q and the file holds %q", got, recording.recorded.Requests[0].Headers["allow"])
+		}
+		return recording.recorded.Requests[0]
+	}
+	first, second := record("PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS"), record("GET, DELETE, PUT, OPTIONS, POST, PATCH, HEAD")
+	if first.Headers["allow"] != "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT" || first.Headers["allow"] != second.Headers["allow"] {
+		t.Fatalf("two runs of one answer are stored as %q and %q", first.Headers["allow"], second.Headers["allow"])
+	}
+	// Another set of methods is another answer: one method less, and one method more.
+	if other := record("GET, HEAD"); other.Headers["allow"] != "GET, HEAD" || other.Headers["content-type"] != "application/json" {
+		t.Fatalf("stored headers: %v", other.Headers)
+	}
+	if more := record("PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS, TRACE"); more.Headers["allow"] != "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT, TRACE" || more.Headers["allow"] == first.Headers["allow"] {
+		t.Fatalf("a header with one method more is stored as %q, the same as without it", more.Headers["allow"])
+	}
+	// The frozen comparison: the Go plane's header in any order is the same answer; a method more is not.
+	python := Response{Status: 405, Headers: map[string]string{"allow": first.Headers["allow"]}, Body: "{}"}
+	same := func(goAllow string) bool {
+		ok, _, _, _ := Compare(requests[0], python, Response{Status: 405, Headers: map[string]string{"allow": goAllow}, Body: "{}"}, DiffOptions{})
+		return ok
+	}
+	if !same("POST, GET, PUT, DELETE, PATCH, HEAD, OPTIONS") || same("POST, GET, PUT, DELETE, PATCH, HEAD, OPTIONS, TRACE") || same("POST, GET") {
+		t.Fatal("the comparison does not treat Allow as a set of exactly these methods")
+	}
+}

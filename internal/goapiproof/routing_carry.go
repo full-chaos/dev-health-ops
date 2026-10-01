@@ -68,6 +68,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
 
 // CarriedEvidencePrefix opens the review_evidence of every carried row.
@@ -154,6 +156,16 @@ var ErrCarryNothingReachable = errors.New("goapiproof: no reachable row at the l
 // digest the new image does not serve is a dead row written on purpose,
 // so the operation is refused BY NAME and the run stops.
 var ErrCarryDocumentMoved = errors.New("goapiproof: the registered document changed or is absent at the target schema digest")
+
+// ErrCarryClassRootGone reports a reachable MCP class row whose root field
+// the image this binary was built from no longer serves: it is gone from the
+// class allowlist or from the SDL's Query type.
+//
+// A refusal and never a skip. A class row is not in any registry, so "the
+// deployed process does not register it" would be true of EVERY class row;
+// skipping on that ground is exactly how the class went dark on every digest
+// move. A root that was removed on purpose must be disabled by name first.
+var ErrCarryClassRootGone = errors.New("goapiproof: an MCP class row names a root field the target image does not serve")
 
 // ErrCarryImageDisagrees reports that the two artifacts this image
 // carries -- the registered-document dump built from its own
@@ -260,6 +272,13 @@ type CarryInputs struct {
 	// a row to carry alongside, it is a second row of which at most one
 	// can ever be looked up.
 	TargetRows map[string]CarryRow
+	// MCPRoots are the MCP class root fields THIS image serves: the class
+	// allowlist intersected with the root fields of this binary's embedded
+	// SDL (mcpclass.ServedRoots). A class row is judged against this set and
+	// never against a registry: it has no registered document. Nil means the
+	// set was not computed, which refuses every class row rather than
+	// carrying one unchecked.
+	MCPRoots map[string]bool
 }
 
 // CarryOutcome is what happened, or would happen, to one live row.
@@ -328,6 +347,9 @@ func DecideCarry(row CarryRow, inputs CarryInputs) CarryOutcome {
 	if row.Mode != TargetModeCanary && row.Mode != TargetModePrimary {
 		return skip("mode=%s is not served to a client by either plane, so the roll un-routes nothing here", row.Mode)
 	}
+	if mcpclass.IsClassRow(row.Operation, row.DocumentDigest) {
+		return decideClassCarry(row, inputs, outcome, refuse)
+	}
 	live, registered := inputs.LiveDocumentDigest[row.Operation]
 	if !registered {
 		return skip("the deployed process does not register this operation, so this row is already unreachable")
@@ -354,6 +376,32 @@ func DecideCarry(row CarryRow, inputs CarryInputs) CarryOutcome {
 		return refuse(ErrCarryImageDisagrees, "this image's edge catalog says %s and its registered documents say %s -- regenerate the catalog with scripts/go_api/generate_operation_catalog.py against this revision", catalog, target)
 	}
 
+	existing, present := inputs.TargetRows[row.Operation]
+	switch {
+	case !present:
+		outcome.Action = CarryActionCarry
+		return outcome
+	case sameCarriedState(row, existing):
+		outcome.Action = CarryActionUnchanged
+		return outcome
+	default:
+		return refuse(ErrCarryTargetRowExists,
+			"the target digest already holds a row for this operation (document %s, mode %s, rollout %d, build %s) that differs from the one being carried -- resolve it there first",
+			existing.DocumentDigest, existing.Mode, existing.RolloutPercentage, existing.Build)
+	}
+}
+
+// decideClassCarry is DecideCarry for an MCP class row. The row's key is
+// (schema digest, class digest, "mcp:<root>"), and the class digest is a
+// function of a constant, not of the SDL, so the row is valid at the target
+// digest exactly when the target image still serves the root field. There is
+// no document to compare and no catalog entry: the Python edge has no route
+// to the class.
+func decideClassCarry(row CarryRow, inputs CarryInputs, outcome CarryOutcome, refuse func(error, string, ...any) CarryOutcome) CarryOutcome {
+	root, _ := mcpclass.Root(row.Operation)
+	if !inputs.MCPRoots[root] {
+		return refuse(ErrCarryClassRootGone, "the MCP class row for root field %q is reachable now, but the image this binary was built from does not serve it (not in the class allowlist or not a Query field of its SDL): carrying it would write a dead row, skipping it would un-route it silently -- `disable` it by name first", root)
+	}
 	existing, present := inputs.TargetRows[row.Operation]
 	switch {
 	case !present:

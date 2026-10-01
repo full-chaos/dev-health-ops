@@ -60,6 +60,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -119,17 +120,19 @@ type flags struct {
 	candidateBuild       string
 	allowProverBuildSkew bool
 	proofURL             string
-	documentsPath        string
-	postgresURI          string
-	orgID                string
-	artifactDir          string
-	recordedBy           string
-	reviewEvidence       string
-	principalKind        string
-	audience             string
-	keyID                string
-	dryRun               bool
-	adminPrincipal       bool
+	// mcpRoots selects the MCP class proof (CHAOS-7214): "mcp:<root>,..." or all-mcp.
+	mcpRoots       string
+	documentsPath  string
+	postgresURI    string
+	orgID          string
+	artifactDir    string
+	recordedBy     string
+	reviewEvidence string
+	principalKind  string
+	audience       string
+	keyID          string
+	dryRun         bool
+	adminPrincipal bool
 	// goEdge selects Go-edge mode: -edge-url is query-api's own /graphql,
 	// with no Python plane behind it (goapiproof/goedge.go).
 	goEdge bool
@@ -189,6 +192,7 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	fs.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written (team-lead ruling R51)")
 	fs.StringVar(&f.edgeURL, "edge-url", "http://localhost:8000/graphql", "the real product GraphQL edge; both the canary/primary candidate leg and every baseline leg go through it")
 	fs.StringVar(&f.proofURL, "proof-url", "", "measurement-only route able to execute a SHADOW-mode operation on the deployed Go build; empty means shadow operations are refused by name rather than skipped")
+	fs.StringVar(&f.mcpRoots, "mcp-roots", "", "MCP class proof (CHAOS-7214): comma-separated mcp:<root> names (or all-mcp). Measures every registered query document whose response root is that field through -proof-url (which MUST be the internal listener's /query/proof-mcp) and the Python edge, and records ONE receipt per root keyed to the class document digest -- never a receipt for the documents' own operations. Needs the roots' routing rows at shadow or canary|primary (`routing seed`), -go-edge is refused")
 	fs.StringVar(&f.documentsPath, "documents", "", "path to `registrydump -file internal/queryapi/server/query_route.go` JSON output (required)")
 	secrets.BindFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar, "domain Postgres DSN holding go_api_routing_state / go_api_proof_run")
 	fs.StringVar(&f.orgID, "org", "", "org id every request is made for (required)")
@@ -428,9 +432,43 @@ func run(args []string) (err error) {
 		defer pool.Close()
 	}
 
-	routing, err := readRoutingState(ctx, pool, registry, f.candidateBuild)
-	if err != nil {
-		return err
+	var routing map[string]goapiproof.RoutingRow
+	var classSources map[string][]string
+	if f.mcpRoots != "" {
+		// The class proof (CHAOS-7214). Every selected document is measured as a
+		// SHADOW operation, so the candidate leg goes through -proof-url (the
+		// class's proof route) and never through the edge, whatever mode the
+		// document's own routing row says; those rows are not read or written.
+		classOperations, err := mcpclass.ResolveOperations(f.mcpRoots)
+		if err != nil {
+			return err
+		}
+		if f.goEdge {
+			return errors.New("-go-edge cannot be combined with -mcp-roots: the class proof compares the Go plane with the Python edge, which still exists; a Go-only class proof is not built")
+		}
+		if err := requireMCPProofURL(f.proofURL); err != nil {
+			return err
+		}
+		classSources, err = goapiproof.MCPClassSourceOperations(classOperations, documents)
+		if err != nil {
+			return err
+		}
+		routing = map[string]goapiproof.RoutingRow{}
+		selected := map[string]string{}
+		selectedDocuments := map[string]string{}
+		for _, operations := range classSources {
+			for _, operation := range operations {
+				routing[operation] = goapiproof.RoutingRow{Mode: "shadow", CandidateBuild: registry.BuildIdentity}
+				selected[operation] = registry.DocumentDigest[operation]
+				selectedDocuments[operation] = documents[operation]
+			}
+		}
+		registry.DocumentDigest, documents = selected, selectedDocuments
+	} else {
+		routing, err = readRoutingState(ctx, pool, registry, f.candidateBuild)
+		if err != nil {
+			return err
+		}
 	}
 	goServed, err := goapiproof.DefaultGoServedLedger()
 	if err != nil {
@@ -481,6 +519,17 @@ func run(args []string) (err error) {
 	var receipts []goapiproof.Receipt
 	var receiptErr error
 	switch {
+	case classSources != nil:
+		// The class proof writes class receipts and NOTHING ELSE: the documents'
+		// own operations get no receipt from a measurement made through the
+		// class's proof route.
+		if stabilityErr == nil {
+			var verdicts []goapiproof.MCPClassVerdict
+			receipts, verdicts, receiptErr = runner.MCPClassReceipts(outcomes, classSources, observedAt)
+			for _, verdict := range verdicts {
+				fmt.Printf("go-api-prove: mcp-class %s\n", goapiproof.FormatMCPClassVerdict(verdict))
+			}
+		}
 	case stabilityErr != nil:
 		// No match receipt may be written -- but writing nothing would make
 		// the run invisible, indistinguishable from one that never ran.
@@ -1025,4 +1074,21 @@ func executedOutcomeLine(outcome goapiproof.Outcome) string {
 		outcome.Operation, outcome.Mode, outcome.Route, verdict,
 		len(outcome.Findings), outcome.DifferencesOutsideBaselineDefect, outcome.BaselineDefects,
 		goapiproof.FormatShapeCounts(outcome.CoveredByShape, outcome.OutsideByShape))
+}
+
+// mcpProofPath is the one path an MCP class proof may be measured through.
+const mcpProofPath = "/query/proof-mcp"
+
+// requireMCPProofURL refuses a class proof whose -proof-url is not the MCP
+// class's proof route: pointed at /query/proof (the documents' own route) the
+// run would measure a different handler and record a receipt for the class.
+func requireMCPProofURL(raw string) error {
+	if raw == "" {
+		return errors.New("-mcp-roots needs -proof-url, the internal listener's " + mcpProofPath + " (no other route measures the MCP class)")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Path != mcpProofPath {
+		return errors.New("-proof-url must be the internal listener's " + mcpProofPath + " for -mcp-roots: another route is a different handler, and a receipt for the class would then describe it")
+	}
+	return nil
 }

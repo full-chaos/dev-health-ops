@@ -41,14 +41,15 @@ func tokenSamples() map[string]string {
 		"linear-key":               "lin" + "_api_" + rep("i", 36),
 		"customer-push-token":      "fc" + "push_" + strings.Repeat("k", 40),
 		"authorization-credential": "Bear" + "er " + rep("j", 30),
+		"encoded-credential":       base64.StdEncoding.EncodeToString([]byte("gh" + "p_" + rep("a", 36))),
 	}
 }
 
 func TestEveryTokenShapeIsFoundAndNamed(t *testing.T) {
 	samples := tokenSamples()
 	names := TokenShapeNames()
-	if len(names) != 14 || len(samples) != 14 {
-		t.Fatalf("shapes = %d, samples = %d, want 14 each", len(names), len(samples))
+	if len(names) != 15 || len(samples) != 15 {
+		t.Fatalf("shapes = %d, samples = %d, want 15 each", len(names), len(samples))
 	}
 	for _, name := range names {
 		sample, ok := samples[name]
@@ -174,7 +175,10 @@ func goldenTokenViolations(t *testing.T, root string) (checked int, violations [
 		}
 		slash := filepath.ToSlash(path)
 		gz := strings.HasSuffix(slash, ".json.gz")
-		if !(strings.HasSuffix(slash, ".json") || gz) || !strings.Contains(slash, "/testdata/") {
+		if !(strings.HasSuffix(slash, ".json") || gz) {
+			return nil
+		}
+		if gz && !strings.Contains(slash, "/testdata/") {
 			return nil
 		}
 		raw, err := os.ReadFile(path)
@@ -241,8 +245,8 @@ func TestTheGateFailsOnAPlantedToken(t *testing.T) {
 		}
 	}
 	checked, violations := goldenTokenViolations(t, dir)
-	if checked != 14 || len(violations) != 14 {
-		t.Fatalf("planted 14 tokens: checked %d, reported %d", checked, len(violations))
+	if checked != 15 || len(violations) != 15 {
+		t.Fatalf("planted 15 tokens: checked %d, reported %d", checked, len(violations))
 	}
 }
 
@@ -465,5 +469,46 @@ func TestACompressedGoldenIsInTheWalk(t *testing.T) {
 	}
 	if checked, violations := goldenTokenViolations(t, filepath.Dir(filepath.Dir(dir))); checked != 1 || len(violations) != 1 {
 		t.Fatalf("a token in a .json.gz golden was not reported: %d %v", checked, violations)
+	}
+}
+
+func TestAShortBearerCredentialAndAnEncodedTokenAreFound(t *testing.T) {
+	if got := TokenShapesIn("Authorization: Bearer abcd1234"); !strings.Contains(strings.Join(got, ","), "authorization-credential") {
+		t.Fatalf("a short Bearer credential with a digit was not found: %v", got)
+	}
+	for _, prose := range []string{"Basic authentication required", "bearer at-fresh", "Bearer 123"} {
+		if got := TokenShapesIn(prose); len(got) > 0 {
+			t.Errorf("%q read as a credential: %v", prose, got)
+		}
+	}
+	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1"}`, "sig")
+	for name, encoded := range map[string]string{
+		"std":      base64.StdEncoding.EncodeToString([]byte(token)),
+		"url":      base64.URLEncoding.EncodeToString([]byte(token)),
+		"twice":    base64.StdEncoding.EncodeToString([]byte(base64.StdEncoding.EncodeToString([]byte(token)))),
+		"in a row": "mail: link=" + base64.RawURLEncoding.EncodeToString([]byte(token)) + " end",
+	} {
+		if got := TokenShapesIn(encoded); !strings.Contains(strings.Join(got, ","), "encoded-credential") {
+			t.Errorf("%s: an encoded token was not found: %v", name, got)
+		}
+	}
+	if got := TokenShapesIn(base64.StdEncoding.EncodeToString([]byte("a harmless sentence of some length here"))); len(got) > 0 {
+		t.Errorf("an encoded sentence read as a credential: %v", got)
+	}
+}
+
+func TestATokenPackedInsideAPackedBodyIsFoundAndAGoldenOutsideTestdataIsWalked(t *testing.T) {
+	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1"}`, "sig")
+	twice := PackBody([]byte(PackBody([]byte("out " + token))))
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"header":{"python_build":"x"},"requests":[{"body":"` + twice + `"}]}`
+	if err := os.WriteFile(filepath.Join(root, "pkg", "g.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if checked, violations := goldenTokenViolations(t, root); checked != 1 || len(violations) != 1 {
+		t.Fatalf("a nested-packed token in a golden outside testdata was not reported: %d %v", checked, violations)
 	}
 }

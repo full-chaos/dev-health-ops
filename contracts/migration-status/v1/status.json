@@ -313,7 +313,7 @@
         "status": "verified",
         "ticket": "CHAOS-5794",
         "sha": "cb9f5f48cece1ed836cd62f76854b9d6c9c73280",
-        "evidence": "internal/providersync/work_item_attribution_backstop_oracle_test.go TestWorkItemAttributionBackstopMatchesLivePythonProduction (exercises remaining.BuildWorkItemAttributionRows, the same row-building function this family's native executor calls, against a frozen Python oracle snapshot; PASS re-run at this sha)"
+        "evidence": "internal/providersync/work_item_attribution_backstop_oracle_test.go TestWorkItemAttributionBackstopMatchesFrozenPythonProduction (exercises remaining.BuildWorkItemAttributionRows, the same row-building function this family's native executor calls, against a frozen Python oracle snapshot; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "f03f57d51c957ad7601fd2154089e152f8cf30d2",
@@ -551,7 +551,7 @@
         "status": "verified",
         "ticket": "CHAOS-5800",
         "sha": "84e5d60d76a3ffd77027c42d03ea10a287fcac0e",
-        "evidence": "internal/providersync/work_item_attribution_backstop_oracle_test.go TestWorkItemAttributionBackstopMatchesLivePythonProduction (drives remaining.BuildWorkItemAttributionRows -- the exact mapping ComputePartition calls -- against the frozen github_work-items_team-attributions_backstop Python oracle snapshot, every WorkItemAttributionRow field via githubTeamAttributionColumns); PASS re-run at this sha"
+        "evidence": "internal/providersync/work_item_attribution_backstop_oracle_test.go TestWorkItemAttributionBackstopMatchesFrozenPythonProduction (drives remaining.BuildWorkItemAttributionRows -- the exact mapping ComputePartition calls -- against the frozen github_work-items_team-attributions_backstop Python oracle snapshot, every WorkItemAttributionRow field via githubTeamAttributionColumns); PASS re-run at this sha"
       },
       "deployed": {
         "revision": "f03f57d51c957ad7601fd2154089e152f8cf30d2",

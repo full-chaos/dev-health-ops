@@ -7,229 +7,105 @@
 // caught this concretely -- the hand-typed work_item_team_attributions carried
 // the PRE-053 enums, missing the `issue_project` and `manual_fallback` source
 // values and the `manual` and `none` confidence values that the production
-// resolver actually emits (derivation_context.go:462,510,561). Every test over
-// that table was green while an insert of a genuinely reachable row would have
-// been rejected by the real column, and one fixture had been quietly written to
-// `low` to stay inside the stale enum.
+// resolver actually emits. Every test over that table was green while an insert
+// of a genuinely reachable row would have been rejected by the real column.
 //
-// So no DDL is authored here. The chain under
-// src/dev_health_ops/migrations/clickhouse is applied through the project's own
-// canonical migration entrypoint -- the same call the `migrate clickhouse
-// upgrade` CLI makes -- which covers BOTH the .sql migrations and the .py ones
-// (027 and 055 rebuild tables through a shadow-table swap that no static SQL
-// extractor could reproduce).
+// So no DDL is authored here. The schema is built by the same migrator
+// production runs (`dho migrate clickhouse upgrade`, internal/chmigrate): the
+// checked-in head, then every chain file after it. No process is started and
+// no Python is involved.
+//
+// The head is production's ordering contract 2. The retired Python chain
+// defaulted to contract 1 when OPERATIONAL_ORDERING_CONTRACT was unset, so a
+// test that still needs the legacy table shape asks for it by name
+// (ApplyOrderingContract1); Apply never builds it silently.
 //
 // SHARED, and table-agnostic by construction: Apply takes no table list and
 // migrates the database to the chain's head, so any package needing real
-// tables gets all of them at once. It was written for three derived work-item
-// destinations, but nothing about it is specific to them -- adopters need only
-// call Apply instead of executing their own CREATE TABLE text.
+// tables gets all of them at once.
 package chschema
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
+	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
-// applyScript runs the canonical migration entrypoint. force=true bypasses the
-// AUTO_RUN_MIGRATIONS opt-out exactly as the CLI does, so a developer's ambient
-// environment cannot turn this into a silent no-op that leaves a test asserting
-// against an empty database.
-const applyScript = `
-import sys
-from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-
-sink = ClickHouseMetricsSink(dsn=sys.argv[1])
-try:
-    sink.ensure_schema(force=True)
-finally:
-    sink.close()
-print("CHSCHEMA_APPLIED")
-`
-
-// Apply migrates the container to the current head of the real chain.
+// Apply migrates the container to the head of the chain, ordering contract 2.
 //
-// It FAILS the test rather than skipping when Python is unavailable. A skip
-// here would silently drop every schema-dependent assertion in the calling
-// package while the package still reported ok, which is precisely the
-// unmeasured-but-green shape this helper was written to remove.
+// It FAILS the test rather than skipping. A skip here would silently drop every
+// schema-dependent assertion in the calling package while the package still
+// reported ok, which is precisely the unmeasured-but-green shape this helper
+// was written to remove.
 //
-// The Python runner executes once per test process. Every later container of a
-// throwaway-container instance receives the first one's captured end state
-// (see snapshot.go); a remote ClickHouse is always migrated by the runner.
+// A process environment that names another contract
+// (OPERATIONAL_ORDERING_CONTRACT set to anything but 2) is refused: the Go
+// migrator would build contract 2 regardless, and a test that believes it got
+// contract 1 would be asserting against the wrong schema.
 func Apply(ctx context.Context, t *testing.T, instance *containers.Instance) {
 	t.Helper()
-	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
+	if err := checkContractEnv(os.LookupEnv(chmigrate.OrderingContractEnv)); err != nil {
+		t.Fatalf("chschema: %v", err)
+	}
+	baseline, err := chmigrate.LoadBaseline()
 	if err != nil {
 		t.Fatalf("chschema: %v", err)
 	}
-	if instance.Container == nil {
-		applyMigrationChain(ctx, t, dsn)
-		return
-	}
-	applyReplayed(ctx, t, dsn, func() { applyMigrationChain(ctx, t, dsn) })
+	migrate(ctx, t, instance, baseline)
 }
 
-// ApplyChain runs the real migration chain against dsn (a ClickHouse HTTP
-// DSN), with no replay cache: the caller gets the chain's own end state even
-// when another container of the same environment was migrated before. The
-// ClickHouse head baseline (internal/chmigrate) is captured this way.
-func ApplyChain(ctx context.Context, t *testing.T, dsn string) {
+// ApplyOrderingContract1 migrates the container to the head of the chain as the
+// legacy ordering contract 1 builds it. Production refuses contract 1
+// (`dho migrate clickhouse` exits with settings_mismatch), so this exists only
+// for tests of the code that still reads or migrates that shape.
+func ApplyOrderingContract1(ctx context.Context, t *testing.T, instance *containers.Instance) {
 	t.Helper()
-	applyMigrationChain(ctx, t, dsn)
-}
-
-// applyMigrationChain runs the canonical migration entrypoint against dsn.
-func applyMigrationChain(ctx context.Context, t *testing.T, dsn string) {
-	t.Helper()
-	root, err := repoRoot()
+	baseline, err := LoadContract1Baseline()
 	if err != nil {
 		t.Fatalf("chschema: %v", err)
 	}
-	python := pyoracle.Resolve(t, root)
-	command := pythonCommand(ctx, python, dsn, root)
-	output, err := command.CombinedOutput()
+	migrate(ctx, t, instance, baseline)
+}
+
+// checkContractEnv refuses an environment that names a contract Apply does not
+// build. Unset is accepted: it names nothing, and Apply builds contract 2.
+func checkContractEnv(value string, set bool) error {
+	if set && value != "2" {
+		return fmt.Errorf("%s=%q, but Apply builds production's contract 2; use ApplyOrderingContract1 for the legacy shape",
+			chmigrate.OrderingContractEnv, value)
+	}
+	return nil
+}
+
+func migrate(ctx context.Context, t *testing.T, instance *containers.Instance, baseline chmigrate.Baseline) {
+	t.Helper()
+	if instance == nil {
+		t.Fatal("chschema: no ClickHouse instance")
+	}
+	chain, err := chmigrate.LoadChain()
 	if err != nil {
-		t.Fatalf("chschema: applying the real migration chain failed: %v", pyoracle.RunError(python, err, output))
+		t.Fatalf("chschema: %v", err)
 	}
-	// The runner can exit 0 having done nothing if the entrypoint ever stops
-	// raising on failure, so require the positive marker rather than trusting
-	// the exit code alone.
-	if !strings.Contains(string(output), "CHSCHEMA_APPLIED") {
-		t.Fatalf("chschema: migration runner produced no completion marker:\n%s", output)
-	}
-}
-
-// repoRoot walks up from THIS file, not from the test's working directory, so
-// the answer does not depend on which package invoked the helper.
-func repoRoot() (string, error) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", fmt.Errorf("cannot locate the chschema source file")
-	}
-	directory := filepath.Dir(file)
-	for {
-		migrations := filepath.Join(directory, "src", "dev_health_ops", "migrations", "clickhouse")
-		if info, err := os.Stat(migrations); err == nil && info.IsDir() {
-			return directory, nil
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			return "", fmt.Errorf("no src/dev_health_ops/migrations/clickhouse above %s", filepath.Dir(file))
-		}
-		directory = parent
-	}
-}
-
-// pythonCommand builds the migration-runner command from an ALREADY-RESOLVED
-// interpreter path.
-//
-// It passes `python` itself rather than a bare "python"/"python3" literal, and
-// that distinction is the whole point. exec.CommandContext resolves a bare name
-// with LookPath against the PARENT process's PATH, at construction time.
-// Setting command.Env afterwards changes the CHILD's environment and cannot
-// affect how the executable is found -- so the PATH entry below was never able
-// to make a bare name resolvable, and the previous code worked only on hosts
-// where `python` already happened to be on PATH.
-//
-// It is not on PATH on Ubuntu, which ships `python3` only. Every chschema-based
-// integration test there died with
-//
-//	chschema: applying the real migration chain failed:
-//	exec: "python": executable file not found in $PATH
-//
-// while pythonBinary had already resolved a perfectly good absolute path one
-// line earlier and the switch discarded it.
-//
-// The basename switch is gone with it. It only ever validated the NAME, and it
-// rejected every interpreter not called exactly `python` or `python3` -- so
-// DEV_HEALTH_PYTHON, which pythonBinary honours, was accepted there and then
-// refused here for anything like `python3.12`, a uv-managed interpreter, or a
-// wrapper script. An override the code accepts and then rejects is worse than
-// one it does not offer.
-//
-// The PATH entry is KEPT because it is still correct for the child process
-// itself (anything the migration runner shells out to), and is now guarded so a
-// bare-name override cannot prepend "." to the child's PATH.
-func pythonCommand(ctx context.Context, python, dsn, root string) *exec.Cmd {
-	// The interpreter path is non-static BY DESIGN, and making it static is
-	// exactly the bug this function exists to fix: a hard-coded "python" is
-	// unresolvable on any host that ships only python3.
-	//
-	// Why it is not a code-injection path here. `python` comes from
-	// pythonBinary(), which defers to pyoracle.Interpreter(): the
-	// DEV_HEALTH_PYTHON environment variable, else the deprecated PYTHON
-	// alias, else <root>/.venv/bin/python, else PATH's python3 interpreter. The
-	// env var is a deliberate developer-facing knob for choosing an
-	// interpreter, set by whoever is already running the test binary -- it is
-	// not request data, not file content, and not attacker-reachable. Anyone
-	// able to set it can already run arbitrary code as that user by running
-	// `go test` at all.
-	//
-	// There is no shell: exec.CommandContext execs directly, so word splitting
-	// and metacharacter interpretation do not apply. The remaining argv is
-	// fully static apart from the DSN.
-	//
-	// Reachability: this package is test support. Its only non-test importer is
-	// internal/testsupport/oraclecompare, which is also test support; no
-	// production binary links it. (Note this was a WEAKER claim than
-	// internal/testsupport/computeparity made for the same rule -- that one
-	// (now retired, CHAOS-5336: its two callers, dora/capacity's Python-producer
-	// parity tests, were deleted along with the Python they compared against)
-	// was importable only from _test.go files, and its argv came from checked-in
-	// test code rather than an environment variable. Stating the difference
-	// rather than reusing its wording.)
-	//
-	// The suppression must sit on the line DIRECTLY above the finding --
-	// Semgrep does not scan back through an intervening comment block, which is
-	// why this rationale is above and the pragma is flush against the call.
-	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
-	command := exec.CommandContext(ctx, python, "-c", applyScript, dsn)
-	command.Dir = root
-	environment := os.Environ()
-	if filepath.IsAbs(python) {
-		environment = append(environment,
-			"PATH="+filepath.Dir(python)+string(os.PathListSeparator)+os.Getenv("PATH"))
-	}
-	environment = append(environment,
-		"PYTHONPATH="+filepath.Join(root, "src")+string(os.PathListSeparator)+os.Getenv("PYTHONPATH"))
-	command.Env = environment
-	return command
-}
-
-// Interpreter resolves the Python this package would use, for callers that
-// must run the SAME interpreter chschema does: internal/testsupport/pyoracle's
-// shared policy, which every live-Python oracle in this repository now
-// shares -- an explicit override, then the checked-out virtualenv, then PATH.
-// It also reports which rule matched, so a caller can log it the same way
-// Apply does.
-//
-// It exists because a test in internal/jobs/metrics/remaining hard-coded
-// <root>/.venv/bin/python while chschema, three lines earlier in the same test,
-// resolved python3 from PATH -- so the schema setup succeeded in CI and the
-// caller's own Python invocation died with "no such file or directory". Two
-// lookups in one test disagreeing about where Python lives.
-//
-// Exported rather than duplicated on purpose: a copied resolver is the same
-// defect again one refactor later.
-func Interpreter() (path string, rule string, err error) {
-	root, err := repoRoot()
+	config := chstorage.DefaultConfig(instance.URI)
+	config.MaxOpenConns, config.MaxIdleConns = 1, 1
+	conn, err := chstorage.Open(ctx, config)
 	if err != nil {
-		return "", "", err
+		t.Fatalf("chschema: open: %v", err)
 	}
-	return pyoracle.Interpreter(root)
-}
-
-func pythonBinary(root string) (string, error) {
-	path, _, err := pyoracle.Interpreter(root)
-	return path, err
+	defer conn.Close()
+	db, database, err := chmigrate.NewConnDB(ctx, conn)
+	if err != nil {
+		t.Fatalf("chschema: %v", err)
+	}
+	if database == "" {
+		t.Fatal("chschema: the connection names no database")
+	}
+	if _, err := chmigrate.Upgrade(ctx, db, baseline, chain); err != nil {
+		t.Fatalf("chschema: migrate %s: %v", database, err)
+	}
 }

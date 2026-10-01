@@ -82,7 +82,7 @@ func acrEntitlementOracleCases() []oracleCase {
 		// A variant of licensing.Decide missing the explicit-purchase branch
 		// (falling straight to the tier check like the incident feature
 		// does) would report Allowed=true here and fail this exact case
-		// against the live Python oracle.
+		// against the frozen Python answer.
 		{ID: "no_override_is_explicit_purchase_required", Input: base()},
 		{ID: "enterprise_org_tier_still_explicit_purchase_required", Input: with(map[string]any{
 			"min_tier": "community", "org_tier": "enterprise",
@@ -104,7 +104,7 @@ func acrEntitlementOracleCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForAcrEntitlement(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForAcrEntitlement(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "acr/entitlements/agent-context-runtime", acrEntitlementOracleCases(),
 		buildAcrEntitlementDecisionForOracle, nil,

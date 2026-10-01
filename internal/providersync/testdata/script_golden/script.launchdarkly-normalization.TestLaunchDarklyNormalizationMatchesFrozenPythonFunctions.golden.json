@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestLaunchDarklyNormalizationMatchesFrozenPythonFunctions",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "script oracle launchdarkly-normalization: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestLaunchDarklyNormalizationMatchesFrozenPythonFunctions$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "launchdarkly-normalization",
+      "method": "PYTHON",
+      "path": "program sha256 eca9bc4ee0d7af7c11c208f576106ad24d9b504b0f8f7387a5cbe962050ea1bb env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"events\":[{\"actor_type\":\"operator@example.test\",\"dedupe_key\":\"event-1\",\"environment\":\"prod\",\"event_ts\":\"2024-08-30T06:40:01.234000Z\",\"event_type\":\"toggle\",\"flag_key\":\"checkout\",\"ingested_at\":\"2026-07-23T12:34:56.789000Z\",\"next_state\":null,\"org_id\":\"org-acme\",\"prev_state\":null,\"repo_id\":null,\"source_event_id\":\"event-1\"},{\"actor_type\":\"member-2\",\"dedupe_key\":\"event-2\",\"environment\":\"production\",\"event_ts\":\"2026-07-22T01:02:03Z\",\"event_type\":\"customKind\",\"flag_key\":\"search\",\"ingested_at\":\"2026-07-23T12:34:56.789000Z\",\"next_state\":null,\"org_id\":\"org-acme\",\"prev_state\":null,\"repo_id\":null,\"source_event_id\":\"event-2\"}],\"flags\":[{\"archived_at\":null,\"created_at\":\"2024-08-30T06:40:00.123000Z\",\"environment\":\"production\",\"flag_key\":\"checkout\",\"flag_type\":\"multivariate\",\"last_synced\":\"2026-07-23T12:34:56.789000Z\",\"org_id\":\"org-acme\",\"project_key\":\"payments\",\"provider\":\"launchdarkly\",\"repo_id\":null},{\"archived_at\":null,\"created_at\":null,\"environment\":\"production\",\"flag_key\":\"search\",\"flag_type\":\"boolean\",\"last_synced\":\"2026-07-23T12:34:56.789000Z\",\"org_id\":\"org-acme\",\"project_key\":null,\"provider\":\"launchdarkly\",\"repo_id\":null}]}\n"
+    }
+  ]
+}

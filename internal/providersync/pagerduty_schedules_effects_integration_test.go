@@ -105,7 +105,7 @@ func TestPagerDutySchedulesEffectUsesMigratedClickHouseTombstonesAndExactReplay(
 	var deletedAt time.Time
 	if err := conn.QueryRow(ctx, `
 SELECT is_deleted, deleted_at
-FROM operational_on_call_schedules FINAL
+FROM `+currentOperationalRows(ctx, t, conn, "operational_on_call_schedules")+`
 WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND external_id = ?`,
 		claim.OrgID, "pagerduty", "acme", "schedule", "PS2",
 	).Scan(&deleted, &deletedAt); err != nil {

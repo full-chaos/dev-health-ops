@@ -444,7 +444,7 @@ check_live_python_oracles() {
   # `test` run) on every package in the tree instead of only the one that
   # structurally needs it, and it would make skipping this specific
   # coverage possible again by construction.
-  local pair_count pair_file pair_source proof_dir proof_file
+  local proof_dir proof_file
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-live-python-oracles.XXXXXX")"
 
   printf 'go test -count=1: internal/providersync (live Python oracle sources are outside the Go embed/cache boundary)\n'
@@ -460,26 +460,11 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  pair_count=0
-  while IFS= read -r pair_source; do
-    pair_count=$((pair_count + 1))
-    pair_file="${pair_source##*/}"
-    proof_file="${proof_dir}/${pair_file}"
-    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-      printf 'ERROR: live Python oracle pair %s was not executed successfully\n' \
-        "${pair_file}" >&2
-      rm -rf -- "${proof_dir}"
-      return 1
-    fi
-  done < <(
-    find "${ROOT}/internal/providersync/testdata/oracle_pairs" \
-      -maxdepth 1 -type f -name '*.py' ! -name '_*' -print | LC_ALL=C sort
-  )
-  if [ "${pair_count}" -eq 0 ]; then
-    printf 'ERROR: no checked-in live Python oracle pairs were discovered\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # The generic pairs (testdata/oracle_pairs/*.py) run no Python here: each
+  # comparison reads its frozen golden (testdata/oracle_golden), in this run
+  # and in every plain `go test`. That every pair still has a golden is
+  # proved by TestEveryOraclePairHasAFrozenGolden in that run, so no proof
+  # file per pair is required below.
   proof_file="${proof_dir}/linear-work-items-oracle-prep"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: the live Linear work-items producer probe (TestLinearWorkItemsOraclePrepExecutesLiveProducer) did not execute\n' >&2
@@ -1832,17 +1817,6 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/cli-sync-batch-loop"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: the dho sync --search batch loop live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  # TestRepoListingMatchesLivePython is run by the unfiltered
-  # ./internal/providersync/... invocation at the top of this function (with the
-  # oracle env and proof dir), so it is not run a second time here; only its
-  # proof marker is required.
-  proof_file="${proof_dir}/repo-listing"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the --search batch repository listing live Python oracle measurement did not occur\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

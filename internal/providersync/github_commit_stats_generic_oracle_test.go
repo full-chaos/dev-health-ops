@@ -28,7 +28,7 @@ func buildCommitStatsRowForOracle(t *testing.T, input map[string]any) commitStat
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForCommitStatsRowConstruction(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForCommitStatsRowConstruction(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"github/commit-stats/row",

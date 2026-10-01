@@ -49,6 +49,24 @@ func liveHasOrderingColumns(ctx context.Context, conn driver.Conn, table string)
 	return count > 0, nil
 }
 
+// stampLiveOrdering stamps an operational table's rows when the connected
+// database's table has the contract-2 shape (the migrated head), and returns
+// the table and rows unchanged otherwise. Every loader of frozen operational
+// rows goes through it.
+func stampLiveOrdering(ctx context.Context, conn driver.Conn, table WorldTable, rows [][]any) (WorldTable, [][]any, error) {
+	if _, operational := operationalFamilies[table.Name]; !operational {
+		return table, rows, nil
+	}
+	contractTwo, err := liveHasOrderingColumns(ctx, conn, table.Name)
+	if err != nil {
+		return table, nil, err
+	}
+	if !contractTwo {
+		return table, rows, nil
+	}
+	return stampOrdering(table, rows)
+}
+
 // stampOrdering returns the table with the four contract-2 columns appended to
 // its columns and to every one of the (already transformed) rows. A table that
 // is not an operational entity table, or already holds the columns, is returned

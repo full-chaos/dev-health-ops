@@ -6,7 +6,7 @@ type gitLabBlameSelectionOracleRow struct {
 	Paths []string `json:"paths"`
 }
 
-func TestGitLabBlameSelectionMatchesLivePython(t *testing.T) {
+func TestGitLabBlameSelectionMatchesFrozenPython(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "gitlab/blame/selection", []oracleCase{
 			{ID: "empty", Input: map[string]any{

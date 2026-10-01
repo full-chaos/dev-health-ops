@@ -15,7 +15,7 @@ type gitLabBlameFileOutcomesOracleRow struct {
 	Raised         bool     `json:"raised"`
 }
 
-func TestGitLabBlamePerFileFailureMatchesLivePython(t *testing.T) {
+func TestGitLabBlamePerFileFailureMatchesFrozenPython(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "gitlab/blame/outcomes", []oracleCase{{
 			ID: "middle_file_fails",

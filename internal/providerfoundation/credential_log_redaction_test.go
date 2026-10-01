@@ -58,3 +58,32 @@ func TestEveryDecryptedValueIsRegisteredAtTheDecryptor(t *testing.T) {
 		}
 	}
 }
+
+// r1 repros: the shared decryptor, the PagerDuty OAuth hydrator and the SSO client
+// secret all decrypt through FernetDecryptor.Decrypt; a value it returned is
+// redacted when a provider echoes it into a log line. Red on the first tip.
+func TestR1DecryptedValuesNeverReachTheProcessLogger(t *testing.T) {
+	key := secrets.NewValue("test-master-key")
+	decryptor, _ := NewFernetDecryptor(key, "salt")
+	for name, plain := range map[string]string{
+		"shared credential (camelCase)": `{"privateKey":"review-shared-credential-7409"}`,
+		"pagerduty oauth token":         `{"access_token":"review-pagerduty-token-7409"}`,
+		"sso client secret":             "review-oidc-client-secret-7409",
+	} {
+		var out bytes.Buffer
+		restore := logging.InstallDefault(logging.NewJSON(&out, slog.LevelInfo))
+		secrets.ResetRegistered()
+		ciphertext := secrets.NewValue("v1:" + encryptForTest(t, []byte(plain), key.Reveal(), "salt"))
+		decrypted, err := decryptor.Decrypt(ciphertext)
+		if err != nil {
+			restore()
+			t.Fatalf("%s: %v", name, err)
+		}
+		slog.Error("unexpected response body: " + string(decrypted))
+		restore()
+		if strings.Contains(out.String(), "review-") {
+			t.Errorf("%s leaked: %s", name, out.String())
+		}
+	}
+	secrets.ResetRegistered()
+}

@@ -27,7 +27,7 @@ func TestFrozenProduceAnswersFromTheFileWithoutRunningTheProducer(t *testing.T) 
 	requests := []Request{ProgramRequest("corpus", sampleProgram, []byte("abc"), map[string]string{"PYTHONHASHSEED": "0"})}
 	path, digest := programGolden(t, requests, "ABC\n")
 	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
-	answers := golden.Produce(t, "/no/python/here", requests, func(string, []Request) []Response {
+	answers := golden.Produce(t, "/no/python/here", requests, func(*Producer, []Request) []Response {
 		t.Fatal("a frozen golden ran its producer")
 		return nil
 	})
@@ -86,7 +86,7 @@ func TestProduceRefusesARequestThatCarriesHeaders(t *testing.T) {
 		t.Setenv(goldenCandidateEnv, "")
 		path, digest := programGolden(t, []Request{plain}, "ABC\n")
 		golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
-		golden.Produce(t, "/no/python/here", []Request{withHeaders}, func(string, []Request) []Response {
+		golden.Produce(t, "/no/python/here", []Request{withHeaders}, func(*Producer, []Request) []Response {
 			t.Fatal("the producer ran")
 			return nil
 		})
@@ -124,16 +124,18 @@ func TestARecordingRunsTheProducerOnlyFromTheVerifiedRoot(t *testing.T) {
 	golden.state = stateOpen
 	requests := []Request{ProgramRequest("corpus", sampleProgram, []byte("abc"), nil)}
 	ran := 0
-	answers := golden.Produce(t, verified, requests, func(root string, got []Request) []Response {
+	answers := golden.Produce(t, verified, requests, func(producer *Producer, got []Request) []Response {
 		ran++
-		if root != verified || len(got) != 1 {
-			t.Fatalf("producer ran from %s with %d requests", root, len(got))
+		if producer.Root != verified || len(got) != 1 {
+			t.Fatalf("producer ran from %s with %d requests", producer.Root, len(got))
 		}
+
 		return []Response{{Status: 3, Headers: map[string]string{"stderr": "boom"}, Body: "out"}}
 	})
 	if ran != 1 || answers[0].Status != 3 || answers[0].Body != "out" {
 		t.Fatalf("ran %d, answers %+v", ran, answers)
 	}
+
 	if len(golden.recorded.Requests) != 1 || golden.recorded.Requests[0].Status != 3 || golden.recorded.Requests[0].Headers["stderr"] != "boom" ||
 		golden.recorded.Requests[0].Path != requests[0].Path {
 		t.Fatalf("recorded %+v", golden.recorded.Requests)

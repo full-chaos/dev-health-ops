@@ -101,7 +101,7 @@ func TestRouteResponseModelsMatchTheFrozenFastAPITable(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	root := golden.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")))
 	request := venueoracle.ProgramRequest("fastapi route table", pythonRouteTableProgram, nil, producerEnv)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		command := exec.Command(python, "-c", pythonRouteTableProgram)
 		command.Env = producerCommandEnv(root)

@@ -150,7 +150,7 @@ func standard(req request) (int, any) {
 			return 200, searchPage("cursor-2", teamNode(teamA, "Platform", "ACTIVE"), teamNode(teamB, "Old", "ARCHIVED"))
 		}
 		return 200, searchPage("", teamNode(teamC, "Data", "ACTIVE"))
-	case "TeamworkGraph_teamUsers":
+	case "TeamworkGraphTeamUsers":
 		switch req.Variables["teamId"] {
 		case teamA:
 			if req.Variables["after"] == nil {
@@ -160,7 +160,7 @@ func standard(req request) (int, any) {
 		case teamC:
 			return 200, connection("teamworkGraph_teamUsers", "", userEdge(teamC, "carol-3"))
 		}
-	case "TeamworkGraph_teamActiveProjects":
+	case "TeamworkGraphTeamActiveProjects":
 		if req.Variables["teamId"] == teamA {
 			return 200, connection("teamworkGraph_teamActiveProjects", "", projectEdge(teamA, "PLAT"), projectEdge(teamA, ""), projectEdge(teamA, "PLAT"))
 		}
@@ -234,7 +234,7 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 	}
 
 	// The archived team was never asked for members or projects.
-	if n := g.count("TeamworkGraph_teamUsers", teamB) + g.count("TeamworkGraph_teamActiveProjects", teamB); n != 0 {
+	if n := g.count("TeamworkGraphTeamUsers", teamB) + g.count("TeamworkGraphTeamActiveProjects", teamB); n != 0 {
 		t.Errorf("%d graph reads for the archived team", n)
 	}
 }
@@ -254,7 +254,7 @@ func TestCollectSendsTheOrganizationSiteCredentialsAndOptIns(t *testing.T) {
 			if got := strings.Join(req.Header.Values("X-ExperimentalApi"), ","); !strings.Contains(got, "teams-beta") {
 				t.Errorf("search opt-ins = %q", got)
 			}
-		case "TeamworkGraph_teamUsers", "TeamworkGraph_teamActiveProjects":
+		case "TeamworkGraphTeamUsers", "TeamworkGraphTeamActiveProjects":
 			if got := strings.Join(req.Header.Values("X-ExperimentalApi"), ","); !strings.Contains(got, "TeamworkGraphContextAPIs") {
 				t.Errorf("%s opt-ins = %q", req.Operation, got)
 			}
@@ -265,7 +265,7 @@ func TestCollectSendsTheOrganizationSiteCredentialsAndOptIns(t *testing.T) {
 		}
 		seen[req.Operation] = true
 	}
-	for _, operation := range []string{"TeamSearchV2", "TeamworkGraph_teamUsers", "TeamworkGraph_teamActiveProjects"} {
+	for _, operation := range []string{"TeamSearchV2", "TeamworkGraphTeamUsers", "TeamworkGraphTeamActiveProjects"} {
 		if !seen[operation] {
 			t.Errorf("no %s request", operation)
 		}
@@ -286,14 +286,14 @@ func TestCollectReadsOnlyTheSelectedDimensions(t *testing.T) {
 	if len(rows.Teams) != 3 || len(rows.Memberships) != 0 || len(rows.Ownership) != 0 {
 		t.Fatalf("rows = %d teams %d memberships %d ownership", len(rows.Teams), len(rows.Memberships), len(rows.Ownership))
 	}
-	if n := g.count("TeamworkGraph_teamUsers", "") + g.count("TeamworkGraph_teamActiveProjects", ""); n != 0 {
+	if n := g.count("TeamworkGraphTeamUsers", "") + g.count("TeamworkGraphTeamActiveProjects", ""); n != 0 {
 		t.Errorf("%d graph reads for a structure-only run", n)
 	}
 }
 
 func TestCollectIsAllOrNothing(t *testing.T) {
 	failing := func(req request) (int, any) {
-		if req.Operation == "TeamworkGraph_teamUsers" && req.Variables["teamId"] == teamC {
+		if req.Operation == "TeamworkGraphTeamUsers" && req.Variables["teamId"] == teamC {
 			return 200, map[string]any{"data": nil, "errors": []any{map[string]any{"message": "boom", "extensions": map[string]any{"classification": "InsufficientOAuthScopes"}}}}
 		}
 		return standard(req)
@@ -428,7 +428,7 @@ func TestAnAtlassianTeamOutranksTheProjectAsTeamOwnerInTheCascade(t *testing.T) 
 func TestCollectRefusesGraphQLErrorsNextToPartialData(t *testing.T) {
 	partial := func(req request) (int, any) {
 		status, body := standard(req)
-		if req.Operation == "TeamworkGraph_teamUsers" && req.Variables["teamId"] == teamA && req.Variables["after"] == nil {
+		if req.Operation == "TeamworkGraphTeamUsers" && req.Variables["teamId"] == teamA && req.Variables["after"] == nil {
 			doc := body.(map[string]any)
 			doc["errors"] = []any{map[string]any{"message": "a field failed", "extensions": map[string]any{"classification": "DataFetchingException"}}}
 		}
@@ -454,7 +454,7 @@ func TestCollectRefusesAPageThatPromisesMoreWithoutACursor(t *testing.T) {
 			}
 		},
 		"team users": func(req request, body any) {
-			if req.Operation == "TeamworkGraph_teamUsers" && req.Variables["teamId"] == teamA && req.Variables["after"] == nil {
+			if req.Operation == "TeamworkGraphTeamUsers" && req.Variables["teamId"] == teamA && req.Variables["after"] == nil {
 				info := body.(map[string]any)["data"].(map[string]any)["teamworkGraph_teamUsers"].(map[string]any)["pageInfo"].(map[string]any)
 				info["endCursor"] = "  "
 			}

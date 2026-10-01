@@ -375,6 +375,7 @@ func TestRowsThatDifferAreAnErrorNamingBothValues(t *testing.T) {
 }
 
 func TestARecordingWritesACandidateBesideTheGoldenNeverTheGolden(t *testing.T) {
+	underTheVerb(t)
 	dir := t.TempDir()
 	final := filepath.Join(dir, "sub", "g.json")
 	newRecording := func() *Golden {
@@ -630,6 +631,7 @@ func TestARecordingRefusesPythonFromARootItNeverVerifiedOrThatTheVenueDoesNotSer
 // the candidate (the Python plane itself needs a venue, so its answers are put
 // in the recording directly).
 func TestTheRecordingPathVerifiesTheRootThenWritesOnlyACandidate(t *testing.T) {
+	underTheVerb(t)
 	dir := t.TempDir()
 	run := func(args ...string) string {
 		t.Helper()

@@ -29,7 +29,7 @@ func TestAdminSchemaMatchesFrozenPython(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
 	request := venueoracle.ProgramRequest("admin schema producer", pythonAdminSchemaProgram, nil, producerEnv)
-	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		command := exec.Command(python, "-c", pythonAdminSchemaProgram)
 		command.Env = producerCommandEnv(root)

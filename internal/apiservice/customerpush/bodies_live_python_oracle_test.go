@@ -216,7 +216,7 @@ func TestCustomerPushBodiesMatchFrozenFastAPI(t *testing.T) {
 	corpus := bodiesCorpus()
 	input, _ := json.Marshal(corpus)
 	request := venueoracle.ProgramRequest("request model corpus", pythonBodiesProgram, input, producerEnv)
-	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		command := exec.Command(python, "-c", pythonBodiesProgram)
 		command.Env = producerCommandEnv(root)

@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestGenericOracleMatchesLivePythonForGitLabSecurityDependencyRows",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair gitlab/security/dependency: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGenericOracleMatchesLivePythonForGitLabSecurityDependencyRows$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "gitlab/security/dependency",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "3bf04881a52aecf35bf459faa594bc61efaadf44ad58f31919a680e30d0580dc",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"dependency_mapping\", \"row\": {\"alert_id\": {\"t\": \"str\", \"v\": \"gitlab_dep:303\"}, \"source\": {\"t\": \"str\", \"v\": \"gitlab_dependency\"}, \"severity\": {\"t\": \"str\", \"v\": \"critical\"}, \"state\": null, \"package_name\": {\"t\": \"str\", \"v\": \"lodash\"}, \"cve_id\": null, \"url\": {\"t\": \"str\", \"v\": \"https://gitlab.example/vuln/303\"}, \"title\": {\"t\": \"str\", \"v\": \"Prototype Pollution\"}, \"description\": null, \"created_at\": {\"t\": \"datetime\", \"v\": \"2026-10-01T01:37:08.554944Z\"}, \"fixed_at\": null, \"dismissed_at\": null}}], \"excluded_fields\": {\"created_at\": \"the Python dependency mapper uses wall-clock now while Go uses the executor normalized instant\"}}\n"
+    }
+  ]
+}

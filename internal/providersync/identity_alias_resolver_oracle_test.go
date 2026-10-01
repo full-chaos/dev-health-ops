@@ -15,9 +15,10 @@ import (
 // only ever runs against this deployment's checked-in EMPTY
 // identity_mapping.yaml, so it proves the unaliased fallback ladder matches
 // but says nothing about alias resolution itself. This test seeds a temp
-// config, points IDENTITY_MAPPING_PATH at it (inherited by the Python
-// subprocess exec.Command spawns, since Cmd.Env is nil), and compares both
-// sides under the SAME config. See testdata/oracle_pairs/identity_alias_resolve.py.
+// config, points IDENTITY_MAPPING_PATH at it (the frozen answer is keyed on the
+// digest of that file, and a recording hands the path to the producer: see
+// oraclePairFileEnv), and compares both sides under the SAME config. See
+// testdata/oracle_pairs/identity_alias_resolve.py.
 func seedIdentityAliasMapping(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()

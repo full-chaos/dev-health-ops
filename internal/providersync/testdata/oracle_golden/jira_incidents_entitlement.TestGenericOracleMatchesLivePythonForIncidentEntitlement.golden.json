@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestGenericOracleMatchesLivePythonForIncidentEntitlement",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair jira/incidents/entitlement: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGenericOracleMatchesLivePythonForIncidentEntitlement$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "jira/incidents/entitlement",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "ef26f0acbe9ea056af34c5bd113eab81d54dd084ef93cceaf9c28fb24f97a89a",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"tier_enabled\", \"row\": {\"feature_key\": {\"t\": \"str\", \"v\": \"canonical_incident_ingestion\"}, \"allowed\": {\"t\": \"bool\", \"v\": \"true\"}, \"reason\": {\"t\": \"str\", \"v\": \"enabled_by_tier\"}, \"expires_at\": null, \"config\": null}}, {\"id\": \"tier_denied\", \"row\": {\"feature_key\": {\"t\": \"str\", \"v\": \"canonical_incident_ingestion\"}, \"allowed\": {\"t\": \"bool\", \"v\": \"false\"}, \"reason\": {\"t\": \"str\", \"v\": \"tier_required\"}, \"expires_at\": null, \"config\": null}}, {\"id\": \"global_kill_switch\", \"row\": {\"feature_key\": {\"t\": \"str\", \"v\": \"canonical_incident_ingestion\"}, \"allowed\": {\"t\": \"bool\", \"v\": \"false\"}, \"reason\": {\"t\": \"str\", \"v\": \"global_disabled\"}, \"expires_at\": null, \"config\": null}}, {\"id\": \"missing_feature\", \"row\": {\"feature_key\": {\"t\": \"str\", \"v\": \"canonical_incident_ingestion\"}, \"allowed\": {\"t\": \"bool\", \"v\": \"false\"}, \"reason\": {\"t\": \"str\", \"v\": \"feature_not_registered\"}, \"expires_at\": null, \"config\": null}}, {\"id\": \"invalid_min_tier\", \"row\": {\"feature_key\": {\"t\": \"str\", \"v\": \"canonical_incident_ingestion\"}, \"allowed\": {\"t\": \"bool\", \"v\": \"false\"}, \"reason\": {\"t\": \"str\", \"v\": \"invalid_feature_state\"}, \"expires_at\": null, \"config\": null}}, {\"id\": \"org_override_enabled\", \"row\": {\"feature_key\": {\"t\": \"str\", \"v\": \"canonical_incident_ingestion\"}, \"allowed\": {\"t\": \"bool\", \"v\": \"true\"}, \"reason\": {\"t\": \"str\", \"v\": \"enabled_by_org_override\"}, \"expires_at\": null, \"config\": null}}, {\"id\": \"org_override_disabled\", \"row\": {\"feature_key\": {\"t\": \"str\", \"v\": \"canonical_incident_ingestion\"}, \"allowed\": {\"t\": \"bool\", \"v\": \"false\"}, \"reason\": {\"t\": \"str\", \"v\": \"org_override_disabled\"}, \"expires_at\": null, \"config\": null}}, {\"id\": \"expired_override_falls_back\", \"row\": {\"feature_key\": {\"t\": \"str\", \"v\": \"canonical_incident_ingestion\"}, \"allowed\": {\"t\": \"bool\", \"v\": \"true\"}, \"reason\": {\"t\": \"str\", \"v\": \"enabled_by_tier\"}, \"expires_at\": null, \"config\": null}}, {\"id\": \"license_enabled\", \"row\": {\"feature_key\": {\"t\": \"str\", \"v\": \"canonical_incident_ingestion\"}, \"allowed\": {\"t\": \"bool\", \"v\": \"true\"}, \"reason\": {\"t\": \"str\", \"v\": \"enabled_by_license_override\"}, \"expires_at\": null, \"config\": null}}, {\"id\": \"license_disabled\", \"row\": {\"feature_key\": {\"t\": \"str\", \"v\": \"canonical_incident_ingestion\"}, \"allowed\": {\"t\": \"bool\", \"v\": \"false\"}, \"reason\": {\"t\": \"str\", \"v\": \"license_override_disabled\"}, \"expires_at\": null, \"config\": null}}], \"excluded_fields\": {}}\n"
+    }
+  ]
+}

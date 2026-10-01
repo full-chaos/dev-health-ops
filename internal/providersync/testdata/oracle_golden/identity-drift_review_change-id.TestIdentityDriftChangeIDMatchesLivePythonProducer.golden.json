@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestIdentityDriftChangeIDMatchesLivePythonProducer",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair identity-drift/review/change-id: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestIdentityDriftChangeIDMatchesLivePythonProducer$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "identity-drift/review/change-id",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "ccf6dd0510155a708f93b57b738bb12e88301e956ab9386830d0c60464353ae5",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"team_memberships_conflict\", \"row\": {\"change_id\": {\"t\": \"str\", \"v\": \"604f7e2f55869e3108c4d76ce623bc8b3a1d97c58ff0d4d06a27249f119fb8d6\"}}}, {\"id\": \"member_fallback_conflict\", \"row\": {\"change_id\": {\"t\": \"str\", \"v\": \"331259ea34946521b0b17fcc64f83bd391b5e6be291614ec8ea7b338d221dc66\"}}}], \"excluded_fields\": {}}\n"
+    }
+  ]
+}

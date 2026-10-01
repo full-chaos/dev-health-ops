@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestGenericOracleMatchesActivePythonGitLabTestsSelection",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair gitlab/tests/selection: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGenericOracleMatchesActivePythonGitLabTestsSelection$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "gitlab/tests/selection",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "4349c11d6968e26d6791779fae8d5bfa7e15ca7681225f246f5e09e87dfe1ee2",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"filter_cap_window_artifacts_and_usage\", \"row\": {\"report_run_ids\": [{\"t\": \"str\", \"v\": \"old-main\"}, {\"t\": \"str\", \"v\": \"valid-main\"}], \"coverage_run_ids\": [{\"t\": \"str\", \"v\": \"old-main\"}], \"artifact_job_ids\": [{\"t\": \"str\", \"v\": \"1\"}, {\"t\": \"str\", \"v\": \"2\"}, {\"t\": \"str\", \"v\": \"3\"}, {\"t\": \"str\", \"v\": \"4\"}, {\"t\": \"str\", \"v\": \"5\"}, {\"t\": \"str\", \"v\": \"6\"}, {\"t\": \"str\", \"v\": \"7\"}, {\"t\": \"str\", \"v\": \"8\"}, {\"t\": \"str\", \"v\": \"9\"}, {\"t\": \"str\", \"v\": \"10\"}, {\"t\": \"str\", \"v\": \"11\"}, {\"t\": \"str\", \"v\": \"12\"}, {\"t\": \"str\", \"v\": \"13\"}, {\"t\": \"str\", \"v\": \"14\"}, {\"t\": \"str\", \"v\": \"15\"}, {\"t\": \"str\", \"v\": \"16\"}, {\"t\": \"str\", \"v\": \"17\"}, {\"t\": \"str\", \"v\": \"18\"}, {\"t\": \"str\", \"v\": \"19\"}, {\"t\": \"str\", \"v\": \"20\"}, {\"t\": \"str\", \"v\": \"21\"}, {\"t\": \"str\", \"v\": \"22\"}, {\"t\": \"str\", \"v\": \"23\"}, {\"t\": \"str\", \"v\": \"24\"}, {\"t\": \"str\", \"v\": \"25\"}], \"adapter_run_ids\": [{\"t\": \"str\", \"v\": \"at-before\"}], \"usage_observations\": [{\"transport\": {\"t\": \"str\", \"v\": \"rest\"}, \"route_family\": {\"t\": \"str\", \"v\": \"tests\"}, \"dimension\": {\"t\": \"str\", \"v\": \"rest_core\"}, \"request_count\": {\"t\": \"int\", \"v\": \"33\"}}], \"max_pipelines\": {\"t\": \"int\", \"v\": \"200\"}, \"max_artifacts\": {\"t\": \"int\", \"v\": \"25\"}}}], \"excluded_fields\": {}}\n"
+    }
+  ]
+}

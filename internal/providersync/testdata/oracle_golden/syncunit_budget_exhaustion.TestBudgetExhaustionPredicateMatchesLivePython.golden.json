@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestBudgetExhaustionPredicateMatchesLivePython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair syncunit/budget/exhaustion: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestBudgetExhaustionPredicateMatchesLivePython$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "syncunit/budget/exhaustion",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "05e01dfc03050488b3867a05de0b088e3036b733cb2312546a45468a19c5aa33",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"fresh_unit_is_never_exhausted\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"cleared_unit_with_a_budget_category_is_not_exhausted\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"one_below_the_count_cap\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"exactly_at_the_count_cap\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"true\"}}}, {\"id\": \"past_the_count_cap\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"true\"}}}, {\"id\": \"one_second_below_the_wall_clock_cap\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"exactly_at_the_wall_clock_cap\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"true\"}}}, {\"id\": \"past_the_wall_clock_cap\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"true\"}}}, {\"id\": \"counter_without_a_first_deferred_stamp\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"unrelated_category_is_refused_despite_both_caps\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"absent_result_document_is_refused\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"half_cleared_episode_past_the_wall_clock_is_still_terminalizable\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"true\"}}}, {\"id\": \"half_cleared_episode_inside_the_wall_clock_is_not\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"go_stamp_release_for_retry_is_not_terminalizable\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"go_stamp_provider_budget_contention_is_not_intrinsic_exhaustion\", \"row\": {\"exhausted\": {\"t\": \"bool\", \"v\": \"false\"}}}], \"excluded_fields\": {}}\n"
+    }
+  ]
+}

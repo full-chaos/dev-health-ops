@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestGitHubWorkItemInteractionMatchesLivePythonProductionRow",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair github/work-items/interaction: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGitHubWorkItemInteractionMatchesLivePythonProductionRow$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "github/work-items/interaction",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "843cdd8dfa35c5cf21d811c0cdb3ee5520fd2c646a565a028d056f09d8920344",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"unicode_comment\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"gh:acme/api#42\"}, \"provider\": {\"t\": \"str\", \"v\": \"github\"}, \"interaction_type\": {\"t\": \"str\", \"v\": \"comment\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T08:30:00Z\"}, \"actor\": {\"t\": \"str\", \"v\": \"github:reviewer\"}, \"body_length\": {\"t\": \"int\", \"v\": \"12\"}, \"last_synced\": {\"t\": \"datetime\", \"v\": \"2026-10-01T01:36:40.648626Z\"}, \"org_id\": {\"t\": \"str\", \"v\": \"77777777-7777-4777-8777-777777777777\"}}}], \"excluded_fields\": {\"last_synced\": \"the production constructor stamps wall-clock now and has no clock parameter; Go stamps the complete unit normalizedAt and its retry stability is asserted separately\"}}\n"
+    }
+  ]
+}

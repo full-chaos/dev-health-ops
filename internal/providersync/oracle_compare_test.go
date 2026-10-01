@@ -5,7 +5,6 @@ import (
 	"embed"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -18,11 +17,13 @@ import (
 // compareRowsAgainstPythonOracle is the generic whole-row comparator this
 // package's pairs share. For each case it:
 //
-//  1. Shells out ONCE to testdata/python_generic_row_oracle.py <pairID>
-//     with all cases, getting back the real, live Python row for each case
-//     plus the pair's own declared excluded_fields (with required reasons).
-//     Python enforces its own completeness (oracle_registry.check_completeness,
-//     codex finding #1's Python-side half) before this ever returns.
+//  1. Reads the pair's frozen answer (frozenPairAnswer): what
+//     testdata/python_generic_row_oracle.py <pairID> printed for all cases
+//     when it was executed ONCE on the pinned Python-bearing build -- the
+//     real Python row for each case plus the pair's own declared
+//     excluded_fields (with required reasons). No Python runs in the test.
+//     Python enforced its own completeness (oracle_registry.check_completeness,
+//     codex finding #1's Python-side half) before the answer was recorded.
 //  2. Calls goRowBuilder(input) to get the Go-side row for the SAME case AS
 //     A CONCRETE, PRODUCTION-TYPED VALUE T (a real struct, e.g.
 //     pullRequestRow -- never a hand-picked map). typedEncode then reflects
@@ -61,7 +62,7 @@ func compareRowsAgainstPythonOracle[T any](
 ) {
 	t.Helper()
 	wrapped := func(t *testing.T, input map[string]any) any { return goRowBuilder(t, input) }
-	// One shellout for the WHOLE batch, not one per case: codex findings
+	// One answer for the WHOLE batch, not one per case: codex findings
 	// (third review) about a stale/unused declared exclusion, and a
 	// goOnlyFields entry that turns out to appear on the Python side after
 	// all, are properties of the BATCH ("did this exclusion ever match
@@ -138,8 +139,10 @@ func reportOracleDivergences(t *testing.T, cases []oracleCase, all []string) {
 	}
 }
 
-// oracleDivergences is the reusable core: it does the Python shellout, the
-// Go row build (as a concrete typed value, then walked exhaustively by
+// oracleDivergences is the reusable core: it reads the frozen Python answer
+// of the batch (frozenPairAnswer; the request it is keyed on holds the cases
+// and the harness sources, so changed cases or a changed pair are refused,
+// never answered from another recording), does the Go row build (as a concrete typed value, then walked exhaustively by
 // typedEncode), and the field-by-field diff, and returns every divergence
 // message found -- WITHOUT calling t.Error/t.Fatal for the divergences
 // themselves (setup failures still fail t immediately, since those
@@ -165,10 +168,6 @@ func oracleDivergences(
 	assertOracleSourcesUnchangedSinceBuild(t)
 	validateOracleCasesAndFields(t, "oracleDivergences", cases, goOnlyFields)
 
-	python := pythonExecutable(t)
-	_, currentFile, _, _ := runtime.Caller(0)
-	packageDir := filepath.Dir(currentFile)
-
 	payload := make([]map[string]any, 0, len(cases))
 	for _, c := range cases {
 		entry := map[string]any{"id": c.ID}
@@ -177,31 +176,11 @@ func oracleDivergences(
 		}
 		payload = append(payload, entry)
 	}
-	casesFile, err := os.CreateTemp(t.TempDir(), "oracle-cases-*.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := casesFile.Write(encoded); err != nil {
-		t.Fatal(err)
-	}
-	if err := casesFile.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	output, err := exec.Command(
-		python,
-		filepath.Join(packageDir, "testdata", "python_generic_row_oracle.py"),
-		pairID,
-		casesFile.Name(),
-	).CombinedOutput()
-	if err != nil {
-		t.Fatalf("execute Python generic row oracle for %s: %v: %s", pairID, err, output)
-	}
-	recordGenericOracleProof(t, packageDir, pairID)
+	output := frozenPairAnswer(t, pairID, encoded)
 	pythonRows, excludedFields := decodeGenericRowOracleOutput(t, pairID, output)
 	return diffAgainstPythonRows(t, cases, pythonRows, excludedFields, goRowBuilder, goOnlyFields)
 }
@@ -350,56 +329,26 @@ func diffAgainstPythonRows(
 	return messages
 }
 
-// recordGenericOracleProof records one successfully executed checked-in pair.
-// ci/check_go.sh derives the complete expected inventory from oracle_pairs/*.py
-// and requires every corresponding marker after the package passes. Keeping
-// this after CombinedOutput succeeds means selecting the interpreter, running
-// an unrelated Python test, or failing to import a pair cannot satisfy the
-// dedicated live-oracle gate.
-func recordGenericOracleProof(t *testing.T, packageDir, pairID string) {
-	t.Helper()
-	pairFilename := strings.ReplaceAll(pairID, "/", "_") + ".py"
-	if filepath.Base(pairFilename) != pairFilename {
-		t.Fatalf("pair %q does not map to a safe oracle proof filename", pairID)
-	}
-	pairSource := filepath.Join(packageDir, "testdata", "oracle_pairs", pairFilename)
-	if info, err := os.Stat(pairSource); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("pair %q does not map to a checked-in oracle source %s", pairID, pairSource)
-	}
-	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), pairFilename)
-	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {
-		t.Fatalf("write live Python oracle proof for %s: %v", pairID, err)
-	}
-}
-
-// embeddedOracleSources exists purely so `go:embed` makes the compiled test
-// binary's content, and therefore Go's test result cache key, sensitive to
-// every byte of these Python files (codex finding #4, second review).
-// `go test` result caching keys off the compiled test binary; that binary
-// has NO knowledge that oracleDivergences shells out to
-// python_generic_row_oracle.py at run time, so a Python-only edit with no
-// Go-file change reuses a stale cached PASS unless something makes the
-// binary itself change too. Listing these files here does exactly that:
-// any byte-level edit to any of them changes what go:embed bakes into the
-// binary, which changes the binary's content hash, which busts the cache
-// on its own -- no reliance on a developer remembering `-count=1`.
-// assertOracleSourcesUnchangedSinceBuild is the second half: it re-reads
-// the same files from disk at run time and fails loudly if they no longer
-// match what was embedded, which would only happen if this embed
-// directive's file list drifted out of sync with what oracleDivergences
-// actually executes.
+// embeddedOracleSources holds every file a pair comparison depends on besides
+// the Go code: the Python harness sources, the frozen snapshots and the pair
+// goldens.
 //
-// testdata/oracle_frozen/*.json carries the SAME stale-cache risk
-// (CHAOS_hygiene_0907 (cc)): frozenOracleDivergences reads those snapshots
-// from disk at run time exactly like oracleDivergences shells out to the
-// Python files above, but the directive used to list only the live-oracle
-// sources -- a byte-level edit to a frozen snapshot changed nothing this
-// binary embeds, so `go test`'s cache could serve a stale PASS after a
-// frozen golden changed. Embedding the frozen snapshots too closes that gap
-// the same way, and frozenOracleDivergences now calls
-// assertOracleSourcesUnchangedSinceBuild just like oracleDivergences does.
+// The harness sources (*.py) are the identity of the producer: the request a
+// pair golden is keyed on holds their digests (oracleHarnessManifest), so a
+// pair file that changes after its answer was recorded is refused instead of
+// being answered from a recording of other code. No test executes them; they
+// run only when the goldenrecord verb records from the pinned build.
 //
-//go:embed testdata/python_generic_row_oracle.py testdata/oracle_registry.py testdata/python_oracle_loader.py testdata/field_reflection.py testdata/oracle_pairs/*.py testdata/oracle_frozen/*.json
+// The snapshots (testdata/oracle_frozen) and the goldens (testdata/oracle_golden)
+// are read from disk at run time. Embedding them makes the compiled test
+// binary, and therefore Go's test result cache key, sensitive to every byte of
+// them, so `go test` cannot serve a cached PASS after one changed.
+// assertOracleSourcesUnchangedSinceBuild is the second half: it re-reads the
+// same files from disk at run time and fails if they no longer match what was
+// embedded, which would only happen if this directive's file list drifted
+// from what the comparisons read.
+//
+//go:embed testdata/python_generic_row_oracle.py testdata/oracle_registry.py testdata/python_oracle_loader.py testdata/field_reflection.py testdata/oracle_pairs/*.py testdata/oracle_frozen/*.json testdata/oracle_golden/*.json
 var embeddedOracleSources embed.FS
 
 // The comparison vocabulary below moved to internal/testsupport/oraclecompare

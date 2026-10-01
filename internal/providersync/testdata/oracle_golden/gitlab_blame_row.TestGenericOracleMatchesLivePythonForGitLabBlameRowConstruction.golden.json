@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestGenericOracleMatchesLivePythonForGitLabBlameRowConstruction",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair gitlab/blame/row: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGenericOracleMatchesLivePythonForGitLabBlameRowConstruction$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "gitlab/blame/row",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "f0fd763921d339411a4875e88837ff422153ad6a46cb89040018b28c561a8119",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"named_author\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"path\": {\"t\": \"str\", \"v\": \"src/main.go\"}, \"line_no\": {\"t\": \"int\", \"v\": \"1\"}, \"author_email\": {\"t\": \"str\", \"v\": \"ada@example.com\"}, \"author_name\": {\"t\": \"str\", \"v\": \"Ada\"}, \"author_when\": null, \"commit_hash\": {\"t\": \"str\", \"v\": \"abc123\"}, \"line\": {\"t\": \"str\", \"v\": \"package main\"}}}, {\"id\": \"provider_defaults\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"path\": {\"t\": \"str\", \"v\": \"README.md\"}, \"line_no\": {\"t\": \"int\", \"v\": \"1\"}, \"author_email\": {\"t\": \"str\", \"v\": \"\"}, \"author_name\": {\"t\": \"str\", \"v\": \"Unknown\"}, \"author_when\": null, \"commit_hash\": {\"t\": \"str\", \"v\": \"\"}, \"line\": {\"t\": \"str\", \"v\": \"readme\"}}}], \"excluded_fields\": {\"last_synced\": \"ClickHouseStore.insert_blame_data stamps persistence time after the live producer boundary\"}}\n"
+    }
+  ]
+}

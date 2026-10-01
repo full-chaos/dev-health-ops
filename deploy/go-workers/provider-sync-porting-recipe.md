@@ -346,6 +346,22 @@ question.
       `oracleDivergences` directly instead and assert on its returned slice
       (see `requireOracleRediscovers` and
       `TestGenericOracleRediscoversRowConstructionDefects`).
+    - **The generic pairs are frozen.** The Python producers are being
+      deleted, so `oracleDivergences` no longer runs Python: each comparison
+      reads its golden under `internal/providersync/testdata/oracle_golden/`
+      (`frozenPairAnswer`, `oracle_golden_test.go`). A golden is the stdout of
+      `python_generic_row_oracle.py`, executed once on the pinned
+      Python-bearing build, with every leaf type-tagged. It is keyed on the
+      cases and on the digest of every harness source, and its SHA-256 is
+      pinned in `oracle_golden_pins_test.go`: changed cases, a changed pair
+      file or an edited golden fail the test, and no test skips. Record with
+      `go run ./internal/testsupport/venueoracle/goldenrecord -pkg
+      ./internal/providersync/ -test '^<Test>$' -python-root <checkout of the
+      pinned build>`; a failure prints the full recipe. A new comparison needs
+      its own (sub)test and a `"PIN:<golden name>"` entry in the pin table
+      before the first record. `TestEveryOraclePairHasAFrozenGolden` fails for
+      a pair with no golden. The "rediscovers" tests run against the same
+      goldens and must stay green after every comparator change.
     - **Prefer live execution over a pinned copy even when the import chain
       looks disproportionate — a monkeypatched dependency seam plus a
       sentinel exception usually gets you there.** `github_prs_window.py`

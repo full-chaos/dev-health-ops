@@ -177,3 +177,20 @@ func TestEnableRefusesAClassReceiptWhoseProvenanceNamesAnotherRoot(t *testing.T)
 		t.Fatalf("mode = %s", got)
 	}
 }
+
+// vetter: an UNPROVEN class root (no receipt at all) is answered by the unproven gate, never by the provenance check (which only judges roots
+// whose receipt was admitted).
+func TestEnableOfAnUnprovenClassRootIsAnsweredByTheUnprovenGate(t *testing.T) {
+	pool := startAuditedRegistryPostgres(t)
+	op := mcpclass.Operation("hotspots")
+	if _, err := Seed(context.Background(), pool, SeedRequest{
+		SchemaDigest: testSchemaDigest, RunningBuild: testCandidateBuild, Operations: []string{op},
+		DocumentDigest: mcpclass.Digests(), RecordedBy: "test", ReviewEvidence: "class row", PrincipalID: "test-principal",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := enableClass(pool, op)
+	if err == nil || !errors.Is(err, ErrEnableUnproven) || errors.Is(err, ErrEnableRequestRefused) || strings.Contains(err.Error(), "provenance") {
+		t.Fatalf("err = %v, want ErrEnableUnproven from the unproven gate (not the provenance refusal)", err)
+	}
+}

@@ -15,7 +15,11 @@ This gate fails when
 1. a served Python route's body is the refusal stub and its path is not in the
    manifest (the body was deleted for a path no recorded revision routes to Go);
 2. a manifest row names a path no served Python route has (the manifest and the
-   route registry drifted: a row nobody can act on);
+   route registry drifted: a row nobody can act on), unless a row of the closed
+   list ``ci/go_served_deleted_routes.tsv`` (method, path, ticket) names that path:
+   the Python route was deleted while the deployed ingress still routes the path
+   (the dump is never edited by hand). A listed entry whose method and path a
+   served Python route still has fails (a stale entry);
 3. a served stub names a different plane than the manifest routes its path to
    (the stub's ``plane`` argument: ``GO_API``/``QUERY_API``, the literal, or the
    function's default ``query-api`` when omitted; an unreadable value fails too);
@@ -55,6 +59,7 @@ from pathlib import Path
 STUB_NAMES = frozenset({"_raise_served_by_go_api", "raise_served_by_go_api"})
 PLANES = {"go-api", "query-api"}
 MANIFEST_RELATIVE = Path("ci/go_served_paths.tsv")
+DELETED_RELATIVE = Path("ci/go_served_deleted_routes.tsv")
 _PARAM = re.compile(r"\{[^}/]*\}")
 _PATH_FORM = re.compile(r"^/[A-Za-z0-9_\-./{}]*$")
 
@@ -111,6 +116,47 @@ def load_manifest(path: Path) -> tuple[dict[str, ManifestRow], list[str]]:
             continue
         rows[route] = ManifestRow(rev, plane, route)
     return rows, problems
+
+
+@dataclass(frozen=True)
+class DeletedRoute:
+    method: str
+    path: str
+    ticket: str
+
+
+def load_deleted(path: Path) -> tuple[list[DeletedRoute], list[str]]:
+    """The closed list of deleted Python routes, and every problem found reading it."""
+    entries: list[DeletedRoute] = []
+    problems: list[str] = []
+    if not path.is_file():
+        return entries, []
+    seen: set[tuple[str, str]] = set()
+    for number, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        cells = [cell.strip() for cell in line.split("\t")]
+        if len(cells) != 3 or any(not cell for cell in cells):
+            problems.append(
+                f"{path}:{number}: want 3 tab-separated cells (method, path, ticket), got {line!r}"
+            )
+            continue
+        method, route, ticket = cells
+        if (
+            method != method.upper()
+            or not _PATH_FORM.match(route)
+            or normalize(route) != route
+        ):
+            problems.append(
+                f"{path}:{number}: method must be upper case and path written with anonymous {{}} parameters and no trailing slash: {line!r}"
+            )
+            continue
+        if (method, route) in seen:
+            problems.append(f"{path}:{number}: {method} {route} is listed twice")
+            continue
+        seen.add((method, route))
+        entries.append(DeletedRoute(method, route, ticket))
+    return entries, problems
 
 
 def _stub_call(body: list[ast.stmt]) -> ast.Call | None:
@@ -259,9 +305,15 @@ def _stubs(routes: list[dict], root: Path) -> list[tuple[dict, str | None]]:
 
 
 def check(
-    routes: list[dict], manifest: dict[str, ManifestRow], root: Path
+    routes: list[dict],
+    manifest: dict[str, ManifestRow],
+    root: Path,
+    deleted: list[DeletedRoute] | None = None,
 ) -> list[str]:
     problems: list[str] = []
+    if deleted is None:
+        deleted, deleted_problems = load_deleted(root / DELETED_RELATIVE)
+        problems.extend(deleted_problems)
     for route, plane in _stubs(routes, root):
         path = normalize(route["path"])
         covering = [row for template, row in manifest.items() if covers(template, path)]
@@ -284,8 +336,19 @@ def check(
                 f"({MANIFEST_RELATIVE}); a route still answering on the Python plane would 500 in production"
             )
     served = {normalize(route["path"]) for route in routes}
+    served_methods = {
+        (str(route["method"]).upper(), normalize(route["path"])) for route in routes
+    }
+    for entry in deleted:
+        if (entry.method, entry.path) in served_methods:
+            problems.append(
+                f"{DELETED_RELATIVE}: {entry.method} {entry.path} ({entry.ticket}) is listed as deleted but a served "
+                "Python route still has it: remove the stale entry"
+            )
     for path, row in sorted(manifest.items()):
         if not any(covers(path, route_path) for route_path in served):
+            if any(covers(path, entry.path) for entry in deleted):
+                continue  # its Python route was deleted: on the closed list
             problems.append(
                 f"{MANIFEST_RELATIVE}: {row.rev} {row.plane} {path} names no served Python route: "
                 "remove the row or fix the path"

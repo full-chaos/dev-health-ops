@@ -21,9 +21,28 @@
 # the sorted `plane<TAB>path` lines. ci/check_go_served_paths.py fails when either differs,
 # so a row is added, dropped or re-planed only together with a new dump. prod-ops updates
 # it with the rows of each new rev.
-# CHAOS-7294: the 21 rows of the Python billing routes deleted there (/api/v1/billing/*) were dropped with their routes (a row
-# naming no served Python route fails the guard); the receipt below is recomputed over the rest.
-# receipt: rev187 rows=124 sha256=9e2d3d141bce554ccb1879aa1aafe8b09ed5eabab80dc2aeb194842cfab57c61
+# receipt: rev187 rows=145 sha256=c9eb518fa32a8e8e7b94d8c01a3f5dd8aece49e57746ce8c3cc75ba216888c0b
+rev186	go-api	/api/v1/billing/audit
+rev186	go-api	/api/v1/billing/audit/{}
+rev186	go-api	/api/v1/billing/audit/{}/resolve
+rev186	go-api	/api/v1/billing/checkout
+rev186	go-api	/api/v1/billing/entitlements/{}
+rev186	go-api	/api/v1/billing/invoices
+rev186	go-api	/api/v1/billing/invoices/{}
+rev186	go-api	/api/v1/billing/invoices/{}/void
+rev186	go-api	/api/v1/billing/plans
+rev186	go-api	/api/v1/billing/plans/{}
+rev186	go-api	/api/v1/billing/plans/{}/sync-stripe
+rev186	go-api	/api/v1/billing/portal
+rev186	go-api	/api/v1/billing/reconcile
+rev186	go-api	/api/v1/billing/refunds
+rev186	go-api	/api/v1/billing/refunds/{}
+rev186	go-api	/api/v1/billing/subscriptions
+rev186	go-api	/api/v1/billing/subscriptions/cancel
+rev186	go-api	/api/v1/billing/subscriptions/change-plan
+rev186	go-api	/api/v1/billing/subscriptions/history
+rev186	go-api	/api/v1/billing/subscriptions/list
+rev186	go-api	/api/v1/billing/subscriptions/reactivate
 rev186	go-api	/api/v1/external-ingest/availability
 rev186	go-api	/api/v1/external-ingest/batches
 rev186	go-api	/api/v1/external-ingest/batches/{}

@@ -88,6 +88,79 @@ def test_a_manifest_row_with_no_python_route_fails(real_routes):
     )
 
 
+DELETED_PATH = REPO_ROOT / "ci" / "go_served_deleted_routes.tsv"
+
+
+def test_a_row_of_the_dump_whose_python_routes_were_deleted_passes_only_on_the_closed_list(
+    real_routes,
+):
+    manifest, _ = checker.load_manifest(MANIFEST_PATH)
+    deleted, problems = checker.load_deleted(DELETED_PATH)
+    assert problems == [] and len(deleted) >= 26
+    assert "/api/v1/billing/checkout" in manifest  # the dump keeps the row
+    assert checker.check(real_routes, manifest, REPO_ROOT, deleted) == []
+    # plant 1: a listed entry removed -> the row names no served Python route
+    kept = [entry for entry in deleted if entry.path != "/api/v1/billing/checkout"]
+    problems = checker.check(real_routes, manifest, REPO_ROOT, kept)
+    assert any(
+        "/api/v1/billing/checkout" in problem
+        and "names no served Python route" in problem
+        for problem in problems
+    ), problems
+
+
+def test_a_listed_route_that_a_python_route_still_has_is_a_stale_entry(real_routes):
+    manifest, _ = checker.load_manifest(MANIFEST_PATH)
+    deleted, _ = checker.load_deleted(DELETED_PATH)
+    live = next(
+        route for route in real_routes if route["path"].startswith("/api/v1/admin/")
+    )
+    stale = [
+        *deleted,
+        checker.DeletedRoute(
+            str(live["method"]).upper(), checker.normalize(live["path"]), "CHAOS-0"
+        ),
+    ]
+    problems = checker.check(real_routes, manifest, REPO_ROOT, stale)
+    assert any("stale entry" in problem for problem in problems), problems
+
+
+def test_a_python_route_deleted_with_no_list_entry_fails(real_routes):
+    manifest, _ = checker.load_manifest(MANIFEST_PATH)
+    deleted, _ = checker.load_deleted(DELETED_PATH)
+    # a dump row served by exactly one Python path: deleting that route leaves the row unanswered
+    row = next(
+        template
+        for template in manifest
+        if template.startswith("/api/v1/admin/")
+        and len(
+            {
+                checker.normalize(route["path"])
+                for route in real_routes
+                if checker.covers(template, checker.normalize(route["path"]))
+            }
+        )
+        == 1
+    )
+    others = [
+        route
+        for route in real_routes
+        if not checker.covers(row, checker.normalize(route["path"]))
+    ]
+    problems = checker.check(others, manifest, REPO_ROOT, deleted)
+    assert any(
+        row in problem and "names no served Python route" in problem
+        for problem in problems
+    ), problems
+
+
+def test_a_malformed_or_duplicated_deleted_list_row_is_reported(tmp_path):
+    copy = tmp_path / "deleted.tsv"
+    copy.write_text("GET\t/a\tCHAOS-1\nGET\t/a\tCHAOS-1\nget\t/b\tCHAOS-1\nGET\t/c\n")
+    entries, problems = checker.load_deleted(copy)
+    assert len(entries) == 1 and len(problems) == 3, problems
+
+
 SOURCE = textwrap.dedent(
     '''
     def stubbed():
@@ -419,9 +492,7 @@ def test_the_real_manifest_matches_its_receipt(tmp_path):
     rows, problems = checker.load_manifest(MANIFEST_PATH)
     assert problems == []
     assert checker.check_receipt(MANIFEST_PATH, rows) == []
-    # the rev187 dump less the 21 rows CHAOS-7294 dropped with their deleted Python billing routes (145 - 21):
-    # a receipt over nothing proves nothing
-    assert len(rows) >= 124
+    assert len(rows) >= 145  # the rev187 dump: a receipt over nothing proves nothing
     assert _receipt_case(tmp_path, lambda lines: None) == []
 
 

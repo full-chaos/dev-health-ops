@@ -979,6 +979,7 @@ func TestThePerRunNamesAreExactlyTheClosedListWithTheirSide(t *testing.T) {
 		"CLICKHOUSE_URI": false, "HOME": false, "PATH": false, "POSTGRES_URI": false, "PYTHONPATH": false, "REDIS_URL": false, "TMPDIR": false,
 		"GITHUB_APP_PRIVATE_KEY": true, "REQUESTS_CA_BUNDLE": true, "TELEMETRY_ENDPOINT": true,
 		"VENUE_PAGERDUTY_API_BASE_OVERRIDE": true, "VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": true, "VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE": true,
+		"SMTP_HOST": true, "SMTP_PORT": true,
 		"VENUE_PROVIDER_STUB_PORT": true, "VENUE_STRIPE_API_BASE": true,
 	}
 	for name, listed := range perRunPythonEnv {
@@ -997,6 +998,35 @@ func TestThePerRunNamesAreExactlyTheClosedListWithTheirSide(t *testing.T) {
 	for name := range want {
 		if _, ok := perRunPythonEnv[name]; !ok {
 			t.Errorf("%s is in this table and not in perRunPythonEnv: the oracle that needs it would key a per-run value by value", name)
+		}
+	}
+}
+
+// TestTheAddressOfAFakeSMTPSinkIsKeyedByNameWhateverItsValue pins SMTP_HOST and
+// SMTP_PORT, which the auth-flow venue sets to the loopback address and the
+// free port of its per-run SMTP sink: two runs with other addresses are one
+// Python environment, while another setting still changes the key, and the same
+// names supplied by the harness or the host are keyed by value.
+func TestTheAddressOfAFakeSMTPSinkIsKeyedByNameWhateverItsValue(t *testing.T) {
+	key := func(entries ...envEntry) string {
+		t.Helper()
+		out, err := pythonEnvKey(entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	one := key(fromTest("SMTP_HOST=127.0.0.1", "SMTP_PORT=40001", "EMAIL_PROVIDER=smtp")...)
+	two := key(fromTest("SMTP_HOST=127.0.0.2", "SMTP_PORT=40002", "EMAIL_PROVIDER=smtp")...)
+	if one != two {
+		t.Fatal("the address of a per-run SMTP sink changes the Python environment key")
+	}
+	if one == key(fromTest("SMTP_HOST=127.0.0.1", "SMTP_PORT=40001", "EMAIL_PROVIDER=resend")...) {
+		t.Fatal("a changed EMAIL_PROVIDER no longer changes the key")
+	}
+	for _, name := range []string{"SMTP_HOST", "SMTP_PORT"} {
+		if key(tagged([]string{name + "=a"}, false)...) == key(tagged([]string{name + "=b"}, false)...) {
+			t.Fatalf("%s supplied by the harness or the host is keyed by name only", name)
 		}
 	}
 }

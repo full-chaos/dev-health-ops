@@ -1,0 +1,7 @@
+# Every file under internal/queryapi/aianalytics/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: dbf43e32b0118f05363a3c250bf65f56244a59842123e12609797b63822a4bad (4 files)
+1dd7fb1386b64e6385cd525d789e118f8a6727ec505bed8db2a48131d69e056a	unclassified	README.md
+dbee37c5d1bc1dacb6c504b9d57c4564a10fd6934480cae04d98cb72681dc1a9	python-recorded	oracle_b_cases.json
+b6b91a2f881a3d115666a149f38eea97ce0a74a16ead2e8ae45c511bd0b93869	python-recorded	oracle_c_cases.json
+2868f2ae6e229fbbab9f213b7438fb4ad6bcd85c4c3b3b5352d7c7f4659971e3	python-recorded	oracle_cases.json
+cb2de5ccd1fe865a543761d0c6093ef7da7e6ee8c3138a042811cb3c84ca3307	python-recorded	oracle_d_cases.json

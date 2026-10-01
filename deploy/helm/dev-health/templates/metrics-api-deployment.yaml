@@ -68,7 +68,7 @@ spec:
           CHAOS-7421: the Python metrics api reads the ordering contract too
           (unset is contract 1 there); see api-deployment.yaml.
           */}}
-          {{- $metricsEnv := list (dict "name" "OPERATIONAL_ORDERING_CONTRACT" "value" (.Values.goWorkers.operationalOrderingContract | default "2" | toString)) }}
+          {{- $metricsEnv := list (dict "name" "OPERATIONAL_ORDERING_CONTRACT" "value" (include "dev-health.operationalOrderingContract" .)) }}
           {{- range (.Values.metricsApi.extraEnv | default (list)) }}
           {{- if ne .name "OPERATIONAL_ORDERING_CONTRACT" }}
           {{- $metricsEnv = append $metricsEnv . }}

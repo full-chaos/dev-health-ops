@@ -84,8 +84,16 @@ func TestEveryReaderOfTheOrderingContractVariableUsesTheOneResolver(t *testing.T
 			}
 		}
 		if importName != "" {
+			// A call whose result is thrown away as a bare statement governs nothing.
+			discarded := map[ast.Node]bool{}
 			ast.Inspect(file, func(n ast.Node) bool {
-				if call, ok := n.(*ast.CallExpr); ok {
+				if statement, ok := n.(*ast.ExprStmt); ok {
+					discarded[statement.X] = true
+				}
+				return true
+			})
+			ast.Inspect(file, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok && !discarded[call] {
 					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
 						if owner, ok := sel.X.(*ast.Ident); ok && owner.Name == importName &&
 							(sel.Sel.Name == "ResolveValue" || sel.Sel.Name == "Resolve" || sel.Sel.Name == "CheckForRead") {
@@ -97,6 +105,22 @@ func TestEveryReaderOfTheOrderingContractVariableUsesTheOneResolver(t *testing.T
 			})
 		}
 		rel := strings.TrimPrefix(slash, "../../")
+		if _, exception := notYetMigrated[rel]; exception {
+			// The exception covers ONE parser: a second literal of the variable in the same
+			// file would be a second parser the file-level exception would hide.
+			literals := 0
+			ast.Inspect(file, func(n ast.Node) bool {
+				if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					if v, _ := strconv.Unquote(lit.Value); v == Env {
+						literals++
+					}
+				}
+				return true
+			})
+			if literals != 1 {
+				offenders = append(offenders, rel+" (the exception file names the variable "+strconv.Itoa(literals)+" times, want exactly 1)")
+			}
+		}
 		_, declares := declaresOnly[rel]
 		_, unmigrated := notYetMigrated[rel]
 		if !uses && !declares && !unmigrated {

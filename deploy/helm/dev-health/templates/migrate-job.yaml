@@ -177,7 +177,7 @@ spec:
             - name: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
               value: {{ .Values.migrations.hook.celeryRiverCutover | quote }}
             - name: OPERATIONAL_ORDERING_CONTRACT
-              value: {{ .Values.goWorkers.operationalOrderingContract | default "2" | quote }}
+              value: {{ include "dev-health.operationalOrderingContract" . | quote }}
             {{- with .Values.migrations.hook.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

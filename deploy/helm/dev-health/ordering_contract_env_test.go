@@ -88,3 +88,20 @@ func TestPythonApiDeploymentsCarryOrderingContract2(t *testing.T) {
 		})
 	}
 }
+
+// Contract 1 is unsupported (D3635): a chart value other than "2" fails the render with the
+// reason, so it never reaches a workload (r2 of CHAOS-7421 rendered "1" into all nine workers,
+// the migrate Job and both Python APIs; Python still reads "1" as legacy).
+func TestChartRefusesAnOrderingContractOtherThan2(t *testing.T) {
+	for _, value := range []string{"1", "3", " 2", "x"} {
+		t.Run("value "+value, func(t *testing.T) {
+			output, err := exec.Command("helm", "template", "refuse-test", ".", "--set-string", "goWorkers.operationalOrderingContract="+value).CombinedOutput()
+			if err == nil {
+				t.Fatalf("the render accepted %q", value)
+			}
+			if !strings.Contains(string(output), "only contract 2 is supported") {
+				t.Fatalf("the refusal does not say why: %s", output)
+			}
+		})
+	}
+}

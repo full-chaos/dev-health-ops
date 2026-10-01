@@ -78,7 +78,7 @@ spec:
           carries (contract 1 is unsupported). An operator's extraEnv entry of the
           same name is ignored, as for EXPECTED_WORKER_GROUPS.
           */}}
-          {{- $apiEnv = append $apiEnv (dict "name" "OPERATIONAL_ORDERING_CONTRACT" "value" (.Values.goWorkers.operationalOrderingContract | default "2" | toString)) }}
+          {{- $apiEnv = append $apiEnv (dict "name" "OPERATIONAL_ORDERING_CONTRACT" "value" (include "dev-health.operationalOrderingContract" .)) }}
           {{- if .Values.goWorkers.enabled }}
           {{- $apiEnv = append $apiEnv (dict "name" "EXPECTED_WORKER_GROUPS" "value" (.Values.goWorkers.expectedWorkerGroups | join ",")) }}
           {{- end }}

@@ -149,6 +149,24 @@ def test_a_skip_that_says_python_is_missing_is_a_second_class_but_a_gated_skip_i
     assert hits.splitlines() == [f"{PKG}\tTestNeedsPython\tskips-without-python"]
 
 
+def test_a_skip_caused_by_the_shim_failing_is_the_skip_class_and_not_a_swallowed_start(
+    tmp_path: Path,
+) -> None:
+    stream = _events(
+        (
+            "output",
+            "TestNeedsCPython",
+            "x_test.go:9: /tmp/python-tripwire.AbC/python3 did not report its implementation: exit status 97\n",
+            "",
+        ),
+        ("skip", "TestNeedsCPython", "", ""),
+    )
+    log = "pid=1 ppid=2 shim=python3 argv=-c 1 parent=/tmp/go-build/b001/p.test -test.run X\n"
+    result, hits = _classify(tmp_path, stream, log)
+    assert result.returncode == 0, result.stderr
+    assert hits.splitlines() == [f"{PKG}\tTestNeedsCPython\tskips-without-python"]
+
+
 def test_a_closed_list_row_needs_a_class(tmp_path: Path) -> None:
     result = _compare(tmp_path, f"{PKG}\tTestA\tCHAOS-7001\tmaybe\n", {"a.hits": ""})
     assert result.returncode == 2 and "without a class" in result.stderr

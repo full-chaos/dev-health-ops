@@ -71,7 +71,7 @@ classify() {
     | ["other", ., "(package-level failure)"] | @tsv
   ' "${json}" >>"${tmp}/failed.tsv"
   # Skipped top-level tests whose reason says Python is missing.
-  jq -rs --arg marker "${SKIP_MARKER}" --arg gate "${SKIP_GATE}" '
+  jq -rs --arg marker "${SKIP_MARKER}" --arg gate "${SKIP_GATE}" --arg tripwire "${MARKER}" --arg weak "${WEAK_MARKER}" --argjson bins "${bins}" '
     [ .[] | select(.Package != null and .Test != null) ] as $events
     | ( $events | map(select(.Action == "skip") | {p: .Package, t: (.Test | split("/")[0])}) | unique ) as $skipped
     | $skipped[]
@@ -79,7 +79,11 @@ classify() {
     | ( $events
         | map(select(.Package == $f.p and (.Test | split("/")[0]) == $f.t and .Action == "output") | .Output)
         | join("") ) as $text
-    | select(($text | test($marker)) and (($text | contains($gate)) | not))
+    | ( $f.p | split("/") | last ) as $base
+    | select(
+        ((($text | test($marker)) or ($text | test($tripwire))
+          or (($text | contains($weak)) and (($bins | index($base)) != null)))
+         and (($text | contains($gate)) | not)))
     | ["skips-without-python", $f.p, $f.t] | @tsv
   ' "${json}" >"${tmp}/skipped.tsv"
   : >"${hits_out}"
@@ -103,15 +107,16 @@ classify() {
   sort -u -o "${hits_out}" "${hits_out}"
   if [ -n "${log}" ] && [ -s "${log}" ]; then
     # SWALLOWED START: every tripwire log line must be attributed to a FAILED test of the binary that started
-    # Python (a tripwire row in HITS_OUT). A line whose binary has no such row means the test ignored the
-    # shim's failure and passed, or skipped: it is named with its argv, and the run fails.
+    # Python (class tripwire) or to a test of it that SKIPPED because of the shim's failure (class
+    # skips-without-python). A line whose binary has neither means the test ignored the shim's failure and
+    # passed: it is named with its argv, and the run fails.
     local shim argv binary base
     while IFS=$'\t' read -r shim argv binary; do
       [ -n "${binary}" ] || continue
       base="${binary##*/}"
       base="${base%.test}"
-      if ! awk -F'\t' -v b="${base}" '$3 == "tripwire" { n = split($1, parts, "/"); if (parts[n] == b) found = 1 } END { exit found ? 0 : 1 }' "${hits_out}"; then
-        printf 'SWALLOWED START: the test binary %s ran %s %s, but no failed test of it names the tripwire (the error was ignored, or the test passed or skipped)\n' "${binary}" "${shim}" "${argv}" >&2
+      if ! awk -F'\t' -v b="${base}" '{ n = split($1, parts, "/"); if (parts[n] == b) found = 1 } END { exit found ? 0 : 1 }' "${hits_out}"; then
+        printf 'SWALLOWED START: the test binary %s ran %s %s, but no failed test of it names the tripwire (the error was ignored and the test passed)\n' "${binary}" "${shim}" "${argv}" >&2
         rc=1
       fi
     done < <(sed -n 's/^.* shim=\([^ ]*\) argv=\(.*\) parent=\([^ ]*\)\( .*\)\{0,1\}$/\1\t\2\t\3/p' "${log}" | sort -u)

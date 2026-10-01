@@ -1,0 +1,6 @@
+# Every file under internal/queryapi/analytics/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: aa13d42c2fc3fd43b67a6b21ce9b9d4d1c388ca457afe659d603611adcac81b2 (1 files)
+b9374c95c18d42e7936c61d0d65e981b0add095370d608c4265c59a2da02f672	unclassified	build_unit_team_subquery_pre_export.sql
+c049a2850da606de1ea52ce9ff472bef119191b7e1ce9dbf41b5fb4c3d083f58	python-recorded	catalog_golden.json
+7883c40ca41fce0bde59682548f9efe17dc083cac1cd389bb24592e509f4591d	unclassified	latest_work_unit_investments_source_pre_export.sql
+d0d0f795a9479d8a8f2881d9fab59b78e0241ba9da5a8de0dc17e7bd2e1f1741	unclassified	latest_work_unit_repo_effort_source_pre_export.sql

@@ -1,0 +1,3 @@
+# Every file under internal/queryapi/producttelemetry/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: 097460175824d12ecceb4b27ca9a814d097f7748b8bc7af393f78aafe33922de (1 files)
+07da428668da51e115356e700c9558a8ae0dcda399b77951aee603d3a07d786a	python-recorded	dashboard_golden.json

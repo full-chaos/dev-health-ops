@@ -1,3 +1,5 @@
 # Every file under internal/apiservice/customerpush/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 b72a2e76f1873c6e9c7e0b6c3c4b386d6478a20a358acbfc399500e28fe680de	unclassified	admin_schema.v1.json
+-	header	golden/admin-schema.json
+-	header	golden/bodies.json

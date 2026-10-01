@@ -1,14 +1,16 @@
 # Every file under internal/adminops/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: 720f7114f86a16c815b61d3328d23ac75e4717103d14e6108a58d49fd85265a2 (3 files)
-e4ba12d30d8c861bd6213e8e1d6a2d20691640263b38fd93fd5c8af67abd3ff8	python-recorded	billing_golden.json
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/billing.json
 -	header	golden/bundles.json
 -	header	golden/credential_args.json
 -	header	golden/llmsettings.json
 -	header	golden/orgdelete.json
+-	header	golden/reconcile.json
+-	header	golden/stripe.json
 -	header	golden/svc_verbs.json
 -	header	golden/users.json
 9f38c0d2145f2bfc81e0eeca6b086c1b86f4024dacfb9f7fd0576632faaf17cd	unclassified	reconcile_fixtures.json
-b3b2b3a932de3ecf3b5412e24e8707b0d623ad8c115743c27a7a8578f7cd22a2	python-recorded	reconcile_golden.json
+f0789e1e419a019d7bd3e5b733f01d197bbab2c0b8a3a8d7101f6995f2f6ebdc	hand-written	reconcile_fixtures.py
 34a98b7daca2aed77352482198ef8715fdd3d67611932d8f8976535ff377bf3d	unclassified	service_credentials_args_oracle.py
 afaad4b5a5602e3d5a63246f33afdb2426dceac920900f991b69b012f1b8ab7b	unclassified	stripe_fixtures.json
-02e477bab12d5a65713c51fd36d829df64c54b50b456c399009d8d84a43ad4dc	python-recorded	stripe_golden.json
+4ed196e3a56be314fb9af040802da248ea2d6d19960609f64edd190a47863b0f	hand-written	stripe_fixtures.py

@@ -407,6 +407,9 @@ func problems(repo string, roots, dayOne []string, dayOneCount int) ([]string, e
 			case row.Kind == PythonRecorded:
 				out = append(out, fmt.Sprintf("%s changed (sha256 %s, its row in %s holds %s). It is a recorded answer of a Python producer: it changes only when it is recorded again, never by an edit. If it was recorded again: %s -recorded-again -kind %s %s",
 					full, digest, ManifestPath(root), row.Digest, Verb, PythonRecorded, full))
+			case row.Kind == Unclassified:
+				out = append(out, fmt.Sprintf("%s changed (sha256 %s, its row in %s holds %s). It has no kind yet: if the change is meant, give it its kind, which also takes it off the day-one list: %s -kind <%s> %s",
+					full, digest, ManifestPath(root), row.Digest, Verb, strings.Join(addable(), "|"), full))
 			default:
 				out = append(out, fmt.Sprintf("%s changed (sha256 %s, its row in %s holds %s). If the change is meant: %s -kind %s %s", full, digest, ManifestPath(root), row.Digest, Verb, row.Kind, full))
 			}

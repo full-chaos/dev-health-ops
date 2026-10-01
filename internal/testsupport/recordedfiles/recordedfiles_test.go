@@ -144,7 +144,7 @@ func TestTheGuardRefusesEachWayAFileCanChangeUnseen(t *testing.T) {
 		{"one byte more in a provider's recorded page", func(t *testing.T, repo string) { write(t, repo, "a/testdata/pages/page_0.json", `{"page": 0} `) },
 			[][]string{{"a/testdata/pages/page_0.json changed", "-kind provider-recorded"}}},
 		{"one byte more in an unclassified file", func(t *testing.T, repo string) { write(t, repo, "a/testdata/old.sql", "select 2;\n") },
-			[][]string{{"a/testdata/old.sql changed", "-kind unclassified"}}},
+			[][]string{{"a/testdata/old.sql changed", "It has no kind yet", "-kind <python-recorded|provider-recorded|hand-written|go-generated> a/testdata/old.sql"}}},
 		{"a file deleted", func(t *testing.T, repo string) { remove(t, repo, "a/testdata/case.json") },
 			[][]string{{"a/testdata.manifest.tsv has a row for case.json and the file is gone", "-sync"}}},
 		{"a manifest deleted", func(t *testing.T, repo string) { remove(t, repo, "tests/fixtures.manifest.tsv") },

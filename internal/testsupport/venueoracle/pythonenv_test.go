@@ -351,8 +351,9 @@ func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
 		return
 	}
 	dir := t.TempDir()
-	names := []string{"VENUE_AMBIENT_ONLY", "VENUE_AMBIENT_SAME", "VENUE_SET_BY_TEST", "TRUSTED_PROXIES", "PYTHONHASHSEED", "TZ", "LANG", "HOME", "PATH", "JWT_SECRET_KEY", "ENVIRONMENT", "EXTRA_FOR_ONE_CALL", mark}
-	script := "#!/bin/sh\nout=\"\"\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; out=\"$out $n=$v\"; done\necho \"$out\"\n"
+	names := []string{"VENUE_AMBIENT_ONLY", "VENUE_AMBIENT_SAME", "VENUE_SET_BY_TEST", "TRUSTED_PROXIES", "PYTHONHASHSEED", "TZ", "LANG", "HOME", "PATH", "JWT_SECRET_KEY", "ENVIRONMENT", "EXTRA_FOR_ONE_CALL", "OTEL_SDK_DISABLED", mark}
+	// The stand-in prints what it sees, and keeps it in a file beside itself for the launch that reads no output.
+	script := "#!/bin/sh\nout=\"\"\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; out=\"$out $n=$v\"; done\necho \"$out\" > \"$(dirname \"$0\")/last.out\"\necho \"$out\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "python3"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -361,6 +362,7 @@ func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
 	t.Setenv("VENUE_SET_BY_TEST", "by-test")
 	t.Setenv("VENUE_AMBIENT_SAME", "same")   // the value it already has: the snapshot cannot see this one
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1") // an ambient variable the test gives another value
+	t.Setenv("OTEL_SDK_DISABLED", "false")   // a name the plane sets itself: the plane's value wins, as it did
 	venue := &Venue{pythonEnv: pythonPlaneEnv(Options{JWTKey: "k"}, inheritedValues(map[string]string{}))}
 	seen := func(v *Venue) map[string]string {
 		out := map[string]string{}
@@ -383,6 +385,7 @@ func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
 		"ENVIRONMENT":        "test",
 		"EXTRA_FOR_ONE_CALL": "<unset>",
 		"VENUE_AMBIENT_SAME": "<unset>", // the stated limit: set to its ambient value, it is not seen as set by the test
+		"OTEL_SDK_DISABLED":  "true",    // the plane's own entry wins over a variable of the same name the test set
 	} {
 		if got[name] != want {
 			t.Errorf("the Python child sees %s=%q, want %q", name, got[name], want)
@@ -396,6 +399,23 @@ func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
 	clone.pythonEnv = append(append([]string(nil), venue.pythonEnv...), "EXTRA_FOR_ONE_CALL=x", "ENVIRONMENT=other")
 	if extra := seen(&clone); extra["EXTRA_FOR_ONE_CALL"] != "x" || extra["ENVIRONMENT"] != "other" || seen(venue)["EXTRA_FOR_ONE_CALL"] != "<unset>" {
 		t.Errorf("a call's extra entries: %v", extra)
+	}
+	// The other Python child of the harness, the ClickHouse migration: the same rule.
+	migration := &Venue{Root: dir, clickHouseHTTPURI: "http://default:pw@127.0.0.1:1/source"}
+	migration.migrateClickHouse(t, context.Background(), "target")
+	raw, err := os.ReadFile(filepath.Join(dir, "last.out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated := map[string]string{}
+	for _, field := range strings.Fields(string(raw)) {
+		name, value, _ := strings.Cut(field, "=")
+		migrated[name] = value
+	}
+	for name, want := range map[string]string{"VENUE_AMBIENT_ONLY": "<unset>", mark: "<unset>", "VENUE_SET_BY_TEST": "by-test", "PYTHONHASHSEED": "0", "TZ": "UTC", "JWT_SECRET_KEY": "<unset>"} {
+		if migrated[name] != want {
+			t.Errorf("the migration child sees %s=%q, want %q", name, migrated[name], want)
+		}
 	}
 	// What the child sees of the test's variables is what the key holds.
 	if set := strings.Join(testSetEnv(), " "); !strings.Contains(set, "VENUE_SET_BY_TEST=by-test") || !strings.Contains(set, "TRUSTED_PROXIES=127.0.0.1") || strings.Contains(set, "VENUE_AMBIENT") || strings.Contains(set, "PATH=") {

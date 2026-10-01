@@ -245,7 +245,7 @@ func asyncpgToPgx(dbURL string) (string, bool) {
 }
 
 func settingsDecryptor(env cli.Env) (providerfoundation.FernetDecryptor, error) {
-	key, _, err := secrets.Resolve("SETTINGS_ENCRYPTION_KEY", env.Lookup)
+	key, _, err := secrets.ResolveSecret("SETTINGS_ENCRYPTION_KEY", env.Lookup)
 	if err != nil {
 		return providerfoundation.FernetDecryptor{}, err
 	}

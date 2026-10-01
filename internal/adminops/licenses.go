@@ -71,7 +71,7 @@ func runLicensesCreate(_ context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "argument error: --duration-days must be an integer")
 		return cli.ExitUsage
 	}
-	key, _, err := secrets.Resolve("LICENSE_PRIVATE_KEY", env.Lookup)
+	key, _, err := secrets.ResolveSecret("LICENSE_PRIVATE_KEY", env.Lookup)
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "configuration error: %v\n", err)
 		return cli.ExitFailure

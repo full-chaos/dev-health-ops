@@ -33,14 +33,16 @@ import (
 //
 // The Python plane's answers are a frozen golden executed on pythonBuild (the
 // last build that carries billing_edge.py), so this oracle survives that
-// file's deletion. The webhook signatures are stamped from the recorded clock,
-// and the Go edge runs on it, so a frozen run sends the bytes the recording
-// sent and both planes judge the signature at the same instant.
+// file's deletion. The webhook signatures are stamped from a fixed instant far
+// ahead of any recording, and the Go edge runs on a fixed clock an hour before
+// it: a signature timestamp is refused only when it is too old, on both
+// planes, so the real Python plane accepts the stamp on whatever day it is
+// recorded, and every recording and every frozen run send the same bytes.
 func TestVenueOracleBillingEdge(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name(), goldenDigest(t.Name())))
-	start := time.Now().UTC()
+	edgeNow := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 	env := webhookEnv()
 	// Only a recording serves Python, and only from the pinned checkout (pythonBuild)
 	// that still carries this module; the module is deleted on main.
@@ -67,10 +69,9 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 	}
 	t.Cleanup(downPool.Close)
 
-	// The Go edge's clock: the recorded instant, read back once the health grid
-	// has run (the recording holds it), so the webhook signatures below are
-	// judged at the time they were stamped for on both planes.
-	goNow := start
+	// The Go edge's clock: the fixed instant the webhook signatures below are
+	// stamped an hour after.
+	goNow := edgeNow
 	// The Go edge, configured like a scenario: the three secrets and the pool.
 	edge := func(stripeKey, webhookSecret, licenseKey string, pool *pgxpool.Pool) string {
 		cfg := config.Config{APIBillingEdgeAddress: "127.0.0.1:0"}
@@ -121,9 +122,8 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 	}
 
 	// Fully configured: the webhook and the 404 grid. The stamp is an hour
-	// ahead of the recorded instant: a signature timestamp is refused only when
-	// it is too old, on both planes, and the recording runs for minutes.
-	goNow = recordedAt(t, golden, start)
+	// ahead of the edge's fixed clock: a signature timestamp is refused only
+	// when it is too old, on both planes.
 	base := edge(env["STRIPE_SECRET_KEY"], env["STRIPE_WEBHOOK_SECRET"], env["LICENSE_PRIVATE_KEY"], upPool)
 	stamp := goNow.Unix() + 3600
 	eventBody := []byte(`{"id": "evt_edge_probe", "object": "event", "type": "customer.created", "data": {"object": {}}}`)

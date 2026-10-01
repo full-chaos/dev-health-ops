@@ -11,8 +11,8 @@
 package webhookintake
 
 import (
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -36,9 +36,9 @@ type Secrets struct {
 
 func envSecrets() Secrets {
 	return Secrets{
-		GitHub: os.Getenv("GITHUB_WEBHOOK_SECRET"),
-		GitLab: os.Getenv("GITLAB_WEBHOOK_TOKEN"),
-		Jira:   os.Getenv("JIRA_WEBHOOK_SECRET"),
+		GitHub: envsecrets.GetenvSecret("GITHUB_WEBHOOK_SECRET"),
+		GitLab: envsecrets.GetenvSecret("GITLAB_WEBHOOK_TOKEN"),
+		Jira:   envsecrets.GetenvSecret("JIRA_WEBHOOK_SECRET"),
 	}
 }
 

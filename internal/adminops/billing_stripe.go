@@ -45,7 +45,7 @@ func printPlanSyncReport(env cli.Env, report billing.PlanSyncReport) {
 // planSync builds the sync of the verb: the database, and Stripe from
 // STRIPE_SECRET_KEY (unset is left for the sync to refuse, with Python's text).
 func planSync(env cli.Env, pool *pgxpool.Pool) (billing.PlanSync, secrets.Value, bool) {
-	key, _, err := secrets.Resolve("STRIPE_SECRET_KEY", env.Lookup)
+	key, _, err := secrets.ResolveSecret("STRIPE_SECRET_KEY", env.Lookup)
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "configuration error: %v\n", err)
 		return billing.PlanSync{}, key, false

@@ -789,6 +789,14 @@ func (g *Golden) answer(t *testing.T, call, callEnv string, requests []Request, 
 			if err != nil {
 				t.Fatalf("golden %s: %v", g.spec.Path, err)
 			}
+			// An Allow header is a set (Compare): a Python route keeps its
+			// methods in a set whose order follows the hash seed, so its text is
+			// another one in every run of the producer. It is stored in the one
+			// order Compare gives both planes, so two recordings of the same
+			// answers are the same bytes.
+			if allow, ok := projected.Headers["allow"]; ok {
+				projected.Headers["allow"] = sortedAllow(allow)
+			}
 			answers[index] = projected
 		}
 		if len(answers) != len(requests) {

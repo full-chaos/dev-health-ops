@@ -11,10 +11,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -504,6 +507,10 @@ func TestMCPBudgetExceptionIsATypedRefusal(t *testing.T) {
 		"result_rows":        {&countingMCPClient{rowsErr: fmt.Errorf("ClickHouse row iteration failed: %w", &clickhousedriver.Exception{Code: 396})}, mcpReasonRowsCeiling},
 		"time":               {&countingMCPClient{err: fmt.Errorf("wrapped: %w", &clickhousedriver.Exception{Code: 159})}, mcpReasonTimeCeiling},
 		"deadline":           {&countingMCPClient{err: fmt.Errorf("ClickHouse query failed: %w", context.DeadlineExceeded)}, mcpReasonTimeCeiling},
+		// The socket read deadline fires first (CI, 1 s ceiling): a net
+		// timeout wrapped by the driver, not the context's error.
+		"socket_deadline_at_query":     {&countingMCPClient{err: fmt.Errorf("ClickHouse query failed: %w", &net.OpError{Op: "read", Err: os.ErrDeadlineExceeded})}, mcpReasonTimeCeiling},
+		"socket_deadline_while_stream": {&countingMCPClient{rowsErr: fmt.Errorf("ClickHouse row iteration failed: %w", fmt.Errorf("read: %w", &net.OpError{Op: "read", Err: os.ErrDeadlineExceeded}))}, mcpReasonTimeCeiling},
 	} {
 		ch, want := tc.ch, tc.want
 		t.Run(name, func(t *testing.T) {
@@ -550,6 +557,9 @@ func TestMCPObservedClientRecordsASwallowedBudgetError(t *testing.T) {
 func TestMCPBudgetReasonIgnoresOtherErrors(t *testing.T) {
 	if got := mcpBudgetReason(fmt.Errorf("x: %w", &clickhousedriver.Exception{Code: 60})); got != "" {
 		t.Fatalf("code 60 classified as %q, want \"\"", got)
+	}
+	if got := mcpBudgetReason(&net.OpError{Op: "read", Err: errors.New("connection reset by peer")}); got != "" {
+		t.Fatalf("a non-timeout network error classified as %q, want \"\"", got)
 	}
 }
 
@@ -1134,7 +1144,11 @@ func TestMCPRefusesPersonSelectorsForeignOrgsAndOversizedSimulationsEverywhere(t
 		{"person: who.developers literal", cat(", filters: {who: {developers: [\"a\"]}}"), nil, 403, mcpReasonPersonScope},
 		{"person: who.roles only", cat(", filters: {who: {roles: [\"r\"]}}"), nil, 403, mcpReasonPersonScope},
 		{"person: DEVELOPER through a variable", "query($f: FilterInput) { catalog(orgId: \"" + org + "\", filters: $f) { values { value } } }", map[string]any{"f": map[string]any{"scope": map[string]any{"level": "DEVELOPER", "ids": []any{"a"}}}}, 403, mcpReasonPersonScope},
-		{"person: undeclared extra variable who", hot, withExtra(map[string]any{"extra": map[string]any{"who": map[string]any{"developers": []any{"a"}}}}), 403, mcpReasonPersonScope},
+		// A value no field reads selects nobody: typed-position matching ignores it
+		// (org ids are different: they fail closed anywhere).
+		{"control: undeclared extra variable `who` is never read", hot, withExtra(map[string]any{"extra": map[string]any{"who": map[string]any{"developers": []any{"a"}}}}), 200, ""},
+		{"control: free text AUTHOR is not an enum position", fmt.Sprintf("query { securityAlerts(orgId: %q, filters: {search: \"AUTHOR\"}) { totalCount } }", org), nil, 200, ""},
+		{"person: an empty who object is still a person filter", cat(", filters: {who: {}}"), nil, 403, mcpReasonPersonScope},
 		{"person: analytics batch scope DEVELOPER", "query { analytics(orgId: \"" + org + "\", batch: {filters: {scope: {level: DEVELOPER, ids: [\"a\"]}}}) { timeseries { dimension } } }", nil, 403, mcpReasonPersonScope},
 		{"control: dimension REPO served", cat(", dimension: REPO"), nil, 200, ""},
 		// foreign org, every location

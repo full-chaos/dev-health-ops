@@ -188,3 +188,21 @@ func TestQueryAPIMCPListenerChart(t *testing.T) {
 		}
 	}
 }
+
+// Post-merge review of #3425: QUERY_API_MCP_ADDR in queryApi.extraEnv must
+// fail the render whether or not queryApi.mcp.enabled is set. With it off there
+// is no MCP Service and no MCP NetworkPolicy, so the env var would start the
+// listener with no boundary at all (the release-wide policy admits every pod).
+func TestQueryAPIMCPAddrInExtraEnvFailsTheRenderEvenWhenMCPIsDisabled(t *testing.T) {
+	envs := `queryApi.extraEnv=[{"name":"QUERY_API_MCP_ADDR","value":":8092"}]`
+	for name, args := range map[string][]string{
+		"mcp disabled":                 {"--set", "queryApi.enabled=true", "--set-json", envs},
+		"mcp disabled, release policy": {"--set", "queryApi.enabled=true", "--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", envs},
+		"mcp enabled":                  {"--set", "queryApi.enabled=true", "--set", "queryApi.mcp.enabled=true", "--set-json", envs},
+	} {
+		out, err := exec.Command("helm", append([]string{"template", "b", "."}, args...)...).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "must not set QUERY_API_MCP_ADDR") {
+			t.Errorf("%s: extraEnv QUERY_API_MCP_ADDR must fail the render: err=%v\n%s", name, err, out)
+		}
+	}
+}

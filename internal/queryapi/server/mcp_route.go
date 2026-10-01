@@ -56,7 +56,9 @@ import (
 	"log"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -541,7 +543,7 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusForbidden, orgReason, "every orgId argument must name the caller's org")
 		return
 	}
-	if status, reason := mcpCheckRequestInputs(op, doc.Fragments, variables, payload.Variables, claims.OrgID); reason != "" {
+	if status, reason := mcpCheckRequestInputs(schema, op, doc.Fragments, variables, payload.Variables, claims.OrgID); reason != "" {
 		refuse(status, reason, "the request names another org, selects a person, or exceeds an input limit of the MCP caller class")
 		return
 	}
@@ -949,20 +951,15 @@ func mcpCheckNestedOrg(value any, check func(any)) {
 // alias cap), and ClickHouse's budget does not bound resolver-side CPU.
 const mcpMaxSimulations = 10000
 
-// mcpPersonValues are enum values that select a person: ScopeLevelInput
-// DEVELOPER and DimensionInput AUTHOR. The MCP caller class is person-free
-// (CHAOS-7087); they are refused wherever they appear in a value.
-var mcpPersonValues = map[string]bool{"DEVELOPER": true, "AUTHOR": true}
-
 // mcpCheckRequestInputs fails closed over EVERY value the request carries,
 // not only the arguments the selected fields read: the field arguments
 // (literals and variables resolved), the coerced variables (declared, used or
 // not, with their defaults), and the raw variables (including undeclared
 // ones). It refuses another org's id anywhere (orgId/org_id members and the
-// ids of an ORG-level scope), any person selector (an enum value DEVELOPER or
-// AUTHOR, a `who` filter, a `developers` list) and a `simulations` count over
+// ids of an ORG-level scope), any person selector (decided from the schema at
+// the value's typed position: see mcp_person_policy.go) and a `simulations` count over
 // mcpMaxSimulations. It returns the HTTP status and reason, or 0 and "".
-func mcpCheckRequestInputs(op *ast.OperationDefinition, fragments ast.FragmentDefinitionList, variables, rawVariables map[string]any, orgID string) (int, string) {
+func mcpCheckRequestInputs(schema *ast.Schema, op *ast.OperationDefinition, fragments ast.FragmentDefinitionList, variables, rawVariables map[string]any, orgID string) (int, string) {
 	status, reason := 0, ""
 	fail := func(s int, r string) {
 		if reason == "" {
@@ -973,9 +970,6 @@ func mcpCheckRequestInputs(op *ast.OperationDefinition, fragments ast.FragmentDe
 	scan = func(key string, value any) {
 		switch v := value.(type) {
 		case string:
-			if mcpPersonValues[v] {
-				fail(http.StatusForbidden, mcpReasonPersonScope)
-			}
 			if key == "orgId" || key == "org_id" {
 				if v != orgID {
 					fail(http.StatusForbidden, mcpReasonOrgMismatch)
@@ -993,16 +987,6 @@ func mcpCheckRequestInputs(op *ast.OperationDefinition, fragments ast.FragmentDe
 			}
 			for k, member := range v {
 				switch k {
-				case "who":
-					if member != nil {
-						fail(http.StatusForbidden, mcpReasonPersonScope)
-					}
-				case "developers":
-					if list, ok := member.([]any); !ok || len(list) > 0 {
-						if member != nil {
-							fail(http.StatusForbidden, mcpReasonPersonScope)
-						}
-					}
 				case "simulations":
 					if n, ok := mcpInt(member); !ok || n > mcpMaxSimulations {
 						fail(http.StatusBadRequest, mcpReasonInputLimit)
@@ -1035,6 +1019,9 @@ func mcpCheckRequestInputs(op *ast.OperationDefinition, fragments ast.FragmentDe
 			if err != nil {
 				fail(http.StatusForbidden, mcpReasonInvalidOrgArgument)
 				return
+			}
+			if field.Definition != nil && mcpArgumentSelectsPerson(schema, field.Definition.Arguments.ForName(argument.Name), value) {
+				fail(http.StatusForbidden, mcpReasonPersonScope)
 			}
 			if argument.Name == "simulations" {
 				if n, ok := mcpInt(value); !ok || n > mcpMaxSimulations {
@@ -1216,6 +1203,20 @@ func mcpBudgetReason(err error) string {
 	// normally fires client-side, as context.DeadlineExceeded, not as the
 	// server's TIMEOUT_EXCEEDED -- both are the class's time ceiling.
 	if errors.Is(err, context.DeadlineExceeded) {
+		return mcpReasonTimeCeiling
+	}
+	// The same deadline reaches the connection as a socket read deadline, and
+	// whichever of the two fires first decides the error shape: a read that is
+	// in flight at the deadline fails as a net timeout (os.ErrDeadlineExceeded
+	// under a *net.OpError, wrapped by the driver), not as the context's
+	// error. CI saw exactly that at the 1 s ceiling: "ClickHouse row
+	// iteration failed: *fmt.wrapError", served as field_errors instead of
+	// the typed 422. This client's only read deadline is the ceiling's.
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return mcpReasonTimeCeiling
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return mcpReasonTimeCeiling
 	}
 	return ""

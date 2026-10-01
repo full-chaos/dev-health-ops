@@ -1,0 +1,5 @@
+# Every file under internal/jobruntime/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+06a90155c9074cde20c0d9f7b788f80c615116c366a8ae212371808f5cb54ab5	unclassified	reasonconstructor/bad_error_string.go
+b538eab5678f472d8c470ff4ffad837b0f955aa8b472f89df3943139105d4411	unclassified	reasonconstructor/bad_struct_literal.go
+e763590fd7501c07730c50ab9b874967ab40a26bfd7ff4981394efd72f3f078a	unclassified	reasonconstructor/valid_usage.go

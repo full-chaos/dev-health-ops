@@ -1,0 +1,3 @@
+# Every file under internal/jobs/system/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: 1e5b2bb4b94a32f0e325461f5d1650ea21b0d4f0ead7fdfcef4782f9455edbbd (1 files)
+86ea3cffebb352eee86bbd67022d41731b75b2edd4c960a5b3abe5fe613d4178	python-recorded	heartbeat_python_oracle.json

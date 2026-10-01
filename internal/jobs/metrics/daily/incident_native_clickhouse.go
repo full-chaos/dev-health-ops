@@ -7,10 +7,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 )
 
 // IncidentRow is one deduplicated repository-scoped incident, as read by
@@ -56,23 +58,19 @@ type IncidentRow struct {
 // valid_from <= {as_of})`, mirroring valid_to's existing shape exactly --
 // port-with-fix (chris/team-lead standing order: no Python patch, fix lands
 // only in the native Go port). See ordering-contract note below for the
-// other faithfully-ported half of this query (current_operational_rows_sql's
-// LEGACY/FINAL branch, the live default).
+// other half of this query.
 //
 // # Ordering contract
 //
-// current_operational_rows_sql (storage/operational_current.py:25) branches
-// on configured_operational_ordering_contract(): LEGACY (`... FINAL WHERE
-// org_id = ...`) when OPERATIONAL_ORDERING_CONTRACT is unset, CURRENT (an
-// explicit `ORDER BY ... LIMIT 1 BY org_id, id` dedup) otherwise.
-// parse_operational_ordering_contract defaults to LEGACY on an unset env var
-// (storage/operational_ordering_guard.py:62-69), and the local/prod compose
-// manifests do not set it (verified: `docker compose config --no-interpolate
-// | rg OPERATIONAL_ORDERING_CONTRACT` finds nothing) -- LEGACY/FINAL is the
-// live default this loader ports. Both `operational_incidents` and
-// `operational_service_repository_mappings` are ReplacingMergeTree, so FINAL
-// is a correct, if potentially stale-between-merges, dedup for that branch,
-// exactly as it is for the Python query.
+// Both operational tables are read through remaining.CurrentOperationalRowsSQL,
+// the one implementation of current_operational_rows_sql
+// (storage/operational_current.py:25): under contract 2 (production's, set on
+// every worker) the current row of a key is selected by revision with
+// LIMIT 1 BY, because FINAL keeps one row per revision there and would return a
+// deleted incident or a deactivated mapping's older live row. The contract comes
+// from OPERATIONAL_ORDERING_CONTRACT, resolved by
+// remaining.ConfiguredOperationalOrderingContract (the same value the worker's
+// boot guard checks against the tables).
 //
 // observer, when non-nil, records how many matched mapping rows had
 // valid_from set versus NULL (CHAOS-4269 telemetry) -- see
@@ -90,6 +88,26 @@ func LoadIncidentsStarted(
 		return nil, nil
 	}
 
+	// The current row of each incident and each mapping is selected through
+	// the one shared implementation (remaining.CurrentOperationalRowsSQL):
+	// under ordering contract 2 FINAL keeps every revision of a key, so a
+	// tombstone or a deactivation would not hide the older live row. The
+	// filters run after that selection, never inside it.
+	contract, err := remaining.ConfiguredOperationalOrderingContract()
+	if err != nil {
+		return nil, fmt.Errorf("load incidents started: %w", err)
+	}
+	currentIncidents := remaining.CurrentOperationalRowsSQL("operational_incidents", []string{
+		"is_deleted = 0",
+		"started_at >= {start:DateTime64(3, 'UTC')}",
+		"started_at < {end:DateTime64(3, 'UTC')}",
+	}, contract)
+	currentMappings := remaining.CurrentOperationalRowsSQL("operational_service_repository_mappings", []string{
+		"repo_id IS NOT NULL",
+		"is_active = 1",
+		"(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})",
+		"(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})",
+	}, contract)
 	rows, err := conn.Query(ctx, `
 SELECT repo_id, incident_id, status, started_at, resolved_at, mapping_valid_from
 FROM (
@@ -101,31 +119,21 @@ FROM (
         incident.resolved_at AS resolved_at,
         incident.last_synced AS last_synced,
         mapping.valid_from AS mapping_valid_from
-    FROM (
-        SELECT * FROM operational_incidents FINAL
-        WHERE org_id = ?
-          AND is_deleted = 0
-          AND started_at >= ? AND started_at < ?
-    ) AS incident
-    INNER JOIN (
-        SELECT * FROM operational_service_repository_mappings FINAL
-        WHERE org_id = ?
-          AND repo_id IS NOT NULL
-          AND is_active = 1
-          AND (valid_from IS NULL OR valid_from <= ?)
-          AND (valid_to IS NULL OR valid_to > ?)
-    ) AS mapping
+    FROM `+currentIncidents+` AS incident
+    INNER JOIN `+currentMappings+` AS mapping
         ON incident.org_id = mapping.org_id AND incident.service_id = mapping.service_id
     INNER JOIN repos AS repo FINAL
         ON mapping.org_id = repo.org_id AND mapping.repo_id = repo.id
-    WHERE mapping.repo_id IS NOT NULL AND mapping.repo_id IN ?
+    WHERE mapping.repo_id IS NOT NULL AND mapping.repo_id IN {repo_ids:Array(UUID)}
     ORDER BY mapping.repo_id, incident.id, incident.last_synced DESC
     LIMIT 1 BY mapping.repo_id, incident.id
 )
 ORDER BY repo_id, incident_id`,
-		organizationID, dayStart.UTC(), dayEnd.UTC(),
-		organizationID, asOf.UTC(), asOf.UTC(),
-		repositoryUUIDStrings(repoIDs),
+		clickhouse.Named("org_id", organizationID),
+		clickhouse.Named("start", remaining.DateTime64Argument(dayStart, remaining.DateTime64MillisecondPrecision)),
+		clickhouse.Named("end", remaining.DateTime64Argument(dayEnd, remaining.DateTime64MillisecondPrecision)),
+		clickhouse.Named("as_of", remaining.DateTime64Argument(asOf, remaining.DateTime64MicrosecondPrecision)),
+		clickhouse.Named("repo_ids", repositoryUUIDStrings(repoIDs)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load incidents started: %w", err)

@@ -19,13 +19,11 @@ type issuePRLinkRow struct {
 
 // investmentMaterializeNativeEnabledEnv is the SAME flag name
 // BuildComponents's own doc comment (units/components.go) names as gating
-// the native materializer cutover -- read directly here, same convention as
-// operationalOrderingContractEnv (displaynames.go): a fresh Go process reads
-// its own env, nothing Python parsed is inherited.
+// the native materializer cutover -- read directly here: a fresh Go process
+// reads its own env, nothing Python parsed is inherited.
 const investmentMaterializeNativeEnabledEnv = "WORKGRAPH_INVESTMENT_MATERIALIZE_NATIVE_ENABLED"
 
-// investmentMaterializeNativeEnabled is "1"-truthy, matching
-// operationalOrderingIsCurrent's convention in this same package. Unset or
+// investmentMaterializeNativeEnabled is "1"-truthy. Unset or
 // anything else means the flag is off -- the safe default, since the fast
 // path below is only correct once migration 084's version_rank column has
 // been applied everywhere this reader might run against.

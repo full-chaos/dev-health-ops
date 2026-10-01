@@ -23,6 +23,7 @@ type frozenGoldenSet struct {
 // the test it belongs to whenever that test runs.
 var frozenGoldenSets = []frozenGoldenSet{
 	{dir: oraclePairGoldenDir, pins: oraclePairGoldenPins},
+	{dir: scriptOracleGoldenDir, pins: oracleScriptGoldenPins},
 }
 
 // TestMain fails the package run when a test that ran did not open a golden
@@ -217,5 +218,41 @@ func TestAGoldenItsTestDidNotOpenIsReported(t *testing.T) {
 		func(goldenName string) bool { return goldenName == "opened.json" })
 	if len(problems) != 1 || !strings.Contains(problems[0], "goldens/unopened.json") || !strings.Contains(problems[0], "TestUnopened/sub") {
 		t.Fatalf("problems = %q, want exactly the unopened golden of the test that ran", problems)
+	}
+}
+
+// TestEveryGoldenDirectoryIsInTheOpenedCheck pins frozenGoldenSets against the
+// files: every directory of this package's testdata that holds a recorded
+// golden (a JSON file with a producer digest) is one of the sets TestMain
+// checks. A new golden directory that is not added there would hold goldens no
+// run answers for.
+func TestEveryGoldenDirectoryIsInTheOpenedCheck(t *testing.T) {
+	_, currentFile, _, _ := runtime.Caller(0)
+	packageDir := filepath.Dir(currentFile)
+	checked := map[string]bool{}
+	for _, set := range frozenGoldenSets {
+		checked[set.dir] = true
+	}
+	files, err := filepath.Glob(filepath.Join(packageDir, "testdata", "*", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), `"producer_digest"`) {
+			found["testdata/"+filepath.Base(filepath.Dir(file))] = true
+		}
+	}
+	if len(found) == 0 {
+		t.Fatal("no recorded golden found under testdata: the check would measure nothing")
+	}
+	for dir := range found {
+		if !checked[dir] {
+			t.Errorf("%s holds recorded goldens but is not in frozenGoldenSets: no run would fail when a test stops opening them", dir)
+		}
 	}
 }

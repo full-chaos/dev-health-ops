@@ -7,8 +7,8 @@ import (
 
 // team_drift_generic_oracle_test.go proves CHAOS-4444's shared drift-review
 // engine (team_drift_review.go / identity_drift_review.go) against the
-// LIVE, checked-in Python producers it ports, via the shared live-python-
-// oracle harness (ci/check_go.sh live-python-oracles) -- the same mechanism
+// checked-in Python producers it ports, as recorded on the pinned build, via
+// the shared frozen pair-oracle harness (oracle_golden_test.go) -- the same mechanism
 // every other provider oracle in this package uses.
 //
 // Scope: these four pairs pin the PURE, deterministic decision functions the

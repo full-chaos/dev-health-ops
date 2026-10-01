@@ -2,10 +2,10 @@ package providersync
 
 import "testing"
 
-// This pair executes LinearProvider.iter_ingest with an injected typed client
-// and compares the resulting WorkItem dataclass against the same Go-normalized
-// production row. It is opt-in through the shared live-oracle gate; ordinary
-// package tests never claim Python execution evidence.
+// This pair executed LinearProvider.iter_ingest with an injected typed client
+// when its answer was recorded on the pinned build. The test compares that
+// recorded WorkItem dataclass against the same Go-normalized production row;
+// it runs in every package test run and executes no Python.
 func TestLinearProviderIterIngestMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,

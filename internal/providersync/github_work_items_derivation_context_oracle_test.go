@@ -194,7 +194,7 @@ func githubWorkItemDerivationOracleCases() []oracleCase {
 				// candidate entirely, which would (a) break the
 				// provenance-retention assertion below and (b) silently
 				// diverge from Python here (no such gate there), breaking
-				// the byte-identical live-oracle comparison this case
+				// the byte-identical frozen-oracle comparison this case
 				// feeds. The dropped-candidate case itself is covered on a
 				// Python-independent fixture in cascade_smoke_test.go
 				// instead.

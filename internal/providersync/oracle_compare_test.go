@@ -83,7 +83,7 @@ func compareRowsAgainstPythonOracle[T any](
 // pair id: two call sites can share one pair id (same oracle_registry
 // registration) while using different case sets, which need different frozen
 // snapshots -- see work_item_attribution_backstop_oracle_test.go and
-// TestJiraWorkItemsRouteIncludesLivePythonMetricEffect, both of which reuse
+// TestJiraWorkItemsRouteIncludesFrozenPythonMetricEffect, both of which reuse
 // another test's pair id with their own cases. Use this for a pair whose
 // Python producer has been deleted from the codebase (native Go executor +
 // providersync ingest derivation own the compared table now) -- see

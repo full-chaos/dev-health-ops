@@ -374,7 +374,7 @@ func TestGitLabWorkItemMetricsDailyMatchesFrozenPythonGolden(t *testing.T) {
 	}, nil)
 }
 
-func TestGitLabWorkItemUserMetricsDailyMatchesLivePythonProduction(t *testing.T) {
+func TestGitLabWorkItemUserMetricsDailyMatchesFrozenPythonProduction(t *testing.T) {
 	compareRowsAgainstFrozenOracle(t, "gitlab_work-items_user-metrics-daily", gitlabOracleCases(githubWorkItemMetricTripletOracleCases()), func(t *testing.T, input map[string]any) githubWorkItemUserMetricsDailyOracleColumns {
 		claim, rows, derived := gitlabWorkItemOracleRows(t, input)
 		triplet, err := buildWorkItemMetricTripletForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived)
@@ -385,7 +385,7 @@ func TestGitLabWorkItemUserMetricsDailyMatchesLivePythonProduction(t *testing.T)
 	}, nil)
 }
 
-func TestGitLabWorkItemCycleTimesMatchLivePythonProduction(t *testing.T) {
+func TestGitLabWorkItemCycleTimesMatchFrozenPythonProduction(t *testing.T) {
 	compareRowsAgainstFrozenOracle(t, "gitlab_work-items_cycle-times", gitlabOracleCases(githubWorkItemMetricTripletOracleCases()), func(t *testing.T, input map[string]any) githubWorkItemCycleTimeOracleColumns {
 		claim, rows, derived := gitlabWorkItemOracleRows(t, input)
 		triplet, err := buildWorkItemMetricTripletForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived)
@@ -396,7 +396,7 @@ func TestGitLabWorkItemCycleTimesMatchLivePythonProduction(t *testing.T) {
 	}, nil)
 }
 
-func TestGitLabDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
+func TestGitLabDerivedSurfacesMatchFrozenPythonProduction(t *testing.T) {
 	cases := gitlabOracleCases(githubDerivedOracleCases())
 	// CHAOS-5323/CHAOS-3092: no "gitlab/work-items/estimate-coverage" oracle
 	// pair here anymore -- compute_estimate_coverage_metrics_daily is

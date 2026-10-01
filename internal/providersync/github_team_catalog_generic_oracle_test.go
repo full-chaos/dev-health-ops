@@ -61,7 +61,7 @@ func buildGitHubTeamCatalogTeamOracleRow(t *testing.T, input map[string]any) git
 	}
 }
 
-func TestGitHubTeamCatalogTeamRowMatchesLivePythonProducer(t *testing.T) {
+func TestGitHubTeamCatalogTeamRowMatchesFrozenPythonProducer(t *testing.T) {
 	// team_autoimport_github.py is deleted -- native Go providersync is the
 	// only producer now. Frozen under the last live comparison (see
 	// testdata/oracle_frozen/README.md).
@@ -130,7 +130,7 @@ func buildGitHubTeamCatalogMembershipOracleRow(t *testing.T, input map[string]an
 	}
 }
 
-func TestGitHubTeamCatalogMembershipRowMatchesLivePythonProducer(t *testing.T) {
+func TestGitHubTeamCatalogMembershipRowMatchesFrozenPythonProducer(t *testing.T) {
 	// team_autoimport_github.py is deleted -- native Go providersync is the
 	// only producer now. Frozen under the last live comparison (see
 	// testdata/oracle_frozen/README.md).
@@ -193,7 +193,7 @@ type githubTeamCatalogRepoOwnershipProducerRow struct {
 	RepoID       *string    `json:"repo_id"`
 }
 
-func TestGitHubTeamCatalogRepoOwnershipRowMatchesLivePythonProducer(t *testing.T) {
+func TestGitHubTeamCatalogRepoOwnershipRowMatchesFrozenPythonProducer(t *testing.T) {
 	// team_autoimport_github.py is deleted -- native Go providersync is the
 	// only producer now. Frozen under the last live comparison (see
 	// testdata/oracle_frozen/README.md).

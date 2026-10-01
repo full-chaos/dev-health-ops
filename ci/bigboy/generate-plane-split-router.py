@@ -166,10 +166,9 @@ def emit_labels(go_regex: str, query_regex: str) -> str:
 # CHAOS-7047: the paths the Python api still answers when the default backend is the Go api.
 # Mirrors the ops chart's ingress.pythonAllowList default (deploy/helm/dev-health/values.yaml);
 # a deploy values file may override it at ops.ingress.pythonAllowList. Each entry is
-# (path, pathType).
-DEFAULT_PYTHON_ALLOW_LIST: list[tuple[str, str]] = [
-    ("/graphql$", "ImplementationSpecific"),
-]
+# (path, pathType). Empty since CHAOS-6263: query-api answers /graphql (a deploy values file
+# routes it there with an ingress.queryApiPaths entry), so no path is Python's by default.
+DEFAULT_PYTHON_ALLOW_LIST: list[tuple[str, str]] = []
 # Kept on Python on bigboy/local ONLY (D2983: prod blocks these at the ingress; local keeps
 # them). Never part of the ops chart's allow-list.
 BIGBOY_LOCAL_PYTHON_PATHS: list[tuple[str, str]] = [
@@ -188,6 +187,31 @@ def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
     return out
 
 
+def allow_list_literal(path: str, path_type: str) -> str:
+    """The literal path an allow-list entry names (an anchored entry without its `$` and `\.`)."""
+    if path_type == "ImplementationSpecific":
+        return path.removesuffix("$").replace(chr(92) + ".", ".")
+    return path
+
+
+def paths_on_two_planes(
+    go_regex: str, query_regex: str, python_allow: list[tuple[str, str]]
+) -> list[str]:
+    """Python allow-list paths that a Go plane's path list ALSO claims.
+
+    One path on two backends is not a route, it is a tie-break: this router would send it to
+    the Go plane (priority 1000 over 500) while prod's ingress controller picks by its own
+    rule order, so bigboy would prove a route prod may not have. A values file that moves a
+    path to a Go plane must also take it off the Python allow-list; the caller refuses.
+    """
+    both = []
+    for path, path_type in python_allow:
+        literal = allow_list_literal(path, path_type)
+        if re.match(go_regex, literal) or re.match(query_regex, literal):
+            both.append(literal)
+    return both
+
+
 def _traefik_path_rule(entries: list[tuple[str, str]]) -> str:
     # Prefix = the path itself OR anything under it (whole segment), like ingress-nginx's own Prefix.
     # CHAOS-7243: an ANCHORED entry (ImplementationSpecific, "<literal>$", `\\.` for a dot) matches exactly
@@ -195,9 +219,7 @@ def _traefik_path_rule(entries: list[tuple[str, str]]) -> str:
     terms: list[str] = []
     for path, path_type in entries:
         if path_type == "ImplementationSpecific":
-            terms.append(
-                f"Path(`{path.removesuffix('$').replace(chr(92) + '.', '.')}`)"
-            )
+            terms.append(f"Path(`{allow_list_literal(path, path_type)}`)")
             continue
         terms.append(f"Path(`{path}`)")
         if path_type == "Prefix":
@@ -315,6 +337,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     go_regex = combined_regex(go_paths)
     query_regex = combined_regex(query_paths)
+    if both := paths_on_two_planes(go_regex, query_regex, python_allow):
+        print(
+            f"REFUSED: {', '.join(both)} is on the Python allow-list (ops.ingress.pythonAllowList) AND in"
+            " ingress.goApiPaths/queryApiPaths: one path, two backends. Take it off the allow-list in the"
+            " same values change that moves it to the Go plane.",
+            file=sys.stderr,
+        )
+        return 4
     if a.format == "dynamic":
         out = emit_dynamic_config(go_regex, query_regex, python_allow)
     else:

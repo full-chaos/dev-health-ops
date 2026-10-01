@@ -17,6 +17,11 @@ exits 2 on the `query-api` argument, so the render refuses it by name.
 {{- if and .Values.queryApi.internal.enabled (eq (int .Values.queryApi.internal.port) (int .Values.queryApi.port)) }}
 {{- fail "queryApi.internal.port must differ from queryApi.port (the public listener)" }}
 {{- end }}
+{{- range .Values.queryApi.extraEnv }}
+{{- if and (eq .name "CORS_ALLOWED_ORIGINS") $.Values.queryApi.corsAllowedOrigins }}
+{{- fail "queryApi.extraEnv sets CORS_ALLOWED_ORIGINS and queryApi.corsAllowedOrigins is set too: two values for one variable; keep one (extraEnv when the value comes from a Secret)" }}
+{{- end }}
+{{- end }}
 {{- /*
 CHAOS-7085: the MCP caller-class listener (QUERY_API_MCP_ADDR). It trusts the
 X-DH-Internal-* identity headers from whoever can connect, so the NetworkPolicy
@@ -176,6 +181,16 @@ spec:
               value: {{ .Values.queryApi.envelope.issuer | quote }}
             - name: GO_API_ENVELOPE_AUDIENCE
               value: {{ .Values.queryApi.envelope.audience | quote }}
+            {{- /*
+            /graphql answers a browser with the Python api's CORS middleware and
+            parameters; only the allowed origins are configuration, and they must be
+            the value the Python api reads. Unset keeps the binary's default
+            (http://localhost:3000), which no real browser origin matches.
+            */}}
+            {{- with .Values.queryApi.corsAllowedOrigins }}
+            - name: CORS_ALLOWED_ORIGINS
+              value: {{ . | quote }}
+            {{- end }}
             {{- /*
             GO_API_SCHEMA_DIGEST is deliberately absent and must stay absent.
             CHAOS-5013 removed it: query-api computes its schema digest from its

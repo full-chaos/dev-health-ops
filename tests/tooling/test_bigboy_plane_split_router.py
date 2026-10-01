@@ -201,11 +201,13 @@ def test_default_backend_is_go_and_allow_list_stays_python(
     assert _route(doc, "/api/v1/work-units") == "http://query-api:8090"
     assert _route(doc, "/health") == "http://go-api:8000"
     for py in (
-        "/graphql",
         "/docs",
         "/openapi.json",
     ):
         assert _route(doc, py) == "http://api:8000", py
+    # CHAOS-6263: /graphql is no longer Python's by default. With no queryApiPaths entry for
+    # it, it is an unknown path (the Go default backend), never the Python api.
+    assert _route(doc, "/graphql") == "http://go-api:8000"
     # CHAOS-7255: the Go public listener serves no /api/v1/internal/* route, so the default list no longer
     # carries it; the request lands on the default backend (Go's native 404).
     assert _route(doc, "/api/v1/internal/acr/health") == "http://go-api:8000"
@@ -250,5 +252,63 @@ def test_anchored_allow_list_entry_emits_one_exact_path_term(gen: ModuleType) ->
     assert "PathPrefix(`/api/v1/internal/`)" in rule
 
 
-def test_default_allow_list_is_anchored_for_graphql(gen: ModuleType) -> None:
-    assert ("/graphql$", "ImplementationSpecific") in gen.DEFAULT_PYTHON_ALLOW_LIST
+def test_default_allow_list_no_longer_carries_graphql(gen: ModuleType) -> None:
+    """CHAOS-6263: query-api answers /graphql, so the default allow-list is empty."""
+    assert gen.DEFAULT_PYTHON_ALLOW_LIST == []
+
+
+def _graphql_values(allow: list[dict] | None) -> dict:
+    doc = yaml.safe_load(yaml.safe_dump(VALUES))
+    doc["ingress"]["queryApiPaths"].append({"path": "/graphql", "pathType": "Exact"})
+    if allow is not None:
+        doc["ops"] = {"ingress": {"pythonAllowList": allow}}
+    return doc
+
+
+def test_graphql_in_query_api_paths_routes_to_query_api(gen: ModuleType) -> None:
+    """CHAOS-6263: the flip is one queryApiPaths entry: /graphql reaches query-api, exactly."""
+    doc = _graphql_values(None)
+    go_paths, query_paths = gen.paths_from_doc(doc)
+    go_regex, query_regex = gen.combined_regex(go_paths), gen.combined_regex(query_paths)
+    allow = gen.python_allow_list_from_doc(doc)
+    assert gen.paths_on_two_planes(go_regex, query_regex, allow) == []
+    routed = yaml.safe_load(gen.emit_dynamic_config(go_regex, query_regex, allow))
+    assert _route(routed, "/graphql") == "http://query-api:8090"
+    for lookalike in ("/graphqlx", "/graphql/", "/graphql/x"):
+        assert _route(routed, lookalike) == "http://go-api:8000", lookalike
+
+
+@pytest.mark.parametrize(
+    "allow",
+    [
+        [{"path": "/graphql$", "pathType": "ImplementationSpecific"}],
+        [{"path": "/graphql", "pathType": "Exact"}],
+        [{"path": "/graphql", "pathType": "Prefix"}],
+        [
+            {"path": "/api/v1/internal", "pathType": "Prefix"},
+            {"path": "/graphql$", "pathType": "ImplementationSpecific"},
+        ],
+    ],
+)
+def test_a_path_on_the_allow_list_and_a_go_plane_is_refused(
+    gen: ModuleType, tmp_path: Path, allow: list[dict], capsys: pytest.CaptureFixture
+) -> None:
+    """One path on two backends is a tie-break, not a route: the generator refuses (exit 4)
+    and names the path, so a flip that forgets the allow-list cannot be proven on bigboy."""
+    values = tmp_path / "values.prod.yaml"
+    values.write_text(yaml.safe_dump(_graphql_values(allow)))
+    assert gen.main([str(values), "--format", "dynamic"]) == 4
+    captured = capsys.readouterr()
+    assert "REFUSED: /graphql " in captured.err and captured.out == ""
+
+
+def test_an_allow_list_without_the_moved_path_is_accepted(
+    gen: ModuleType, tmp_path: Path
+) -> None:
+    values = tmp_path / "values.prod.yaml"
+    values.write_text(
+        yaml.safe_dump(
+            _graphql_values([{"path": "/metrics$", "pathType": "ImplementationSpecific"}])
+        )
+    )
+    assert gen.main([str(values), "--format", "dynamic"]) == 0

@@ -419,7 +419,9 @@ def test_the_real_manifest_matches_its_receipt(tmp_path):
     rows, problems = checker.load_manifest(MANIFEST_PATH)
     assert problems == []
     assert checker.check_receipt(MANIFEST_PATH, rows) == []
-    assert len(rows) >= 145  # the rev187 dump: a receipt over nothing proves nothing
+    # the rev187 dump less the 21 rows CHAOS-7294 dropped with their deleted Python billing routes (145 - 21):
+    # a receipt over nothing proves nothing
+    assert len(rows) >= 124
     assert _receipt_case(tmp_path, lambda lines: None) == []
 
 

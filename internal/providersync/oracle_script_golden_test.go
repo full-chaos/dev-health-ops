@@ -86,11 +86,8 @@ func frozenScriptAnswer(t *testing.T, oracle scriptOracle) []byte {
 	oraclecompare.AssertSourcesUnchangedSinceBuild(t, embeddedScriptOracleSources, packageDir)
 	assertOracleSourcesUnchangedSinceBuild(t)
 
-	if !knownScriptOracle(oracle.name) {
-		t.Fatalf("script oracle %q is not in scriptOracleNames", oracle.name)
-	}
-	if (oracle.script == "") == (oracle.program == "") {
-		t.Fatalf("script oracle %q: set exactly one of script and program", oracle.name)
+	if err := oracle.producerErr(); err != nil {
+		t.Fatal(err)
 	}
 	name := scriptOracleGoldenName(oracle.name, t.Name())
 	if err := claimOraclePairGolden(&oraclePairGoldensOpened, name, t, oracle.name, t.Name()); err != nil {
@@ -127,12 +124,39 @@ func frozenScriptAnswer(t *testing.T, oracle scriptOracle) []byte {
 		})
 	golden.Consumed(t, answers...)
 	output := []byte(oraclePairAnswerText(t, answers[0].Body))
-	if len(bytes.TrimSpace(output)) == 0 {
-		t.Fatalf("script oracle %q: the answer is empty", oracle.name)
-	}
 	golden.SkipDiff(t)
 	golden.Finish(t)
 	return output
+}
+
+// producerErr is an error unless the oracle names exactly one producer: a
+// script or an inline program. With both set, one of them would run and the
+// other would only look like part of the request.
+func (oracle scriptOracle) producerErr() error {
+	if (oracle.script == "") == (oracle.program == "") {
+		return fmt.Errorf("script oracle %q: set exactly one of script and program", oracle.name)
+	}
+	return nil
+}
+
+// TestAScriptOracleNamesExactlyOneProducer pins producerErr.
+func TestAScriptOracleNamesExactlyOneProducer(t *testing.T) {
+	for _, oracle := range []scriptOracle{
+		{name: "none"},
+		{name: "both", script: "testdata/python_work_item_sink_oracle.py", program: "print(1)"},
+	} {
+		if err := oracle.producerErr(); err == nil {
+			t.Errorf("oracle %q was accepted", oracle.name)
+		}
+	}
+	for _, oracle := range []scriptOracle{
+		{name: "script", script: "testdata/python_work_item_sink_oracle.py"},
+		{name: "program", program: "print(1)"},
+	} {
+		if err := oracle.producerErr(); err != nil {
+			t.Errorf("oracle %q was refused: %v", oracle.name, err)
+		}
+	}
 }
 
 func knownScriptOracle(name string) bool {

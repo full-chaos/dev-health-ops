@@ -20,6 +20,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // This file is the second mandated guard for CHAOS-3092 R1 (Option C).
@@ -450,7 +451,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	code := m.Run()
+	code := venueoracle.RunTests(m)
 	closeMigratedStores()
 	os.Exit(code)
 }

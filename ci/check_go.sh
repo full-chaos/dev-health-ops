@@ -811,29 +811,6 @@ check_live_python_oracles() {
     fi
   done
 
-  printf 'go test -count=1: internal/jobs/metrics/daily (live Python repository discovery source is outside the Go embed/cache boundary)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestPythonDiscoverReposOracle$' \
-        ./internal/jobs/metrics/daily
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/daily-metrics-discover"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: daily metrics live Python repository-discovery measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
   printf 'go test -count=1: internal/api/externalingest (schema bundle, operational host, envelope validation vs live Python)\n'
   if ! (
     cd "${ROOT}"
@@ -894,64 +871,6 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/streamhandlers-normalize-batch"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: streamhandlers normalize_batch live Python oracle did not run\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/jobs/metrics/aigovernance (ai_governance port vs live Python, CHAOS-4285)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestGovernanceRowsMatchLivePythonProduction$' \
-        ./internal/jobs/metrics/aigovernance
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/ai-governance-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: ai_governance live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  # internal/jobs/metrics/aiimpact's ROW-METRICS live-Python rot guard
-  # (TestAIImpactMatchesLivePythonProduction, CHAOS-4280) was retired here
-  # (CHAOS-5234/CHAOS-3092), same shape as issueprlinks' CHAOS-5249
-  # retirement above: its producer, compute_ai_impact_metrics_daily, was
-  # DELETED, not merely un-called -- AIImpactExecutor is the sole computer
-  # now. The frozen golden (tests/fixtures/ai_impact_python_golden.json)
-  # stays; Go's own TestAIImpactMatchesFrozenPythonGolden is the regression
-  # guard going forward. TestRepoPatternResolverMatchesLivePython is a
-  # SEPARATE, still-live concern -- ci/check_go.sh's own prior comment here
-  # called it "not optional -- it is the sole source of ai_impact's team
-  # dimension" -- so it keeps running alone below, unaffected by this
-  # retirement.
-  printf 'go test -count=1: internal/jobs/metrics/aiimpact (repo-team pattern resolver vs live Python, CHAOS-4280)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestRepoPatternResolverMatchesLivePython$' \
-        ./internal/jobs/metrics/aiimpact
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/ai-impact-repo-teams-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: ai_impact repo-team pattern resolver live Python oracle measurement did not occur\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -1167,29 +1086,6 @@ check_live_python_oracles() {
   # frozen golden (tests/fixtures/daily_benchmarking_python_golden.json)
   # stays; Go's own TestComputeMatchesFrozenPythonGolden is the regression
   # guard going forward.
-
-  printf 'go test -count=1: internal/jobs/metrics/remaining (DORA incident projection vs the live Python builder)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestGoIncidentProjectionMatchesLivePythonBuilder$' \
-        ./internal/jobs/metrics/remaining
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/remaining-dora-incident-sql"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the DORA incident projection was not compared against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
 
   # NOTE: this -run list is itself an enumeration, and it is the SECOND place a
   # rot guard has to be remembered -- once when the test is written, again here
@@ -1426,118 +1322,6 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/python-sum-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: python sum() semantics did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/jobs/workgraph/edges (frozen issue<->issue edge golden vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython|TestEveryRuneLowercasesLikeLivePython)$' \
-        ./internal/jobs/workgraph/edges
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # A SECOND invocation, not another name in the -run pattern above: `-run`
-  # selects tests within the packages named on the command line, so a guard in a
-  # different package is silently never run if it is only added to the pattern.
-  # That failure is invisible -- the command exits 0 having matched nothing --
-  # which is why the marker check below is what actually proves it executed.
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestEveryRuneMatchesLivePythonCharacterClasses|TestPythonDigitValueMatchesLivePythonForEveryDigit)$' \
-        ./internal/jobs/workgraph/textrefs
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # internal/jobs/workgraph/edges' live-Python rot guard
-  # (TestWorkgraphIssueEdgesGoldenMatchesLivePython, CHAOS-4766) was retired
-  # here: its producer, _build_issue_issue_edges, was DELETED, not merely
-  # un-called -- the Go native pre-step is the sole producer now. The frozen
-  # golden (tests/fixtures/workgraph_issue_edges_python_golden.json) stays;
-  # Go's own exhaustive frozen-golden comparison in golden_full_test.go is the
-  # regression guard going forward. Proving "Python still agrees with itself"
-  # stops being the protection that matters once Python is no longer in the
-  # loop.
-  # Its own marker again, per the capacity-forecast reasoning: this guard derives
-  # a Unicode property table from the live interpreter, a different producer from
-  # the edge golden above it, and it is the only thing standing between a Python
-  # upgrade and a silent parity break in which pipeline owns a dependency row.
-  proof_file="${proof_dir}/workgraph-numeric-digit-table"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the Numeric_Type=Digit table was not re-derived from live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker: a different Unicode property from the digit table above, and
-  # the one that decides which BRANCH of the canonicalisation a row takes.
-  proof_file="${proof_dir}/workgraph-python-lower"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: pythonLower was not re-derived against live str.lower()\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker: this one reads an interpreter SETTING rather than a Unicode
-  # property, so it rots for a different reason from every guard above --
-  # sys.set_int_max_str_digits() can change it at runtime, and it did not exist
-  # before Python 3.11. A deployment that raised or lowered it would leave this
-  # port disagreeing about which PR ids are convertible, in the direction that
-  # mislabels a build-aborting row as an ordinary PR.
-  # Its own marker: this is the guard that stops Go's unicode package being the
-  # oracle for a Python-facing predicate. It derives Python's DECIMAL set (the
-  # direction the digit-table guard above does not cover) and compares the two
-  # planes' Unicode versions, which is how a Go-only Nd rune parsed a PR number
-  # Python does not recognise.
-  # Its own marker: this one enumerates EVERY code point rather than a derived
-  # subset, because the two previous case guards were each blind to a one-rune
-  # property they did not think to vary -- context-sensitive final sigma, then
-  # Unicode version skew between x/text and the interpreter.
-  proof_file="${proof_dir}/workgraph-python-lower-allrunes"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the all-runes lowercase comparison was not run against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker: this guard covers the THREE regex character classes the text
-  # extractor substitutes (\s, \w, \d), which is a different Unicode surface
-  # from the case-mapping and digit-table guards above. It fails in two
-  # directions for different reasons -- a rune Python accepts and Go rejects is
-  # a defect, while a rune Go accepts and Python does not is version skew with a
-  # pinned count -- so it also rots when either side upgrades its tables.
-  # This marker carries DATA as well as the fact of execution: the two UCD
-  # versions the parity claim was established against. So it is a prefix test,
-  # not equality -- an undated parity claim is the thing being avoided.
-  proof_file="${proof_dir}/workgraph-textrefs-charclass-allrunes"
-  if [ ! -f "${proof_file}" ] || ! grep -q '^executed ucd_python=.* ucd_go=' "${proof_file}"; then
-    printf 'ERROR: the text-extractor character classes were not compared against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/workgraph-python-decimal-blocks"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: Python decimal-digit blocks were not re-derived from live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/workgraph-int-max-str-digits"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: int_max_str_digits was not read back from live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

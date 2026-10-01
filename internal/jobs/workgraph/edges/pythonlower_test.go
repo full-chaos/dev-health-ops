@@ -3,15 +3,14 @@ package edges
 import (
 	"encoding/json"
 	"errors"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
 // TestPythonLowerMatchesStrLowerOnTheKnownDivergences pins the two cases where
@@ -63,14 +62,6 @@ func TestPythonLowerMatchesStrLowerOnTheKnownDivergences(t *testing.T) {
 // Unicode revision adding another multi-char lowercase mapping would silently
 // reintroduce the divergence in whichever direction the new rune falls.
 func TestPythonLowerMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	python := edgesLivePython(t)
 	const derive = `
 import json, sys
 out = {}
@@ -81,16 +72,7 @@ for cp in range(0x110000):
         out[cp] = low
 json.dump(out, sys.stdout)
 `
-	command := exec.Command(python, "-c", derive)
-	rendered, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("derive multi-rune lowercase mappings: %v", pyoracle.RunError(python, err, stderr))
-	}
+	rendered := []byte(edgesProgram(t, "python_lower_multirune", "TestPythonLowerMatchesLivePython", "multi-rune lowercase mappings", derive))
 	var multi map[string]string
 	if err := json.Unmarshal(rendered, &multi); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -114,11 +96,6 @@ json.dump(out, sys.stdout)
 				value, expected, got,
 			)
 		}
-	}
-	if err := os.WriteFile(
-		filepath.Join(proofDirectory, "workgraph-python-lower"), []byte("executed"), 0o644,
-	); err != nil {
-		t.Fatalf("write proof: %v", err)
 	}
 	t.Logf("pythonLower matches live str.lower() on all %d multi-rune mappings", len(multi))
 }
@@ -222,17 +199,7 @@ var unicodeVersionSkewRunes = []rune{
 // A change in EITHER direction fails. More disagreements means the port drifted
 // or x/text moved; fewer means CPython caught up, and then divergence #4 should
 // be deleted rather than quietly shrinking.
-//
-// Proof marker: workgraph-python-lower-allrunes
 func TestEveryRuneLowercasesLikeLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	python := edgesLivePython(t)
 
 	const derive = `
 import json, sys, unicodedata
@@ -244,10 +211,7 @@ for cp in range(0x110000):
         mapping[cp] = [ord(x) for x in low]
 print(json.dumps({"mapping": mapping, "unicode": unicodedata.unidata_version}))
 `
-	output, err := exec.Command(python, "-c", derive).Output()
-	if err != nil {
-		t.Fatalf("derive full lower mapping from live python: %v", pyoracle.RunError(python, err, nil))
-	}
+	output := []byte(edgesProgram(t, "python_lower_allrunes", "TestEveryRuneLowercasesLikeLivePython", "full lower mapping", derive))
 	var live struct {
 		Mapping map[string][]int `json:"mapping"`
 		Unicode string           `json:"unicode"`
@@ -297,18 +261,19 @@ print(json.dumps({"mapping": mapping, "unicode": unicodedata.unidata_version}))
 			"silently carrying a stale entry", codePoint)
 	}
 
-	if err := os.WriteFile(
-		filepath.Join(proofDirectory, "workgraph-python-lower-allrunes"), []byte("executed"), 0o644,
-	); err != nil {
-		t.Fatalf("write proof marker: %v", err)
-	}
 }
 
-// edgesLivePython resolves the interpreter every live-Python oracle in this
-// package compares Go against, through the policy shared by every
-// live-Python oracle in the repository: an explicit override, then the
-// checked-out virtualenv, then PATH.
-func edgesLivePython(t *testing.T) string {
+// edgesProgram returns the stdout of the inline Python program `text` (run as `python3 -c`). Every
+// derivation of this package that asks the interpreter was executed once on the last build that carried
+// the Python sources and is frozen in testdata/golden/<slug>.json (recipe in the golden's spec); a frozen
+// run reads the recorded stdout and starts no Python. The program's text is part of the request, so a
+// changed derivation is refused until it is recorded again.
+func edgesProgram(t *testing.T, slug, test, name, text string) string {
 	t.Helper()
-	return pyoracle.Resolve(t, repositoryRootPath(t))
+	spec := rotguard.Spec("testdata/golden/"+slug+".json", "", "./internal/jobs/workgraph/edges/", "^"+test+"$")
+	answers := programoracle.Run(t, spec, repositoryRootPath(t), []programoracle.Program{{Name: name, Text: text}})
+	if answers[0].ExitCode != 0 {
+		t.Fatalf("the %s program exited %d (stdout %q)", name, answers[0].ExitCode, answers[0].Stdout)
+	}
+	return answers[0].Stdout
 }

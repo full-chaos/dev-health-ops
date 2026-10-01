@@ -1,14 +1,8 @@
 package complexity
 
 import (
-	"bytes"
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 func intp(n int) *int { return &n }
@@ -176,10 +170,6 @@ func derefOrNil(p *int) any {
 // unless the live-oracle gate is set, matching this package's other oracle
 // tests.
 func TestBlameMaxFilesArithmeticMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE") == "" {
-		t.Skip("live Python oracle runs only through the uncached live-oracle gate")
-	}
-
 	type caseIn struct {
 		MaxFiles         *int `json:"max_files"`
 		TotalFiles       int  `json:"total_files"`
@@ -200,14 +190,8 @@ func TestBlameMaxFilesArithmeticMatchesLivePython(t *testing.T) {
 		t.Fatalf("marshal cases: %v", err)
 	}
 
-	python := pyoracle.Resolve(t, complexityRepositoryRoot(t))
-	script := filepath.Join("testdata", "python_blame_maxfiles_oracle.py")
-	cmd := exec.Command(python, script)
-	cmd.Stdin = bytes.NewReader(payload)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("oracle failed: %v", pyoracle.RunError(python, err, output))
-	}
+	output := runComplexityOracle(t, "testdata/golden/blame_maxfiles_oracle.json", "^TestBlameMaxFilesArithmeticMatchesLivePython$",
+		"blame max files oracle", "python_blame_maxfiles_oracle.py", payload)
 
 	var got []struct {
 		Missing      int  `json:"missing"`

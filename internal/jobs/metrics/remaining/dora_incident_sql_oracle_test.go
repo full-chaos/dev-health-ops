@@ -2,19 +2,14 @@ package remaining
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-)
-
-const (
-	livePythonOraclesEnv     = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
-	livePythonOracleProofDir = "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"
-	incidentSQLProofFile     = "remaining-dora-incident-sql"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
 // pythonIncidentQuery asks the REAL builder for the query, rather than a
@@ -46,15 +41,6 @@ sys.stdout.write(active_incidents_query(
 // precedent of executing the production Python selector rather than a copied
 // fixture.
 func TestGoIncidentProjectionMatchesLivePythonBuilder(t *testing.T) {
-	if os.Getenv(livePythonOraclesEnv) != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv(livePythonOracleProofDir)
-	if proofDirectory == "" {
-		t.Fatalf("%s is required", livePythonOracleProofDir)
-	}
-	python := livePythonInterpreter(t)
-
 	repoID := "00000000-0000-4000-8000-00000000000a"
 	repoName := "acme/widgets"
 	filters := []struct {
@@ -74,37 +60,46 @@ func TestGoIncidentProjectionMatchesLivePythonBuilder(t *testing.T) {
 		{name: "revision ordering", env: "2", contract: OperationalOrderingRevision},
 	}
 
-	for _, contract := range contracts {
-		for _, filter := range filters {
-			contract, filter := contract, filter
-			t.Run(contract.name+"/"+filter.name, func(t *testing.T) {
-				repoFilter := repoFilterClause(filter.scope, map[string]any{})
-				want := declaredIncidentValidFromDivergence(t, runPythonIncidentQuery(t, python, contract.env, repoFilter))
-				got := resolvedIncidentsQuery(repoFilter, contract.contract)
-				if normalizeSQL(got) != normalizeSQL(want) {
-					t.Errorf(
-						"Go incident projection has drifted from the Python builder.\n"+
-							"This is the copied-query-rots failure, not a formatting nit:\n"+
-							"  go     = %s\n  python = %s",
-						normalizeSQL(got), normalizeSQL(want),
-					)
-				}
+	// One program per (contract, filter): the production builder's output for it. They were executed once
+	// on the last build that carried the Python sources and are frozen in
+	// testdata/golden/dora_incident_sql_oracle.json (recipe in the golden's spec); a frozen run reads them
+	// and runs no Python. Each program's text, arguments and environment are part of its request.
+	type run struct{ contract, filter int }
+	var runs []run
+	var programs []programoracle.Program
+	for ci, contract := range contracts {
+		for fi, filter := range filters {
+			repoFilter := repoFilterClause(filter.scope, map[string]any{})
+			programs = append(programs, programoracle.Program{
+				Name: "incident query " + contract.name + "/" + filter.name,
+				Text: "import sys\nsys.argv = ['-c', " + strconv.Quote("{org_id:String}") + ", " + strconv.Quote(repoFilter) + "]\n" + pythonIncidentQuery,
+				Env:  map[string]string{"OPERATIONAL_ORDERING_CONTRACT": contract.env},
 			})
+			runs = append(runs, run{ci, fi})
 		}
 	}
+	spec := rotguard.Spec("testdata/golden/dora_incident_sql_oracle.json", "",
+		"./internal/jobs/metrics/remaining/", "^TestGoIncidentProjectionMatchesLivePythonBuilder$")
+	answers := programoracle.Run(t, spec, repositoryRootForOracle(t), programs)
 
-	// Only on a PASS. t.Errorf does not stop execution, so an unguarded write
-	// here records a proof the run did not earn -- the lane would then hold a
-	// marker saying this comparison was satisfied while it had in fact
-	// diverged. The lane checks the exit code too, so nothing would have
-	// shipped, but a marker that can mean either thing is not evidence.
-	if t.Failed() {
-		return
-	}
-	if err := os.WriteFile(
-		filepath.Join(proofDirectory, incidentSQLProofFile), []byte("executed\n"), 0o600,
-	); err != nil {
-		t.Fatalf("write live Python oracle proof: %v", err)
+	for index, ran := range runs {
+		contract, filter, answer := contracts[ran.contract], filters[ran.filter], answers[index]
+		t.Run(contract.name+"/"+filter.name, func(t *testing.T) {
+			if answer.ExitCode != 0 {
+				t.Fatalf("the incident builder exited %d (stdout %q)", answer.ExitCode, answer.Stdout)
+			}
+			repoFilter := repoFilterClause(filter.scope, map[string]any{})
+			want := declaredIncidentValidFromDivergence(t, answer.Stdout)
+			got := resolvedIncidentsQuery(repoFilter, contract.contract)
+			if normalizeSQL(got) != normalizeSQL(want) {
+				t.Errorf(
+					"Go incident projection has drifted from the recorded Python builder output.\n"+
+						"This is the copied-query-rots failure, not a formatting nit:\n"+
+						"  go     = %s\n  python = %s",
+					normalizeSQL(got), normalizeSQL(want),
+				)
+			}
+		})
 	}
 }
 
@@ -144,21 +139,6 @@ func declaredIncidentValidFromDivergence(t *testing.T, pythonSQL string) string 
 	return strings.Replace(pythonSQL, pythonPredicate, goPredicate, 1)
 }
 
-func runPythonIncidentQuery(t *testing.T, python, contract, repoFilter string) string {
-	t.Helper()
-	command := exec.Command(python, "-c", pythonIncidentQuery, "{org_id:String}", repoFilter)
-	command.Env = append(os.Environ(), "OPERATIONAL_ORDERING_CONTRACT="+contract)
-	output, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("run the live Python incident builder: %v", pyoracle.RunError(python, err, stderr))
-	}
-	return string(output)
-}
-
 // normalizeSQL collapses whitespace so the comparison is about SQL STRUCTURE,
 // not about how each language happens to indent a heredoc. It deliberately
 // does NOT lowercase or reorder anything: a changed predicate, a changed join,
@@ -167,36 +147,6 @@ var sqlWhitespace = regexp.MustCompile(`\s+`)
 
 func normalizeSQL(query string) string {
 	return strings.TrimSpace(sqlWhitespace.ReplaceAllString(query, " "))
-}
-
-// livePythonInterpreter resolves the interpreter AND proves it resolves
-// dev_health_ops inside THIS checkout.
-//
-// On a machine with several worktrees an ambient interpreter silently supplies
-// another checkout's dev_health_ops, and the comparison then runs half against
-// one tree and half against another while reporting a clean pass -- the worst
-// possible fault for a parity guard, because it is indistinguishable from
-// success.
-func livePythonInterpreter(t *testing.T) string {
-	t.Helper()
-	root := repositoryRootForOracle(t)
-	resolved := pyoracle.Resolve(t, root)
-	located, err := exec.Command(
-		resolved, "-c",
-		"import dev_health_ops, sys; sys.stdout.write(dev_health_ops.__file__)",
-	).CombinedOutput()
-	if err != nil {
-		t.Fatalf("resolve dev_health_ops: %v", pyoracle.RunError(resolved, err, located))
-	}
-	if !strings.HasPrefix(string(located), root+string(os.PathSeparator)) {
-		t.Fatalf(
-			"%s resolves dev_health_ops to %s, OUTSIDE this checkout (%s) -- the "+
-				"guard would be comparing another worktree's builder against this "+
-				"worktree's port; set PYTHONPATH to this checkout's src",
-			resolved, string(located), root,
-		)
-	}
-	return resolved
 }
 
 func repositoryRootForOracle(t *testing.T) string {

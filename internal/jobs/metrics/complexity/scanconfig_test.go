@@ -1,15 +1,37 @@
 package complexity
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
+
+// runComplexityOracle returns the stdout of one oracle script of this package's testdata fed `stdin`. The
+// script was executed once on the last build that carried the Python sources and its stdout is frozen in
+// the golden at goldenPath (recipe in the golden's spec); a frozen run reads it and runs no Python. The
+// script's text and its stdin are part of the request, so a changed script or corpus is refused until it is
+// recorded again.
+func runComplexityOracle(t *testing.T, goldenPath, testPattern, name, script string, stdin []byte) []byte {
+	t.Helper()
+	root := complexityRepositoryRoot(t)
+	scriptPath := "internal/jobs/metrics/complexity/testdata/" + script
+	source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scriptPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := rotguard.Spec(goldenPath, "", "./internal/jobs/metrics/complexity/", testPattern)
+	answers := programoracle.Run(t, spec, root, []programoracle.Program{
+		programoracle.Script(name, scriptPath, string(source), stdin),
+	})
+	if answers[0].ExitCode != 0 {
+		t.Fatalf("the %s exited %d (stdout %q)", name, answers[0].ExitCode, answers[0].Stdout)
+	}
+	return []byte(answers[0].Stdout)
+}
 
 // configPath resolves the real complexity.yaml, five levels up from this
 // package. The Go executor reads the SAME file Python reads -- embedding a
@@ -76,23 +98,12 @@ var shouldProcessPaths = []string{
 }
 
 func TestShouldProcessMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE") == "" {
-		t.Skip("live Python oracle runs only through the uncached live-oracle gate")
-	}
-	python := pyoracle.Resolve(t, complexityRepositoryRoot(t))
-
 	encoded, err := json.Marshal(shouldProcessPaths)
 	if err != nil {
 		t.Fatalf("encode paths: %v", err)
 	}
-	script := filepath.Join("testdata", "python_should_process_oracle.py")
-	command := exec.Command(python, script)
-	command.Stdin = bytes.NewReader(encoded)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join("..", "..", "..", "..", "src"))
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("python oracle failed: %v", pyoracle.RunError(python, err, nil))
-	}
+	output := runComplexityOracle(t, "testdata/golden/should_process_oracle.json", "^TestShouldProcessMatchesLivePython$",
+		"should process oracle", "python_should_process_oracle.py", encoded)
 
 	var oracle struct {
 		ConfigPath        string   `json:"config_path"`

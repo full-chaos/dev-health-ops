@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,7 +14,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
 func TestClickHouseRepositoryDiscovererUsesPythonLatestRowQueryWithTenantFence(t *testing.T) {
@@ -54,29 +54,26 @@ func TestClickHouseRepositoryDiscovererUsesPythonLatestRowQueryWithTenantFence(t
 // It prevents an apparently equivalent Go query from drifting in grouping,
 // tenant binding, or row-selection semantics while both implementations exist.
 func TestPythonDiscoverReposOracle(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
 	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "testdata/python_daily_discover_oracle.py")
-	command.Dir = filepath.Join(root, "internal", "jobs", "metrics", "daily")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	err = command.Run()
-	output := stdout.Bytes()
+	// The script was executed once on the last build that carried the Python sources and its stdout is
+	// frozen in testdata/golden/daily_discover_repos_oracle.json (recipe in the golden's spec); a frozen
+	// run reads it and runs no Python. The script's text is part of the request.
+	const scriptPath = "internal/jobs/metrics/daily/testdata/python_daily_discover_oracle.py"
+	source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scriptPath)))
 	if err != nil {
-		t.Fatalf("execute production Python discover_repos oracle: %v\nstdout:\n%s",
-			pyoracle.RunError(python, err, stderr.Bytes()), output)
+		t.Fatal(err)
+	}
+	spec := rotguard.Spec("testdata/golden/daily_discover_repos_oracle.json", "",
+		"./internal/jobs/metrics/daily/", "^TestPythonDiscoverReposOracle$")
+	answers := programoracle.Run(t, spec, root, []programoracle.Program{
+		programoracle.Script("daily discover repos oracle", scriptPath, string(source), nil),
+	})
+	output := []byte(answers[0].Stdout)
+	if answers[0].ExitCode != 0 {
+		t.Fatalf("the production Python discover_repos oracle exited %d (stdout %q)", answers[0].ExitCode, output)
 	}
 	var oracle struct {
 		IDs        []string          `json:"ids"`
@@ -108,9 +105,6 @@ func TestPythonDiscoverReposOracle(t *testing.T) {
 	if oracle.Parameters["org_id"] != organizationID || !strings.Contains(oracle.Query, "GROUP BY org_id, id") ||
 		!strings.Contains(oracle.Query, "argMax(tuple(repo, settings, provider), last_synced)") {
 		t.Fatalf("Python production selector changed unexpectedly: parameters=%v query=%s", oracle.Parameters, oracle.Query)
-	}
-	if err := os.WriteFile(filepath.Join(proofDirectory, "daily-metrics-discover"), []byte("executed\n"), 0o600); err != nil {
-		t.Fatalf("write daily metrics live Python oracle proof: %v", err)
 	}
 }
 

@@ -2,14 +2,12 @@ package textrefs
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
-	"unicode"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
 // TestEveryRuneMatchesLivePythonCharacterClasses is the guard that makes the
@@ -40,18 +38,7 @@ import (
 //
 // The marker records BOTH UCD versions, so the parity claim in CI carries the
 // pair it was established against rather than being undated.
-//
-// Proof marker: workgraph-textrefs-charclass-allrunes
 func TestEveryRuneMatchesLivePythonCharacterClasses(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	python := textrefsLivePython(t)
-
 	// Range-encoded so the transfer stays small: \w alone is ~143k code points,
 	// and a naive list would dominate the test's runtime for no benefit.
 	const derive = `
@@ -83,10 +70,7 @@ print(json.dumps({
     "python": sys.version.split()[0],
 }))
 `
-	output, err := exec.Command(python, "-c", derive).Output()
-	if err != nil {
-		t.Fatalf("derive character classes from live python: %v", pyoracle.RunError(python, err, nil))
-	}
+	output := []byte(textrefsProgram(t, "charclass_allrunes", "TestEveryRuneMatchesLivePythonCharacterClasses", "character classes", derive))
 
 	var derived struct {
 		Space      [][2]rune `json:"space"`
@@ -185,14 +169,6 @@ print(json.dumps({
 		t.Logf("%s: go-only residue %d rune(s), all unassigned in UCD %s",
 			class.name, len(goOnly), derived.Unicode)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(proofDirectory, "workgraph-textrefs-charclass-allrunes"),
-		[]byte(fmt.Sprintf("executed ucd_python=%s ucd_go=%s",
-			derived.Unicode, unicode.Version)), 0o644,
-	); err != nil {
-		t.Fatalf("write proof marker: %v", err)
-	}
 }
 
 // textrefsRepositoryRoot walks up to the module root, for callers that need
@@ -215,10 +191,17 @@ func textrefsRepositoryRoot(t *testing.T) string {
 	}
 }
 
-// textrefsLivePython resolves the interpreter every live-Python oracle in
-// this package compares Go against, through the policy shared by every
-// live-Python oracle in the repository.
-func textrefsLivePython(t *testing.T) string {
+// textrefsProgram returns the stdout of the inline Python program `text` (run as `python3 -c`). The
+// derivations of this package were executed once on the last build that carried the Python sources and
+// are frozen in testdata/golden/<slug>.json (recipe in the golden's spec); a frozen run reads the recorded
+// stdout and starts no Python. The program's text is part of the request, so a changed derivation is
+// refused until it is recorded again.
+func textrefsProgram(t *testing.T, slug, test, name, text string) string {
 	t.Helper()
-	return pyoracle.Resolve(t, textrefsRepositoryRoot(t))
+	spec := rotguard.Spec("testdata/golden/"+slug+".json", "", "./internal/jobs/workgraph/textrefs/", "^"+test+"$")
+	answers := programoracle.Run(t, spec, textrefsRepositoryRoot(t), []programoracle.Program{{Name: name, Text: text}})
+	if answers[0].ExitCode != 0 {
+		t.Fatalf("the %s program exited %d (stdout %q)", name, answers[0].ExitCode, answers[0].Stdout)
+	}
+	return answers[0].Stdout
 }

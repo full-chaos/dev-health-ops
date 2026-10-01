@@ -2,12 +2,8 @@ package textrefs
 
 import (
 	"encoding/json"
-	"os"
-	"os/exec"
 	"strconv"
 	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestPythonDigitValueMatchesLivePythonForEveryDigit checks pythonDigitValue
@@ -18,11 +14,6 @@ import (
 // Nd blocks being ADJACENT would let the walk cross a boundary and return a
 // wrong value -- so it is checked exhaustively rather than argued.
 func TestPythonDigitValueMatchesLivePythonForEveryDigit(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	python := textrefsLivePython(t)
-
 	const derive = `
 import json, re
 out = {}
@@ -32,10 +23,7 @@ for cp in range(0x110000):
         out[cp] = int(c)
 print(json.dumps(out))
 `
-	output, err := exec.Command(python, "-c", derive).Output()
-	if err != nil {
-		t.Fatalf("derive digit values from live python: %v", pyoracle.RunError(python, err, nil))
-	}
+	output := []byte(textrefsProgram(t, "number_allrunes", "TestPythonDigitValueMatchesLivePythonForEveryDigit", "digit values", derive))
 	var want map[string]int
 	if err := json.Unmarshal(output, &want); err != nil {
 		t.Fatalf("decode digit values: %v", err)

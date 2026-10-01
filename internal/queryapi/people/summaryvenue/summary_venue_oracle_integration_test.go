@@ -137,6 +137,10 @@ VALUES ('%s', '%s', '%s', '%s', 6.5, '2026-09-24 12:00:00', '%s')`, repo, day, v
 	}
 	statements = append(statements, fmt.Sprintf(`INSERT INTO repo_metrics_daily (repo_id, day, computed_at, org_id)
 VALUES ('%s', '2026-09-23', '2026-09-24 12:00:00', '%s')`, repo, venueOrg))
+	// A second repository ingested EARLIER: last_ingested_at is the MAX of computed_at (Python fetch_last_ingested_at), so a
+	// reader taking the min or the first row reads 2026-09-20 here and not 2026-09-24.
+	statements = append(statements, fmt.Sprintf(`INSERT INTO repo_metrics_daily (repo_id, day, computed_at, org_id)
+VALUES ('%s', '2026-09-22', '2026-09-20 08:00:00', '%s')`, venueoracle.StableUUID("people summary: older repository"), venueOrg))
 	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
 		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
 		if err != nil {

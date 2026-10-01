@@ -562,6 +562,12 @@ func TestVolatileHeadersAreStoredAsAPlaceholderAndOtherHeadersStillCompare(t *te
 // header), so this test scans each for token shapes and verifies the pin by reading it out of the
 // pinning test's own source (CHAOS-7431). A new header-less recorded file is not allowed to
 // appear without a row here.
+//
+// LIMIT (stated, not hidden): the list covers exactly these three. It does NOT detect another
+// header-less recorded file added elsewhere; the walk above is keyed on the header and is
+// unchanged. About 180 other header-less JSON files whose names say golden, frozen, oracle,
+// python or recorded exist under testdata (providersync oracle_frozen, pythonparity, adminops...),
+// most pinned by their own tests; covering that whole class is a separate decision.
 var executionRecordedGoldens = []struct {
 	file     string // the recorded file
 	pinFile  string // the test source that pins it

@@ -57,11 +57,20 @@ func TestParseLimitMatchesFrozenPython(t *testing.T) {
 	if len(want) != len(corpus) {
 		t.Fatalf("python returned %d results for %d cases", len(want), len(corpus))
 	}
-	accepted, mismatches := 0, 0
+	accepted, mismatches, zeroRefused := 0, 0, 0
 	for index, text := range corpus {
 		limit, err := httpapi.ParseLimit("x", text)
 		expected := want[index]
 		switch {
+		case len(expected) == 1 && expected[0][0] == 0:
+			// Python's parser reads "0/hour" as one limit of count 0; Go documents
+			// that it refuses a zero count, and this pins the refusal.
+			if err == nil {
+				mismatches++
+				t.Errorf("%q: python reads a limit of count 0, go accepts it (%d per %s): a zero count must be refused", text, limit.Count, limit.Window)
+			} else {
+				zeroRefused++
+			}
 		case err == nil && (len(expected) != 1 || expected[0][0] != float64(limit.Count) || expected[0][1] != limit.Window.Seconds()):
 			mismatches++
 			t.Errorf("%q: go %d per %s, python %v", text, limit.Count, limit.Window, expected)
@@ -82,5 +91,8 @@ func TestParseLimitMatchesFrozenPython(t *testing.T) {
 	if accepted == 0 {
 		t.Fatal("no case was accepted; the corpus cannot show the accepted branch agrees")
 	}
-	t.Logf("%d cases compared, %d accepted; 0 mismatches", len(corpus), accepted)
+	if zeroRefused == 0 {
+		t.Fatal("no zero-count case was refused; the corpus cannot show the refusal Go documents")
+	}
+	t.Logf("%d cases compared, %d accepted, %d zero-count refused; 0 mismatches", len(corpus), accepted, zeroRefused)
 }

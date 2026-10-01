@@ -307,6 +307,8 @@ func newMCPHandlerWithLimits(ch featureflags.QueryClient, pg datahealth.PGQuerie
 func newMCPGraphQLServer(es graphql.ExecutableSchema, limits mcpLimits) *gqlhandler.Server {
 	gql := gqlhandler.New(es)
 	gql.AddTransport(transport.POST{})
+	// Outermost, so refusals by the limits and the org guard are counted too.
+	gql.AroundOperations(recordOperationErrorCount)
 	gql.Use(extension.FixedComplexityLimit(limits.complexity))
 	gql.Use(depthLimit{Max: limits.depth})
 	gql.Use(mcpOperationGuard{})

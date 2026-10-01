@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"io"
 	"log/slog"
 	"net"
@@ -257,6 +258,31 @@ func TestAGraphQLResponseWithErrorsIsMarkedOnTheServerSpan(t *testing.T) {
 	}
 	if strings.Contains(fmt.Sprint(spans[0]), "fieldThatDoesNotExistCanary") {
 		t.Errorf("the document or the error message reached the span: %v", spans[0])
+	}
+}
+
+// TestAnOrgGuardRefusalIsMarkedOnTheServerSpan: the operation guard answers a
+// foreign-org operation itself (HTTP 200, errors body) before the response
+// middleware runs, so the count must come from the outer operation wrapper.
+func TestAnOrgGuardRefusalIsMarkedOnTheServerSpan(t *testing.T) {
+	read := installSpanTracing(t, "1")
+	mux := http.NewServeMux()
+	mux.Handle("/query", newGraphQLServer(&graph.Resolver{}))
+	handler := httpapi.TraceHandler(mux, httpapi.TraceOptions{Listener: "public", ProbePaths: queryProbePaths})
+	request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`{"query":"query Q($o: String!) { experiments(orgId: $o) { __typename } }","variables":{"o":"org-other"}}`))
+	request.Header.Set("Content-Type", "application/json")
+	request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-own"}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if !strings.Contains(recorder.Body.String(), "Access denied") {
+		t.Fatalf("not the guard's refusal: %d %s", recorder.Code, recorder.Body.String())
+	}
+	spans := read()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	if count, ok := spanInt(spans[0], httpapi.GraphQLErrorCountAttribute); !ok || count != 1 {
+		t.Errorf("%s = %d (present %v), want 1", httpapi.GraphQLErrorCountAttribute, count, ok)
 	}
 }
 

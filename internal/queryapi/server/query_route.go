@@ -3274,6 +3274,8 @@ func newGraphQLServerWithLimits(resolver *graph.Resolver, complexityLimit, depth
 	//     for the pin.
 	gqlHandler := gqlhandler.New(schema)
 	gqlHandler.AddTransport(transport.POST{})
+	// Outermost, so refusals by the limits and the org guard are counted too.
+	gqlHandler.AroundOperations(recordOperationErrorCount)
 	gqlHandler.Use(extension.FixedComplexityLimit(complexityLimit))
 	gqlHandler.Use(depthLimit{Max: depthMax})
 	gqlHandler.AroundFields(graph.RefuseNullForNonNullArguments)

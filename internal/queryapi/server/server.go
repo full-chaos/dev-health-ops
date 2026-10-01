@@ -900,3 +900,26 @@ func recordErrorCount(ctx context.Context, next graphql.ResponseHandler) *graphq
 	}
 	return response
 }
+
+// recordOperationErrorCount counts the errors of a response that an operation
+// interceptor answered itself. Registered BEFORE the limits and
+// graph.OperationOrgGuard it is the outermost wrapper, so their refusals
+// (HTTP 200, errors body) are counted: they return before the response
+// middleware (recordErrorCount) runs. It only ever stamps a non-zero count, so
+// it never overwrites what recordErrorCount stamped for a resolver error.
+func recordOperationErrorCount(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
+	handle := next(ctx)
+	if handle == nil {
+		return nil
+	}
+	// The span is read from the operation's own ctx: when an inner interceptor
+	// refuses, gqlgen hands the response handler no ctx at all (innerCtx stays nil).
+	operationCtx := ctx
+	return func(ctx context.Context) *graphql.Response {
+		response := handle(ctx)
+		if response != nil && len(response.Errors) > 0 {
+			httpapi.RecordGraphQLErrorCount(operationCtx, len(response.Errors))
+		}
+		return response
+	}
+}

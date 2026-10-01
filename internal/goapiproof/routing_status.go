@@ -25,6 +25,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
 
 // Digest states a routing row can be in, relative to the LIVE schema
@@ -324,6 +326,12 @@ func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDiges
 				bucket[row.operation] = map[string]bool{}
 			}
 			bucket[row.operation][row.schemaDigest] = true
+			continue
+		}
+		// An MCP class row is not a catalog operation by construction: it has its
+		// own table (MCPClassStatusRows), and listing it here as UNREGISTERED
+		// would be false.
+		if mcpclass.IsClassRow(row.operation, row.documentDigest) {
 			continue
 		}
 		// A live row of an operation the catalog does not register has no catalog

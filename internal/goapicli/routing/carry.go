@@ -32,8 +32,10 @@ import (
 	"io"
 	"time"
 
+	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
 	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
 
 // carryResult is -json's output shape: one line, prefixed carryJSONPrefix, printed to
@@ -182,18 +184,40 @@ func runCarry(argv []string) (err error) {
 	// of the deployment being rolled to is refused before any plane is
 	// contacted. An empty or separator-only value is refused rather than
 	// widened to everything (goapiproof.SplitOperations).
-	operationFilter, err := goapiproof.SplitOperations(common.operations)
+	//
+	// MCP class rows (CHAOS-7214) are named "mcp:<root>" (or all-mcp) and are not in
+	// any catalog: a filter that names them is resolved by the class's own rules,
+	// and one that mixes them with document operations is refused.
+	classScope, isClass, err := resolveClassScope(common.operations)
 	if err != nil {
-		return refuse("%v", err)
+		return err
 	}
-	if operationFilter != nil {
-		if _, err := goapiproof.ResolveOperations(common.operations, catalog); err != nil {
+	var operationFilter []string
+	if isClass {
+		operationFilter = classScope.Operations
+	} else {
+		operationFilter, err = goapiproof.SplitOperations(common.operations)
+		if err != nil {
 			return refuse("%v", err)
+		}
+		if operationFilter != nil {
+			if _, err := goapiproof.ResolveOperations(common.operations, catalog); err != nil {
+				return refuse("%v", err)
+			}
 		}
 	}
 	targetDigests, err := targetDocumentDigests(documentsPath)
 	if err != nil {
 		return refuse("%v -- the registered-document dump for THIS image is what says the documents did not change; without it nothing can be carried safely", err)
+	}
+
+	// The MCP class rows (CHAOS-7214) are judged against what THIS image serves:
+	// the class allowlist intersected with its own SDL's Query root fields.
+	// An SDL that cannot be read is a refusal, never an empty set that would
+	// quietly refuse (or worse, skip) every class row.
+	mcpRoots, err := mcpclass.ServedRoots(schemav1.SDL)
+	if err != nil {
+		return refuse("%v -- the MCP class rows cannot be judged without this image's SDL", err)
 	}
 
 	ctx := context.Background()
@@ -264,6 +288,7 @@ func runCarry(argv []string) (err error) {
 			LiveDocumentDigest:    registry.DocumentDigest,
 			TargetDocumentDigest:  targetDigests,
 			CatalogDocumentDigest: catalog,
+			MCPRoots:              mcpRoots,
 		},
 		Operations:     operationFilter,
 		RecordedBy:     common.recordedBy,

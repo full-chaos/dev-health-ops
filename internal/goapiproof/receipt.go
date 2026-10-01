@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
 
 // EnablementProofStage and EnablementProofTerminalState are two of the
@@ -690,6 +692,13 @@ func OperationsWithEnablementProof(
 const (
 	OperationKindQuery    = "query"
 	OperationKindMutation = "mutation"
+	// OperationKindMCPClass marks an MCP class operation ("mcp:<root>",
+	// CHAOS-7214). It has no registered document, so no catalog states it: the
+	// caller declares it from mcpclass.IsOperation. Its receipt is a
+	// deployed_executed receipt on the proof route for the class document
+	// digest, and ONLY that; a document operation never reads such a receipt
+	// and a class operation never reads a document operation's.
+	OperationKindMCPClass = "mcp_class"
 )
 
 // OperationsWithEnablementProofByKind is OperationsWithEnablementProof for
@@ -716,6 +725,14 @@ func OperationsWithEnablementProofByKind(
 	if err != nil {
 		return nil, err
 	}
+	// The class arm is judged by the canary route rule whatever the target
+	// mode: a class row has no edge route to be measured through, so primary
+	// can never be admitted (Enable refuses it by name) and a class receipt is
+	// held to the explicit proof-route test below instead.
+	classClause, err := EnablementProofClause("p", TargetModeCanary)
+	if err != nil {
+		return nil, err
+	}
 
 	found := map[string]bool{}
 	if len(documentDigestByOperation) == 0 {
@@ -729,8 +746,8 @@ func OperationsWithEnablementProofByKind(
 		operations = append(operations, operation)
 		digests = append(digests, digest)
 		kind := operationKinds[operation]
-		if kind != OperationKindQuery && kind != OperationKindMutation {
-			kind = "" // unknown: matches neither arm below
+		if kind != OperationKindQuery && kind != OperationKindMutation && kind != OperationKindMCPClass {
+			kind = "" // unknown: matches no arm below
 		}
 		kinds = append(kinds, kind)
 	}
@@ -743,9 +760,14 @@ func OperationsWithEnablementProofByKind(
 		    AND want.document_digest = p.document_digest
 		  WHERE p.schema_digest = $1
 		    AND p.candidate_build = $2
-		    AND ((want.kind = '`+OperationKindQuery+`' AND (`+queryClause+`))
-		      OR (want.kind = '`+OperationKindMutation+`' AND (`+writeClause+`)))`,
-		schemaDigest, candidateBuild, operations, digests, kinds,
+		    AND ((want.kind = '`+OperationKindQuery+`' AND left(p.selected_operation, `+fmt.Sprint(len(mcpclass.OperationPrefix))+`) <> '`+mcpclass.OperationPrefix+`' AND (`+queryClause+`))
+		      OR (want.kind = '`+OperationKindMutation+`' AND left(p.selected_operation, `+fmt.Sprint(len(mcpclass.OperationPrefix))+`) <> '`+mcpclass.OperationPrefix+`' AND (`+writeClause+`))
+		      OR (want.kind = '`+OperationKindMCPClass+`'
+		          AND left(p.selected_operation, `+fmt.Sprint(len(mcpclass.OperationPrefix))+`) = '`+mcpclass.OperationPrefix+`'
+		          AND p.document_digest = $6
+		          AND p.measurement_route = '`+RouteProof+`'
+		          AND (`+classClause+`)))`,
+		schemaDigest, candidateBuild, operations, digests, kinds, mcpclass.DocumentDigest(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("goapiproof: read enablement proof: %w", err)

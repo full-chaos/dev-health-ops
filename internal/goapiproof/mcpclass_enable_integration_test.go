@@ -194,3 +194,23 @@ func TestEnableOfAnUnprovenClassRootIsAnsweredByTheUnprovenGate(t *testing.T) {
 		t.Fatalf("err = %v, want ErrEnableUnproven from the unproven gate (not the provenance refusal)", err)
 	}
 }
+
+// vetter: a class provenance with NO root (an empty mcp_class object, or root "") is not a provenance of this root.
+func TestEnableRefusesAClassReceiptWhoseProvenanceHasNoRoot(t *testing.T) {
+	for name, evidence := range map[string]string{
+		"empty mcp_class object":   `{"measurement_route":"proof","mcp_class":{}}`,
+		"root is the empty string": `{"measurement_route":"proof","mcp_class":{"root":"","reference":"go_document_route","shapes_executed":1,"shapes_matched":1}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			pool := startAuditedRegistryPostgres(t)
+			op := seedAndProveClass(t, pool, "hotspots", evidence)
+			_, err := enableClass(pool, op)
+			if err == nil || !errors.Is(err, ErrEnableRequestRefused) || !strings.Contains(err.Error(), "names root , not hotspots") {
+				t.Fatalf("err = %v, want the wrong-root refusal", err)
+			}
+			if got := classRowMode(t, pool, op); got != "shadow" {
+				t.Fatalf("mode = %s", got)
+			}
+		})
+	}
+}

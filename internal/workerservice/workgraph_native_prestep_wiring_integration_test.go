@@ -48,6 +48,10 @@ func (stubIssueEdgesObserver) ObserveWorkGraphIssueEdges(
 // Both cases are deliberately minimal: prove the wiring (constructor -> Run
 // -> real ClickHouse read/write) actually works, not re-derive the detailed
 // scenario coverage the edges package's own test already owns.
+// issueCommitWiringNow is the pinned clock of the issue_commit_edges cases:
+// 2026-09-01T12:00Z seeds are 14 days inside the 30-day default window.
+var issueCommitWiringNow = time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+
 func TestNativePreStepsRunThroughTheProductionWiring(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -145,6 +149,11 @@ VALUES (?,?,?,?,?,?,?)`,
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Pin the step's clock: with an empty scope the pre-step reads its
+		// 30-day default window from step.now, so the fixed author_when above
+		// is only "live" relative to a clock chosen with it (CHAOS-7455: the
+		// wall clock passed 2026-10-01T12:00Z and the seed aged out).
+		step.now = func() time.Time { return issueCommitWiringNow }
 		claim := workgraph.Claim{Request: workgraph.Request{OrganizationID: org}}
 		result, err := step.Run(ctx, claim)
 		if err != nil {
@@ -163,6 +172,66 @@ VALUES (?,?,?,?,?,?,?)`,
 		}
 		if count != 1 {
 			t.Fatalf("expected exactly one edge written through the production Run() wiring, got %d", count)
+		}
+	})
+
+	t.Run("issue_commit_edges default window lower bound is exactly now-30d", func(t *testing.T) {
+		const boundaryOrg = "5b1a6e2e-6b0a-4e6a-9b7c-workgraph-edge"
+		from := issueCommitWiringNow.AddDate(0, 0, -30)
+		seed := func(key, hash string, authorWhen time.Time) {
+			if err := conn.Exec(ctx, `INSERT INTO work_items
+(repo_id, work_item_id, provider, org_id, title, type, status, status_raw, project_key, project_id, reporter,
+ created_at, updated_at, sprint_id, sprint_name, parent_id, epic_id, url, last_synced)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				repoID, "jira:"+key, "jira", boundaryOrg, "edge", "task", "open", "open", "EDGE", "10001", "someone",
+				time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+				"", "", "", "", "", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+			); err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.Exec(ctx, `INSERT INTO git_commits
+(repo_id, hash, message, author_when, parents, last_synced, org_id)
+VALUES (?,?,?,?,?,?,?)`,
+				repoID, hash, "Fixes "+key+": boundary", authorWhen, uint32(1), authorWhen, boundaryOrg,
+			); err != nil {
+				t.Fatal(err)
+			}
+		}
+		seed("EDGE-1", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1", from.Add(-time.Second))
+		seed("EDGE-2", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2", from.Add(time.Second))
+
+		loader, err := issuecommitedges.NewLoader(conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		service, err := issuecommitedges.NewService(loader, conn, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		step, err := newIssueCommitEdgesPreStep(service)
+		if err != nil {
+			t.Fatal(err)
+		}
+		step.now = func() time.Time { return issueCommitWiringNow }
+		result, err := step.Run(ctx, workgraph.Claim{Request: workgraph.Request{OrganizationID: boundaryOrg}})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result["edges_written"] != 1 || result["commits_scanned"] != 1 {
+			t.Fatalf("Run result = %+v, want exactly the from+1s commit (scanned=1, written=1)", result)
+		}
+		var count uint64
+		if err := conn.QueryRow(ctx,
+			`SELECT count() FROM work_graph_edges FINAL WHERE org_id = ? AND target_id = ?`,
+			boundaryOrg, "jira:EDGE-2",
+		).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("in-window edge count = %d (err %v), want 1", count, err)
+		}
+		if err := conn.QueryRow(ctx,
+			`SELECT count() FROM work_graph_edges FINAL WHERE org_id = ? AND target_id = ?`,
+			boundaryOrg, "jira:EDGE-1",
+		).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("out-of-window edge count = %d (err %v), want 0", count, err)
 		}
 	})
 }

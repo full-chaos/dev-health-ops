@@ -1,9 +1,16 @@
 package synccli
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
@@ -48,6 +55,69 @@ func TestSyncTargetPrintsNeitherClickHouseLoginNorPassword(t *testing.T) {
 			code, stdout, stderr := runVerb(t, "prs", h.executor(), githubArgs, plantedEnv())
 			if code != cli.ExitFailure {
 				t.Fatalf("exit %d, want a failure that reached the error path; stderr %q", code, stderr)
+			}
+			for _, secret := range []string{plantedLogin, plantedPassword} {
+				if strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
+					t.Errorf("%q printed:\nstdout %q\nstderr %q", secret, stdout, stderr)
+				}
+			}
+		})
+	}
+}
+
+// What the in-process run logs through the process logger (the sinks under the
+// executor log database errors) is redacted too: a warning and an error that
+// carry the login and the password, logged by a stub run, never reach the log.
+func TestSyncTargetLogsNeitherClickHouseLoginNorPassword(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	executor := InlineExecutor(InlineDeps{
+		OpenStore: func(context.Context, string) (driver.Conn, error) { return fakeStore{}, nil },
+		Run: func(context.Context, providersync.InProcessRun) (providersync.CompleteRouteExecutionResult, error) {
+			slog.Error("provider write failed", "error", errors.New(plantedServerText()))
+			slog.Warn("guard read failed: " + plantedServerText())
+			slog.Default().With("cause", plantedServerText()).Info("x")
+			return providersync.CompleteRouteExecutionResult{}, nil
+		},
+	})
+	code, stdout, stderr := runVerb(t, "prs", executor,
+		[]string{"--provider", "github", "--owner", "acme", "--repo", "api", "--auth", "ghp-test"}, plantedEnv())
+	if code != cli.ExitOK {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "provider write failed") || !strings.Contains(out, "Authentication failed") {
+		t.Fatalf("the run logged nothing the test can check:\n%s", out)
+	}
+	for _, secret := range []string{plantedLogin, plantedPassword} {
+		if strings.Contains(out, secret) || strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
+			t.Errorf("%q logged:\n%s", secret, out)
+		}
+	}
+}
+
+// The batch path prints a failure per repository and a listing error through
+// its own redact() (batch.go): neither holds the login or the password.
+func TestSyncBatchPrintsNeitherClickHouseLoginNorPassword(t *testing.T) {
+	for name, build := range map[string]func() *batchHarness{
+		"the listing fails": func() *batchHarness {
+			return &batchHarness{listErr: errors.New(plantedServerText())}
+		},
+		"a repository's run fails": func() *batchHarness {
+			return &batchHarness{repos: githubRepos("acme/api"), fail: func(providersync.InProcessRun) error { return errors.New(plantedServerText()) }}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := build()
+			code, stdout, stderr := runVerb(t, "git", h.executor(), githubBatchArgs, plantedEnv())
+			if code == cli.ExitOK {
+				t.Fatalf("exit %d: the failure never reached the printing path; stderr %q", code, stderr)
+			}
+			if !strings.Contains(stderr, "Authentication failed") {
+				t.Fatalf("the server's text is not in stderr, so the run proves nothing: %q", stderr)
 			}
 			for _, secret := range []string{plantedLogin, plantedPassword} {
 				if strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {

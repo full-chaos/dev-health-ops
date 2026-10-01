@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/pyargparse"
 	"io"
+	"log/slog"
 	"math/big"
 	"os"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
@@ -727,6 +729,11 @@ func runTarget(ctx context.Context, env cli.Env, target string, exec Executor, n
 		writeLine(env.Stdout, targetUsage(target))
 		return cli.ExitOK
 	}
+	// Everything the run logs (the sinks under the executor log database
+	// errors through the process logger) passes through the same boundary as
+	// the error the verb prints.
+	redact := planBoundary(plan)
+	defer logging.InstallDefault(slog.New(logging.WithValueRedaction(slog.Default().Handler(), redact)))()
 	if err := exec(ctx, plan, env); err != nil {
 		var refused *Refusal
 		if errors.As(err, &refused) {
@@ -739,7 +746,7 @@ func runTarget(ctx context.Context, env cli.Env, target string, exec Executor, n
 		// boundary is built from the sink and the PostgreSQL URI this run
 		// resolved and applied here, so no layer under the executor has to
 		// remember which of its errors can carry them.
-		writeLine(env.Stderr, fmt.Sprintf("dho sync %s: %s", target, planBoundary(plan)(err.Error())))
+		writeLine(env.Stderr, fmt.Sprintf("dho sync %s: %s", target, redact(err.Error())))
 		if errors.Is(err, ErrNotAvailable) {
 			return cli.ExitRefused
 		}

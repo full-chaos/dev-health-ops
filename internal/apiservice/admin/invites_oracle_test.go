@@ -93,41 +93,102 @@ func decodeInviteMail(t *testing.T, captured smtpcapture.Mail) decodedInviteMail
 	return out
 }
 
-// checkInviteToken proves a token is the one invites.py's _build_token makes
-// for id under secret (the plane that produced it is named by label), and that
-// the stored token_hash is the sha256 of it.
-// pythonTokenHashes is the stored token hash of every invite the Python plane
-// created (each 201 answer's id), read through storedHash.
-func pythonTokenHashes(t *testing.T, responses []venueoracle.Response, storedHash func(string) string) map[string]string {
+// inviteTokenChecks is what a plane left for every invite it created, as text
+// the two planes must agree on, one line per invite in (org, email) order:
+// whether an email carried its token, and the outcome of the two checks of
+// checkInviteToken. The invite's id and its token are another one on each plane
+// and in every run, so they are checked here on the plane's own raw values (its
+// rows, its emails) and only the outcome is frozen and compared. A check that
+// fails also fails the test, so a recording never freezes a wrong outcome.
+//
+// answers is the plane's answers: every 201 is one row, and no row is there
+// without a 201. An answer's id that is still a plain id (the Go plane's; a
+// frozen Python answer holds a placeholder) must be the id of a row.
+func inviteTokenChecks(t *testing.T, ctx context.Context, label, uri string, answers []venueoracle.Response, mails []decodedInviteMail, secret string) string {
 	t.Helper()
-	out := map[string]string{}
-	for _, response := range responses {
-		if response.Status != 201 {
+	text := venueoracle.TableRows(t, ctx, uri, `SELECT coalesce(string_agg(concat_ws('|', id::text, org_id::text, email, token_hash), E'\x1e'
+  ORDER BY org_id, email, created_at), '') FROM org_invites`)
+	if text == "" {
+		t.Fatalf("%s: no org_invites row: the token checks checked nothing", label)
+	}
+	rows := strings.Split(text, "\x1e")
+	created, rowIDs := 0, map[string]bool{}
+	for _, row := range rows {
+		rowIDs[strings.SplitN(row, "|", 2)[0]] = true
+	}
+	for _, answer := range answers {
+		if answer.Status != 201 {
 			continue
 		}
+		created++
 		var body struct {
 			ID string `json:"id"`
 		}
-		if err := json.Unmarshal([]byte(response.Body), &body); err != nil {
-			t.Fatalf("python: %v", err)
+		if err := json.Unmarshal([]byte(answer.Body), &body); err != nil {
+			t.Fatalf("%s: %v", label, err)
 		}
-		out[body.ID] = storedHash(body.ID)
+		if _, err := uuid.Parse(body.ID); err == nil && !rowIDs[body.ID] {
+			t.Errorf("%s: a 201 answer names invite %s and no org_invites row has that id", label, body.ID)
+		}
 	}
-	return out
+	if created != len(rows) {
+		t.Errorf("%s: %d answers of 201 and %d org_invites rows", label, created, len(rows))
+	}
+	var lines []string
+	for _, row := range rows {
+		fields := strings.Split(row, "|")
+		if len(fields) != 4 {
+			t.Fatalf("%s: org_invites row %q", label, row)
+		}
+		id, org, email, storedHash := fields[0], fields[1], fields[2], fields[3]
+		mailed := false
+		for _, m := range mails {
+			if strings.HasPrefix(m.Token, strings.ReplaceAll(id, "-", "")+".") {
+				mailed = true
+				if !checkInviteToken(t, label, m.Token, id, secret, storedHash) {
+					lines = append(lines, org+"|"+email+"|mailed|WRONG")
+					continue
+				}
+				lines = append(lines, org+"|"+email+"|mailed|the token is _build_token(invite id) and the stored hash its sha256")
+			}
+		}
+		if !mailed {
+			// No email to read the token from: the stored hash must still be
+			// the sha256 of the token the id and the secret make.
+			if !checkInviteToken(t, label, inviteToken(id, secret), id, secret, storedHash) {
+				lines = append(lines, org+"|"+email+"|not mailed|WRONG")
+				continue
+			}
+			lines = append(lines, org+"|"+email+"|not mailed|the stored hash is the sha256 of _build_token(invite id)")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
-func checkInviteToken(t *testing.T, label, token, id, secret, storedHash string) {
-	t.Helper()
+// inviteToken is invites.py's _build_token for id under secret.
+func inviteToken(id, secret string) string {
 	idHex := strings.ReplaceAll(id, "-", "")
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(idHex))
-	if want := idHex + "." + hex.EncodeToString(mac.Sum(nil)); token != want {
+	return idHex + "." + hex.EncodeToString(mac.Sum(nil))
+}
+
+// checkInviteToken proves a token is the one invites.py's _build_token makes
+// for id under secret (the plane that produced it is named by label), and that
+// the stored token_hash is the sha256 of it.
+func checkInviteToken(t *testing.T, label, token, id, secret, storedHash string) bool {
+	t.Helper()
+	ok := true
+	if want := inviteToken(id, secret); token != want {
 		t.Errorf("%s: token in the email is %q, want %q", label, token, want)
+		ok = false
 	}
 	sum := sha256.Sum256([]byte(token))
 	if want := hex.EncodeToString(sum[:]); storedHash != want {
 		t.Errorf("%s: stored token_hash %q, want sha256(token) %q", label, storedHash, want)
+		ok = false
 	}
+	return ok
 }
 
 // TestCreateOrgInviteVenueOracle is the venue-oracle proof for
@@ -137,7 +198,7 @@ func checkInviteToken(t *testing.T, label, token, id, secret, storedHash string)
 // construction, and the route's 10/hour keyed rate limit.
 func TestCreateOrgInviteVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminGolden("invites", t.Name(), "ee2ebb15c6c6a148575637d446ede9ce4f698321f910f00466d48aca499076fd"))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("invites", t.Name(), "cb4287464c6ba30896f602f24ba71abf6b6b4911a1c7c0188bcca2791a741f34"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("inv")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-invites-flow-32-bytes!"
@@ -282,12 +343,17 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), row.org, row.user, row.
 	// Every plane's mail, in the order sent. What each plane sent is compared
 	// below by RECIPIENT, never assumed to be one per 201. The Python plane's
 	// mail is captured while recording and frozen with its answers.
-	var pythonMails []decodedInviteMail
+	// The token of an invite is another one in every run: it is checked on the
+	// raw mail while recording (inviteTokenChecks below) and never frozen.
+	var pythonMails, rawPythonMails []decodedInviteMail
 	pythonMailText := golden.InspectRows(t, "python invite mails", func() string {
 		captured := sink.Drain(t)
 		mails := make([]decodedInviteMail, 0, len(captured))
 		for _, message := range captured {
-			mails = append(mails, decodeInviteMail(t, smtpcapture.Normalize(message)))
+			decoded := decodeInviteMail(t, smtpcapture.Normalize(message))
+			rawPythonMails = append(rawPythonMails, decoded)
+			decoded.Token = ""
+			mails = append(mails, decoded)
 		}
 		raw, err := json.Marshal(mails)
 		if err != nil {
@@ -354,51 +420,15 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), row.org, row.user, row.
 	// The token: each plane's own emails carry a token that is exactly
 	// _build_token(invite id) under the shared secret, and the stored hash is
 	// the sha256 of it -- so a token minted by either plane is one the other
-	// would accept.
-	verify := func(label string, storedHash func(id string) string, responses []venueoracle.Response, mails []decodedInviteMail) {
-		for _, response := range responses {
-			if response.Status != 201 {
-				continue
-			}
-			var body struct {
-				ID string `json:"id"`
-			}
-			if err := json.Unmarshal([]byte(response.Body), &body); err != nil {
-				t.Fatalf("%s: %v", label, err)
-			}
-			stored := storedHash(body.ID)
-			found := false
-			for _, m := range mails {
-				if strings.HasPrefix(m.Token, strings.ReplaceAll(body.ID, "-", "")+".") {
-					checkInviteToken(t, label, m.Token, body.ID, jwtKey, stored)
-					found = true
-				}
-			}
-			if !found {
-				t.Logf("%s: no email carried invite %s's token (its send failed or was skipped)", label, body.ID)
-			}
-		}
+	// would accept. Each plane is checked on its own raw values; the outcome,
+	// invite by invite, is what the golden holds and what is compared.
+	goTokenChecks := inviteTokenChecks(t, ctx, "go", venue.AdminURI(t, venue.GoDB), goResponses, goMails, jwtKey)
+	pythonTokenChecks := golden.CompareRows(t, "invite token checks", func() string {
+		return inviteTokenChecks(t, ctx, "python", venue.AdminURI(t, venue.SourceDB), python, rawPythonMails, jwtKey)
+	}, goTokenChecks)
+	if !strings.Contains(pythonTokenChecks, "|mailed|the token is _build_token(invite id)") {
+		t.Errorf("no invite of the Python plane was mailed with a checked token:\n%s", pythonTokenChecks)
 	}
-	hashes := func(uri string) func(string) string {
-		return func(id string) string {
-			return venueoracle.TableRows(t, ctx, uri, fmt.Sprintf(`SELECT token_hash FROM org_invites WHERE id = '%s'`, id))
-		}
-	}
-	// The Python plane's stored hashes, by invite id: read while recording,
-	// frozen otherwise.
-	pythonHashes := map[string]string{}
-	pythonHashText := golden.InspectRows(t, "python invite token hashes", func() string {
-		raw, err := json.Marshal(pythonTokenHashes(t, python, hashes(venue.AdminURI(t, venue.SourceDB))))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(raw)
-	})
-	if err := json.Unmarshal([]byte(pythonHashText), &pythonHashes); err != nil {
-		t.Fatalf("python invite token hashes %q: %v", pythonHashText, err)
-	}
-	verify("python", func(id string) string { return pythonHashes[id] }, python, pythonMails)
-	verify("go", hashes(venue.AdminURI(t, venue.GoDB)), goResponses, goMails)
 
 	// The rows each route left, ignoring only what is random or clock-derived.
 	rowsQuery := `SELECT coalesce(string_agg(concat_ws('|', org_id::text, email, role, status, invited_by_id::text,

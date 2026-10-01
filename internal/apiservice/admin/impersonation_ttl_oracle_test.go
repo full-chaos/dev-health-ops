@@ -40,14 +40,14 @@ func TestImpersonationTTLConfigMatchesThePythonAPI(t *testing.T) {
 // impersonationTTLDigests pin each subtest's golden ("PIN:<file>" until its
 // first recording).
 var impersonationTTLDigests = map[string]string{
-	"unicode_digit":   "7ff7ae121398dce7f3aa568ab827ec10299ba3b425c81b336d8f7b492fdd73f7",
-	"beyond_duration": "eb5b4fa665184a9df3e66c99d18f5da4d2ca2c2ec8b52a30333e6fd5ea4000dd",
+	"unicode_digit":   "cdeaffbc316d65f03afa43227fd7eb0c73da02b941680f07c85b08fc36ae31ec",
+	"beyond_duration": "81231d41e878f6d2e26dfecf67f208e01838873c7bd24807805dbe7f61efedfc",
 }
 
 func runImpersonationTTLCase(t *testing.T, name, ttlMinutes string) {
 	t.Helper()
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminGolden("impersonation_ttl_"+name, t.Name(), impersonationTTLDigests[name]))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("impersonation_ttl_"+name, t.Name(), impersonationTTLDigests[name]))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("impttl-" + name)
 	jwtKey := "venue-oracle-test-secret-key-for-impersonation-ttl-32bytes!"

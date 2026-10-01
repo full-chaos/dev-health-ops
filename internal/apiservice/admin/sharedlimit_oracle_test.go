@@ -46,7 +46,7 @@ func roundRobin(t *testing.T, backends ...string) string {
 // counters each replica would admit its own full allowance.
 func TestSharedRateLimitAcrossReplicasVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminGolden("sharedlimit", t.Name(), "3ebba60f06c643495f0b679247a52ae5233fd0d97bbe519ff3fcf3f3ce0a6fd4"))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("sharedlimit", t.Name(), "391eab409c603531db4145d17743061595eaf56966c3c54cc3be7162caa8a1eb"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("shl")
 	const jwtKey = "venue-oracle-test-secret-key-for-shared-rate-limit-32-by"

@@ -3,7 +3,15 @@
     "test": "TestImpersonationTTLConfigMatchesThePythonAPI/unicode_digit_TTL",
     "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
     "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
-    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestImpersonationTTLConfigMatchesThePythonAPI/unicode_digit_TTL$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestImpersonationTTLConfigMatchesThePythonAPI/unicode_digit_TTL$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "9b3a11192a90136885fed86e98615685e71d4f4bf59f2b48eb7c7393966bffa6",
+    "python_env_version": 2,
+    "blanked": {
+      "body $.expires_at": 4,
+      "header date": 3,
+      "header x-dev-health-plane": 3,
+      "header x-request-id": 6
+    }
   },
   "requests": [
     {
@@ -22,9 +30,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a9a2a680-87a9-4639-a88d-e8229ed6bb38"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"status\":\"active\",\"target_user\":{\"id\":\"e178295b-8157-5d18-bf87-8de03f361f72\",\"email\":\"venue-ttl-target@example.com\",\"org_id\":\"641d29ef-1b78-5890-8bc2-1896aa298e1f\",\"role\":\"member\"},\"expires_at\":\"2026-10-01T02:15:01.232857Z\"}"
+      "body": "{\"status\":\"active\",\"target_user\":{\"id\":\"e178295b-8157-5d18-bf87-8de03f361f72\",\"email\":\"venue-ttl-target@example.com\",\"org_id\":\"641d29ef-1b78-5890-8bc2-1896aa298e1f\",\"role\":\"member\"},\"expires_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "status during",
@@ -44,9 +52,9 @@
         "x-frame-options": "DENY",
         "x-impersonated-user-id": "e178295b-8157-5d18-bf87-8de03f361f72",
         "x-impersonating": "true",
-        "x-request-id": "daec8aee-76e5-4693-9fdd-d549feb3c17e"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"is_impersonating\":true,\"target_user_id\":\"e178295b-8157-5d18-bf87-8de03f361f72\",\"target_email\":\"venue-ttl-target@example.com\",\"target_org_id\":\"641d29ef-1b78-5890-8bc2-1896aa298e1f\",\"expires_at\":\"2026-10-01T02:15:01.232857Z\"}"
+      "body": "{\"is_impersonating\":true,\"target_user_id\":\"e178295b-8157-5d18-bf87-8de03f361f72\",\"target_email\":\"venue-ttl-target@example.com\",\"target_org_id\":\"641d29ef-1b78-5890-8bc2-1896aa298e1f\",\"expires_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "stop",
@@ -66,7 +74,7 @@
         "x-frame-options": "DENY",
         "x-impersonated-user-id": "e178295b-8157-5d18-bf87-8de03f361f72",
         "x-impersonating": "true",
-        "x-request-id": "ffea9d75-777b-4009-9989-3e24829ea0b7"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"status\":\"stopped\"}"
     }

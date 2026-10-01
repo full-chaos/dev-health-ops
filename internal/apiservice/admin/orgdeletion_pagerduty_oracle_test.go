@@ -69,7 +69,7 @@ func (f *fakePagerDutyRevokeServer) count() int {
 // on both planes.
 func TestOrgDeletionRevokesPagerDutyOnBothPlanes(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminGolden("orgdeletion_pagerduty", t.Name(), "1ab118083883b7b8a9df15050c5200c5e1d000c1a5f7ec4b5fd54a174cf31d43"))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion_pagerduty", t.Name(), "fd074224bf7d0a252b2f6b53ff5b03e12de3419be1d5efb9058856ab4f3af858"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("odpd")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-pd-flow-32-byt"

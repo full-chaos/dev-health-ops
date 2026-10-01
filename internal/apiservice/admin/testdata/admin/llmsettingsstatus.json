@@ -3,7 +3,15 @@
     "test": "TestLLMSettingsStatusRouteVenueOracle",
     "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
     "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
-    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestLLMSettingsStatusRouteVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestLLMSettingsStatusRouteVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "ca112422885b41c26b692b4a17c4ba4e2612e8a1b558e3bbe3185efb69f8860b",
+    "python_env_version": 2,
+    "blanked": {
+      "body $.last_fallback_at": 2,
+      "header date": 18,
+      "header x-dev-health-plane": 18,
+      "header x-request-id": 36
+    }
   },
   "requests": [
     {
@@ -22,7 +30,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "443e4bd1-2b55-43b2-9263-76b6dcfbc607"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"configured\":false,\"active\":false,\"degraded\":false,\"reason_code\":\"not_configured\",\"last_fallback_at\":null,\"readiness\":\"never_checked\",\"binary_transport_readiness\":\"never_checked\",\"readiness_checked_at\":null,\"readiness_safe_failure_reason\":null}"
     },
@@ -42,7 +50,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3ed446af-9727-4df2-940f-818d45360793"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"configured\":true,\"active\":false,\"degraded\":false,\"reason_code\":\"unknown_provider\",\"last_fallback_at\":null,\"readiness\":\"never_checked\",\"binary_transport_readiness\":\"never_checked\",\"readiness_checked_at\":null,\"readiness_safe_failure_reason\":null}"
     },
@@ -62,7 +70,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "c64c24c9-aec7-43ae-a047-25bcc11e24eb"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"configured\":true,\"active\":false,\"degraded\":false,\"reason_code\":\"missing_credentials\",\"last_fallback_at\":null,\"readiness\":\"never_checked\",\"binary_transport_readiness\":\"never_checked\",\"readiness_checked_at\":null,\"readiness_safe_failure_reason\":null}"
     },
@@ -82,7 +90,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f2969291-c212-4f1f-add9-118a127fde52"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"configured\":true,\"active\":false,\"degraded\":true,\"reason_code\":\"invalid_base_url\",\"last_fallback_at\":null,\"readiness\":\"never_checked\",\"binary_transport_readiness\":\"never_checked\",\"readiness_checked_at\":null,\"readiness_safe_failure_reason\":null}"
     },
@@ -102,7 +110,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2f19ba23-c85d-4ea6-8fdc-56f707f3ae22"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"configured\":true,\"active\":true,\"degraded\":false,\"reason_code\":\"active\",\"last_fallback_at\":null,\"readiness\":\"never_checked\",\"binary_transport_readiness\":\"never_checked\",\"readiness_checked_at\":null,\"readiness_safe_failure_reason\":null}"
     },
@@ -122,7 +130,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "07349099-23d6-4d1a-8f78-0dda6748b262"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"configured\":true,\"active\":true,\"degraded\":false,\"reason_code\":\"active\",\"last_fallback_at\":null,\"readiness\":\"stale\",\"binary_transport_readiness\":\"stale\",\"readiness_checked_at\":\"2026-01-15T12:00:00Z\",\"readiness_safe_failure_reason\":\"This configuration has not been certified under the current readiness requirements. Run preflight again.\"}"
     },
@@ -142,7 +150,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b09d83a2-0b99-44cd-a305-c83bdcd39671"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"configured\":true,\"active\":true,\"degraded\":false,\"reason_code\":\"active\",\"last_fallback_at\":null,\"readiness\":\"stale\",\"binary_transport_readiness\":\"stale\",\"readiness_checked_at\":\"2026-01-15T12:00:00Z\",\"readiness_safe_failure_reason\":\"This configuration has not been certified under the current readiness requirements. Run preflight again.\"}"
     },
@@ -162,7 +170,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7048e610-d54f-4d8a-9e01-34fa0b110c8c"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"configured\":true,\"active\":true,\"degraded\":false,\"reason_code\":\"active\",\"last_fallback_at\":null,\"readiness\":\"stale\",\"binary_transport_readiness\":\"stale\",\"readiness_checked_at\":\"2026-01-15T12:00:00Z\",\"readiness_safe_failure_reason\":\"This configuration has not been certified under the current readiness requirements. Run preflight again.\"}"
     },
@@ -182,7 +190,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1f7ec5a0-9455-449d-8441-1e65ba2d38cc"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"byo_llm\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
     },
@@ -202,7 +210,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1318fe91-0277-4040-8ddd-ffe84504f6f5"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"byo_llm\",\"message\":\"BYO LLM is not enabled for this organization\"}}"
     },
@@ -222,7 +230,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "53978c26-290a-4d4c-8219-93af97a89383"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"configured\":true,\"active\":true,\"degraded\":false,\"reason_code\":\"active\",\"last_fallback_at\":null,\"readiness\":\"never_checked\",\"binary_transport_readiness\":\"never_checked\",\"readiness_checked_at\":null,\"readiness_safe_failure_reason\":null}"
     },
@@ -242,9 +250,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "64ee7205-6b29-435a-8d85-38d7e8f4c99d"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"configured\":true,\"active\":false,\"degraded\":true,\"reason_code\":\"invalid_base_url\",\"last_fallback_at\":\"2026-10-01T01:07:41.123456Z\",\"readiness\":\"never_checked\",\"binary_transport_readiness\":\"never_checked\",\"readiness_checked_at\":null,\"readiness_safe_failure_reason\":null}"
+      "body": "{\"configured\":true,\"active\":false,\"degraded\":true,\"reason_code\":\"invalid_base_url\",\"last_fallback_at\":\"DDDD-DD-DDTDD:DD:DD.DDDDDDZ\",\"readiness\":\"never_checked\",\"binary_transport_readiness\":\"never_checked\",\"readiness_checked_at\":null,\"readiness_safe_failure_reason\":null}"
     },
     {
       "name": "org not a uuid",
@@ -262,7 +270,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "af1a782e-ca36-4b2e-b74c-acdf78d6d7b6"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
     },
@@ -282,7 +290,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "35c59aef-b31f-4a01-9b4c-7c0d8be74468"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":{\"error\":\"organization_not_found\",\"message\":\"Organization not found\"}}"
     },
@@ -302,7 +310,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "449124b2-0c49-4f86-9dc8-eacf264c606c"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":\"Organization context required\"}"
     },
@@ -322,7 +330,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f0686564-f16e-4f27-9603-99176e14f2cf"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -343,7 +351,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0a6e4202-b966-48b2-9662-6f36d9b67f6d"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     },
@@ -364,7 +372,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "52e0bce5-97d8-4bdc-bf9c-61ae169494d9"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":\"Method Not Allowed\"}"
     }

@@ -25,7 +25,7 @@ func TestUserCRUDAndPasswordChangeMatchesThePythonAPI(t *testing.T) {
 	// the header's first hop. Trust this test's loopback peer so both planes agree.
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminGolden("users", t.Name(), "ccc805b079d435f0e06d1cc79ae442c551e3581cb8296d9087ce1bf3173bcef4"))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("users", t.Name(), "9a405ffbe2abc133bb290308a71fea5734b01ac3216e7030be45704db89a71c7"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("usr")
 	const jwtKey = "venue-oracle-test-secret-key-for-user-crud-flow-32-bytes!!"

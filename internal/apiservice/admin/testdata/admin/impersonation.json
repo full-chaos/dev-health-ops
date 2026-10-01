@@ -3,7 +3,15 @@
     "test": "TestImpersonationStartStopMatchesThePythonAPI",
     "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
     "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
-    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestImpersonationStartStopMatchesThePythonAPI$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestImpersonationStartStopMatchesThePythonAPI$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "96bd22c045ea4c15f8c43ccf4ac2aeb7bd87435bfc33c40b3c8c772f7f1f9f64",
+    "python_env_version": 2,
+    "blanked": {
+      "body $.expires_at": 4,
+      "header date": 7,
+      "header x-dev-health-plane": 7,
+      "header x-request-id": 14
+    }
   },
   "requests": [
     {
@@ -22,7 +30,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7082923a-cdc6-4bd8-aafe-6a0103d91d03"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"is_impersonating\":false,\"target_user_id\":null,\"target_email\":null,\"target_org_id\":null,\"expires_at\":null}"
     },
@@ -42,9 +50,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0676f910-511c-4ba0-a6d6-442cb271d6e2"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"status\":\"active\",\"target_user\":{\"id\":\"542da722-da68-5b8d-a5cc-814760b1cb12\",\"email\":\"venue-target@example.com\",\"org_id\":\"99cb726c-9e8c-5ab4-a17f-22538b42c24b\",\"role\":\"member\"},\"expires_at\":\"2026-10-01T03:04:01.066172Z\"}"
+      "body": "{\"status\":\"active\",\"target_user\":{\"id\":\"542da722-da68-5b8d-a5cc-814760b1cb12\",\"email\":\"venue-target@example.com\",\"org_id\":\"99cb726c-9e8c-5ab4-a17f-22538b42c24b\",\"role\":\"member\"},\"expires_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "status during",
@@ -64,9 +72,9 @@
         "x-frame-options": "DENY",
         "x-impersonated-user-id": "542da722-da68-5b8d-a5cc-814760b1cb12",
         "x-impersonating": "true",
-        "x-request-id": "95ac21a5-bf3c-4410-a81b-b07098275206"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"is_impersonating\":true,\"target_user_id\":\"542da722-da68-5b8d-a5cc-814760b1cb12\",\"target_email\":\"venue-target@example.com\",\"target_org_id\":\"99cb726c-9e8c-5ab4-a17f-22538b42c24b\",\"expires_at\":\"2026-10-01T03:04:01.066172Z\"}"
+      "body": "{\"is_impersonating\":true,\"target_user_id\":\"542da722-da68-5b8d-a5cc-814760b1cb12\",\"target_email\":\"venue-target@example.com\",\"target_org_id\":\"99cb726c-9e8c-5ab4-a17f-22538b42c24b\",\"expires_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "stop",
@@ -86,7 +94,7 @@
         "x-frame-options": "DENY",
         "x-impersonated-user-id": "542da722-da68-5b8d-a5cc-814760b1cb12",
         "x-impersonating": "true",
-        "x-request-id": "ca0ed5e3-495d-454b-ad77-866378cfb2ad"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"status\":\"stopped\"}"
     },
@@ -106,7 +114,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6a60eafe-8e2e-4602-8a32-a545ef6fea68"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"is_impersonating\":false,\"target_user_id\":null,\"target_email\":null,\"target_org_id\":null,\"expires_at\":null}"
     },
@@ -126,7 +134,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d1ac0c2a-3af0-491a-9506-7003beb5b972"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":\"Cannot impersonate yourself\"}"
     },
@@ -146,7 +154,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "05cd59fc-25bc-4ca8-b4ca-e722011e80ce"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
     }

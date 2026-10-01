@@ -3,7 +3,17 @@
     "test": "TestUserCRUDAndPasswordChangeMatchesThePythonAPI",
     "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
     "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
-    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestUserCRUDAndPasswordChangeMatchesThePythonAPI$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestUserCRUDAndPasswordChangeMatchesThePythonAPI$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "8410254b1d5da8f464310352a69c6d62bdb88fa597a8a08eb533928ba2563ba7",
+    "python_env_version": 2,
+    "blanked": {
+      "body $.created_at": 10,
+      "body $.id": 10,
+      "body $.updated_at": 18,
+      "header date": 31,
+      "header x-dev-health-plane": 31,
+      "header x-request-id": 60
+    }
   },
   "requests": [
     {
@@ -22,7 +32,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "680f3684-85ba-4397-aa18-274adbbd2ec6"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "[{\"id\":\"10923d98-8e78-5821-978f-6ffeafd418e8\",\"email\":\"venue-İstanbul@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:04.123456Z\",\"updated_at\":\"2026-01-01T00:00:04.123456Z\"},{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"venue-umember@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"2026-01-01T00:00:03.123456Z\"},{\"id\":\"01cb5ae0-0cd9-51df-95ec-9da9c732fa1e\",\"email\":\"venue-uadmin@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:02.123456Z\",\"updated_at\":\"2026-01-01T00:00:02.123456Z\"}]"
     },
@@ -42,7 +52,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "30e0b08a-be7d-43f7-91f9-8c8fb1b884c8"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "[]"
     },
@@ -62,7 +72,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2670773a-5aae-4b55-a604-28c041198a73"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "[]"
     },
@@ -82,7 +92,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9fcd4a5f-fe5e-4075-ba34-4b2d27368773"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "[]"
     },
@@ -102,7 +112,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "debf09f0-4edd-4368-b228-6480f7231b89"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "[]"
     },
@@ -122,7 +132,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "eda52931-1694-45c9-acbe-f7c6c43a64fc"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "[{\"id\":\"10923d98-8e78-5821-978f-6ffeafd418e8\",\"email\":\"venue-İstanbul@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:04.123456Z\",\"updated_at\":\"2026-01-01T00:00:04.123456Z\"}]"
     },
@@ -142,7 +152,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d7b6bf0b-beef-445a-818a-6fd5699145f0"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "[{\"id\":\"10923d98-8e78-5821-978f-6ffeafd418e8\",\"email\":\"venue-İstanbul@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:04.123456Z\",\"updated_at\":\"2026-01-01T00:00:04.123456Z\"}]"
     },
@@ -162,7 +172,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f74223ce-e8c4-4607-bb7c-6cc05664f743"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"venue-umember@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"2026-01-01T00:00:03.123456Z\"}"
     },
@@ -182,7 +192,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "fcf447e6-39da-4e37-a1e0-b24183d11eb0"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":\"User not found\"}"
     },
@@ -202,9 +212,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d7479585-13a1-4c22-a5b8-0fd633b5af4d"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"12604e66-7541-499d-a912-24df6d08e26b\",\"email\":\"venue-newuser@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-10-01T02:16:56.985777Z\",\"updated_at\":\"2026-10-01T02:16:56.985781Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"email\":\"venue-newuser@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "unauthenticated create user",
@@ -223,7 +233,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b98ee1b8-99a1-4610-bbb2-45760b412b7a"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     },
@@ -243,9 +253,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e9aeae0d-14b3-45fc-bb1a-407f04afd6b9"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"e920b479-5010-4c6d-b6ad-967a13a08974\",\"email\":\"venue-username-ws@example.com\",\"username\":\"\",\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-10-01T02:16:57.119823Z\",\"updated_at\":\"2026-10-01T02:16:57.119827Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"email\":\"venue-username-ws@example.com\",\"username\":\"\",\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "create user dotted capital I email",
@@ -263,9 +273,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3572ffea-7aef-4346-821e-4c6b0e681ef7"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"faa3a592-b4f8-4e48-a19e-d2ecce0e891a\",\"email\":\"i̇-venue@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-10-01T02:16:57.244537Z\",\"updated_at\":\"2026-10-01T02:16:57.244540Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"email\":\"i̇-venue@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "create user dotted capital I email again",
@@ -283,7 +293,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8a3993b2-fcfc-47e4-b99c-591d59c79227"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":\"User with email İ-Venue@Example.com already exists\"}"
     },
@@ -303,7 +313,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d19be3f9-4c8b-4f21-9178-65c826fa0cf1"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":\"User with email i̇-venue@example.com already exists\"}"
     },
@@ -323,9 +333,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1bace165-25bc-4a0a-a84e-601c38bf81a2"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"1d61ebc5-06bc-43dd-8237-c46cda5063a2\",\"email\":\"venue-fs@example.com\",\"username\":\"i̇venue\",\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-10-01T02:16:57.608201Z\",\"updated_at\":\"2026-10-01T02:16:57.608205Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"email\":\"venue-fs@example.com\",\"username\":\"i̇venue\",\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "create user duplicate lowered dotted username",
@@ -343,7 +353,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7371d638-7dbb-4e93-8b9f-294abf30b3fe"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":\"User with username i̇venue already exists\"}"
     },
@@ -363,7 +373,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a206afd0-2dca-4712-8e34-45a665b982fb"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":\"User with username İVenue already exists\"}"
     },
@@ -383,9 +393,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "cba260cb-7c4a-40c7-9025-ef9c77453c5a"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"16235143-a98b-49cf-bba4-860e53b96376\",\"email\":\"venue-authprovider-empty@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-10-01T02:16:57.971775Z\",\"updated_at\":\"2026-10-01T02:16:57.971778Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"email\":\"venue-authprovider-empty@example.com\",\"username\":null,\"full_name\":null,\"avatar_url\":null,\"auth_provider\":\"\",\"is_active\":true,\"is_verified\":false,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "create user null-typed defaulted fields",
@@ -403,7 +413,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a8ca7a1c-dc3b-4ffa-89ff-a6dd2eb5ea7d"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"auth_provider\"],\"msg\":\"Input should be a valid string\",\"input\":null},{\"type\":\"bool_type\",\"loc\":[\"body\",\"is_verified\"],\"msg\":\"Input should be a valid boolean\",\"input\":null}]}"
     },
@@ -423,9 +433,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a0d22b25-4d98-462b-aa57-2b8b33d05475"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"venue-umember@example.com\",\"username\":null,\"full_name\":\"A New Name\",\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"2026-10-01T02:16:58.180162Z\"}"
+      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"venue-umember@example.com\",\"username\":null,\"full_name\":\"A New Name\",\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "patch user dotted capital I email and username",
@@ -443,9 +453,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9c813b31-5684-40ac-8347-fabbb1d8d862"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"i̇-patched@example.com\",\"username\":\"i̇patched\",\"full_name\":\"A New Name\",\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"2026-10-01T02:16:58.315076Z\"}"
+      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"i̇-patched@example.com\",\"username\":\"i̇patched\",\"full_name\":\"A New Name\",\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "patch user same dotted email again",
@@ -463,9 +473,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ca8e9e98-b16e-4cf2-a470-7e2684a639a7"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"i̇-patched@example.com\",\"username\":\"i̇patched\",\"full_name\":\"A New Name\",\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"2026-10-01T02:16:58.441682Z\"}"
+      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"i̇-patched@example.com\",\"username\":\"i̇patched\",\"full_name\":\"A New Name\",\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "patch user int-coerced bool",
@@ -483,9 +493,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8f76315e-0821-485f-8691-71bd7aa8875b"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"i̇-patched@example.com\",\"username\":\"i̇patched\",\"full_name\":\"A New Name\",\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"2026-10-01T02:16:58.569766Z\"}"
+      "body": "{\"id\":\"abe7905f-76d4-5294-9727-04a1b0869578\",\"email\":\"i̇-patched@example.com\",\"username\":\"i̇patched\",\"full_name\":\"A New Name\",\"avatar_url\":null,\"auth_provider\":\"local\",\"is_active\":true,\"is_verified\":true,\"is_superuser\":false,\"last_login_at\":null,\"created_at\":\"2026-01-01T00:00:03.123456Z\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "set password",
@@ -503,7 +513,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "venue-set-password-req"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"success\":true}"
     },
@@ -523,7 +533,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a8dd8aed-4324-4133-a7aa-5ffdef63111c"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":\"Admin password verification failed\"}"
     },
@@ -543,7 +553,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "venue-set-password-unicode-req"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"success\":true}"
     },
@@ -576,7 +586,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "58ff12c2-b093-4abd-8358-f0dd9e87fcd8"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"deleted\":true}"
     },
@@ -596,7 +606,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2b6cdc42-a07b-45cc-a1d7-3ecbfa51a9ac"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":\"User not found\"}"
     },
@@ -616,7 +626,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "bc0850b5-57be-4582-96ab-a9e3b51a1937"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
     }

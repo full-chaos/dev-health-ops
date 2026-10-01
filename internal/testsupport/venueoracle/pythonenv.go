@@ -175,6 +175,7 @@ var perRunPythonEnv = map[string]perRunName{
 	"TMPDIR":         {false, "inherited: the host's directory for temporary files"},
 
 	"REQUESTS_CA_BUNDLE":                  {true, "a temporary certificate file of the test's fake TLS server"},
+	"SMTP_PORT":                           {true, "the port of the test's mail sink"},
 	"TELEMETRY_ENDPOINT":                  {true, "the address of the test's fake telemetry endpoint"},
 	"VENUE_PAGERDUTY_API_BASE_OVERRIDE":   {true, "the address of the test's fake PagerDuty server"},
 	"VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": {true, "the address of the test's fake PagerDuty server"},

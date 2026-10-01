@@ -4,6 +4,9 @@ package admin_test
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -27,4 +30,63 @@ func adminGolden(file, test, digest string) venueoracle.GoldenSpec {
 			"(records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
 			adminPythonBuild, test),
 	}
+}
+
+// The run window of the admin goldens: a time a plane makes while the oracle
+// runs lies in it. The floor is after every time a seed writes down (seedClock
+// starts on 2026-01-01) and before the day the goldens were recorded; the
+// ceiling is after the farthest time a route computes from the clock (the
+// impersonation TTL of about 292 years). No request of these oracles supplies
+// a time, and a time outside the window stays compared by value.
+var (
+	adminRunFloor   = time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	adminRunCeiling = time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC)
+)
+
+// adminRunValuesGolden is adminGolden for an oracle whose answers hold what a
+// plane makes during the run: a random id of a created row becomes "<id>" and
+// a time in the run window "<now>", on both planes, so the golden holds no
+// value that is another one in every run. The golden's header lists what was
+// blanked, and the record verb refuses a blanked leaf that is the same in two
+// recordings.
+//
+// more are the scrubs of what else the oracle's routes make at random; each
+// runs after the run values, on the same text.
+func adminRunValuesGolden(file, test, digest string, more ...func(string) string) venueoracle.GoldenSpec {
+	spec := adminGolden(file, test, digest)
+	runValues := venueoracle.ScrubRunValues(adminRunFloor, adminRunCeiling)
+	spec.Scrub = func(text string) string {
+		text = runValues(text)
+		for _, scrub := range more {
+			text = scrub(text)
+		}
+		return text
+	}
+	return spec
+}
+
+var adminISOTime = regexp.MustCompile(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)?`)
+
+// adminRunTimeShapesGolden is adminGolden for an oracle whose seed writes a
+// time relative to the wall clock with a fixed precision: a time in the run
+// window keeps its spelling (each digit becomes D), so the precision and the
+// zone suffix of the two planes are still compared. The test checks the Go
+// value itself against what the seed wrote.
+func adminRunTimeShapesGolden(file, test, digest string) venueoracle.GoldenSpec {
+	spec := adminGolden(file, test, digest)
+	inWindow := venueoracle.ScrubRunValues(adminRunFloor, adminRunCeiling)
+	spec.Scrub = func(text string) string {
+		return adminISOTime.ReplaceAllStringFunc(text, func(match string) string {
+			if inWindow(match) != "<now>" {
+				return match
+			}
+			return strings.Map(func(r rune) rune {
+				if r >= '0' && r <= '9' {
+					return 'D'
+				}
+				return r
+			}, match)
+		})
+	}
+	return spec
 }

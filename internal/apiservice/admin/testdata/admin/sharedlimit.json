@@ -3,7 +3,18 @@
     "test": "TestSharedRateLimitAcrossReplicasVenueOracle",
     "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
     "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
-    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestSharedRateLimitAcrossReplicasVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestSharedRateLimitAcrossReplicasVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "243263316ccd875e9dd3145546ae405603a8cc3ff89e24fb159eabd727fe085a",
+    "python_env_version": 2,
+    "blanked": {
+      "body $.created_at": 20,
+      "body $.expires_at": 20,
+      "body $.id": 20,
+      "body $.updated_at": 20,
+      "header date": 19,
+      "header x-dev-health-plane": 19,
+      "header x-request-id": 38
+    }
   },
   "requests": [
     {
@@ -22,9 +33,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a642509d-badc-40c6-9a5f-80ad7859bcc6"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"03a41f57-4631-474b-a1e5-55ed298a5905\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-0@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.145594Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.154633Z\",\"updated_at\":\"2026-10-01T02:13:21.154638Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-0@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"\u003cnow\u003e\",\"accepted_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "invite 2/12",
@@ -42,9 +53,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "60f9f5fa-7d0b-4cc8-8679-f7032cb87bc8"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"f984fb88-4c87-45dd-9a8a-96adbc82189a\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-1@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.290051Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.295808Z\",\"updated_at\":\"2026-10-01T02:13:21.295812Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-1@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"\u003cnow\u003e\",\"accepted_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "invite 3/12",
@@ -62,9 +73,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "02d42ffa-ea0a-4412-a7e0-eafc08d6c899"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"7323b7f2-a93e-4115-90ef-e6764971eda2\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-2@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.427145Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.432886Z\",\"updated_at\":\"2026-10-01T02:13:21.432890Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-2@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"\u003cnow\u003e\",\"accepted_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "invite 4/12",
@@ -82,9 +93,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6792d0f6-f928-460d-83ed-efee23c50e26"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"476cc64e-613f-4bea-ad2a-2c42e57fea80\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-3@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.563694Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.569331Z\",\"updated_at\":\"2026-10-01T02:13:21.569335Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-3@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"\u003cnow\u003e\",\"accepted_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "invite 5/12",
@@ -102,9 +113,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "c463c4a6-b7fd-40a0-8fba-04f1fb120b5b"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"26becd91-1267-4c89-8729-993424626d80\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-4@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.700006Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.705644Z\",\"updated_at\":\"2026-10-01T02:13:21.705648Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-4@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"\u003cnow\u003e\",\"accepted_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "invite 6/12",
@@ -122,9 +133,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "39e3f0bf-9b35-4a27-b434-cc22980839f3"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"d7ea8ea0-7079-4821-9007-e49f883f6e1b\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-5@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.835564Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.841255Z\",\"updated_at\":\"2026-10-01T02:13:21.841259Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-5@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"\u003cnow\u003e\",\"accepted_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "invite 7/12",
@@ -142,9 +153,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "bc98c225-90da-40b4-98fb-72632e5c90c4"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"031551cf-3560-459e-bbc4-85e27e95182d\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-6@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.971092Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.976511Z\",\"updated_at\":\"2026-10-01T02:13:21.976514Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-6@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"\u003cnow\u003e\",\"accepted_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "invite 8/12",
@@ -162,9 +173,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8df083db-6c18-4d96-af7f-1365d1c86191"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"632d7ad6-75d9-4f2e-8f2a-3b096608c520\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-7@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:22.107065Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:22.112568Z\",\"updated_at\":\"2026-10-01T02:13:22.112572Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-7@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"\u003cnow\u003e\",\"accepted_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "invite 9/12",
@@ -182,9 +193,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "42b765ee-cbc4-467f-8dff-64ff4f632eff"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"a663d4aa-89a6-4886-bf67-6cf02a79f27a\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-8@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:22.243054Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:22.248785Z\",\"updated_at\":\"2026-10-01T02:13:22.248789Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-8@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"\u003cnow\u003e\",\"accepted_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "invite 10/12",
@@ -202,9 +213,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a38eddb4-5ca0-411b-9a96-06913742bea9"
+        "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "{\"id\":\"fbc27d61-b7a8-4ba8-a8fd-22764e3b08a7\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-9@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:22.380464Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:22.385931Z\",\"updated_at\":\"2026-10-01T02:13:22.385934Z\"}"
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-9@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"\u003cnow\u003e\",\"accepted_at\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "invite 11/12",
@@ -222,7 +233,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3ac1f805-71f7-4d6e-96ef-e484126cdf73"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
     },
@@ -242,7 +253,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b8e1b253-6c13-439c-a44a-b441c54e25c9"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
     },
@@ -262,7 +273,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "350b5653-45f8-4d93-b797-16262ff661c1"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"success\":true}"
     },
@@ -282,7 +293,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "89c7f049-1784-4305-8b6f-25a22160e426"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"success\":true}"
     },
@@ -302,7 +313,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0821df91-0670-496f-8880-30a556efaa51"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"success\":true}"
     },
@@ -322,7 +333,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "256aa01a-1314-498f-9c7d-180d1d63a883"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"success\":true}"
     },
@@ -342,7 +353,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "54b40c70-c46c-4782-ae2b-15eb7060f520"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"success\":true}"
     },
@@ -362,7 +373,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9eab0a98-b40f-45e7-a6f6-e3f894abd6eb"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
     },
@@ -382,7 +393,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "14acfa1c-173d-4e58-93d2-45ec9bff4341"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
     }

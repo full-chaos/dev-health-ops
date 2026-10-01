@@ -316,11 +316,25 @@ func TestSyncTargetMatchesFrozenPython(t *testing.T) {
 		t.Fatalf("python answered %d for %d cases", len(want), len(corpus))
 	}
 
+	// dho reads the App key file by its real path: the placeholder is swapped for a real file here and swapped
+	// back in the answer it renders.
+	goKeyFile := filepath.Join(t.TempDir(), "app-key.pem")
+	if err := os.WriteFile(goKeyFile, []byte("-----BEGIN KEY-----\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	swap := func(text string) string { return strings.ReplaceAll(text, syncTargetKeyPlaceholder, goKeyFile) }
 	stages := map[string]int{}
 	mismatches := 0
 	for index, c := range corpus {
-		target, args := c.Args[0], c.Args[1:]
-		env := c.Env
+		target := c.Args[0]
+		args := make([]string, len(c.Args)-1)
+		for i, arg := range c.Args[1:] {
+			args[i] = swap(arg)
+		}
+		env := map[string]string{}
+		for name, value := range c.Env {
+			env[name] = swap(value)
+		}
 		in := Inputs{
 			Lookup: func(name string) (string, bool) { v, ok := env[name]; return v, ok },
 			Now:    func() time.Time { return time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC) },
@@ -328,6 +342,8 @@ func TestSyncTargetMatchesFrozenPython(t *testing.T) {
 		got := goResult(target, oracleCase{Args: args, Env: env}, in)
 		gotRedacted, _ := redactSecrets(mustGeneric(got)).(map[string]any)
 		gotJSON, _ := json.Marshal(gotRedacted)
+		gotJSON = []byte(strings.ReplaceAll(string(gotJSON), goKeyFile, syncTargetKeyPlaceholder))
+		_ = json.Unmarshal(gotJSON, &gotRedacted)
 		wantJSON, _ := json.Marshal(want[index])
 		stage, _ := want[index]["stage"].(map[string]any)
 		stages[fmt.Sprint(stage["v"])]++

@@ -1045,6 +1045,14 @@ CREATE TABLE sync_coverage_projections (
  org_id text NOT NULL, sync_config_id uuid NOT NULL, invalidated_at timestamptz NULL,
  updated_at timestamptz NOT NULL DEFAULT '2000-01-01 00:00:00+00',
  PRIMARY KEY (org_id, sync_config_id)
+);
+-- CHAOS-7132: finalize reads the reference-discovery ledger's degraded legs into the run result.
+CREATE TABLE sync_run_reference_discoveries (
+ id uuid PRIMARY KEY, sync_run_id uuid NOT NULL UNIQUE, org_id text NOT NULL,
+ status text NOT NULL, attempts int NOT NULL DEFAULT 0, available_at timestamptz NOT NULL,
+ lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
+ completed_at timestamptz NULL, error text NULL, result json NULL,
+ created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 )`)
 	if err != nil {
 		t.Fatal(err)

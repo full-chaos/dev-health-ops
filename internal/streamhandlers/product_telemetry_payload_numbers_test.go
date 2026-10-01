@@ -26,7 +26,9 @@ func storedPayload(t *testing.T, payload string) (string, error) {
 	return sink.batch.rows[0][7].(string), nil
 }
 
-// A payload number is stored as the text the producer wrote, whatever its size.
+// A payload number in a stream entry is stored as the text the producer wrote, whatever its size.
+// (Through the public intake an integer may have at most 4300 digits, as Python's json.loads allows: see
+// TestIntakeAndConsumerAgreeWithPythonOnKeyOrderOverflowAndHugeIntegers.)
 func TestPayloadNumbersAreStoredExactly(t *testing.T) {
 	huge := strings.Repeat("9", 4301)
 	for name, tc := range map[string]struct{ in, want string }{
@@ -50,9 +52,10 @@ func TestPayloadNumbersAreStoredExactly(t *testing.T) {
 	}
 }
 
-// A number that does not fit a float64 as a float is still refused, as before; an integer of any
-// length is not a float and is kept.
-func TestPayloadFloatOverflowIsStillRefused(t *testing.T) {
+// A number that does not fit a float64, written with a fraction or exponent in a stream entry that did not
+// come through the intake, is still refused, as before. Through the intake the same value arrives as the
+// word Infinity and is stored as null (CHAOS-6299), see the intake test below.
+func TestPayloadFloatOverflowInADirectStreamEntryIsStillRefused(t *testing.T) {
 	for name, payload := range map[string]string{
 		"exponent overflow":        `{"f":1e999}`,
 		"negative exponent over":   `{"f":-1e999}`,

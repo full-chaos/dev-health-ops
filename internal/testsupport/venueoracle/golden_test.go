@@ -710,7 +710,7 @@ func TestFrozenPythonWithEnvAnswersEachScenarioByNameAndEnvironment(t *testing.T
 		{Name: "plain GET /health", Method: "GET", Path: "/health"},
 	}
 	unset := []string{"STRIPE_SECRET_KEY="}
-	unsetKey, _ := pythonEnvKey(unset)
+	unsetKey, _ := pythonEnvKey(fromTest(unset...))
 	noneKey, _ := pythonEnvKey(nil)
 	frozen := func(callEnv ...string) (string, string) {
 		file := sampleGolden(requests)
@@ -740,8 +740,8 @@ func TestFrozenPythonWithEnvAnswersEachScenarioByNameAndEnvironment(t *testing.T
 	if _, err := open(unsetKey).frozenAnswers(renamed, unsetKey); err == nil || !strings.Contains(err.Error(), "secrets=111 GET /health") {
 		t.Fatalf("a renamed scenario was answered from the file: %v", err)
 	}
-	otherKey, _ := pythonEnvKey([]string{"STRIPE_SECRET_KEY=", "LICENSE_PRIVATE_KEY="})
-	valueKey, _ := pythonEnvKey([]string{"STRIPE_SECRET_KEY=x"})
+	otherKey, _ := pythonEnvKey(fromTest("STRIPE_SECRET_KEY=", "LICENSE_PRIVATE_KEY="))
+	valueKey, _ := pythonEnvKey(fromTest("STRIPE_SECRET_KEY=x"))
 	for name, c := range map[string]struct {
 		recorded, call string
 		refusal        string

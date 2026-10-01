@@ -2,6 +2,7 @@ package venueoracle
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,7 +17,7 @@ func TestThePythonEnvKeyHoldsEveryDeclaredSettingAndThePerRunNamesOnly(t *testin
 	base := []string{"VENUE_PINNED_NOW=2026-01-01T00:00:00Z", "SETTINGS_ENCRYPTION_KEY=k", "VENUE_STRIPE_API_BASE=http://127.0.0.1:41001"}
 	key := func(env []string) string {
 		t.Helper()
-		out, err := pythonEnvKey(env)
+		out, err := pythonEnvKey(fromTest(env...))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -50,16 +51,149 @@ func TestThePythonEnvKeyHoldsEveryDeclaredSettingAndThePerRunNamesOnly(t *testin
 		t.Errorf("no settings: key %q", got)
 	}
 	for _, bad := range []string{"NOEQUALS", "=value"} {
-		if _, err := pythonEnvKey([]string{bad}); err == nil {
+		if _, err := pythonEnvKey(fromTest(bad)); err == nil {
 			t.Errorf("%q was keyed", bad)
 		}
 	}
 	// A per-run name that was never executed as one would hide a setting: every listed name has a reason.
 	for name, why := range perRunPythonEnv {
-		if strings.TrimSpace(why) == "" || strings.TrimSpace(name) == "" {
+		if strings.TrimSpace(why.reason) == "" || strings.TrimSpace(name) == "" {
 			t.Errorf("perRunPythonEnv[%q] has no reason", name)
 		}
 	}
+}
+
+// The rule of perRunPythonEnv, on every way an entry reaches a Python child:
+// an entry is keyed by name and value unless its name is listed AND the listed
+// side supplied the value. Each harness name and each of the test's per-run
+// names is tried on each channel, with one unlisted name beside them.
+func TestAnEntryIsKeyedByNameOnlyWhenTheListedSideSuppliedIt(t *testing.T) {
+	options := Options{JWTKey: "k"}
+	var harnessNames, testNames []string
+	for name, listed := range perRunPythonEnv {
+		if listed.byTest {
+			testNames = append(testNames, name)
+		} else {
+			harnessNames = append(harnessNames, name)
+		}
+	}
+	sort.Strings(harnessNames)
+	sort.Strings(testNames)
+	if len(harnessNames) == 0 || len(testNames) == 0 {
+		t.Fatalf("the list holds %d harness names and %d names of the test: both rules need a name to be tried", len(harnessNames), len(testNames))
+	}
+	const unlisted = "A_SETTING_NOBODY_LISTED"
+	must := func(key string, err error) string {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
+	// same reports whether two values of name give one key on a channel.
+	check := func(channel, name string, wantSame bool, key func(entry string) string) {
+		t.Helper()
+		if same := key(name+"=/first") == key(name+"=/second"); same != wantSame {
+			t.Errorf("%s, %s: two values give the same key = %v, want %v", channel, name, same, wantSame)
+		}
+	}
+	base := must(venuePythonEnvKey(nil, options))
+
+	// Channel 1: the test's declared settings (Options.PythonEnv).
+	declared := func(entry string) string {
+		return must(venuePythonEnvKey(nil, Options{JWTKey: "k", PythonEnv: []string{entry}}))
+	}
+	for _, name := range harnessNames {
+		check("Options.PythonEnv", name, false, declared)
+		if declared(name+"=/first") == base {
+			t.Errorf("Options.PythonEnv, %s: the test's value is keyed as if the harness had set it", name)
+		}
+	}
+	for _, name := range testNames {
+		check("Options.PythonEnv", name, true, declared)
+	}
+	check("Options.PythonEnv", unlisted, false, declared)
+
+	// Channel 2: a variable test code set in the process before the venue was built.
+	inProcess := func(entry string) string { return must(venuePythonEnvKey([]string{entry}, options)) }
+	planeSets := planeNames(options)
+	for _, name := range harnessNames {
+		if !planeSets[name] {
+			t.Errorf("%s is a harness name the plane does not set: a process variable of that name would reach the child", name)
+			continue
+		}
+		// The plane's own entry comes later and wins: the variable does not reach the child.
+		check("process variable", name, true, inProcess)
+		if inProcess(name+"=/first") != base {
+			t.Errorf("process variable, %s: a variable the plane overwrites changed the key", name)
+		}
+	}
+	for _, name := range testNames {
+		check("process variable", name, true, inProcess)
+		if inProcess(name+"=/first") == base {
+			t.Errorf("process variable, %s: its presence is not in the key", name)
+		}
+	}
+	check("process variable", unlisted, false, inProcess)
+
+	// Channels 3 and 4: one call's extra entries, and a variable test code
+	// sets in the process after the venue was built, through the golden.
+	golden, err := openGolden(GoldenSpec{Path: t.TempDir() + "/g.json", PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := golden.bindPythonEnv(options); err != nil {
+		t.Fatal(err)
+	}
+	extra := func(entry string) string { return must(golden.callEnvKey([]string{entry})) }
+	for _, name := range harnessNames {
+		check("a call's extra entry", name, false, extra)
+	}
+	for _, name := range testNames {
+		check("a call's extra entry", name, true, extra)
+	}
+	check("a call's extra entry", unlisted, false, extra)
+
+	later := func(name string) func(entry string) string {
+		return func(entry string) string {
+			_, value, _ := strings.Cut(entry, "=")
+			t.Setenv(name, value)
+			defer os.Unsetenv(name)
+			return must(golden.callEnvKey(nil))
+		}
+	}
+	for _, name := range harnessNames {
+		if name == "HOME" || name == "PATH" || name == "TMPDIR" {
+			continue // the children get these as the venue fixed them (hostEnv), see TestThePythonChildSeesOnlyItsExplicitEnvironment
+		}
+		// The plane's own entry wins: the variable does not reach the child, so it is in no call key.
+		if key := later(name)(name + "=/first"); key != "" {
+			t.Errorf("a variable set after the venue was built, %s: the plane overwrites it and the call key is %q, want none", name, key)
+		}
+	}
+	for _, name := range testNames {
+		check("a variable set after the venue was built", name, true, later(name))
+		if later(name)(name+"=/first") == "" {
+			t.Errorf("a variable set after the venue was built, %s: it is in no call key", name)
+		}
+	}
+	check("a variable set after the venue was built", unlisted, false, later(unlisted))
+
+	// The harness's own channel: its per-run values are keyed by name, every
+	// other entry it sets by value, and a name of the test's list is not
+	// name-only when the harness supplies it.
+	fromSide := func(byTest bool) func(entry string) string {
+		return func(entry string) string { return must(pythonEnvKey(tagged([]string{entry}, byTest))) }
+	}
+	for _, name := range harnessNames {
+		check("the harness's entry", name, true, fromSide(false))
+		check("the same name from the test", name, false, fromSide(true))
+	}
+	for _, name := range testNames {
+		check("the harness's entry", name, false, fromSide(false))
+		check("the same name from the test", name, true, fromSide(true))
+	}
+	check("the harness's entry", unlisted, false, fromSide(false))
 }
 
 // frozenWithEnv writes a frozen golden whose header holds key in the given key
@@ -82,7 +216,7 @@ func frozenWithEnv(t *testing.T, key string, version int) (*Golden, string) {
 // variables this test process has set.
 func currentKey(t *testing.T, options Options) string {
 	t.Helper()
-	key, err := pythonEnvKey(append(testSetEnv(), pythonPlaneEnv(options, nil)...))
+	key, err := venuePythonEnvKey(testSetEnv(), options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,10 +351,13 @@ func TestTheVariablesATestSetAreToldFromTheAmbientOnes(t *testing.T) {
 func TestACallsKeyHoldsItsExtraEntriesAndWhatTheTestChangedSinceTheVenueWasBuilt(t *testing.T) {
 	declared := Options{JWTKey: "k"}
 	extra := []string{"STRIPE_SECRET_KEY=", "POSTGRES_URI=postgresql://nobody@127.0.0.1:1/none"}
-	extraKey, _ := pythonEnvKey(extra)
+	extraKey, _ := pythonEnvKey(fromTest(extra...))
 	legacyExtraKey, _ := legacyPythonEnvKey(extra)
-	if extraKey != legacyExtraKey {
-		t.Fatal("the key of a call's extra entries changed between the key versions: a golden with call keys of the first version would be refused")
+	// The first version keyed POSTGRES_URI by name whoever supplied it; the
+	// current one keys the value a test supplies. A golden of the first
+	// version is still checked by the first version's rule (below).
+	if extraKey == legacyExtraKey {
+		t.Fatal("a database address the test passes to one call is keyed as the first version keyed it: by name only")
 	}
 	recording, err := openGolden(GoldenSpec{Path: t.TempDir() + "/g.json", PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
 	if err != nil {
@@ -290,7 +427,7 @@ func TestThePlaneEnvironmentAndItsFirstKeyVersion(t *testing.T) {
 		t.Fatalf("the first key version computes %s for these Options: no golden of that version would be accepted", got)
 	}
 	key := func(o Options, values map[string]string) string {
-		out, err := pythonEnvKey(pythonPlaneEnv(o, values))
+		out, err := pythonEnvKey(planeEntries(o, values))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -600,26 +737,33 @@ func TestStartRefusesAGoldenRecordedUnderAnotherPythonEnvironment(t *testing.T) 
 	}
 }
 
-// legacyKeyGoldenCeiling is how many goldens held the first key version when
-// the versions were introduced. The list can only shrink: this number is never
-// raised, and legacyKeyGoldenCount goes down with every row that is deleted.
-const (
-	legacyKeyGoldenCeiling = 38
-	legacyKeyGoldenCount   = 37
-)
+// legacyKeyGoldenCount is how many goldens the closed list holds. It only goes
+// down, with every row that is deleted: there is no room above it.
+const legacyKeyGoldenCount = 37
 
-// legacyKeyGoldens reads the closed list: repository-relative paths, one per line.
-func legacyKeyGoldens(t *testing.T, path string) []string {
+// legacyRow is one row of the closed list: a golden of the first key version
+// by its repository path, and the sha256 of its bytes.
+type legacyRow struct {
+	Digest, Path string
+}
+
+// legacyKeyGoldens reads the closed list: "<sha256>  <repository path>", one per line.
+func legacyKeyGoldens(t *testing.T, path string) []legacyRow {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rows []string
+	var rows []legacyRow
 	for _, line := range strings.Split(string(raw), "\n") {
-		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
-			rows = append(rows, line)
+		if line = strings.TrimSpace(line); line == "" || strings.HasPrefix(line, "#") {
+			continue
 		}
+		digest, file, found := strings.Cut(line, "  ")
+		if !found || len(digest) != 64 || file == "" {
+			t.Fatalf("%s: %q is not a row (sha256, two spaces, path)", path, line)
+		}
+		rows = append(rows, legacyRow{Digest: digest, Path: file})
 	}
 	return rows
 }
@@ -627,14 +771,17 @@ func legacyKeyGoldens(t *testing.T, path string) []string {
 // keyVersionProblems walks root for venue goldens (a golden whose header holds
 // a key of its Python environment) and lists every breach of the closed list:
 // a golden of the first key version that is not listed, a listed golden that
-// holds the current version or is gone or is listed twice.
-func keyVersionProblems(t *testing.T, root string, listed []string) (venueGoldens int, problems []string) {
+// holds the current version, or has other bytes than its row says, or is gone,
+// or is listed twice.
+func keyVersionProblems(t *testing.T, root string, listed []legacyRow) (venueGoldens int, problems []string) {
 	t.Helper()
 	onList := map[string]int{}
+	digests := map[string]string{}
 	for _, row := range listed {
-		onList[row]++
-		if onList[row] == 2 {
-			problems = append(problems, row+": listed twice")
+		onList[row.Path]++
+		digests[row.Path] = row.Digest
+		if onList[row.Path] == 2 {
+			problems = append(problems, row.Path+": listed twice")
 		}
 	}
 	found := map[string]bool{}
@@ -674,6 +821,8 @@ func keyVersionProblems(t *testing.T, root string, listed []string) (venueGolden
 			problems = append(problems, relative+": holds the current key version and is still on the list of the first version: delete its row")
 		case version == 0 && onList[relative] == 0:
 			problems = append(problems, relative+": holds the first key version and is not on the closed list: a golden recorded now holds the current version; record it with this harness")
+		case version == 0 && digests[relative] != fmt.Sprintf("%x", sha256.Sum256(raw)):
+			problems = append(problems, fmt.Sprintf("%s: is on the closed list with the sha256 %s and its bytes are %x: a listed golden changes only by being recorded again, which gives it the current key version", relative, digests[relative], sha256.Sum256(raw)))
 		case version != 0 && version != pythonEnvKeyVersion:
 			problems = append(problems, fmt.Sprintf("%s: holds key version %d, which this harness does not know", relative, version))
 		}
@@ -699,8 +848,8 @@ func TestOnlyTheListedGoldensHoldTheFirstKeyVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	listed := legacyKeyGoldens(t, filepath.Join("testdata", "legacy_python_env_goldens.txt"))
-	if len(listed) != legacyKeyGoldenCount || legacyKeyGoldenCount > legacyKeyGoldenCeiling {
-		t.Fatalf("the closed list holds %d goldens, the count says %d, the ceiling is %d: the list only shrinks, and the count goes down with it", len(listed), legacyKeyGoldenCount, legacyKeyGoldenCeiling)
+	if len(listed) != legacyKeyGoldenCount {
+		t.Fatalf("the closed list holds %d goldens and legacyKeyGoldenCount says %d: the list only shrinks, and the count goes down with it", len(listed), legacyKeyGoldenCount)
 	}
 	venueGoldens, problems := keyVersionProblems(t, root, listed)
 	if venueGoldens == 0 {
@@ -741,18 +890,23 @@ func TestTheKeyVersionRatchetNamesEachBreach(t *testing.T) {
 		"a/testdata/program.json": golden(0, ""), // a program producer's golden: no key, not a venue golden
 		"a/testdata/notes.json":   `{"a":1}`,
 	}
-	if count, problems := keyVersionProblems(t, tree(files), []string{"a/testdata/old.json"}); count != 2 || len(problems) != 0 {
+	row := func(path string) legacyRow {
+		return legacyRow{Digest: fmt.Sprintf("%x", sha256.Sum256([]byte(files[path]))), Path: path}
+	}
+	old := row("a/testdata/old.json")
+	if count, problems := keyVersionProblems(t, tree(files), []legacyRow{old}); count != 2 || len(problems) != 0 {
 		t.Fatalf("a correct tree: %d venue goldens, problems %v", count, problems)
 	}
 	for name, c := range map[string]struct {
-		listed []string
+		listed []legacyRow
 		want   string
 	}{
 		"a first-version golden that is not listed":      {nil, "a/testdata/old.json: holds the first key version and is not on the closed list"},
-		"a listed golden that holds the current version": {[]string{"a/testdata/old.json", "a/testdata/new.json"}, "a/testdata/new.json: holds the current key version and is still on the list"},
-		"a row with no golden":                           {[]string{"a/testdata/old.json", "a/testdata/gone.json"}, "a/testdata/gone.json: on the list of the first key version, and no such venue golden exists"},
-		"a row for a program golden":                     {[]string{"a/testdata/old.json", "a/testdata/program.json"}, "a/testdata/program.json: on the list of the first key version, and no such venue golden exists"},
-		"a row twice":                                    {[]string{"a/testdata/old.json", "a/testdata/old.json"}, "a/testdata/old.json: listed twice"},
+		"a listed golden that holds the current version": {[]legacyRow{old, row("a/testdata/new.json")}, "a/testdata/new.json: holds the current key version and is still on the list"},
+		"a row with no golden":                           {[]legacyRow{old, {Digest: strings.Repeat("0", 64), Path: "a/testdata/gone.json"}}, "a/testdata/gone.json: on the list of the first key version, and no such venue golden exists"},
+		"a row for a program golden":                     {[]legacyRow{old, row("a/testdata/program.json")}, "a/testdata/program.json: on the list of the first key version, and no such venue golden exists"},
+		"a row twice":                                    {[]legacyRow{old, old}, "a/testdata/old.json: listed twice"},
+		"a listed golden with other bytes than its row":  {[]legacyRow{{Digest: strings.Repeat("0", 64), Path: "a/testdata/old.json"}}, "a/testdata/old.json: is on the closed list with the sha256 0000"},
 	} {
 		_, problems := keyVersionProblems(t, tree(files), c.listed)
 		if len(problems) != 1 || !strings.HasPrefix(problems[0], c.want) {
@@ -760,7 +914,7 @@ func TestTheKeyVersionRatchetNamesEachBreach(t *testing.T) {
 		}
 	}
 	files["a/testdata/future.json"] = golden(3, key)
-	if _, problems := keyVersionProblems(t, tree(files), []string{"a/testdata/old.json"}); len(problems) != 1 || !strings.Contains(problems[0], "holds key version 3") {
+	if _, problems := keyVersionProblems(t, tree(files), []legacyRow{old}); len(problems) != 1 || !strings.Contains(problems[0], "holds key version 3") {
 		t.Errorf("a golden of an unknown key version: %q", problems)
 	}
 }

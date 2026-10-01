@@ -114,6 +114,9 @@ type Golden struct {
 	// testSetAtStart is the variables test code had set when the venue was
 	// built: a call's key holds what changed in them since (callEnvKey).
 	testSetAtStart []string
+	// planeNames is the names the venue's plane sets itself: a process
+	// variable of such a name does not reach a Python child.
+	planeNames map[string]bool
 	// use is what RunTests reads after the package's tests: this golden was
 	// opened by a test, and whether it reached Finish.
 	use *goldenUse
@@ -207,7 +210,7 @@ func (g *Golden) bindPythonEnv(options Options) error {
 	var err error
 	switch version {
 	case pythonEnvKeyVersion:
-		key, err = pythonEnvKey(append(append([]string{}, testSet...), pythonPlaneEnv(options, nil)...))
+		key, err = venuePythonEnvKey(testSet, options)
 	case 0:
 		key, err = legacyPythonEnvKey(legacyPlaneEnv(options))
 	default:
@@ -219,7 +222,7 @@ func (g *Golden) bindPythonEnv(options Options) error {
 	if g.pythonEnvBound && g.pythonEnv != key {
 		return fmt.Errorf("golden %s: two venues with different Python environments use one golden: its answers belong to one environment", g.spec.Path)
 	}
-	g.pythonEnv, g.pythonEnvBound, g.testSetAtStart = key, true, testSet
+	g.pythonEnv, g.pythonEnvBound, g.testSetAtStart, g.planeNames = key, true, testSet, planeNames(options)
 	if g.recording {
 		g.recorded.Header.PythonEnv, g.recorded.Header.PythonEnvVersion = key, pythonEnvKeyVersion
 		return nil
@@ -252,11 +255,20 @@ func (g *Golden) callEnvKey(extra []string) (string, error) {
 		}
 		return legacyPythonEnvKey(extra)
 	}
-	changed := testSetDelta(g.testSetAtStart, testSetEnv())
+	// What the test changed in the process since the venue was built, less the
+	// names the plane sets itself: the plane's entry wins, so such a variable
+	// does not reach the child. Both this and the extra entries are the
+	// test's: keyed by name and value (perRunPythonEnv).
+	var changed []string
+	for _, entry := range testSetDelta(g.testSetAtStart, testSetEnv()) {
+		if name, _, _ := strings.Cut(entry, "="); !g.planeNames[name] {
+			changed = append(changed, entry)
+		}
+	}
 	if extra == nil && len(changed) == 0 {
 		return "", nil
 	}
-	return pythonEnvKey(append(changed, extra...))
+	return pythonEnvKey(append(fromTest(changed...), fromTest(extra...)...))
 }
 
 // pythonEnvUnboundErr is an error when the frozen golden holds the key of a

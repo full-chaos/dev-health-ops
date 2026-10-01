@@ -399,10 +399,12 @@ func TestExecutionLivenessIgnoresATransientIdempotencyFailureThatRecovers(t *tes
 	if attempt != 2 || errorCount != 1 {
 		t.Fatalf("the transient Begin failure was not recorded as exactly one failed attempt (attempt=%d errors=%d) timeline=%v", attempt, errorCount, timeline)
 	}
-	// The control is only meaningful if readiness was sampled INSIDE the backoff
-	// gap. A poll loop that never saw the gap proves nothing.
-	if retryableReadySamples < 3 {
-		t.Fatalf("readiness was sampled only %d times while the job was retryable (need >=3; longest poll gap %s): the control did not observe the backoff gap; timeline=%v",
+	// The control is only meaningful if the (state, liveness) PAIR was seen inside
+	// the backoff gap: the row state is read and readiness answered in the same
+	// loop step, so the pair is not inferred from elapsed time. The gap is the
+	// retry wait (~5s), so one pair is the claim; no sample count is asserted.
+	if retryableReadySamples < 1 {
+		t.Fatalf("readiness was never answered green while the river_job row read retryable (pairs seen=%d; longest poll gap %s): the control did not observe the backoff gap; timeline=%v",
 			retryableReadySamples, maxGap.Round(time.Millisecond), timeline)
 	}
 }

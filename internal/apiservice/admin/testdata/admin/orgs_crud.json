@@ -8,15 +8,15 @@
     "python_env_version": 2,
     "recorded_by": "goldenrecord",
     "blanked": {
-      "body $.created_at": 30,
-      "body $.id": 30,
+      "body $.created_at": 32,
+      "body $.id": 32,
       "body $.joined_at": 2,
       "body $.slug": 8,
-      "body $.updated_at": 36,
-      "header content-length": 36,
-      "header date": 41,
-      "header x-dev-health-plane": 41,
-      "header x-request-id": 74
+      "body $.updated_at": 38,
+      "header content-length": 38,
+      "header date": 42,
+      "header x-dev-health-plane": 42,
+      "header x-request-id": 76
     }
   },
   "requests": [
@@ -445,6 +445,26 @@
         "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"id\":\"\u003cid\u003e\",\"slug\":\"istanbul-\u003csuffix\u003e\",\"name\":\"i̇stanbul\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "create org final sigma name",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "6b35c8c9cbea4e1c99b22ce03f6f3573aaea7affe1665a83bc616aba3b183b45",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "\u003clength of projected body\u003e",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "\u003cvolatile\u003e"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"slug\":\"οδος\",\"name\":\"ΟΔΟΣ\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\"}"
     },
     {
       "name": "create org explicit dotted capital I slug",

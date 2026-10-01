@@ -34,7 +34,7 @@ func scrubSlugSuffix(text string) string {
 
 func TestOrgCRUDMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgs_crud", t.Name(), "1dbf98b6960d00e239b9d2b4fe4065feb3705a69ce2aaecae5840ebd4f73e2e4", scrubSlugSuffix))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgs_crud", t.Name(), "fa28f01cc4875aee591f84e6f9c131d769a85c017e68f310e4253888927f04d2", scrubSlugSuffix))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("orgs")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-crud-flow-32-bytes!!!"
@@ -188,6 +188,12 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, newMemberI
 			Body: venueoracle.B64(`{"name":"\u001f\u001e\u0130STANBUL\u001c"}`)},
 		{Name: "create org lowered dotted i name", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"name":"i\u0307stanbul"}`)},
+		// Python's str.lower() turns a capital sigma at the end of a word into the
+		// final form (U+03C2); a per-character lower gives U+03C3, and the slug
+		// keeps either letter. The dotted names above cannot tell the two lowers
+		// apart: the combining dot they differ by is not a slug character.
+		{Name: "create org final sigma name", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"\u039f\u0394\u039f\u03a3"}`)},
 		// An explicit slug is stored as given and looked up by Python's lower() of it
 		// (orgBySlug's bind): the same slug again, and its lowered spelling
 		// ("i" plus a combining dot), are looked up against the stored one.

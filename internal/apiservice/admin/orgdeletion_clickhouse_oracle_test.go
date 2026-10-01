@@ -78,7 +78,7 @@ func TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex(t *testing.T)
 		goSet[table.Name] = true
 	}
 
-	golden := venueoracle.OpenGolden(t, adminGolden("clickhouse_org_tables", t.Name(), "e5000574c978935395161284727ad12dccd08862261db8b4a18b1413830d5828"))
+	golden := venueoracle.OpenGolden(t, adminGolden("clickhouse_org_tables", t.Name(), "a5d37df41d25222a696a4d21db8c7862068ef1ccdb951afc340cacdf519d1059"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	script := `
 import json

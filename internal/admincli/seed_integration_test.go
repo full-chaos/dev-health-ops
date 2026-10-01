@@ -78,7 +78,7 @@ print(json.dumps([[k, n, c.value, t.value, d] for k, n, c, t, d in STANDARD_FEAT
 // TestStandardFeaturesMatchThePythonRegistry requires the Go registry to equal Python's,
 // row for row and in order. Python's registry is frozen at seedPythonBuild.
 func TestStandardFeaturesMatchThePythonRegistry(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, seedGolden(t, "standard_features", "757897c1d46189dfa80c300c19a092f5899fa0e9aeebb033ac60541f7b5e96fc"))
+	golden := venueoracle.OpenGolden(t, seedGolden(t, "standard_features", "872225b77164e3a5e095cd15d9799b8c00cd2ce174de1b03a0bed8e4b7461922"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("standard features", registryProgram, nil, nil)},
 		func(root string, _ []venueoracle.Request) []venueoracle.Response {
@@ -108,7 +108,7 @@ func TestStandardFeaturesMatchThePythonRegistry(t *testing.T) {
 // The producer's output and rows were executed once on seedPythonBuild and are
 // frozen in testdata/golden/seed.json.
 func TestSeedMatchesThePythonProducer(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, seedGolden(t, "seed", "05ceb6b56a4f6c1af782ee85790e89239aa40258efaa51cb275a24eb5ada4ab0"))
+	golden := venueoracle.OpenGolden(t, seedGolden(t, "seed", "cd0f089f8a447748858cc8408f60428fca7da678693f43bc9afa4fd5081ac884"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	ctx := context.Background()
 	instance, err := containers.StartPostgres(ctx)

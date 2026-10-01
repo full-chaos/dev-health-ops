@@ -3,7 +3,9 @@
     "test": "TestAdminSetupStatusVenueOracle",
     "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
     "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
-    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/adminsetupvenue/ -test '^TestAdminSetupStatusVenueOracle$' -python-root $DIR"
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/adminsetupvenue/ -test '^TestAdminSetupStatusVenueOracle$' -python-root $DIR",
+    "python_env": "fe09ca4f3f9a5c05234ed9edfa7a20248778da945abac77c4a58f8f66f3a3013",
+    "python_env_version": 2
   },
   "requests": [
     {
@@ -22,7 +24,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "c70f73c6-a995-4485-bf0a-270684ec3006"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":false,\"providers\":[],\"has_sync_config\":false,\"sync_config_id\":null,\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"connect_integration\",\"blocker\":\"No integration connected\"}"
     },
@@ -42,7 +44,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "c5100721-6b9c-4cda-9e2e-3750c7c39c25"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":false,\"sync_config_id\":null,\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"select_repositories\",\"blocker\":\"No sync configuration\"}"
     },
@@ -62,7 +64,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "f2e77371-02fa-434b-9e06-d9fa1ba5c243"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":false,\"sync_config_id\":null,\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"create_sync_config\",\"blocker\":\"No sync configuration\"}"
     },
@@ -82,7 +84,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3ad0c10e-f69d-48d7-a386-93bf613379db"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":false,\"providers\":[],\"has_sync_config\":false,\"sync_config_id\":null,\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"connect_integration\",\"blocker\":\"No integration connected\"}"
     },
@@ -102,7 +104,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8dae67a7-fdec-4a1c-9f15-8a162224a413"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\",\"jira\"],\"has_sync_config\":false,\"sync_config_id\":null,\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"select_repositories\",\"blocker\":\"No sync configuration\"}"
     },
@@ -122,7 +124,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e739c4fc-adfa-48dd-8709-b1a1b97e7846"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"4542f811-1fca-5db5-b53c-adfabfd9586e\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"select_repositories\",\"blocker\":\"No repositories selected\"}"
     },
@@ -142,7 +144,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a2ec8e42-14dd-4c3b-9b42-c1491c5a008d"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"d9122a54-6d9e-5150-8c0c-044fa0136cb6\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":null}"
     },
@@ -162,7 +164,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a1414d77-f306-474d-8067-4d1e94cccede"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"1093b0e4-d915-5464-9c14-a6254319f799\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"select_repositories\",\"blocker\":\"No repositories selected\"}"
     },
@@ -182,7 +184,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8dcd3fb8-5648-4370-a99a-861019d701a3"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"64f85508-43a9-5e4b-a8da-b26d542700cc\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":2,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":null}"
     },
@@ -202,7 +204,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "4798734a-92a9-42e8-90b6-f7ee38787dd5"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"59daac9c-ca7a-527c-8973-b0d5505eae3e\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":null}"
     },
@@ -222,7 +224,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "10a2bc4b-663e-4290-9d94-650c10ab30f3"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"02685b73-81e2-5ae2-b341-187abe8fbe4c\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"pending\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"complete\",\"blocker\":null}"
     },
@@ -242,7 +244,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d9cc78ed-d825-43ea-9efc-303df12a364c"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"a795776f-2daa-5c58-9d20-88c19ea95a34\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"running\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"complete\",\"blocker\":null}"
     },
@@ -262,7 +264,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "be894f51-deef-43c2-b3e5-9062b7a10761"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"b16123a3-cb56-5abb-88b6-759be272a7b9\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":\"boom: provider 500\",\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"boom: provider 500\"}"
     },
@@ -282,7 +284,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2db61cb4-93e5-4da2-9633-659dc23bde8d"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"b527301b-239a-52a2-952a-3022be536501\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":\"config-level failure\",\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"config-level failure\"}"
     },
@@ -302,7 +304,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b3f9a666-e8ed-4048-adbd-bed9e87c06e3"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"fc0ea937-2e00-53f2-879c-efae7bb472a3\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"Last sync failed\"}"
     },
@@ -322,7 +324,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "150d5399-78bb-4d9b-b438-b6310cf81162"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"69e7e639-851b-5add-96c9-39442090ccf5\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":\"cancelled by operator\",\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"cancelled by operator\"}"
     },
@@ -342,7 +344,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d622c559-b2ee-45af-bdb1-738852d1dffe"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"b3120c42-b2be-5a63-876e-0a84cf20fce3\",\"first_sync_started\":true,\"first_sync_completed\":true,\"sync_status\":\"complete\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"complete\",\"blocker\":null}"
     },
@@ -362,7 +364,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0e821588-260a-464b-a0ce-7190729b6860"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"1561c481-5833-56f8-b200-6c99a62ea10c\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"partial\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"complete\",\"blocker\":null}"
     },
@@ -382,7 +384,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "805809f8-52df-4221-8392-c104958cb916"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"9e0e2fb9-ad83-5b59-b52e-48d376952452\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"partial\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"complete\",\"blocker\":null}"
     },
@@ -402,7 +404,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "85cab3b4-4d95-43d2-86f0-a3bbcf399b50"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"953c7045-6b97-5fff-8082-dc556b5f2962\",\"first_sync_started\":true,\"first_sync_completed\":true,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":\"later failure\",\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"later failure\"}"
     },
@@ -422,7 +424,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a116d630-dfc8-4796-9f4e-fbfbadd77ff8"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"93119630-9158-52ba-a7f4-692789e3faf8\",\"first_sync_started\":true,\"first_sync_completed\":true,\"sync_status\":\"complete\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"complete\",\"blocker\":null}"
     },
@@ -442,7 +444,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "968f924f-2b3a-4865-a95b-965af0908f19"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"92b4944a-2daf-5ee6-a818-8e04e0d4f78b\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"Last sync failed\"}"
     },
@@ -462,7 +464,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d1b9e907-2168-4ffe-9705-06fd385ad9e1"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"c3aa7d80-b7df-5094-85af-07f0853744df\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":\"configured but broken\",\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"configured but broken\"}"
     },
@@ -482,7 +484,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e10cf8ba-f4c8-4ebc-b239-900d14285a7a"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"93f1d7c5-5add-59e0-9079-e130e4061ca8\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"start_sync\",\"blocker\":null}"
     },
@@ -502,7 +504,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1f40b2d8-54bd-48e6-b71f-6b20034098e4"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"2dd6b944-3afc-50db-9390-ea950732bf06\",\"first_sync_started\":true,\"first_sync_completed\":true,\"sync_status\":\"complete\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"complete\",\"blocker\":null}"
     },
@@ -522,7 +524,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5e7cba34-35fc-464a-bebb-e03a6d1b4cc2"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"b54ad489-1c26-5602-bb92-82bc994b688e\",\"first_sync_started\":true,\"first_sync_completed\":true,\"sync_status\":\"complete\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"complete\",\"blocker\":null}"
     },
@@ -542,7 +544,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "33d4efe9-6797-4fcb-b869-1a7817189378"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"42fbf486-722b-5915-ad80-dc8cf001bd48\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":null}"
     },
@@ -562,7 +564,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1083f446-67d8-4fdf-82a5-c2bd41497800"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"15f9bbf5-6ac5-5397-9262-e1e2ebcc18b7\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"running\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"complete\",\"blocker\":null}"
     },
@@ -582,7 +584,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "7c5c8e3a-a174-4b53-b710-eddd7a6bfea5"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"45c1b8df-d3f9-5e33-95ec-eb965f70879b\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":\"c failed newer\",\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"c failed newer\"}"
     },
@@ -602,7 +604,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3fd1fbfd-9a00-4601-9a07-43e18756d95b"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"9d06e783-966a-56e0-9461-a72644ad0920\",\"first_sync_started\":true,\"first_sync_completed\":true,\"sync_status\":\"pending\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"complete\",\"blocker\":null}"
     },
@@ -622,7 +624,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "9bcae318-686c-4d0a-ba68-074601dbd9cf"
+        "x-request-id": "\u003cvolatile\u003e"
       },
       "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"491bac52-ce1a-5c12-8e9d-02a562f12146\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"pending\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"complete\",\"blocker\":null}"
     }

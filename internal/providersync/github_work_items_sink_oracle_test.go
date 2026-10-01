@@ -3,10 +3,6 @@ package providersync
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,8 +24,7 @@ import (
 // column list and value matrix it would have inserted. This test runs the Go
 // adapter's projection over the same row and compares both, with types
 // preserved on the wire so an int cannot pass as a float or a UUID as a string.
-func TestDirectAdapterProjectionsMatchTheLivePythonSink(t *testing.T) {
-	python := pythonExecutable(t)
+func TestDirectAdapterProjectionsMatchTheFrozenPythonSink(t *testing.T) {
 	// A negative-offset evening: the local date and the UTC date disagree, so
 	// any accidental local-time coercion on either side shows up as a wrong day
 	// rather than passing by coincidence.
@@ -167,24 +162,14 @@ func TestDirectAdapterProjectionsMatchTheLivePythonSink(t *testing.T) {
 		})
 	}
 
-	_, currentFile, _, _ := runtime.Caller(0)
-	packageDir := filepath.Dir(currentFile)
-	casesFile := filepath.Join(t.TempDir(), "sink-cases.json")
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(casesFile, encoded, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	output, err := exec.Command(
-		python,
-		filepath.Join(packageDir, "testdata", "python_work_item_sink_oracle.py"),
-		casesFile,
-	).CombinedOutput()
-	if err != nil {
-		t.Fatalf("execute Python sink oracle: %v: %s", err, output)
-	}
+	output := frozenScriptAnswer(t, scriptOracle{
+		name: "work-item-sink", script: "testdata/python_work_item_sink_oracle.py",
+		input: encoded, inputFile: true,
+	})
 	var decoded struct {
 		Cases []struct {
 			ID          string              `json:"id"`

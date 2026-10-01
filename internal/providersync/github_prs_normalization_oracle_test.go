@@ -2,9 +2,6 @@ package providersync
 
 import (
 	"encoding/json"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 )
@@ -60,25 +57,20 @@ func mustParseOracleTime(t *testing.T, value string) *time.Time {
 	return &parsed
 }
 
-// TestGitHubPRSNormalizationMatchesLivePythonFunctions shells out to the
-// live Python producer (codex H9 fix) rather than comparing against a
-// hand-authored fixture. See
+// TestGitHubPRSNormalizationMatchesFrozenPythonFunctions compares with what
+// the real Python producer answered (codex H9 fix), executed once on the pinned
+// build and frozen, rather than with a hand-authored fixture. See
 // testdata/python_github_prs_normalization_oracle.py's docstring for what
 // this does and deliberately does not cover.
-func TestGitHubPRSNormalizationMatchesLivePythonFunctions(t *testing.T) {
-	python := pythonExecutable(t)
-	_, currentFile, _, _ := runtime.Caller(0)
-	packageDir := filepath.Dir(currentFile)
-	srcRoot := filepath.Join(packageDir, "..", "..", "src", "dev_health_ops")
-	output, err := exec.Command(
-		python,
-		filepath.Join(packageDir, "testdata", "python_github_prs_normalization_oracle.py"),
-		filepath.Join(srcRoot, "providers", "pr_state.py"),
-		filepath.Join(srcRoot, "processors", "base_git.py"),
-	).CombinedOutput()
-	if err != nil {
-		t.Fatalf("execute Python github/prs oracle: %v: %s", err, output)
-	}
+func TestGitHubPRSNormalizationMatchesFrozenPythonFunctions(t *testing.T) {
+	output := frozenScriptAnswer(t, scriptOracle{
+		name:   "github-prs-normalization",
+		script: "testdata/python_github_prs_normalization_oracle.py",
+		sources: []string{
+			"src/dev_health_ops/providers/pr_state.py",
+			"src/dev_health_ops/processors/base_git.py",
+		},
+	})
 	var got []struct {
 		ID                string  `json:"id"`
 		State             string  `json:"state"`
@@ -113,7 +105,7 @@ func TestGitHubPRSNormalizationMatchesLivePythonFunctions(t *testing.T) {
 
 			gotState := normalizePRState(testCase.rawState, mergedAt)
 			if gotState != oracle.State {
-				t.Fatalf("normalizePRState = %q, oracle (live Python) = %q", gotState, oracle.State)
+				t.Fatalf("normalizePRState = %q, oracle (frozen Python) = %q", gotState, oracle.State)
 			}
 			if gotState != testCase.wantState {
 				t.Fatalf("normalizePRState = %q, Go table wants %q", gotState, testCase.wantState)

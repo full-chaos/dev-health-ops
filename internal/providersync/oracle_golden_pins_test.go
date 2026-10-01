@@ -121,3 +121,22 @@ var oraclePairGoldenPins = map[string]string{
 	"team-catalog_drift_change-id.TestTeamCatalogChangeIDMatchesFrozenPythonProducer.golden.json":                                                  "25eff75ee8489b35ed7f2def898f4ba8f157452d7f95b61ef964b1d6c3eb7a94",
 	"team-catalog_drift_observed-row.TestTeamCatalogObservedRowMatchesFrozenPythonProducer.golden.json":                                            "034d0086d4447f22891ce626ae4e24cb9e3db10aebff524b7eab752b2721f2ce",
 }
+
+// oracleScriptGoldenPins pins the SHA-256 of every golden under
+// testdata/script_golden, the same way oraclePairGoldenPins does for the pairs.
+var oracleScriptGoldenPins = map[string]string{
+	"script.github-prs-normalization.TestGitHubPRSNormalizationMatchesFrozenPythonFunctions.golden.json":                                        "f1721677a1854c5bcb52edaf377e9f384db249f2fc4989ce0ecfc2e5834197df",
+	"script.json-dumps-evidence.TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte.bot_author_disagrees_with_alphabetical_order.golden.json": "f30f818f770f1ba8daaac37aabb3ed662cdf40508cd14a41f32331887853ab13",
+	"script.json-dumps-evidence.TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte.branch.golden.json":                                       "f3f0d21af59092d2b0aafea8c423a59dec5afca3b41db0c3a4d8f740bfafe5ee",
+	"script.json-dumps-evidence.TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte.commit_trailer.golden.json":                               "fdd7ea8df482d9be17b318dad03c8447f5c61da5b2d58c38fa7c82e7b534fa48",
+	"script.json-dumps-evidence.TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte.control_characters_and_quotes.golden.json":                "b1ba3cacedef18b191f5a1c0f35bb6e63024a597cb36d685ea4b66917638f6ea",
+	"script.json-dumps-evidence.TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte.label.golden.json":                                        "5213b24832f9b3fbd0ca4ee259034362ec02adbc81fc26b816d762bb1c9424b5",
+	"script.json-dumps-evidence.TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte.non-ascii_and_html_characters.golden.json":                "bc7c0fc5cc287b291fd0338c3f9318bbf18f6b21ef399d6db7632fe3d23b9195",
+	"script.json-dumps-evidence.TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte.null_actor_value.golden.json":                             "099c3fba8e7c0972a163cc9a7f0d9845da9ae2676e604919e990ec2a6311400f",
+	"script.json-dumps-evidence.TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte.pr_body_disagrees_with_alphabetical_order.golden.json":    "880ca2b55a1d9e4914bc970a62fb4af7ab53ad232ccc85553111cee6f7998ba5",
+	"script.launchdarkly-normalization.TestLaunchDarklyNormalizationMatchesFrozenPythonFunctions.golden.json":                                   "773eb610992caf20c651d2af629f40ca0ebe7c721d492e765b17bb0507707330",
+	"script.provider-budget.TestProviderRequestPlansMatchFrozenPythonBudgetFunctions.golden.json":                                               "d0bdc7ec05690a3a790588ca32dd290e65e7107ca11a2cc12b21530cbf004340",
+	"script.repo-listing.TestRepoListingMatchesFrozenPython.golden.json":                                                                        "3fcf791cd662f52a7fb30b3887aa149554be6b41c5bee3aa47bb2bb681dc953e",
+	"script.work-item-sink.TestDirectAdapterProjectionsMatchTheFrozenPythonSink.golden.json":                                                    "89d4c92f5997f1d134b2cf871796e55b7d319f2862c6181426623aa186ce5945",
+	"script.work-item-sink.TestJiraDirectAdapterProjectionsMatchFrozenPythonSink.golden.json":                                                   "2711392b8ace560af9de1df77baad430729308064418ee5957463c0fe442b950",
+}

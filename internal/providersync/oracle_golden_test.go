@@ -233,43 +233,15 @@ func manifestLine(path string, raw []byte) string {
 // production code is.
 func runPinnedPairOracle(t *testing.T, root, manifest, pairID string, encodedCases []byte, passed []string) []byte {
 	t.Helper()
-	pinnedPackage := filepath.Join(root, "internal", "providersync")
-	for _, line := range strings.Split(strings.TrimSuffix(manifest, "\n"), "\n") {
-		want, path, _ := strings.Cut(line, "  ")
-		raw, err := os.ReadFile(filepath.Join(pinnedPackage, filepath.FromSlash(path)))
-		if err != nil {
-			t.Fatalf("recording pair %q: the pinned checkout lacks the harness file %s: %v", pairID, path, err)
-		}
-		if got := strings.SplitN(manifestLine(path, raw), "  ", 2)[0]; got != want {
-			t.Fatalf("recording pair %q: harness file %s differs between this checkout (sha256 %s) and the pinned checkout %s (sha256 %s): "+
-				"the answer would come from a harness the golden does not name", pairID, path, want, root, got)
-		}
-	}
-
-	python := pyoracle.Resolve(t, root)
-	probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
-	pyoracle.RequireDeployed(t, python, probe, probeErr)
-	environment := append([]string{
-		"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"),
-		"PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1",
-	}, passed...)
-
-	// The production package the runner imports must be the pinned checkout's.
-	locate := exec.Command(python, "-c",
-		"import importlib.util;s=importlib.util.find_spec('dev_health_ops');print(s.origin if s else '')")
-	locate.Env = environment
-	origin, err := locate.Output()
-	source := filepath.Join(root, "src") + string(filepath.Separator)
-	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(origin)), source) {
-		t.Fatalf("recording pair %q: %s imports dev_health_ops from %q (%v), not from the pinned checkout %s",
-			pairID, python, strings.TrimSpace(string(origin)), err, source)
-	}
+	assertPinnedHarness(t, "pair "+pairID, root, manifest)
+	python, environment := pinnedInterpreter(t, "pair "+pairID, root, passed)
 
 	casesFile := filepath.Join(t.TempDir(), "oracle-cases.json")
 	if err := os.WriteFile(casesFile, encodedCases, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, filepath.Join(pinnedPackage, "testdata", "python_generic_row_oracle.py"), pairID, casesFile)
+	runner := filepath.Join(root, "internal", "providersync", "testdata", "python_generic_row_oracle.py")
+	command := exec.Command(python, runner, pairID, casesFile)
 	command.Env = environment
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
@@ -278,6 +250,53 @@ func runPinnedPairOracle(t *testing.T, root, manifest, pairID string, encodedCas
 		t.Fatalf("recording pair %q: %v", pairID, pyoracle.RunError(python, err, stderr.Bytes()))
 	}
 	return output
+}
+
+// assertPinnedHarness fails a recording unless every harness file of manifest
+// is, in the pinned checkout at root, the file this checkout holds: the answer
+// would otherwise come from a harness the golden does not name. what names the
+// oracle in the failure.
+func assertPinnedHarness(t *testing.T, what, root, manifest string) {
+	t.Helper()
+	pinnedPackage := filepath.Join(root, "internal", "providersync")
+	for _, line := range strings.Split(strings.TrimSuffix(manifest, "\n"), "\n") {
+		want, path, _ := strings.Cut(line, "  ")
+		raw, err := os.ReadFile(filepath.Join(pinnedPackage, filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatalf("recording %s: the pinned checkout lacks the harness file %s: %v", what, path, err)
+		}
+		if got := strings.SplitN(manifestLine(path, raw), "  ", 2)[0]; got != want {
+			t.Fatalf("recording %s: harness file %s differs between this checkout (sha256 %s) and the pinned checkout %s (sha256 %s): "+
+				"the answer would come from a harness the golden does not name", what, path, want, root, got)
+		}
+	}
+}
+
+// pinnedInterpreter is the interpreter of the pinned checkout at root and the
+// whole environment a producer runs with: nothing of the test process's
+// environment but PATH and HOME, the pinned sources first on the module path,
+// no bytecode written, and passed. It fails unless that interpreter is the
+// deployed release and imports dev_health_ops from the pinned checkout.
+func pinnedInterpreter(t *testing.T, what, root string, passed []string) (string, []string) {
+	t.Helper()
+	python := pyoracle.Resolve(t, root)
+	probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
+	pyoracle.RequireDeployed(t, python, probe, probeErr)
+	environment := append([]string{
+		"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"),
+		"PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1",
+	}, passed...)
+
+	locate := exec.Command(python, "-c",
+		"import importlib.util;s=importlib.util.find_spec('dev_health_ops');print(s.origin if s else '')")
+	locate.Env = environment
+	origin, err := locate.Output()
+	source := filepath.Join(root, "src") + string(filepath.Separator)
+	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(origin)), source) {
+		t.Fatalf("recording %s: %s imports dev_health_ops from %q (%v), not from the pinned checkout %s",
+			what, python, strings.TrimSpace(string(origin)), err, source)
+	}
+	return python, environment
 }
 
 // untaggedLeafErr is an error when a runner answer holds a row value that is

@@ -8,10 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -19,7 +15,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 //go:embed testdata/repo_listing_oracle.py
@@ -148,32 +143,24 @@ func goListing(kase listingCase) listingOutcome {
 	return outcome
 }
 
-// TestRepoListingMatchesLivePython runs the REAL Python batch listing
+// TestRepoListingMatchesFrozenPython compares the Go listing over a scripted
+// provider with what the REAL Python batch listing
 // (_list_github_repositories_for_batch, GitLabCodeClient.list_projects behind
-// _gitlab_effective_group) against a scripted provider and compares what it
-// returns AND every request it made with the Go listing over the same script.
-func TestRepoListingMatchesLivePython(t *testing.T) {
-	requireLivePythonOracles(t)
-	python := pythonExecutable(t)
+// _gitlab_effective_group) returned AND every request it made over the same
+// script, executed once on the pinned build and frozen.
+func TestRepoListingMatchesFrozenPython(t *testing.T) {
 	corpus := repoListingCorpus()
 	input, err := json.Marshal(corpus)
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, "-c", repoListingOracleProgram)
-	command.Stdin = bytes.NewReader(input)
-	_, file, _, _ := runtime.Caller(0)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(filepath.Dir(file), "..", "..", "src"))
-	output, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr))
-	}
+	output := frozenScriptAnswer(t, scriptOracle{name: "repo-listing", program: repoListingOracleProgram, input: input})
+	// UseNumber: a project id is compared by its literal text, never through
+	// float64.
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	decoder.UseNumber()
 	var want []listingOutcome
-	if err := json.Unmarshal(output, &want); err != nil {
+	if err := decoder.Decode(&want); err != nil {
 		t.Fatalf("decode python answer: %v", err)
 	}
 	if len(want) != len(corpus) {
@@ -198,10 +185,6 @@ func TestRepoListingMatchesLivePython(t *testing.T) {
 	t.Logf("%d listings compared (%d ended in a provider error), %d mismatches", len(corpus), errored, mismatches)
 	if mismatches > 0 {
 		t.Fatalf("%d of %d listings differ", mismatches, len(corpus))
-	}
-	proof := os.Getenv(livePythonOracleProofDir)
-	if err := os.WriteFile(filepath.Join(proof, "repo-listing"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }
 

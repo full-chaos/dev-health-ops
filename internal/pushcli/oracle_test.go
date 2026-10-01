@@ -452,6 +452,21 @@ func substituteDir(c pushCase, dir string) pushCase {
 	return c
 }
 
+// pushPythonSettings are the variables that shape the answers of both push oracles, as constants: the
+// producer's environment AND part of each golden's request key (a changed value fails the frozen replay).
+var pushPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
+
+// pushPythonEnv is the producer's CLOSED environment: PATH and HOME, the checkout's source, and
+// pushPythonSettings; nothing is inherited from the test process (a proxy variable, a host identity, a
+// leftover switch of the shell cannot change a recorded answer).
+func pushPythonEnv(root string) []string {
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
+	for _, name := range []string{"OTEL_ENABLED", "PYTHONHASHSEED"} {
+		env = append(env, name+"="+pushPythonSettings[name])
+	}
+	return env
+}
+
 // pushPythonBuild is the build whose Python `dev-hops push` verbs answered the corpus: a build that
 // still carried the Python CLI.
 const pushPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
@@ -485,16 +500,12 @@ func TestPushMatchesTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
-	request := venueoracle.ProgramRequest("push corpus", pythonPushProgram, input, env)
+	request := venueoracle.ProgramRequest("push corpus", pythonPushProgram, input, pushPythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		dir := t.TempDir()
 		command := exec.Command(python, "-c", pythonPushProgram)
-		command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1")
-		for key, value := range env {
-			command.Env = append(command.Env, key+"="+value)
-		}
+		command.Env = pushPythonEnv(root)
 		command.Stdin = bytes.NewReader(bytes.ReplaceAll(input, []byte(pushOracleDir), []byte(dir)))
 		output, err := command.CombinedOutput()
 		if err != nil {
@@ -560,4 +571,18 @@ func maskProducerVersion(text string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// CHAOS-7469: the producer environment is closed; a variable of the test process never reaches Python.
+func TestPushPythonEnvIsClosed(t *testing.T) {
+	for _, name := range []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "ORG_ID", "PYTHONHASHSEED", "TZ", "LANG"} {
+		t.Setenv(name, "from-the-test-process")
+	}
+	allowed := map[string]bool{"PATH": true, "HOME": true, "PYTHONPATH": true, "PYTHONDONTWRITEBYTECODE": true, "OTEL_ENABLED": true, "PYTHONHASHSEED": true}
+	for _, entry := range pushPythonEnv("/checkout") {
+		name, value, _ := strings.Cut(entry, "=")
+		if !allowed[name] || value == "from-the-test-process" {
+			t.Errorf("the producer environment carries %s", name)
+		}
+	}
 }

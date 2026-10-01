@@ -1,0 +1,1417 @@
+{
+  "header": {
+    "test": "TestVenueOracleCustomerPushWrites",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/ -test '^TestVenueOracleCustomerPushWrites$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "61984fb1154c7ca326f825804a1db878915ff166de79e52548e7b6d98063a1de"
+  },
+  "requests": [
+    {
+      "name": "create: bad json anon",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "133007e8a369bf97141fd62d13b0b8c476c5240fe0014721ea8f1cac37c03cec",
+      "request_headers_sha256": "745ea247455bcb9570a60349b90d2be75781fef93245bc583fb608f0a3151138",
+      "status": 422,
+      "headers": {
+        "content-length": "125",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",10],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
+    },
+    {
+      "name": "create: anon",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "c70f2e91cc1ef1010268e1b58e0fdc08c7d69a02f89403c6bd19c317ad2a7334",
+      "request_headers_sha256": "745ea247455bcb9570a60349b90d2be75781fef93245bc583fb608f0a3151138",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "create: member",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "c70f2e91cc1ef1010268e1b58e0fdc08c7d69a02f89403c6bd19c317ad2a7334",
+      "request_headers_sha256": "86eaacf95ab70e8567b4582348271934209d24990872fea8852847843e80eca0",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "create: member invalid body",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "86eaacf95ab70e8567b4582348271934209d24990872fea8852847843e80eca0",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "create: invalid body",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "b59e6ff55ddb6cc9085ae0ddb0d250577a06a8a8b08b5defe7803f36160cd7a8",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 422,
+      "headers": {
+        "content-length": "619",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"system\"],\"msg\":\"Field required\",\"input\":{\"instance\":\" \",\"entity_family\":\"x\",\"webhook_mode\":\"y\"}},{\"type\":\"value_error\",\"loc\":[\"body\",\"instance\"],\"msg\":\"Value error, instance must not be blank\",\"input\":\" \",\"ctx\":{\"error\":{}}},{\"type\":\"literal_error\",\"loc\":[\"body\",\"entity_family\"],\"msg\":\"Input should be 'legacy' or 'operational'\",\"input\":\"x\",\"ctx\":{\"expected\":\"'legacy' or 'operational'\"}},{\"type\":\"value_error\",\"loc\":[\"body\",\"webhook_mode\"],\"msg\":\"Value error, webhook_mode must be one of ['customer_relay', 'disabled', 'fullchaos_hosted']\",\"input\":\"y\",\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "create: invalid body community",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "766fff29d5168cce2a5a546a5c3e9d9246edc47ca960b03ad8ea39657a255692",
+      "status": 422,
+      "headers": {
+        "content-length": "168",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"system\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"instance\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "create: community",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "c70f2e91cc1ef1010268e1b58e0fdc08c7d69a02f89403c6bd19c317ad2a7334",
+      "request_headers_sha256": "766fff29d5168cce2a5a546a5c3e9d9246edc47ca960b03ad8ea39657a255692",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "create: disabled org",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "c70f2e91cc1ef1010268e1b58e0fdc08c7d69a02f89403c6bd19c317ad2a7334",
+      "request_headers_sha256": "11ece2b676d63fd8e44c8c957797506949cf5e1ec0924226e885c9826d8d95a8",
+      "status": 403,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"customer_push_ingest\",\"message\":\"Customer push ingest is not enabled for this organization\"}}"
+    },
+    {
+      "name": "create: no body",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "create: form body",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "ec1a68083ce7c2e991c1ca6d88c9b683d8b38e92c27775eb3bf410f0aa1bb63a",
+      "request_headers_sha256": "7a13c80cec49321decfeae7cfc3357965909b279097b1337d06a934337083cee",
+      "status": 422,
+      "headers": {
+        "content-length": "160",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":\"system=github\"}]}"
+    },
+    {
+      "name": "create: bad system",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "98b42e95eb59d113ad61b19470de9450c231ebee3ae77e34bbafad53fdc1e114",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 400,
+      "headers": {
+        "content-length": "132",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid system ' Bitbucket '; must be one of ['atlassian', 'custom', 'github', 'gitlab', 'jira', 'linear', 'pagerduty']\"}"
+    },
+    {
+      "name": "create: bad mode",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "11b135d8140d0ab76c39cf3d71bf4369934ca8fa13fa376d4b1060d05eced034",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 400,
+      "headers": {
+        "content-length": "105",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid mode 'Customer_Push'; must be one of ['fullchaos_sync', 'customer_push', 'disabled']\"}"
+    },
+    {
+      "name": "create: fullchaos hosted",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "b0ac540493e0170287f8f1ce3cf622757d5d3dfdeab249d07ec0ed1ac04fb32e",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 400,
+      "headers": {
+        "content-length": "63",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"fullchaos_hosted webhook mode is not available yet\"}"
+    },
+    {
+      "name": "create: case variant",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "ebf7e761ec50c4ae552671d05ff3466ecb8e645b0d5656fbc29caf60e36519dc",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 409,
+      "headers": {
+        "content-length": "148",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"A source is already registered for system='github' instance='Acme/API' in this organization (instance identifiers are case-insensitive)\"}"
+    },
+    {
+      "name": "create: owned by managed sync",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "3eb86e4dc8f9fa151db598406df227aa002da379285decb74a49621bc79af1eb",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 409,
+      "headers": {
+        "content-length": "152",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"A source is already registered for system='github' instance='ACME/managed' in this organization (instance identifiers are case-insensitive)\"}"
+    },
+    {
+      "name": "create: owned (push)",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "3702ac73429599e023834c3ae64656529cba744875005f5d80103b35f73ba420",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "create: matched dormant",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "5b61557ad63227a020b521f28ff9346643e2b4465fc1ac4e360b36b64985c356",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 201,
+      "headers": {
+        "content-length": "553",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"acme/dormant\",\"entity_family\":\"legacy\",\"display_name\":\"Dormant é\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":\"a132f763-bf4b-eaba-2ca1-67f13f0269e9\",\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[\"Managed sync is also configured for provider 'github' in this organization -- verify this is a different repository/workspace.\"]}"
+    },
+    {
+      "name": "create: matched inactive gitlab",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "1c292ef995aa2ad7a13d37f16ddb601dd2921ddaef9fcfd89a09f1b3839f2d8f",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 201,
+      "headers": {
+        "content-length": "546",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"gitlab\",\"instance\":\"GRP/SUB\",\"entity_family\":\"legacy\",\"display_name\":null,\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"customer_relay\",\"matched_integration_source_id\":\"a2112ba5-6c72-ef0c-84fe-47d90296080a\",\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[\"Managed sync is also configured for provider 'gitlab' in this organization -- verify this is a different repository/workspace.\"]}"
+    },
+    {
+      "name": "create: linear placeholder",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e0db3473f9d0b99dd146750470e0fb71169bd063ffe22f9e2cc63107552ea1dd",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 409,
+      "headers": {
+        "content-length": "198",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"code\":\"source_owned_by_fullchaos_sync\",\"message\":\"A managed linear sync source already owns 'ENG' in this organization; disable it before enabling customer-push for the same instance.\"}}"
+    },
+    {
+      "name": "create: custom",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "56a745b520b01ffb451ea6d962824609dd3f517f0d301547a5160b98e9fbe7ab",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 201,
+      "headers": {
+        "content-length": "379",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"custom\",\"instance\":\"anything\",\"entity_family\":\"legacy\",\"display_name\":null,\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[]}"
+    },
+    {
+      "name": "create: jira no integration",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "42fa31be64ae6a27cc4cde565c8c1e4d1acfece50b0af7d6d8110b6458a86e56",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 201,
+      "headers": {
+        "content-length": "374",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"jira\",\"instance\":\"PROJ\",\"entity_family\":\"legacy\",\"display_name\":null,\"mode\":\"fullchaos_sync\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[]}"
+    },
+    {
+      "name": "create: operational ghe host",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "92a4218ad51fe16958a31ed07be690e1e73df6270b2a9893d9d56a204a9e4de4",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 409,
+      "headers": {
+        "content-length": "222",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"code\":\"source_owned_by_fullchaos_sync\",\"message\":\"A managed github sync source already owns 'https://ghe.ACME.test:443/x' in this organization; disable it before enabling customer-push for the same instance.\"}}"
+    },
+    {
+      "name": "create: operational other host",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "642e1ad99a07c0b495b7c08599abe32dfb23fc6a227b09ab5a17a46f330cd9b5",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 201,
+      "headers": {
+        "content-length": "519",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"other.acme.test\",\"entity_family\":\"operational\",\"display_name\":null,\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[\"Managed sync is also configured for provider 'github' in this organization -- verify this is a different repository/workspace.\"]}"
+    },
+    {
+      "name": "create: operational invalid host",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "f23075e346a92647a8dd0b73b8e6e295103c6183d0dd20b317b4fc11abb2d425",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "create: operational credential host",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "54178d02db2f18abd640919e373d7eff3c5aa490881372eebdc29541c1849a54",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 409,
+      "headers": {
+        "content-length": "216",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"code\":\"source_owned_by_fullchaos_sync\",\"message\":\"A managed gitlab sync source already owns 'gitlab.acme.test:8443' in this organization; disable it before enabling customer-push for the same instance.\"}}"
+    },
+    {
+      "name": "create: operational credential other",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "bbcacae94ec4dc3800e7b0023e242f2412d6595ac175c6916fd75eecb8b5bd25",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 201,
+      "headers": {
+        "content-length": "521",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"gitlab\",\"instance\":\"gitlab.other.test\",\"entity_family\":\"operational\",\"display_name\":null,\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[\"Managed sync is also configured for provider 'gitlab' in this organization -- verify this is a different repository/workspace.\"]}"
+    },
+    {
+      "name": "create: operational gitlab.com",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "a73cff874837d97a3fe3a43bdc76c54d41fd45538ef88c607921b7a00022d8f0",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 201,
+      "headers": {
+        "content-length": "548",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"gitlab\",\"instance\":\"gitlab.com\",\"entity_family\":\"operational\",\"display_name\":null,\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":\"a2112ba5-6c72-ef0c-84fe-47d90296080a\",\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[\"Managed sync is also configured for provider 'gitlab' in this organization -- verify this is a different repository/workspace.\"]}"
+    },
+    {
+      "name": "create: duplicate of created",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "7d59c86fd18c67179a0d68642ade13e8f372f3dbdeb570ed034b9221ef763382",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 409,
+      "headers": {
+        "content-length": "148",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"A source is already registered for system='custom' instance='anything' in this organization (instance identifiers are case-insensitive)\"}"
+    },
+    {
+      "name": "create: superuser x-org",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "4313979fdd238c35eab1aa56df9c1fce8808785cdc32850c1a8d82b661c5a10e",
+      "request_headers_sha256": "9a9c04f25a4d55378bf52c9fd705c5f2878e7e46994f70a0722ed437a05e7d35",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "list sources after creates",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 200,
+      "headers": {
+        "content-length": "4710",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"gitlab\",\"instance\":\"gitlab.com\",\"entity_family\":\"operational\",\"display_name\":null,\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":\"a2112ba5-6c72-ef0c-84fe-47d90296080a\",\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[]},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"gitlab\",\"instance\":\"gitlab.other.test\",\"entity_family\":\"operational\",\"display_name\":null,\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[]},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"other.acme.test\",\"entity_family\":\"operational\",\"display_name\":null,\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[]},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"jira\",\"instance\":\"PROJ\",\"entity_family\":\"legacy\",\"display_name\":null,\"mode\":\"fullchaos_sync\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[]},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"custom\",\"instance\":\"anything\",\"entity_family\":\"legacy\",\"display_name\":null,\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[]},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"gitlab\",\"instance\":\"GRP/SUB\",\"entity_family\":\"legacy\",\"display_name\":null,\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"customer_relay\",\"matched_integration_source_id\":\"a2112ba5-6c72-ef0c-84fe-47d90296080a\",\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[]},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"acme/dormant\",\"entity_family\":\"legacy\",\"display_name\":\"Dormant é\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":\"a132f763-bf4b-eaba-2ca1-67f13f0269e9\",\"created_at\":\"\u003cnow\u003e\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[]},{\"id\":\"fe0171da-2d8d-50f5-8341-642190d5de46\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"gitlab\",\"instance\":\"grp/proj\",\"entity_family\":\"operational\",\"display_name\":null,\"mode\":\"managed_sync\",\"enabled\":false,\"webhook_mode\":\"customer_hosted\",\"matched_integration_source_id\":\"81e10ef1-4aa6-5fb6-9d0f-337b66922970\",\"created_at\":\"2026-09-03T10:00:00Z\",\"updated_at\":\"2026-09-03T10:00:00Z\",\"warnings\":[]},{\"id\":\"81e10ef1-4aa6-5fb6-9d0f-337b66922970\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"custom\",\"instance\":\"x é y\",\"entity_family\":\"legacy\",\"display_name\":\"Ünïcode\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-02T10:00:00Z\",\"updated_at\":\"2026-09-02T10:00:00.500000Z\",\"warnings\":[]},{\"id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"Acme/API\",\"entity_family\":\"legacy\",\"display_name\":\"Acme API\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-01T10:00:00.123456Z\",\"updated_at\":\"2026-09-02T11:00:00Z\",\"warnings\":[]},{\"id\":\"70f5c912-a742-5d6e-9445-f16583b35dac\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"jira\",\"instance\":\"OPS\",\"entity_family\":\"legacy\",\"display_name\":\"Ops\",\"mode\":\"disabled\",\"enabled\":false,\"webhook_mode\":\"customer_relay\",\"matched_integration_source_id\":null,\"created_at\":\"2026-08-02T00:00:00Z\",\"updated_at\":\"2026-08-02T00:00:00Z\",\"warnings\":[]},{\"id\":\"955b52e9-158d-5cd8-9060-3c4adf0146c6\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"ACME/managed\",\"entity_family\":\"legacy\",\"display_name\":null,\"mode\":\"customer_push\",\"enabled\":false,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"2026-08-01T00:00:00Z\",\"updated_at\":\"2026-08-01T00:00:00Z\",\"warnings\":[]}]"
+    },
+    {
+      "name": "patch: anon bad json",
+      "method": "PATCH",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "28a501f9c40dfb7c7cda64942f73f6f8da060a81e3d8ece9511fe9b81f752615",
+      "request_headers_sha256": "745ea247455bcb9570a60349b90d2be75781fef93245bc583fb608f0a3151138",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
+    },
+    {
+      "name": "patch: invalid body",
+      "method": "PATCH",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "0732541cd48599d80f63f2a8264f1aad08557ac0086d9e07afa898380b137d53",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 422,
+      "headers": {
+        "content-length": "238",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"mode\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"enabled\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"}]}"
+    },
+    {
+      "name": "patch: not found",
+      "method": "PATCH",
+      "path": "/api/v1/admin/customer-push/sources/1faf2d54-ea65-553d-9bb4-7c8cdaa34555",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Source not found\"}"
+    },
+    {
+      "name": "patch: bad id",
+      "method": "PATCH",
+      "path": "/api/v1/admin/customer-push/sources/nope",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Source not found\"}"
+    },
+    {
+      "name": "patch: no change",
+      "method": "PATCH",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "302620ecfad765f582339f803413018b2338e6f8731f5286721a1cb8620463d0",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 200,
+      "headers": {
+        "content-length": "378",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"Acme/API\",\"entity_family\":\"legacy\",\"display_name\":\"Acme API\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"disabled\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-01T10:00:00.123456Z\",\"updated_at\":\"2026-09-02T11:00:00Z\",\"warnings\":[]}"
+    },
+    {
+      "name": "patch: bad mode",
+      "method": "PATCH",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "de885dbb626aa89004ef06dd4541326d4ab96809c1da2dac67c08fddad98cd79",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 400,
+      "headers": {
+        "content-length": "96",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid mode 'nope'; must be one of ['fullchaos_sync', 'customer_push', 'disabled']\"}"
+    },
+    {
+      "name": "patch: fullchaos hosted",
+      "method": "PATCH",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "535ea49afbba2a20e3d606168ced45d6d147720fecee688e5861ac4203ec2187",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 400,
+      "headers": {
+        "content-length": "63",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"fullchaos_hosted webhook mode is not available yet\"}"
+    },
+    {
+      "name": "patch: rename",
+      "method": "PATCH",
+      "path": "/api/v1/admin/customer-push/sources/24F9813E-6116-51FC-B9BC-16B92E3F5F3A",
+      "body_sha256": "f032b4761b5af57497a000eb64ac1b7e124c546d69005abd9f903644be376afd",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 200,
+      "headers": {
+        "content-length": "398",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"Acme/API\",\"entity_family\":\"legacy\",\"display_name\":\"Acme \\\"API\\\" ü\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"customer_relay\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-01T10:00:00.123456Z\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[]}"
+    },
+    {
+      "name": "patch: enable owned",
+      "method": "PATCH",
+      "path": "/api/v1/admin/customer-push/sources/955b52e9-158d-5cd8-9060-3c4adf0146c6",
+      "body_sha256": "dcdb9554970ba1cf60802e18f4253fd7915ff8a8e5c70d7696b303670b528c8c",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 409,
+      "headers": {
+        "content-length": "207",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"code\":\"source_owned_by_fullchaos_sync\",\"message\":\"A managed github sync source already owns 'ACME/managed' in this organization; disable it before enabling customer-push for the same instance.\"}}"
+    },
+    {
+      "name": "patch: enable unowned push",
+      "method": "PATCH",
+      "path": "/api/v1/admin/customer-push/sources/70f5c912-a742-5d6e-9445-f16583b35dac",
+      "body_sha256": "ff67b68878e586d6f1730ccc6b286adb85f7d2b33cf2fc79f2555a0d8d055e67",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 200,
+      "headers": {
+        "content-length": "372",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"70f5c912-a742-5d6e-9445-f16583b35dac\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"jira\",\"instance\":\"OPS\",\"entity_family\":\"legacy\",\"display_name\":\"Ops\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"customer_relay\",\"matched_integration_source_id\":null,\"created_at\":\"2026-08-02T00:00:00Z\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[]}"
+    },
+    {
+      "name": "patch: disable",
+      "method": "PATCH",
+      "path": "/api/v1/admin/customer-push/sources/fe0171da-2d8d-50f5-8341-642190d5de46",
+      "body_sha256": "c49e85a9eb92458b6b814c3b411b24351dd0ecac49043ed5281223924f32774e",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 200,
+      "headers": {
+        "content-length": "411",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"fe0171da-2d8d-50f5-8341-642190d5de46\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"gitlab\",\"instance\":\"grp/proj\",\"entity_family\":\"operational\",\"display_name\":null,\"mode\":\"managed_sync\",\"enabled\":false,\"webhook_mode\":\"customer_hosted\",\"matched_integration_source_id\":\"81e10ef1-4aa6-5fb6-9d0f-337b66922970\",\"created_at\":\"2026-09-03T10:00:00Z\",\"updated_at\":\"2026-09-03T10:00:00Z\",\"warnings\":[]}"
+    },
+    {
+      "name": "get patched source",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 200,
+      "headers": {
+        "content-length": "398",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"system\":\"github\",\"instance\":\"Acme/API\",\"entity_family\":\"legacy\",\"display_name\":\"Acme \\\"API\\\" ü\",\"mode\":\"customer_push\",\"enabled\":true,\"webhook_mode\":\"customer_relay\",\"matched_integration_source_id\":null,\"created_at\":\"2026-09-01T10:00:00.123456Z\",\"updated_at\":\"\u003cnow\u003e\",\"warnings\":[]}"
+    },
+    {
+      "name": "token: anon",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "e2684e1f2cdbc37b29b6cf42001b7fcb240310aec58394829fb971bef850474b",
+      "request_headers_sha256": "745ea247455bcb9570a60349b90d2be75781fef93245bc583fb608f0a3151138",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "token: invalid body",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "69a41169c07361ae074b2aaa96341bf16a74d309ac78e5352793c04ea9e3e010",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 422,
+      "headers": {
+        "content-length": "528",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"name\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}},{\"type\":\"value_error\",\"loc\":[\"body\",\"scopes\"],\"msg\":\"Value error, Unknown scope(s) ['nope']; valid scopes are ['ingest:status', 'ingest:write', 'schema:read']\",\"input\":[\"nope\"],\"ctx\":{\"error\":{}}},{\"type\":\"datetime_from_date_parsing\",\"loc\":[\"body\",\"expires_at\"],\"msg\":\"Input should be a valid datetime or date, input is too short\",\"input\":\"soon\",\"ctx\":{\"error\":\"input is too short\"}}]}"
+    },
+    {
+      "name": "token: unknown source",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/1faf2d54-ea65-553d-9bb4-7c8cdaa34555/tokens",
+      "body_sha256": "e2684e1f2cdbc37b29b6cf42001b7fcb240310aec58394829fb971bef850474b",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Source not found\"}"
+    },
+    {
+      "name": "token: bound aware expiry",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "29e7b85b1f96db8e745a82c8af82f8746e233056d9bcb3fbaa1981ee1e7c4aa5",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 201,
+      "headers": {
+        "content-length": "396",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"ci é\",\"token\":\"fcpush_\u003ctoken\u003e\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:write\",\"schema:read\",\"ingest:write\"],\"expires_at\":\"2031-01-01T00:00:00.500000+05:30\",\"created_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "token: bound naive expiry",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "60ce9ea93058414252df1a44f629fd9caf022b33ff394aaa4d6bcdf92a4799ec",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 201,
+      "headers": {
+        "content-length": "355",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"naive\",\"token\":\"fcpush_\u003ctoken\u003e\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:status\"],\"expires_at\":\"2031-06-01T12:00:00\",\"created_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "token: bound unix expiry",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "f0614daef49132938d2036ee09377e5bc60e108b06f039bad6f364f7dc85a4a0",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 201,
+      "headers": {
+        "content-length": "353",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"unix\",\"token\":\"fcpush_\u003ctoken\u003e\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"schema:read\"],\"expires_at\":\"2031-10-17T10:40:00Z\",\"created_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "token: org wide write refused",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens",
+      "body_sha256": "90e5c33053ddf8d3648a2115e245ae47dbba00f362cee0e3519e29e46c85bd33",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 400,
+      "headers": {
+        "content-length": "117",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"ingest:write requires a source-bound token; create it via POST /customer-push/sources/{source_id}/tokens\"}"
+    },
+    {
+      "name": "token: org wide",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens",
+      "body_sha256": "cf3d3113b9f4fac2a418b939d8c534f794fc72cedd584398f9ab4b8f882646ba",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 201,
+      "headers": {
+        "content-length": "299",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":null,\"name\":\"ow\",\"token\":\"fcpush_\u003ctoken\u003e\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"schema:read\"],\"expires_at\":null,\"created_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "token: org wide community",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens",
+      "body_sha256": "cf3d3113b9f4fac2a418b939d8c534f794fc72cedd584398f9ab4b8f882646ba",
+      "request_headers_sha256": "766fff29d5168cce2a5a546a5c3e9d9246edc47ca960b03ad8ea39657a255692",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "list tokens after creates",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 200,
+      "headers": {
+        "content-length": "2546",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":null,\"name\":\"ow\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"schema:read\"],\"expires_at\":null,\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"unix\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"schema:read\"],\"expires_at\":\"2031-10-17T10:40:00Z\",\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"naive\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:status\"],\"expires_at\":\"2031-06-01T12:00:00Z\",\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"ci é\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:write\",\"schema:read\",\"ingest:write\"],\"expires_at\":\"2030-12-31T18:30:00.500000Z\",\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"b18f7f32-7491-5a45-a4d9-fbb2842f81d9\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":null,\"name\":\"to revoke\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:status\"],\"expires_at\":null,\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"2026-09-13T00:00:00Z\"},{\"id\":\"45034bbd-ebf9-5dd5-87e7-ade069dbe237\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":null,\"name\":\"org wide\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"schema:read\"],\"expires_at\":null,\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"2026-09-11T00:00:00Z\"},{\"id\":\"7ba9c604-2dfd-5a51-add2-79583c622ee3\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"bound\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:write\",\"schema:read\"],\"expires_at\":\"\u003cnow\u003e\",\"revoked_at\":null,\"last_used_at\":\"2026-09-20T01:02:03.000004Z\",\"created_at\":\"2026-09-10T00:00:00Z\"},{\"id\":\"4ec62e6e-b417-55d3-b688-2d09a6bcdd31\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"revoked\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[],\"expires_at\":null,\"revoked_at\":\"2026-09-12T00:00:00Z\",\"last_used_at\":null,\"created_at\":\"2026-09-09T00:00:00Z\"}]"
+    },
+    {
+      "name": "list source tokens after creates",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 200,
+      "headers": {
+        "content-length": "1714",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"unix\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"schema:read\"],\"expires_at\":\"2031-10-17T10:40:00Z\",\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"naive\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:status\"],\"expires_at\":\"2031-06-01T12:00:00Z\",\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"ci é\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:write\",\"schema:read\",\"ingest:write\"],\"expires_at\":\"2030-12-31T18:30:00.500000Z\",\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"7ba9c604-2dfd-5a51-add2-79583c622ee3\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"bound\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:write\",\"schema:read\"],\"expires_at\":\"\u003cnow\u003e\",\"revoked_at\":null,\"last_used_at\":\"2026-09-20T01:02:03.000004Z\",\"created_at\":\"2026-09-10T00:00:00Z\"},{\"id\":\"4ec62e6e-b417-55d3-b688-2d09a6bcdd31\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"revoked\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[],\"expires_at\":null,\"revoked_at\":\"2026-09-12T00:00:00Z\",\"last_used_at\":null,\"created_at\":\"2026-09-09T00:00:00Z\"}]"
+    },
+    {
+      "name": "rotate: anon",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/7ba9c604-2dfd-5a51-add2-79583c622ee3/rotate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "72a65fb37729c4781ce1ba632d3992e2d2ff4e3b932abe5fc1eab310d7ad3811",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "rotate: member",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/7ba9c604-2dfd-5a51-add2-79583c622ee3/rotate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "5d26044bf27d25db63f27cf137f8fd69a23fa3bba2e66d855b689dbe16d7869b",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "rotate: community",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/7ba9c604-2dfd-5a51-add2-79583c622ee3/rotate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "aa6456ed2a84cbd750caf71a69615a2bfc7c089e521d5e1df1dac06ff08fbbda",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "rotate: bad id",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/nope/rotate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 404,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Token not found\"}"
+    },
+    {
+      "name": "rotate: other org",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/7f75c097-2a76-5e14-a660-af932da94eea/rotate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 404,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Token not found\"}"
+    },
+    {
+      "name": "rotate: revoked",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/4ec62e6e-b417-55d3-b688-2d09a6bcdd31/rotate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 400,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Token already revoked\"}"
+    },
+    {
+      "name": "rotate: bound with ttl",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/7ba9c604-2dfd-5a51-add2-79583c622ee3/rotate",
+      "body_sha256": "4af8670485ecc2b21487b0a174abccf3b17bb9bac15f271afbe603e54bce0e7b",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 200,
+      "headers": {
+        "content-length": "376",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"bound\",\"token\":\"fcpush_\u003ctoken\u003e\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:write\",\"schema:read\"],\"expires_at\":\"\u003cnow\u003e\",\"created_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "rotate: again",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/7ba9c604-2dfd-5a51-add2-79583c622ee3/rotate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 400,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Token already revoked\"}"
+    },
+    {
+      "name": "rotate: org wide no ttl",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/45034BBD-EBF9-5DD5-87E7-ADE069DBE237/rotate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 200,
+      "headers": {
+        "content-length": "305",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":null,\"name\":\"org wide\",\"token\":\"fcpush_\u003ctoken\u003e\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"schema:read\"],\"expires_at\":null,\"created_at\":\"\u003cnow\u003e\"}"
+    },
+    {
+      "name": "revoke: live",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/b18f7f32-7491-5a45-a4d9-fbb2842f81d9/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 200,
+      "headers": {
+        "content-length": "303",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"b18f7f32-7491-5a45-a4d9-fbb2842f81d9\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":null,\"name\":\"to revoke\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:status\"],\"expires_at\":null,\"revoked_at\":\"\u003cnow\u003e\",\"last_used_at\":null,\"created_at\":\"2026-09-13T00:00:00Z\"}"
+    },
+    {
+      "name": "revoke: again",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/b18f7f32-7491-5a45-a4d9-fbb2842f81d9/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 200,
+      "headers": {
+        "content-length": "303",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"b18f7f32-7491-5a45-a4d9-fbb2842f81d9\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":null,\"name\":\"to revoke\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:status\"],\"expires_at\":null,\"revoked_at\":\"\u003cnow\u003e\",\"last_used_at\":null,\"created_at\":\"2026-09-13T00:00:00Z\"}"
+    },
+    {
+      "name": "revoke: other org",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/7f75c097-2a76-5e14-a660-af932da94eea/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 404,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Token not found\"}"
+    },
+    {
+      "name": "revoke: disabled org",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/tokens/b18f7f32-7491-5a45-a4d9-fbb2842f81d9/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4a58936e14a132a94d77f7d09353b98d7967ed0822b2c3c667cf9efb0c8b1ff9",
+      "status": 403,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"customer_push_ingest\",\"message\":\"Customer push ingest is not enabled for this organization\"}}"
+    },
+    {
+      "name": "list tokens after rotation",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 200,
+      "headers": {
+        "content-length": "3258",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":null,\"name\":\"org wide\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"schema:read\"],\"expires_at\":null,\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"bound\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:write\",\"schema:read\"],\"expires_at\":\"\u003cnow\u003e\",\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":null,\"name\":\"ow\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"schema:read\"],\"expires_at\":null,\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"unix\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"schema:read\"],\"expires_at\":\"2031-10-17T10:40:00Z\",\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"naive\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:status\"],\"expires_at\":\"2031-06-01T12:00:00Z\",\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"ci é\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:write\",\"schema:read\",\"ingest:write\"],\"expires_at\":\"2030-12-31T18:30:00.500000Z\",\"revoked_at\":null,\"last_used_at\":null,\"created_at\":\"\u003cnow\u003e\"},{\"id\":\"b18f7f32-7491-5a45-a4d9-fbb2842f81d9\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":null,\"name\":\"to revoke\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:status\"],\"expires_at\":null,\"revoked_at\":\"\u003cnow\u003e\",\"last_used_at\":null,\"created_at\":\"2026-09-13T00:00:00Z\"},{\"id\":\"45034bbd-ebf9-5dd5-87e7-ade069dbe237\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":null,\"name\":\"org wide\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"schema:read\"],\"expires_at\":null,\"revoked_at\":\"\u003cnow\u003e\",\"last_used_at\":null,\"created_at\":\"2026-09-11T00:00:00Z\"},{\"id\":\"7ba9c604-2dfd-5a51-add2-79583c622ee3\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"bound\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[\"ingest:write\",\"schema:read\"],\"expires_at\":\"\u003cnow\u003e\",\"revoked_at\":\"\u003cnow\u003e\",\"last_used_at\":\"2026-09-20T01:02:03.000004Z\",\"created_at\":\"2026-09-10T00:00:00Z\"},{\"id\":\"4ec62e6e-b417-55d3-b688-2d09a6bcdd31\",\"org_id\":\"46af3ae0-e015-50fb-9917-799cbbba5d21\",\"source_id\":\"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\",\"name\":\"revoked\",\"token_prefix\":\"fcpush_\u003ctoken\u003e\",\"scopes\":[],\"expires_at\":null,\"revoked_at\":\"2026-09-12T00:00:00Z\",\"last_used_at\":null,\"created_at\":\"2026-09-09T00:00:00Z\"}]"
+    },
+    {
+      "name": "GET rotate",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/tokens/7ba9c604-2dfd-5a51-add2-79583c622ee3/rotate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "PUT source",
+      "method": "PUT",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "ab2067c4b07f602b777e207f31705ecd8216d2ba0c44a91a20547d6cf898a186",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "DELETE tokens",
+      "method": "DELETE",
+      "path": "/api/v1/admin/customer-push/tokens",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4e500c1728d042447a64da39036cf03217ffe27fdc294237448b5716a4ce3d35",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    }
+  ],
+  "rows": {
+    "audit rows": {
+      "rows": "46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_source_registeredingest_source\u003cid-2\u003eRegistered customer-push source github/acme/dormant{\"system\": \"github\", \"instance\": \"acme/dormant\", \"entity_family\": \"legacy\", \"mode\": \"customer_push\"}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_source_registeredingest_source\u003cid-4\u003eRegistered customer-push source gitlab/GRP/SUB{\"system\": \"gitlab\", \"instance\": \"GRP/SUB\", \"entity_family\": \"legacy\", \"mode\": \"customer_push\"}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_source_registeredingest_source\u003cid-1\u003eRegistered customer-push source custom/anything{\"system\": \"custom\", \"instance\": \"anything\", \"entity_family\": \"legacy\", \"mode\": \"customer_push\"}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_source_registeredingest_source\u003cid-7\u003eRegistered customer-push source jira/PROJ{\"system\": \"jira\", \"instance\": \"PROJ\", \"entity_family\": \"legacy\", \"mode\": \"fullchaos_sync\"}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_source_registeredingest_source\u003cid-3\u003eRegistered customer-push source github/other.acme.test{\"system\": \"github\", \"instance\": \"other.acme.test\", \"entity_family\": \"operational\", \"mode\": \"customer_push\"}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_source_registeredingest_source\u003cid-6\u003eRegistered customer-push source gitlab/gitlab.other.test{\"system\": \"gitlab\", \"instance\": \"gitlab.other.test\", \"entity_family\": \"operational\", \"mode\": \"customer_push\"}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_source_registeredingest_source\u003cid-5\u003eRegistered customer-push source gitlab/gitlab.com{\"system\": \"gitlab\", \"instance\": \"gitlab.com\", \"entity_family\": \"operational\", \"mode\": \"customer_push\"}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_source_mode_changedingest_source24f9813e-6116-51fc-b9bc-16b92e3f5f3aUpdated customer-push source github/Acme/API{\"display_name\": {\"old\": \"Acme API\", \"new\": \"Acme \\\"API\\\" \\u00fc\"}, \"webhook_mode\": {\"old\": \"disabled\", \"new\": \"customer_relay\"}}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_source_mode_changedingest_source70f5c912-a742-5d6e-9445-f16583b35dacUpdated customer-push source jira/OPS{\"mode\": {\"old\": \"disabled\", \"new\": \"customer_push\"}, \"enabled\": {\"old\": false, \"new\": true}}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_token_createdingest_token\u003cid-9\u003eCreated ingest token 'ci é'{\"name\": \"ci \\u00e9\", \"scopes\": [\"ingest:write\", \"schema:read\", \"ingest:write\"], \"source_id\": \"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\"}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_token_createdingest_token\u003cid-10\u003eCreated ingest token 'naive'{\"name\": \"naive\", \"scopes\": [\"ingest:status\"], \"source_id\": \"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\"}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_token_createdingest_token\u003cid-13\u003eCreated ingest token 'unix'{\"name\": \"unix\", \"scopes\": [\"schema:read\"], \"source_id\": \"24f9813e-6116-51fc-b9bc-16b92e3f5f3a\"}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_token_createdingest_token\u003cid-12\u003eCreated ingest token 'ow'{\"name\": \"ow\", \"scopes\": [\"schema:read\"], \"source_id\": null}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_token_rotatedingest_token\u003cid-8\u003eRotated ingest token 'bound'{\"old_token_id\": \"7ba9c604-2dfd-5a51-add2-79583c622ee3\", \"new_token_id\": \"\u003cid-8\u003e\"}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_token_rotatedingest_token\u003cid-11\u003eRotated ingest token 'org wide'{\"old_token_id\": \"45034bbd-ebf9-5dd5-87e7-ade069dbe237\", \"new_token_id\": \"\u003cid-11\u003e\"}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e | 46af3ae0-e015-50fb-9917-799cbbba5d210118be82-674f-5e2f-9b99-424a2d3d9171ingest_token_revokedingest_tokenb18f7f32-7491-5a45-a4d9-fbb2842f81d9Revoked ingest token 'to revoke'{}{\"ip_address\": \"203.0.113.9\", \"user_agent\": \"venue/1\", \"request_id\": \"req-1\"}success\u003cnil\u003e \u003cnow\u003e"
+    },
+    "python minted token checks": {
+      "rows": "true true\ntrue true\ntrue true\ntrue true\ntrue true\ntrue true"
+    },
+    "sources rows": {
+      "rows": "\u003cid-1\u003e46af3ae0-e015-50fb-9917-799cbbba5d21customanythinglegacy\u003cnil\u003ecustomer_pushtruedisabled\u003cnil\u003e false0118be82-674f-5e2f-9b99-424a2d3d9171\u003cnow\u003e \u003cnow\u003e | 81e10ef1-4aa6-5fb6-9d0f-337b6692297046af3ae0-e015-50fb-9917-799cbbba5d21customx é ylegacyÜnïcodecustomer_pushtruedisabled\u003cnil\u003e false \u003cnil\u003e 2026-09-02 10:00:00 +0000 UTC 2026-09-02 10:00:00.5 +0000 UTC | 955b52e9-158d-5cd8-9060-3c4adf0146c646af3ae0-e015-50fb-9917-799cbbba5d21githubACME/managedlegacy\u003cnil\u003ecustomer_pushfalsedisabled\u003cnil\u003e false \u003cnil\u003e 2026-08-01 00:00:00 +0000 UTC 2026-08-01 00:00:00 +0000 UTC | 24f9813e-6116-51fc-b9bc-16b92e3f5f3a46af3ae0-e015-50fb-9917-799cbbba5d21githubAcme/APIlegacyAcme \"API\" ücustomer_pushtruecustomer_relay\u003cnil\u003e false \u003cnil\u003e 2026-09-01 10:00:00.123456 +0000 UTC \u003cnow\u003e | \u003cid-2\u003e46af3ae0-e015-50fb-9917-799cbbba5d21githubacme/dormantlegacyDormant écustomer_pushtruedisabled\u003cnil\u003e true0118be82-674f-5e2f-9b99-424a2d3d9171\u003cnow\u003e \u003cnow\u003e | \u003cid-3\u003e46af3ae0-e015-50fb-9917-799cbbba5d21githubother.acme.testoperational\u003cnil\u003ecustomer_pushtruedisabled\u003cnil\u003e false0118be82-674f-5e2f-9b99-424a2d3d9171\u003cnow\u003e \u003cnow\u003e | \u003cid-4\u003e46af3ae0-e015-50fb-9917-799cbbba5d21gitlabGRP/SUBlegacy\u003cnil\u003ecustomer_pushtruecustomer_relay\u003cnil\u003e true0118be82-674f-5e2f-9b99-424a2d3d9171\u003cnow\u003e \u003cnow\u003e | \u003cid-5\u003e46af3ae0-e015-50fb-9917-799cbbba5d21gitlabgitlab.comoperational\u003cnil\u003ecustomer_pushtruedisabled\u003cnil\u003e true0118be82-674f-5e2f-9b99-424a2d3d9171\u003cnow\u003e \u003cnow\u003e | \u003cid-6\u003e46af3ae0-e015-50fb-9917-799cbbba5d21gitlabgitlab.other.testoperational\u003cnil\u003ecustomer_pushtruedisabled\u003cnil\u003e false0118be82-674f-5e2f-9b99-424a2d3d9171\u003cnow\u003e \u003cnow\u003e | fe0171da-2d8d-50f5-8341-642190d5de4646af3ae0-e015-50fb-9917-799cbbba5d21gitlabgrp/projoperational\u003cnil\u003emanaged_syncfalsecustomer_hosted\u003cnil\u003e true \u003cnil\u003e 2026-09-03 10:00:00 +0000 UTC 2026-09-03 10:00:00 +0000 UTC | 70f5c912-a742-5d6e-9445-f16583b35dac46af3ae0-e015-50fb-9917-799cbbba5d21jiraOPSlegacyOpscustomer_pushtruecustomer_relay\u003cnil\u003e false \u003cnil\u003e 2026-08-02 00:00:00 +0000 UTC \u003cnow\u003e | \u003cid-7\u003e46af3ae0-e015-50fb-9917-799cbbba5d21jiraPROJlegacy\u003cnil\u003efullchaos_synctruedisabled\u003cnil\u003e false0118be82-674f-5e2f-9b99-424a2d3d9171\u003cnow\u003e \u003cnow\u003e | 1faf2d54-ea65-553d-9bb4-7c8cdaa345558b72262a-b72b-585f-a1a1-14f8603d6e7dgithubother/repolegacy\u003cnil\u003ecustomer_pushtruedisabled\u003cnil\u003e false \u003cnil\u003e 2026-09-01 00:00:00 +0000 UTC 2026-09-01 00:00:00 +0000 UTC"
+    },
+    "tokens rows": {
+      "rows": "7ba9c604-2dfd-5a51-add2-79583c622ee346af3ae0-e015-50fb-9917-799cbbba5d2124f9813e-6116-51fc-b9bc-16b92e3f5f3abound2fcpush_\u003ctoken\u003e[\"ingest:write\", \"schema:read\"]\u003cnil\u003e \u003cnow\u003e \u003cnow\u003e 2026-09-20 01:02:03.000004 +0000 UTC \u003cnil\u003e 2026-09-10 00:00:00 +0000 UTC | \u003cid-8\u003e46af3ae0-e015-50fb-9917-799cbbba5d2124f9813e-6116-51fc-b9bc-16b92e3f5f3abound64\u003cprefix\u003e[\"ingest:write\", \"schema:read\"]0118be82-674f-5e2f-9b99-424a2d3d9171\u003cnow\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnow\u003e | \u003cid-9\u003e46af3ae0-e015-50fb-9917-799cbbba5d2124f9813e-6116-51fc-b9bc-16b92e3f5f3aci é64\u003cprefix\u003e[\"ingest:write\", \"schema:read\", \"ingest:write\"]0118be82-674f-5e2f-9b99-424a2d3d91712030-12-31 18:30:00.5 +0000 UTC \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnow\u003e | \u003cid-10\u003e46af3ae0-e015-50fb-9917-799cbbba5d2124f9813e-6116-51fc-b9bc-16b92e3f5f3anaive64\u003cprefix\u003e[\"ingest:status\"]0118be82-674f-5e2f-9b99-424a2d3d91712031-06-01 12:00:00 +0000 UTC \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnow\u003e | 45034bbd-ebf9-5dd5-87e7-ade069dbe23746af3ae0-e015-50fb-9917-799cbbba5d21\u003cnil\u003eorg wide2fcpush_\u003ctoken\u003e[\"schema:read\"]\u003cnil\u003e \u003cnil\u003e \u003cnow\u003e \u003cnil\u003e \u003cnil\u003e 2026-09-11 00:00:00 +0000 UTC | \u003cid-11\u003e46af3ae0-e015-50fb-9917-799cbbba5d21\u003cnil\u003eorg wide64\u003cprefix\u003e[\"schema:read\"]0118be82-674f-5e2f-9b99-424a2d3d9171\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnow\u003e | 7f75c097-2a76-5e14-a660-af932da94eea8b72262a-b72b-585f-a1a1-14f8603d6e7d1faf2d54-ea65-553d-9bb4-7c8cdaa34555other2fcpush_\u003ctoken\u003e[\"ingest:status\"]\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e 2026-09-11 00:00:00 +0000 UTC | \u003cid-12\u003e46af3ae0-e015-50fb-9917-799cbbba5d21\u003cnil\u003eow64\u003cprefix\u003e[\"schema:read\"]0118be82-674f-5e2f-9b99-424a2d3d9171\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnow\u003e | 4ec62e6e-b417-55d3-b688-2d09a6bcdd3146af3ae0-e015-50fb-9917-799cbbba5d2124f9813e-6116-51fc-b9bc-16b92e3f5f3arevoked2fcpush_\u003ctoken\u003e[]\u003cnil\u003e \u003cnil\u003e 2026-09-12 00:00:00 +0000 UTC \u003cnil\u003e \u003cnil\u003e 2026-09-09 00:00:00 +0000 UTC | b18f7f32-7491-5a45-a4d9-fbb2842f81d946af3ae0-e015-50fb-9917-799cbbba5d21\u003cnil\u003eto revoke2fcpush_\u003ctoken\u003e[\"ingest:status\"]\u003cnil\u003e \u003cnil\u003e \u003cnow\u003e \u003cnil\u003e \u003cnil\u003e 2026-09-13 00:00:00 +0000 UTC | \u003cid-13\u003e46af3ae0-e015-50fb-9917-799cbbba5d2124f9813e-6116-51fc-b9bc-16b92e3f5f3aunix64\u003cprefix\u003e[\"schema:read\"]0118be82-674f-5e2f-9b99-424a2d3d91712031-10-17 10:40:00 +0000 UTC \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnow\u003e"
+    }
+  }
+}

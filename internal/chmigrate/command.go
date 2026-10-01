@@ -65,7 +65,7 @@ func run(ctx context.Context, verb string, env cli.Env) int {
 		fmt.Fprint(env.Stderr, "\nEnvironment:\n"+
 			"  CLICKHOUSE_URI (or _FILE)       ClickHouse DSN (native protocol); the database it names is migrated\n"+
 			"  DEV_HEALTH_CH_HOST, _PORT, _USER, _PASSWORD, _DB   component form, exclusive with CLICKHOUSE_URI\n"+
-			"  OPERATIONAL_ORDERING_CONTRACT   must be 2: the head is production's contract-2 schema\n")
+			"  OPERATIONAL_ORDERING_CONTRACT   unset or 2: the head is production's contract-2 schema; 1 is refused (unsupported)\n")
 	}
 	var check *bool
 	if verb == "status" {

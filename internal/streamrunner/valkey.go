@@ -169,15 +169,7 @@ func (t *ValkeyTransport) Quarantine(ctx context.Context, message Message, reaso
 	if strings.HasPrefix(message.Stream, "external-ingest:") {
 		return t.quarantineExternal(ctx, message, reason)
 	}
-	fields := map[string]string{"original_stream": message.Stream, "entry_id": message.ID, "reason": reason, "moved_at": time.Now().UTC().Format(time.RFC3339Nano)}
-	for key, value := range message.Fields {
-		// Durable identities only. binding_id/event_id make a PagerDuty DLQ row
-		// reconcilable against the Python contract; the raw payload deliberately
-		// stays out of the quarantine record.
-		if key == "ingestion_id" || key == "org_id" || key == "binding_id" || key == "event_id" {
-			fields[key] = value
-		}
-	}
+	fields := DeadLetterFields(message, reason, time.Now().UTC().Format(time.RFC3339Nano))
 	command := t.client.B().Xadd().Key(quarantineStream(message.Stream)).Maxlen().Almost().Threshold("100000").Id("*").FieldValue()
 	for key, value := range fields {
 		command = command.FieldValue(key, value)

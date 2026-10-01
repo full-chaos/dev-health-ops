@@ -253,7 +253,7 @@ func TestParseContract(t *testing.T) {
 		present bool
 		want    int
 		fails   bool
-	}{{"", false, 1, false}, {"1", true, 1, false}, {"2", true, 2, false}, {"", true, 0, true}, {"3", true, 0, true}} {
+	}{{"", false, 2, false}, {"1", true, 0, true}, {"2", true, 2, false}, {"", true, 0, true}, {" 2", true, 0, true}, {"3", true, 0, true}} {
 		got, err := ParseContract(testCase.raw, testCase.present)
 		if (err != nil) != testCase.fails || got != testCase.want {
 			t.Fatalf("ParseContract(%q, %v) = %d, %v", testCase.raw, testCase.present, got, err)
@@ -388,11 +388,11 @@ func TestCommandRefusesBeforeConnecting(t *testing.T) {
 		code int
 		want string
 	}{
-		"a positional argument": {[]string{"extra"}, nil, cli.ExitUsage, "positional arguments"},
-		"a bad contract":        {nil, map[string]string{OrderingContractEnv: "3"}, cli.ExitFailure, `"code":"configuration_error"`},
-		"another contract":      {nil, map[string]string{OrderingContractEnv: "1"}, cli.ExitFailure, `"code":"settings_mismatch"`},
-		"an unset contract":     {nil, nil, cli.ExitFailure, "contract 2 expected, OPERATIONAL_ORDERING_CONTRACT=1 found"},
-		"no DSN":                {nil, map[string]string{OrderingContractEnv: "2"}, cli.ExitFailure, "CLICKHOUSE_URI is required"},
+		"a positional argument":  {[]string{"extra"}, nil, cli.ExitUsage, "positional arguments"},
+		"a bad contract":         {nil, map[string]string{OrderingContractEnv: "3"}, cli.ExitFailure, `"code":"configuration_error"`},
+		"contract 1 is refused":  {nil, map[string]string{OrderingContractEnv: "1"}, cli.ExitFailure, "only contract 2 is supported"},
+		"an unset contract is 2": {nil, nil, cli.ExitFailure, "CLICKHOUSE_URI is required"},
+		"no DSN":                 {nil, map[string]string{OrderingContractEnv: "2"}, cli.ExitFailure, "CLICKHOUSE_URI is required"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer

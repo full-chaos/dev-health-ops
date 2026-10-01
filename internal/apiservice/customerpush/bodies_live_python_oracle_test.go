@@ -2,12 +2,13 @@ package customerpush
 
 import (
 	"encoding/json"
+	"maps"
 	"math/rand"
 	"net/http/httptest"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // The three request models the write routes take, each behind a FastAPI
@@ -68,7 +70,8 @@ var modelFields = map[string][]string{
 // model's fields (a field is absent, or one of its value pool).
 func bodiesCorpus() [][2]string {
 	var corpus [][2]string
-	for model := range modelFields {
+	// Sorted: the corpus is the key of a frozen golden, and a Go map ranges in a random order.
+	for _, model := range slices.Sorted(maps.Keys(modelFields)) {
 		for _, body := range []string{``, `null`, `[]`, `"x"`, `1`, `{}`, `{`, `{"a":1}`, `{"x": NaN}`} {
 			corpus = append(corpus, [2]string{model, body})
 		}
@@ -206,22 +209,26 @@ func goBodyAnswer(model, body string) (int, string) {
 
 // TestCustomerPushBodiesMatchLiveFastAPI compares the write routes' body
 // validation with FastAPI's on the real request models.
-func TestCustomerPushBodiesMatchLiveFastAPI(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
+func TestCustomerPushBodiesMatchFrozenFastAPI(t *testing.T) {
+	frozen := venueoracle.OpenGolden(t, programGolden("bodies", t.Name(), "f94d527b161e5ac97fb0131f67e9d77b7670f0fc2b74379868148e3d3ad8b495"))
 	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
 	corpus := bodiesCorpus()
 	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonBodiesProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
+	request := venueoracle.ProgramRequest("request model corpus", pythonBodiesProgram, input, producerEnv)
+	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		python := pyoracle.Resolve(t, root)
+		command := exec.Command(python, "-c", pythonBodiesProgram)
+		command.Env = producerCommandEnv(root)
+		command.Stdin = strings.NewReader(string(input))
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		}
+		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
+	})
+	frozen.Consumed(t, answers...)
+	output := []byte(answers[0].Body)
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want [][2]any
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -252,12 +259,7 @@ func TestCustomerPushBodiesMatchLiveFastAPI(t *testing.T) {
 	if mismatches > 0 {
 		t.Fatalf("%d of %d bodies differ", mismatches, len(corpus))
 	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "api-customerpush-bodies"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	frozen.SkipDiff(t)
+	frozen.Finish(t)
 	t.Logf("%d bodies compared (status counts %v); 0 mismatches", len(corpus), statuses)
 }

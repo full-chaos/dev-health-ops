@@ -739,7 +739,7 @@ func TestStartRefusesAGoldenRecordedUnderAnotherPythonEnvironment(t *testing.T) 
 
 // legacyKeyGoldenCount is how many goldens the closed list holds. It only goes
 // down, with every row that is deleted: there is no room above it.
-const legacyKeyGoldenCount = 37
+const legacyKeyGoldenCount = 52
 
 // legacyRow is one row of the closed list: a golden of the first key version
 // by its repository path, and the sha256 of its bytes.

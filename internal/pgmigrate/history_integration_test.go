@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -98,19 +99,18 @@ func TestHistoryMatchesTheFrozenAlembicOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := map[string]string{"OTEL_ENABLED": "false"}
-	request := venueoracle.ProgramRequest("history scenarios", pythonCLIProgram, input, env)
+	request := venueoracle.ProgramRequest("history scenarios", pythonCLIProgram, input, historyPythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		produced := historyGoldenFile{History: map[string]string{}}
 		for _, scenario := range historyScenarios {
-			code, text := pythonMigrate(t, root, scenario.env, "", "history")
+			code, text := pythonMigrate(t, root, historyPythonSettings, scenario.env, "", "history")
 			if code != 0 {
 				t.Fatalf("%s: alembic history exited %d", scenario.name, code)
 			}
 			produced.History[scenario.name] = text
 		}
 		uri, _ := revisionsDatabase(t)
-		code, _ := pythonMigrate(t, root, []string{"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}, uri, "downgrade", "0139")
+		code, _ := pythonMigrate(t, root, historyPythonSettings, []string{"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}, uri, "downgrade", "0139")
 		produced.Downgrade.Exit = code
 		produced.Downgrade.VersionsAfter = recordedVersions(t, uri)
 		body, err := json.Marshal(produced)
@@ -162,19 +162,46 @@ func TestHistoryMatchesTheFrozenAlembicOutput(t *testing.T) {
 // pythonCLIProgram is the entry point the producer runs: the real dev-hops CLI, in process.
 const pythonCLIProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
 
-func pythonMigrate(t *testing.T, root string, env []string, uri string, args ...string) (int, string) {
+// pgmigratePythonSettings are the variables that shape the answers of the alias and revisions oracles, as
+// constants: they are the producer's environment AND part of each golden's request key (a changed value
+// fails the frozen replay). historyPythonSettings leaves the hash seed to each history scenario (a seed is
+// part of the scenario, in its input).
+var (
+	pgmigratePythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
+	historyPythonSettings   = map[string]string{"OTEL_ENABLED": "false"}
+)
+
+// pgmigratePythonEnv is the producer's CLOSED environment: PATH and HOME, the checkout's source, and the
+// settings map; nothing is inherited from the test process. This is the form of what the history producer
+// used to do by hand (it removed MIGRATION_DATABASE_URI and DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER from
+// os.Environ() because they change the answer): they are absent by construction, and
+// TestPgmigratePythonEnvIsClosed keeps that visible. A per-run value (a database address) or a scenario's own
+// variable is appended by name by the caller.
+func pgmigratePythonEnv(root string, settings map[string]string) []string {
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
+	names := make([]string, 0, len(settings))
+	for name := range settings {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		env = append(env, name+"="+settings[name])
+	}
+	return env
+}
+
+func pythonMigrate(t *testing.T, root string, settings map[string]string, env []string, uri string, args ...string) (int, string) {
 	t.Helper()
-	return pythonCLI(t, root, env, uri, append([]string{"migrate", "postgres"}, args...)...)
+	return pythonCLI(t, root, settings, env, uri, append([]string{"migrate", "postgres"}, args...)...)
 }
 
 // pythonCLI runs `dev-hops ARGS` (the real entry point, in process) and returns its
 // exit code and stdout.
-func pythonCLI(t *testing.T, root string, env []string, uri string, cliArgs ...string) (int, string) {
+func pythonCLI(t *testing.T, root string, settings map[string]string, env []string, uri string, cliArgs ...string) (int, string) {
 	t.Helper()
 	python := pyoracle.Resolve(t, root)
 	command := exec.Command(python, append([]string{"-c", pythonCLIProgram}, cliArgs...)...)
-	command.Env = removeEnv(removeEnv(os.Environ(), "MIGRATION_DATABASE_URI"), "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER")
-	command.Env = append(command.Env, "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_ENABLED=false", "PYTHONDONTWRITEBYTECODE=1")
+	command.Env = pgmigratePythonEnv(root, settings)
 	if uri != "" {
 		// The async engine (migrate status) takes asyncpg's own query names.
 		pyURI := strings.Replace(strings.Replace(uri, "postgres://", "postgresql+asyncpg://", 1), "sslmode=", "ssl=", 1)

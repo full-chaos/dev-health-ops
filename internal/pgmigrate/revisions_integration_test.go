@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -72,8 +71,7 @@ func pythonRevisions(t *testing.T, root, uri, verb string) string {
 	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
 	command := exec.Command(python, "-c", program, "migrate", "postgres", verb)
 	pyURI := strings.Replace(uri, "postgres://", "postgresql://", 1)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI, "OTEL_ENABLED=false", "PYTHONHASHSEED=0", "PYTHONDONTWRITEBYTECODE=1")
-	command.Env = removeEnv(command.Env, "MIGRATION_DATABASE_URI")
+	command.Env = append(pgmigratePythonEnv(root, pgmigratePythonSettings), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	if err := command.Run(); err != nil {
@@ -157,8 +155,7 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
-	request := venueoracle.ProgramRequest("revisions scenarios", revisionsPythonProgram, input, env)
+	request := venueoracle.ProgramRequest("revisions scenarios", revisionsPythonProgram, input, pgmigratePythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		uri, exec := revisionsDatabase(t)
 		exec("CREATE TABLE alembic_version_saved AS SELECT * FROM alembic_version")

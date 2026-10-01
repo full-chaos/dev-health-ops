@@ -78,6 +78,7 @@ func idempotencyKeys(t *testing.T, ctx context.Context, uri string) string {
 // (decode, credentials, idempotency key, validation) is measured here on
 // the live app: a request refused with 422 has already claimed its key.
 func TestLegacyIngestVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("legacy-ingest-venue-oracle", t.Name(), "2930d49992d63d52bd913bd1ab2e92e92273709b367225cb31227bbebf8a7cd6"))
 	ctx := context.Background()
 	root := webhookintakeRepoRoot(t)
 	const (
@@ -86,7 +87,7 @@ func TestLegacyIngestVenueOracle(t *testing.T) {
 		jwtKey = "venue-oracle-jwt-signing-key-32-bytes-min"
 	)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, JWTKey: jwtKey,
+		Golden: golden, Root: golden.PythonRoot(t, root), JWTKey: jwtKey,
 		PythonEnv: []string{"INGEST_API_KEYS=other-key, " + apiKey, "INGEST_SIGNING_SECRET=" + secret},
 		Seed: func(*testing.T, context.Context, *pgxpool.Pool, *venueoracle.Venue) map[string]map[string]any {
 			return nil
@@ -178,24 +179,30 @@ func TestLegacyIngestVenueOracle(t *testing.T) {
 		signed("idempotency claimed by a refused credential", "commits", body(commit), map[string]string{"X-Idempotency-Key": "venue-key-3", "X-API-Key": "nope"}),
 		signed("idempotency after the refused credential", "commits", body(commit), map[string]string{"X-Idempotency-Key": "venue-key-3"}),
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(_ venueoracle.Request, text string) string {
 			return ingestionIDPattern.ReplaceAllString(text, `"ingestion_id":"<id>"`)
 		},
 	})
 	t.Log(receipt)
 
-	pythonStream := venueoracle.StreamEntries(t, ctx, venue.PythonValkeyURI, "ingest:*", "ingestion_id")
 	goStream := venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "ingest:*", "ingestion_id")
-	if pythonStream != goStream || pythonStream == "" {
-		t.Errorf("ingest stream entries differ:\n python: %s\n go:     %s", pythonStream, goStream)
+	pythonStream := golden.CompareRows(t, "ingest stream entries", func() string {
+		return venueoracle.StreamEntries(t, ctx, venue.PythonValkeyURI, "ingest:*", "ingestion_id")
+	}, goStream)
+	if pythonStream == "" {
+		t.Error("ingest stream entries are empty")
 	}
-	pythonKeys := idempotencyKeys(t, ctx, venue.PythonValkeyURI)
 	goKeys := idempotencyKeys(t, ctx, venue.ValkeyURI)
-	if pythonKeys != goKeys || pythonKeys == "" {
-		t.Errorf("idempotency keys differ:\n python: %s\n go:     %s", pythonKeys, goKeys)
+	pythonKeys := golden.CompareRows(t, "idempotency keys", func() string {
+		return idempotencyKeys(t, ctx, venue.PythonValkeyURI)
+	}, goKeys)
+	if pythonKeys == "" {
+		t.Error("idempotency keys are empty")
 	}
+	golden.Finish(t)
 }
 
 // TestLegacyIngestTelemetryVenueOracle is the telemetry route's differential:
@@ -206,6 +213,7 @@ func TestLegacyIngestVenueOracle(t *testing.T) {
 // own). A value the column cannot hold is Python's unhandled 500 and stores
 // nothing, on both planes.
 func TestLegacyIngestTelemetryVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("legacy-ingest-telemetry-venue-oracle", t.Name(), "fbc762005c5f59983c039e44cbf6735462a2feeeaa5d2b91c6f52144afd5a4e7"))
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 	const (
@@ -213,7 +221,7 @@ func TestLegacyIngestTelemetryVenueOracle(t *testing.T) {
 		secret = "venue-ingest-secret"
 	)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{"INGEST_API_KEYS=" + apiKey, "INGEST_SIGNING_SECRET=" + secret},
 		Seed: func(*testing.T, context.Context, *pgxpool.Pool, *venueoracle.Venue) map[string]map[string]any {
 			return nil
@@ -234,7 +242,9 @@ func TestLegacyIngestTelemetryVenueOracle(t *testing.T) {
 	// The table's TTL drops a bucket 90 days after its start, so every
 	// timestamp is recent (fixed strings in the requests, so both planes
 	// see the same ones).
-	now := time.Now().UTC().Truncate(time.Second)
+	// Fixed, far in the future: a frozen golden holds request bytes, and the
+	// table's TTL must not reach the rows however late the test runs.
+	now := time.Date(2099, time.June, 15, 12, 0, 0, 0, time.UTC)
 	recent := func(offset time.Duration, layout string) string { return `"` + now.Add(offset).Format(layout) + `"` }
 	item := func(overrides ...string) string {
 		fields := map[string]string{
@@ -289,16 +299,18 @@ func TestLegacyIngestTelemetryVenueOracle(t *testing.T) {
 		request("no items", batch(`"org-t6"`), nil),
 		request("bad credentials", batch(`"org-t6"`, item()), map[string]string{keyHeader: "nope"}),
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(_ venueoracle.Request, text string) string {
 			return ingestionIDPattern.ReplaceAllString(text, `"ingestion_id":"<id>"`)
 		},
 	})
 	t.Log(receipt)
 	var out strings.Builder
-	compareCHRows(t, ctx, venue, &out, "telemetry_signal_bucket",
+	compareCHRows(t, ctx, golden, venue, &out, "telemetry_signal_bucket",
 		`SELECT org_id, signal_type, signal_count, session_count, ifNull(toString(unique_pseudonymous_count), '<null>'), endpoint_group, environment, repo_id, release_ref,
 			toString(bucket_start), toString(bucket_end), is_sampled, schema_version, dedupe_key FROM telemetry_signal_bucket ORDER BY org_id, dedupe_key`)
 	t.Log(out.String())
+	golden.Finish(t)
 }

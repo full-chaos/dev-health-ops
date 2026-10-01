@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -76,7 +75,7 @@ type corsCase struct {
 	Headers map[string]string `json:"headers"`
 }
 
-// TestCORSVenueOracleMatchesLiveStarlette pins the Go CORS middleware against the
+// TestCORSMatchesFrozenStarlette pins the Go CORS middleware against the
 // installed Starlette CORSMiddleware built with the api's own arguments:
 // every Origin shape (absent, empty, allowed, disallowed) crossed with 0, 1
 // or 2 handler-set Vary headers, on a simple request and on a preflight, for
@@ -84,13 +83,10 @@ type corsCase struct {
 // Vary value and every Access-Control-* header. It imports the api's own
 // middleware module, so it needs the full project environment: it runs in
 // the venue-oracles job, which discovers it by name and requires its proof.
-func TestCORSVenueOracleMatchesLiveStarlette(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the CORS oracle needs the full project Python environment; ci/check_go.sh venue-oracles runs it")
-	}
+func TestCORSMatchesFrozenStarlette(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, programGolden("cors-starlette", t.Name(), "1044e4342d107474f8f42de4ee0d8cdd04e9e6da67492eaad3bc9172b393fc7c"))
 	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	python := pyoracle.Resolve(t, root)
+	root := golden.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")))
 
 	configs := map[string]*string{
 		"default": nil,
@@ -118,13 +114,20 @@ func TestCORSVenueOracleMatchesLiveStarlette(t *testing.T) {
 		}
 	}
 	input, _ := json.Marshal(map[string]any{"configs": configs, "cases": cases})
-	command := exec.Command(python, "-c", pythonCORSProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live Starlette: %v", pyoracle.RunError(python, err, output))
-	}
+	request := venueoracle.ProgramRequest("cors matrix", pythonCORSProgram, input, producerEnv)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		python := pyoracle.Resolve(t, root)
+		command := exec.Command(python, "-c", pythonCORSProgram)
+		command.Env = producerCommandEnv(root)
+		command.Stdin = strings.NewReader(string(input))
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("live Starlette: %v", pyoracle.RunError(python, err, output))
+		}
+		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
+	})
+	golden.Consumed(t, answers...)
+	output := []byte(answers[0].Body)
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want struct {
 		Starlette string `json:"starlette"`
@@ -189,7 +192,8 @@ func TestCORSVenueOracleMatchesLiveStarlette(t *testing.T) {
 	if compared != 225 || !strings.HasPrefix(want.Starlette, "1.7.") {
 		t.Fatalf("compared %d of 225 cases against starlette %s", compared, want.Starlette)
 	}
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 func ptr(value string) *string { return &value }

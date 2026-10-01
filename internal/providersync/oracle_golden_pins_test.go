@@ -137,6 +137,6 @@ var oracleScriptGoldenPins = map[string]string{
 	"script.launchdarkly-normalization.TestLaunchDarklyNormalizationMatchesFrozenPythonFunctions.golden.json":                                   "773eb610992caf20c651d2af629f40ca0ebe7c721d492e765b17bb0507707330",
 	"script.provider-budget.TestProviderRequestPlansMatchFrozenPythonBudgetFunctions.golden.json":                                               "d0bdc7ec05690a3a790588ca32dd290e65e7107ca11a2cc12b21530cbf004340",
 	"script.repo-listing.TestRepoListingMatchesFrozenPython.golden.json":                                                                        "3fcf791cd662f52a7fb30b3887aa149554be6b41c5bee3aa47bb2bb681dc953e",
-	"script.work-item-sink.TestDirectAdapterProjectionsMatchTheFrozenPythonSink.golden.json":                                                    "89d4c92f5997f1d134b2cf871796e55b7d319f2862c6181426623aa186ce5945",
-	"script.work-item-sink.TestJiraDirectAdapterProjectionsMatchFrozenPythonSink.golden.json":                                                   "2711392b8ace560af9de1df77baad430729308064418ee5957463c0fe442b950",
+	"script.work-item-sink.TestDirectAdapterProjectionsMatchTheFrozenPythonSink.golden.json":                                                    "02d8a03ff1d6ec99dfa08c03ac34590f9c7619eecf827f0d8d4adc51095fbedf",
+	"script.work-item-sink.TestJiraDirectAdapterProjectionsMatchFrozenPythonSink.golden.json":                                                   "d2882a443b5bc6e65e7e3c0bb88ad4570465d43dd330afb3e9334fd99b607a14",
 }

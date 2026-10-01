@@ -15,6 +15,11 @@ import (
 // own virtual environment, whose python3 prints the named variables it sees.
 func checkoutWithInterpreter(t *testing.T, names ...string) string {
 	t.Helper()
+	// The checkout's own interpreter is the one under test: an override the
+	// process holds (a developer's shell, the Python-free job's tripwire, which
+	// points both names at its shim) would replace it.
+	t.Setenv("DEV_HEALTH_PYTHON", "")
+	t.Setenv("PYTHON", "")
 	root := t.TempDir()
 	script := "#!/bin/sh\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; echo \"$n=$v\"; done\n"
 	for _, name := range []string{"python", "python3"} {
@@ -229,4 +234,33 @@ func TestOnlyARecordingTheVerbStartedWritesACandidateAndItHoldsTheStamp(t *testi
 			t.Fatalf("the candidate holds no stamp of the verb:\n%s", raw)
 		}
 	})
+}
+
+// The producer's version probe runs in the closed environment too: in a
+// recording test, whose process holds the guard's variable, it passes, and it
+// judges the interpreter by what it says.
+func TestTheProducersVersionProbeIsNotStoppedByTheGuard(t *testing.T) {
+	root := t.TempDir()
+	probed := filepath.Join(root, "probed")
+	script := "#!/bin/sh\nif [ -n \"${" + producerPoisonName + "+set}\" ]; then echo 'Fatal Python error: cannot start' >&2; exit 1; fi\n: > '" + probed + "'\necho 3.14\n"
+	for _, name := range []string{"python", "python3"} {
+		file := filepath.Join(root, ".venv", "bin", name)
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("DEV_HEALTH_PYTHON", "")
+	t.Setenv("PYTHON", "")
+	poisonInheritedEnvironment(t)
+	producer := &Producer{Root: root, t: t}
+	producer.RequireDeployed()
+	if got := filepath.Join(root, ".venv", "bin", "python3"); producer.python != got {
+		t.Fatalf("the producer's interpreter is %q, want the checkout's %s", producer.python, got)
+	}
+	if _, err := os.Stat(probed); err != nil {
+		t.Fatalf("the checkout's interpreter was not the one probed: %v", err)
+	}
 }

@@ -97,7 +97,7 @@ VALKEY_PORT="${VALKEY_PORT:-6379}"
 # (confirmed by hand; see deploy/go-workers/README.md).
 CLICKHOUSE_URI_HTTP="clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@${CLICKHOUSE_HOST}:${CLICKHOUSE_HTTP_PORT}/${CLICKHOUSE_DB}"
 # Derived from the HTTP DSN (clickhouse_native_uri) so both name the same server and database.
-CLICKHOUSE_URI_NATIVE="$(clickhouse_native_uri "${CLICKHOUSE_URI_HTTP}" "${CLICKHOUSE_NATIVE_PORT}")"
+CLICKHOUSE_URI_NATIVE="$(clickhouse_native_uri "${CLICKHOUSE_URI_HTTP}" "${CLICKHOUSE_NATIVE_PORT}" CLICKHOUSE_URI_HTTP)"
 POSTGRES_SUPERUSER_URI="postgresql+asyncpg://${POSTGRES_SUPERUSER}:${POSTGRES_SUPERUSER_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
 
 RIVER_DOMAIN_ROLE="devhealth_domain"
@@ -268,12 +268,12 @@ echo "   -- fixtures generate (CHAOS-4276: git_commits + a repo-pattern team for
 # 2-team/1-repo seed here would have exercised membership fallback instead
 # of the repo-pattern-first path this job's comment above says it proves.
 # One team keeps the repo genuinely single-owner.
-FIXTURES_SINK="$(clickhouse_http_sink "${CLICKHOUSE_URI_HTTP}")"
+FIXTURES_SINK="$(clickhouse_http_sink "${CLICKHOUSE_URI_HTTP}" CLICKHOUSE_URI_HTTP)"
 # dho loads the frozen world (CHAOS-7301) and refuses a PostgreSQL URI in its environment. The sink
 # scheme is spelled by clickhouse_http_sink (ci/lib/go_worker_fixture.sh).
-env -u DATABASE_URI -u POSTGRES_URI -u DATABASE_URL ORG_ID="${ORG_ID}" OTEL_ENABLED=false \
+# The DSN reaches dho by environment, not argv (it can hold a password).
+env -u DATABASE_URI -u POSTGRES_URI -u DATABASE_URL CLICKHOUSE_URI="${FIXTURES_SINK}" ORG_ID="${ORG_ID}" OTEL_ENABLED=false \
   "${BIN_DIR}/dho" fixtures generate \
-  --sink "${FIXTURES_SINK}" \
   --db-type clickhouse \
   --org "${ORG_ID}" \
   --provider synthetic \

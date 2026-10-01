@@ -325,7 +325,7 @@ CLICKHOUSE_NATIVE_PORT="${CLICKHOUSE_NATIVE_PORT:-9000}"
 # clickhouse-connect HTTP port -- see start_worker_stack's own comment.
 # Derived from the HTTP DSN (clickhouse_native_uri): one address, so an override of any part of
 # CLICKHOUSE_URI reaches the migrate, the worker and the fixtures alike, or fails loudly.
-CLICKHOUSE_URI_NATIVE="$(clickhouse_native_uri "${CLICKHOUSE_URI_HTTP}" "${CLICKHOUSE_NATIVE_PORT}")"
+CLICKHOUSE_URI_NATIVE="$(clickhouse_native_uri "${CLICKHOUSE_URI_HTTP}" "${CLICKHOUSE_NATIVE_PORT}" CLICKHOUSE_URI)"
 
 VALKEY_HOST="${LIVE_E2E_VALKEY_HOST:-127.0.0.1}"
 VALKEY_PORT="${LIVE_E2E_VALKEY_PORT:-6379}"
@@ -555,7 +555,7 @@ wait_for_redis
 export OPERATIONAL_ORDERING_CONTRACT=2
 build_go_binaries
 CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}" "${BIN_DIR}/dho" migrate clickhouse upgrade
-FIXTURES_SINK="$(clickhouse_http_sink "${CLICKHOUSE_URI}")"
+FIXTURES_SINK="$(clickhouse_http_sink "${CLICKHOUSE_URI}" CLICKHOUSE_URI)"
 echo "==> generating deterministic ClickHouse fixtures (raw git/PR/team data only)"
 (
   export ORG_ID="${E2E_ORG_ID}"
@@ -564,8 +564,8 @@ echo "==> generating deterministic ClickHouse fixtures (raw git/PR/team data onl
   unset DATABASE_URL
   # http:// spelled explicitly: dho reads a clickhouse:// DSN as native except on port 8123 and
   # CLICKHOUSE_URI is overrideable.
-  "${BIN_DIR}/dho" fixtures generate \
-    --sink "${FIXTURES_SINK}" \
+  # The DSN reaches dho by environment, not argv (it can hold a password).
+  CLICKHOUSE_URI="${FIXTURES_SINK}" "${BIN_DIR}/dho" fixtures generate \
     --db-type clickhouse \
     --repo-name "${FIXTURE_REPO_NAME}" \
     --provider "${FIXTURE_PROVIDER}" \

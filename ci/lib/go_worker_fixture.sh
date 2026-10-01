@@ -43,34 +43,38 @@
 # protocol except on port 8123, and the HTTP port a caller configures can be
 # anything, so the scheme is spelled out: clickhouse:// is rewritten to http://,
 # http:// and https:// pass through, and any other scheme is refused loudly
-# (exit 1, a message on stderr) instead of being guessed at.
+# (exit 1, a message on stderr) instead of being guessed at. The DSN can hold a
+# password: a refusal names the variable (LABEL, the optional second argument)
+# and the reason, never the DSN or any part of it.
 # ---------------------------------------------------------------------------
 clickhouse_http_sink() {
+  local label="${2:-the ClickHouse DSN}"
   case "${1:-}" in
     clickhouse://*) printf 'http://%s\n' "${1#clickhouse://}" ;;
     http://* | https://*) printf '%s\n' "$1" ;;
     *)
-      echo "ERROR: ClickHouse HTTP sink '${1:-}' must start with clickhouse://, http:// or https://" >&2
+      echo "ERROR: ${label} must start with clickhouse://, http:// or https:// (value not shown: it can hold a password)" >&2
       return 1
       ;;
   esac
 }
 
 # ---------------------------------------------------------------------------
-# clickhouse_native_uri HTTP_URI NATIVE_PORT -- prints the native-protocol DSN of
+# clickhouse_native_uri HTTP_URI NATIVE_PORT [LABEL] -- prints the native-protocol DSN of
 # the ClickHouse server whose HTTP endpoint is HTTP_URI: same credentials, host
 # and database, the native port in place of the HTTP port. The scheme becomes
 # clickhouse:// (clickhouses:// for https://). The HTTP DSN is the one source of
 # truth for the address, so the migrate target and the fixtures sink (see
 # clickhouse_http_sink) cannot name different servers or databases. A DSN it
 # cannot split (another scheme, no explicit port) or a non-numeric NATIVE_PORT is
-# refused loudly (exit 1) rather than guessed at.
+# refused loudly (exit 1) rather than guessed at; the message names LABEL (the
+# variable, optional) and the reason, never the DSN or any part of it.
 # ---------------------------------------------------------------------------
 clickhouse_native_uri() {
-  local uri="${1:-}" port="${2:-}" scheme
+  local uri="${1:-}" port="${2:-}" label="${3:-the ClickHouse DSN}" scheme
   local re='^(clickhouse|http|https)://([^@/]*@)?([^:/@[]+|\[[^]]+\]):([0-9]+)(/.*)?$'
   if [[ ! "${port}" =~ ^[0-9]+$ ]] || [[ ! "${uri}" =~ ${re} ]]; then
-    echo "ERROR: cannot derive a native ClickHouse DSN from '${uri}' (native port '${port}'): want clickhouse://, http:// or https:// with an explicit port" >&2
+    echo "ERROR: cannot derive a native ClickHouse DSN from ${label} (native port '${port}'): want clickhouse://, http:// or https:// with an explicit port and no unencoded @ or / in the password (value not shown)" >&2
     return 1
   fi
   scheme="clickhouse"

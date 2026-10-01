@@ -72,6 +72,22 @@ for uri in 'clickhouse://a:b@h1:18123/db1' 'http://c:d@h2:8123/db2' 'https://e:f
   fi
 done
 
+# A refusal never shows the DSN: a marker password is absent from stdout and stderr of every refusal.
+MARK='s3cr3t-MARKER'
+check_refusal() { # check_refusal FUNCTION ARGS... -- the refusal names the variable and hides the marker
+  local seen
+  seen="$("$@" 2>&1 || true)"
+  if [ -z "${seen}" ] || [[ "${seen}" == *"${MARK}"* ]] || [[ "${seen}" != *CLICKHOUSE_URI* ]]; then
+    echo "FAIL: refusal output missing, names no variable, or leaks the marker: ${seen//${MARK}/<LEAK>}"
+    fail=1
+  fi
+}
+check_refusal clickhouse_http_sink "tcp://u:${MARK}@h:1/d" CLICKHOUSE_URI
+check_refusal clickhouse_native_uri "tcp://u:${MARK}@h:1/d" 9000 CLICKHOUSE_URI
+check_refusal clickhouse_native_uri "clickhouse://u:${MARK}@h/d" 9000 CLICKHOUSE_URI
+check_refusal clickhouse_native_uri "clickhouse://u:${MARK}@h:8123/d" nine CLICKHOUSE_URI
+check_refusal clickhouse_native_uri "clickhouse://u:p/${MARK}@h:8123/d" 9000 CLICKHOUSE_URI
+
 # A refused scheme must also make a calling `VAR="$(...)"` assignment stop a set -e script.
 out="$(bash -c 'set -euo pipefail; eval "$1"; _="$(clickhouse_http_sink tcp://x 2>/dev/null)"; echo reached' _ "${FUNC}" 2>/dev/null || true)"
 if [ "${out}" = "reached" ]; then

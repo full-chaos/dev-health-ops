@@ -1,17 +1,14 @@
-package providerfoundation
+package providerfoundation_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // fieldReadCase is one decrypted credential payload and the fields whose text
@@ -31,7 +28,7 @@ type fieldReadResult struct {
 }
 
 const fieldReadProgram = `
-import json, sys
+import json, os, sys, tempfile
 from dev_health_ops.credentials import resolver
 builders = {
     "github": resolver.github_credentials_from_mapping,
@@ -39,8 +36,21 @@ builders = {
     "jira": resolver.jira_credentials_from_mapping,
     "linear": resolver.linear_credentials_from_mapping,
 }
+request = json.load(sys.stdin)
+# The key files the cases name are made here, in a directory of this run, and
+# their paths replace the tokens in the bodies: a path of one run is in no
+# request and no answer.
+directory = tempfile.mkdtemp()
+paths = {}
+for token, content in request["files"].items():
+    paths[token] = os.path.join(directory, token.strip("@") + ".pem")
+    if token != "@MISSING@":
+        with open(paths[token], "w") as handle:
+            handle.write(content)
 out = []
-for case in json.load(sys.stdin):
+for case in request["cases"]:
+    for token, path in paths.items():
+        case["body"] = case["body"].replace('"' + token + '"', json.dumps(path))
     credential = builders[case["provider"]](json.loads(case["body"]))
     fields = {}
     for name in case["fields"]:
@@ -50,20 +60,11 @@ for case in json.load(sys.stdin):
 print(json.dumps(out))
 `
 
-// TestCredentialFieldReadsMatchLivePython (CHAOS-6770) feeds every payload
+// TestCredentialFieldReadsMatchFrozenPython (CHAOS-6770) feeds every payload
 // shape to the real Python resolver builders and to decodeCredential +
 // ValidateCredentialShape, and compares whether a credential is built and the
 // text of each field the provider reads, containers included.
-func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve providerfoundation package path")
-	}
-	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
-	python := pyoracle.Resolve(t, repositoryRoot)
+func TestCredentialFieldReadsMatchFrozenPython(t *testing.T) {
 
 	github := []string{"token", "app_id", "installation_id", "private_key", "base_url"}
 	gitlab := []string{"token"}
@@ -155,10 +156,11 @@ func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
 		{"linear", `{"api_key": "canonical", "apiKey": 0}`, linear},
 		{"linear", `{"apiKey": ""}`, linear},
 	}
-	// The key-file cases name real files: an empty one, a whitespace-only one, a
-	// key, and one that is missing.
-	dir := t.TempDir()
+	// The key-file cases name files by token; the program makes the files and
+	// puts their paths in. The Go side makes its own files for the same tokens.
 	files := map[string]string{"@EMPTY@": "", "@BLANK@": " \n", "@KEY@": "-----BEGIN KEY-----", "@MISSING@": ""}
+	goCases := append([]fieldReadCase(nil), cases...)
+	dir := t.TempDir()
 	for token, content := range files {
 		path := filepath.Join(dir, strings.Trim(token, "@")+".pem")
 		if token != "@MISSING@" {
@@ -170,35 +172,30 @@ func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for index := range cases {
-			cases[index].Body = strings.ReplaceAll(cases[index].Body, `"`+token+`"`, string(quoted))
+		for index := range goCases {
+			goCases[index].Body = strings.ReplaceAll(goCases[index].Body, `"`+token+`"`, string(quoted))
 		}
 	}
-	input, err := json.Marshal(cases)
+	input, err := json.Marshal(map[string]any{"cases": cases, "files": files})
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, "-c", fieldReadProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repositoryRoot, "src"))
-	command.Stdin = bytes.NewReader(input)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live Python credential builders: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "credential-field-reads.golden.json",
+		programoracle.Program{Name: "credential-field-reads", Text: fieldReadProgram, Stdin: []byte(input)})[0]
 	var results []fieldReadResult
-	if err := json.Unmarshal(bytes.TrimSpace(output), &results); err != nil || len(results) != len(cases) {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &results); err != nil || len(results) != len(cases) {
 		t.Fatalf("decode the Python answer (%d results for %d cases): %v\n%s", len(results), len(cases), err, output)
 	}
 
 	agreed := 0
 	for index, tc := range cases {
 		want := results[index]
-		credential, err := decodeCredential(EncryptedCredential{Provider: tc.Provider}, []byte(tc.Body))
+		credential, err := providerfoundation.DecodeCredential(providerfoundation.EncryptedCredential{Provider: tc.Provider}, []byte(goCases[index].Body))
 		if err != nil {
 			t.Errorf("case %d %s %s: decode refused: %v", index, tc.Provider, tc.Body, err)
 			continue
 		}
-		built := ValidateCredentialShape(credential) == nil
+		built := providerfoundation.ValidateCredentialShape(credential) == nil
 		if built != want.Built {
 			t.Errorf("case %d %s %s: Go built=%v, Python built=%v", index, tc.Provider, tc.Body, built, want.Built)
 			continue
@@ -210,7 +207,7 @@ func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
 		}
 		for _, field := range tc.Fields {
 			pythonText := want.Fields[field]
-			value, present := goFieldRead(credential, tc.Provider, field)
+			value, present := providerfoundation.GoFieldRead(credential, tc.Provider, field)
 			goText := value.Reveal()
 			// An absent field and an empty one read the same everywhere; only a
 			// configured text is compared against Python's.
@@ -239,25 +236,4 @@ func deref(text *string) any {
 		return nil
 	}
 	return *text
-}
-
-// goFieldRead is the text Go's consumers get for a field: Jira's token and URL
-// take the first configured spelling in Python's precedence order
-// (`a or b or c`), every other field is read by its own name.
-func goFieldRead(credential Credential, provider, field string) (secrets.Value, bool) {
-	names := []string{field}
-	if provider == "jira" {
-		switch field {
-		case "api_token":
-			names = jiraAPITokenAliases
-		case "base_url":
-			names = jiraBaseURLAliases
-		}
-	}
-	for _, name := range names {
-		if value, ok := credential.Secret(name); ok && value.Configured() {
-			return value, true
-		}
-	}
-	return secrets.Value{}, false
 }

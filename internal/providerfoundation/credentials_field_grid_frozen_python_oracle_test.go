@@ -1,18 +1,17 @@
-package providerfoundation
+package providerfoundation_test
 
 import (
-	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // The grid oracle (CHAOS-6770). The hand-written table beside it lists shapes
@@ -66,7 +65,7 @@ print(json.dumps(out))
 `
 
 const gridRunProgram = `
-import json, sys
+import base64, json, os, sys, tempfile
 from dev_health_ops.credentials import resolver
 builders = {
     "github": resolver.github_credentials_from_mapping,
@@ -74,11 +73,26 @@ builders = {
     "jira": resolver.jira_credentials_from_mapping,
     "linear": resolver.linear_credentials_from_mapping,
 }
+request = json.load(sys.stdin)
+# The key files the cases name are made here, in a directory of this run, and
+# their paths replace the tokens in the bodies: a path of one run is in no
+# request and no answer.
+directory = tempfile.mkdtemp()
+paths = {}
+for name, encoded in request["files"].items():
+    paths[name] = os.path.join(directory, name + ".pem")
+    if encoded is not None:
+        with open(paths[name], "wb") as handle:
+            handle.write(base64.b64decode(encoded))
+paths["directory"] = directory
 out = []
-for case in json.load(sys.stdin):
+for case in request["cases"]:
+    body = case["body"]
+    for name, path in paths.items():
+        body = body.replace('"@FILE:' + name + '@"', json.dumps(path))
     raised = False
     try:
-        credential = builders[case["provider"]](json.loads(case["body"]))
+        credential = builders[case["provider"]](json.loads(body))
     except Exception:
         credential, raised = None, True
     fields = {}
@@ -161,19 +175,10 @@ func gridWithout(base []gridPair, keys ...string) []gridPair {
 	return out
 }
 
-func TestCredentialFieldGridMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve providerfoundation package path")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
-	python := pyoracle.Resolve(t, root)
-
+func TestCredentialFieldGridMatchesFrozenPython(t *testing.T) {
 	derived := map[string]gridDerived{}
-	deriveOutput := runGridPython(t, python, root, gridDeriveProgram, nil)
+	deriveOutput := []byte(strings.TrimSpace(frozenPython(t, "credential-field-grid-derive.golden.json",
+		programoracle.Program{Name: "credential field grid derive", Text: gridDeriveProgram})[0]))
 	if err := json.Unmarshal(deriveOutput, &derived); err != nil || len(derived) != 4 {
 		t.Fatalf("decode the derived field sets: %v\n%s", err, deriveOutput)
 	}
@@ -196,17 +201,33 @@ func TestCredentialFieldGridMatchesLivePython(t *testing.T) {
 		}
 	}
 
+	// The key-file cases name files by token; the program makes the files and
+	// puts their paths in. The Go side makes its own files for the same tokens.
+	contents := map[string][]byte{"empty": {}, "blank": []byte(" \n"), "key": []byte("-----BEGIN KEY-----"), "nonutf8": {0xff, 0xfe, 0x41}}
 	dir := t.TempDir()
-	files := map[string]string{}
-	for name, content := range map[string][]byte{"empty": {}, "blank": []byte(" \n"), "key": []byte("-----BEGIN KEY-----"), "nonutf8": {0xff, 0xfe, 0x41}} {
+	files := map[string]*string{"missing": nil}
+	goPaths := map[string]string{"missing": filepath.Join(dir, "missing.pem"), "directory": dir}
+	for name, content := range contents {
 		path := filepath.Join(dir, name+".pem")
 		if err := os.WriteFile(path, content, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		files[name] = path
+		encoded := base64.StdEncoding.EncodeToString(content)
+		files[name] = &encoded
+		goPaths[name] = path
 	}
-	files["missing"] = filepath.Join(dir, "missing.pem")
-	files["directory"] = dir
+	goBody := func(body string) string {
+		for name, path := range goPaths {
+			quoted, _ := json.Marshal(path)
+			body = strings.ReplaceAll(body, `"@FILE:`+name+`@"`, string(quoted))
+		}
+		return body
+	}
+	var tokenNames []string
+	for name := range goPaths {
+		tokenNames = append(tokenNames, name)
+	}
+	sort.Strings(tokenNames)
 
 	var cases []gridCase
 	add := func(family, provider string, pairs []gridPair) {
@@ -248,8 +269,8 @@ func TestCredentialFieldGridMatchesLivePython(t *testing.T) {
 	}
 	// private_key_path variants: every spelling x file state x companions.
 	for _, spelling := range []string{"private_key_path", "privateKeyPath"} {
-		for name, path := range files {
-			quotedPath, _ := json.Marshal(path)
+		for _, name := range tokenNames {
+			quotedPath := `"@FILE:` + name + `@"`
 			for _, token := range []bool{false, true} {
 				for _, key := range []string{"", `null`, `""`, `"inline-key-value"`} {
 					for _, app := range []bool{false, true} {
@@ -263,7 +284,7 @@ func TestCredentialFieldGridMatchesLivePython(t *testing.T) {
 						if key != "" {
 							pairs = append(pairs, gridPair{"private_key", key})
 						}
-						pairs = append(pairs, gridPair{spelling, string(quotedPath)})
+						pairs = append(pairs, gridPair{spelling, quotedPath})
 						add("key-file-"+name, "github", pairs)
 					}
 				}
@@ -271,12 +292,14 @@ func TestCredentialFieldGridMatchesLivePython(t *testing.T) {
 		}
 	}
 
-	input, err := json.Marshal(cases)
+	input, err := json.Marshal(map[string]any{"cases": cases, "files": files})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var results []gridResult
-	if err := json.Unmarshal(runGridPython(t, python, root, gridRunProgram, input), &results); err != nil || len(results) != len(cases) {
+	runOutput := frozenPython(t, "credential-field-grid.golden.json",
+		programoracle.Program{Name: "credential field grid", Text: gridRunProgram, Stdin: input})[0]
+	if err := json.Unmarshal([]byte(strings.TrimSpace(runOutput)), &results); err != nil || len(results) != len(cases) {
 		t.Fatalf("decode the Python answers (%d for %d cases): %v", len(results), len(cases), err)
 	}
 
@@ -294,12 +317,12 @@ func TestCredentialFieldGridMatchesLivePython(t *testing.T) {
 				t.Errorf("%s %s %s: %s", tc.Family, tc.Provider, tc.Body, fmt.Sprintf(format, args...))
 			}
 		}
-		credential, err := decodeCredential(EncryptedCredential{Provider: tc.Provider}, []byte(tc.Body))
+		credential, err := providerfoundation.DecodeCredential(providerfoundation.EncryptedCredential{Provider: tc.Provider}, []byte(goBody(tc.Body)))
 		if err != nil {
 			report("decode refused: %v", err)
 			continue
 		}
-		built := ValidateCredentialShape(credential) == nil
+		built := providerfoundation.ValidateCredentialShape(credential) == nil
 		if built != want.Built {
 			report("Go built=%v, Python built=%v (raised=%v)", built, want.Built, want.Raised)
 			continue
@@ -310,7 +333,7 @@ func TestCredentialFieldGridMatchesLivePython(t *testing.T) {
 		}
 		builtBoth++
 		for _, field := range tc.Fields {
-			goText := gridGoField(credential, tc.Provider, field)
+			goText := providerfoundation.GridGoField(credential, tc.Provider, field)
 			if goText == nil {
 				report("no Go reader for the Python field %q: classify it", field)
 				continue
@@ -326,7 +349,7 @@ func TestCredentialFieldGridMatchesLivePython(t *testing.T) {
 	// Redaction: no verb, handler or container prints a secret the grid put in.
 	leaked := 0
 	for _, tc := range cases {
-		credential, err := decodeCredential(EncryptedCredential{Provider: tc.Provider}, []byte(tc.Body))
+		credential, err := providerfoundation.DecodeCredential(providerfoundation.EncryptedCredential{Provider: tc.Provider}, []byte(goBody(tc.Body)))
 		if err != nil {
 			continue
 		}
@@ -336,7 +359,7 @@ func TestCredentialFieldGridMatchesLivePython(t *testing.T) {
 			leaves = gridLeaves(payload, nil)
 		}
 		for _, verb := range []string{"v", "+v", "#v", "s", "d", "+d", "f", "x", "q", "t", "e", "o", "b", "c", "U", "g"} {
-			out := fmt.Sprintf("%"+verb, credential) + fmt.Sprintf("%"+verb, []Credential{credential}) + fmt.Sprintf("%"+verb, map[string]Credential{"c": credential})
+			out := fmt.Sprintf("%"+verb, credential) + fmt.Sprintf("%"+verb, []providerfoundation.Credential{credential}) + fmt.Sprintf("%"+verb, map[string]providerfoundation.Credential{"c": credential})
 			for _, leaf := range leaves {
 				if strings.Contains(out, leaf) {
 					leaked++
@@ -364,29 +387,6 @@ func TestCredentialFieldGridMatchesLivePython(t *testing.T) {
 	if len(cases) < 2000 {
 		t.Fatalf("the grid has only %d cells; the generation is broken", len(cases))
 	}
-	if diffs == 0 && leaked == 0 {
-		proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-		if proofDir == "" {
-			t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-		}
-		if err := os.WriteFile(filepath.Join(proofDir, "providerfoundation-credential-field-grid"), []byte("executed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-func runGridPython(t *testing.T, python, root, program string, stdin []byte) []byte {
-	t.Helper()
-	command := exec.Command(python, "-c", program)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	if stdin != nil {
-		command.Stdin = bytes.NewReader(stdin)
-	}
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live Python: %v", pyoracle.RunError(python, err, output))
-	}
-	return bytes.TrimSpace(output)
 }
 
 // gridLeaves are the secret-shaped leaves of a payload: strings of 8+
@@ -407,50 +407,4 @@ func gridLeaves(value any, into []string) []string {
 		}
 	}
 	return into
-}
-
-// gridGoField is what Go's consumers read for a Python dataclass field, or nil
-// when no reader exists (the test then fails: a new Python field needs a
-// decision). Empty means not configured.
-func gridGoField(credential Credential, provider, field string) *string {
-	text := func(names ...string) *string {
-		out := ""
-		for _, name := range names {
-			if value, ok := credential.Secret(name); ok && value.Configured() {
-				out = value.Reveal()
-				break
-			}
-		}
-		return &out
-	}
-	switch provider + "." + field {
-	case "github.token", "github.app_id", "github.installation_id", "github.base_url":
-		return text(field)
-	case "github.private_key":
-		if _, present := credential.Secret("private_key"); present {
-			return text("private_key")
-		}
-		out := ""
-		if path, ok := credential.Secret("private_key_path"); ok && path.Configured() {
-			if content, err := readGitHubAppPrivateKeyFile(path.Reveal()); err == nil {
-				out = content.Reveal()
-			}
-		}
-		return &out
-	case "gitlab.token":
-		return text("token")
-	case "gitlab.base_url":
-		out := gitLabCredentialBaseURL(credential)
-		return &out
-	case "jira.api_token":
-		return text(jiraAPITokenAliases...)
-	case "jira.email":
-		return text("email")
-	case "jira.base_url":
-		out := jiraCredentialBaseURL(credential)
-		return &out
-	case "linear.api_key":
-		return text("api_key")
-	}
-	return nil
 }

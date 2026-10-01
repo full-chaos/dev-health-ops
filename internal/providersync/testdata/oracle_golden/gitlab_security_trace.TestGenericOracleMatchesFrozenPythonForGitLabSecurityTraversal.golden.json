@@ -13,7 +13,7 @@
       "body_sha256": "18f9fc45f9c1b87ca18e4fe23e842981b8e1e15b15d36f36c1e07dcfe3479654",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"single_page_window\", \"row\": {\"producer_requests\": [{\"t\": \"str\", \"v\": \"/api/v4/projects/123\"}, {\"t\": \"str\", \"v\": \"/api/v4/projects/123/vulnerability_findings?per_page=100\"}, {\"t\": \"str\", \"v\": \"/api/v4/projects/123/dependencies?per_page=100\"}], \"usage_request_count\": {\"t\": \"int\", \"v\": \"3\"}, \"rows\": [{\"alert_id\": {\"t\": \"str\", \"v\": \"gitlab_vuln:2\"}, \"source\": {\"t\": \"str\", \"v\": \"gitlab_vulnerability\"}}]}}, {\"id\": \"plain_forbidden_optional_endpoint\", \"row\": {\"producer_requests\": [{\"t\": \"str\", \"v\": \"/api/v4/projects/123\"}, {\"t\": \"str\", \"v\": \"/api/v4/projects/123/vulnerability_findings?per_page=100\"}, {\"t\": \"str\", \"v\": \"/api/v4/projects/123/dependencies?per_page=100\"}], \"usage_request_count\": {\"t\": \"int\", \"v\": \"3\"}, \"rows\": [{\"alert_id\": {\"t\": \"str\", \"v\": \"gitlab_dep:5\"}, \"source\": {\"t\": \"str\", \"v\": \"gitlab_dependency\"}}]}}, {\"id\": \"core_failure_stops_second_endpoint\", \"row\": {\"producer_requests\": [{\"t\": \"str\", \"v\": \"/api/v4/projects/123\"}, {\"t\": \"str\", \"v\": \"/api/v4/projects/123/vulnerability_findings?per_page=100\"}], \"usage_request_count\": {\"t\": \"int\", \"v\": \"2\"}, \"rows\": []}}], \"excluded_fields\": {}}\n"
     }
   ]

@@ -13,7 +13,7 @@
       "body_sha256": "6f02f0d8b61e338587afcc14cdc39b5bafd86ad7ab507ace28fe33d4e5e056eb",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"required_main_branch_job\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"run_id\": {\"t\": \"str\", \"v\": \"9001\"}, \"job_id\": {\"t\": \"str\", \"v\": \"11\"}, \"job_name\": {\"t\": \"str\", \"v\": \"unit\"}, \"stage\": null, \"status\": {\"t\": \"str\", \"v\": \"success\"}, \"started_at\": {\"t\": \"datetime\", \"v\": \"2026-07-22T10:01:00Z\"}, \"finished_at\": {\"t\": \"datetime\", \"v\": \"2026-07-22T10:04:00Z\"}, \"duration_seconds\": {\"t\": \"float\", \"v\": \"180.0\"}, \"runner_type\": {\"t\": \"str\", \"v\": \"hosted\"}, \"retry_attempt\": {\"t\": \"int\", \"v\": \"1\"}, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}], \"excluded_fields\": {}}\n"
     }
   ]

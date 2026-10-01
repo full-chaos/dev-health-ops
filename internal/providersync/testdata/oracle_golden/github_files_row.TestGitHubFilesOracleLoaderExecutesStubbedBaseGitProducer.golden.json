@@ -13,7 +13,7 @@
       "body_sha256": "42f9b29850d75c69945b027176a28d94edc6d87d9389c4188748d5e7beacc974",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"stubbed_base_git\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"path\": {\"t\": \"str\", \"v\": \"src/main.go\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": {\"t\": \"str\", \"v\": \"package main\\n\"}}}], \"excluded_fields\": {\"last_synced\": \"stamped by ClickHouseStore.insert_git_file_data, not backfill_file_records\"}}\n"
     }
   ]

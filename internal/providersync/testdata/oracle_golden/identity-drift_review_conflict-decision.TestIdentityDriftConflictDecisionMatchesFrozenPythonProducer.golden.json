@@ -13,7 +13,7 @@
       "body_sha256": "7e728a40f4555d91afc5f4091a9f05ba4c0893092228db6d613cf38dfafed2cc",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"same_team_manual_confirms_no_conflict\", \"row\": {\"conflict_field\": null}}, {\"id\": \"different_team_manual_conflicts\", \"row\": {\"conflict_field\": {\"t\": \"str\", \"v\": \"team_memberships\"}}}, {\"id\": \"member_has_both_same_and_different_team_still_conflicts\", \"row\": {\"conflict_field\": {\"t\": \"str\", \"v\": \"team_memberships\"}}}, {\"id\": \"no_manual_match_fallback_same_team_no_conflict\", \"row\": {\"conflict_field\": null}}, {\"id\": \"no_manual_match_fallback_different_team_conflicts\", \"row\": {\"conflict_field\": {\"t\": \"str\", \"v\": \"manual_attribution_fallbacks.member\"}}}, {\"id\": \"no_match_at_all_no_conflict\", \"row\": {\"conflict_field\": null}}], \"excluded_fields\": {}}\n"
     }
   ]

@@ -186,7 +186,9 @@ func redactLegError(err error, values ...string) error {
 	if err == nil {
 		return nil
 	}
-	text := secrets.RedactValues(err.Error(), values...)
+	// The existing value-based primitive (secrets.Boundary, the one every dho verb redacts through),
+	// fed the credential this leg actually authenticated with.
+	text := secrets.NewBoundaryWith("", values...).RedactText(err.Error())
 	if text == err.Error() {
 		return err
 	}

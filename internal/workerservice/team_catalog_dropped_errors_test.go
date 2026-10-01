@@ -253,3 +253,58 @@ func TestTeamAutoImportRecordsADegradedLegOnTheRun(t *testing.T) {
 		t.Errorf("dispatches = %+v", observer.dispatches)
 	}
 }
+
+// D3678: every stored and logged sink of the dropped error, end to end through the post-sync dispatcher with
+// the real jira collector: the gateway echoes the test token AND email; neither may appear in the Warn
+// lines, the recorded degraded detail, the reason, or any telemetry outcome.
+func TestEveryDegradedLegSinkIsFreeOfTheEchoedCredential(t *testing.T) {
+	logs := captureWarnings(t)
+	const token, email = "ATATT-test-constant-token-9876543210", "echo-test-constant@example.test"
+	credential := providerfoundation.NewCredential("jira", "cred-1",
+		map[string]string{"base_url": "https://acme.atlassian.net", "atlassian_organization_id": "org-123", "atlassian_cloud_id": "cloud-123"},
+		map[string]secrets.Value{"email": secrets.NewValue(email), "api_token": secrets.NewValue(token)})
+	combined := jiraCombinedTeamCatalogCollector{
+		ProjectAsTeam: projectAsTeamStub{result: providersync.TeamCatalogResult{TeamsWritten: 1}},
+		Conn:          nopConn{},
+		NewClient: func(string, atlassian.AuthProvider) atlassianteams.Client {
+			return echoingClient{echo: "body: {\"email\":\"" + email + "\",\"token\":\"" + token + "\"} Basic " + token}
+		},
+	}
+	var recorded []providersync.DegradedLeg
+	observer := &fakeTeamCatalogObserver{}
+	dispatcher := &nativeTeamAutoimportDispatcher{
+		resolveProvider: func(context.Context, string, string) (string, error) { return "jira", nil },
+		native:          map[string]providersync.TeamCatalogCollector{"jira": combined},
+		clients:         credentialClientResolver{credential: credential},
+		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
+		observer:        observer,
+		recordDegraded: func(_ context.Context, _, _ string, legs []providersync.DegradedLeg) error {
+			recorded = legs
+			return nil
+		},
+	}
+	if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{OrganizationID: testOrg, SyncRunID: testRun}); err != nil {
+		t.Fatal(err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("recorded legs = %+v", recorded)
+	}
+	sinks := []string{logs.String(), recorded[0].Detail, recorded[0].Reason, recorded[0].Leg, recorded[0].Outcome}
+	for _, dispatch := range observer.dispatches {
+		sinks = append(sinks, dispatch.provider, string(dispatch.outcome))
+	}
+	for _, sink := range sinks {
+		if strings.Contains(sink, token) || strings.Contains(sink, email) {
+			t.Fatalf("a credential value reached a sink: %q", sink)
+		}
+	}
+	if !strings.Contains(recorded[0].Detail, "teamSearchV2") {
+		t.Errorf("the detail lost the gateway's own message: %q", recorded[0].Detail)
+	}
+}
+
+type credentialClientResolver struct{ credential providerfoundation.Credential }
+
+func (resolver credentialClientResolver) ResolveClient(context.Context, string, string, string) (providerfoundation.Credential, *providerfoundation.HTTPClient, string, error) {
+	return resolver.credential, &providerfoundation.HTTPClient{BaseURL: &url.URL{Scheme: "https", Host: "acme.atlassian.net"}}, "integration-1", nil
+}

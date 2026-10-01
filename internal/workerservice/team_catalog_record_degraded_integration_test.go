@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
@@ -37,11 +38,20 @@ func TestRecordSyncRunDegradedLegsMergesIntoTheRunResult(t *testing.T) {
 	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: runID, OrgID: orgID, Status: "success", TotalUnits: 14, CompletedUnits: 14,
 		ResultJSON: `{"completed_units":14,"failed_units":0}`})
 
-	record := recordSyncRunDegradedLegs(pool)
-	legs := []providersync.DegradedLeg{{Dataset: "teams", Leg: "jira_atlassian_teams", Outcome: "failed", Reason: "unclassified",
-		Detail: "Invalid Organization Ari: some-uuid Authorization: Bearer secret-token-value"}}
-	if err := record(ctx, orgID, runID, legs); err != nil {
-		t.Fatalf("record: %v", err)
+	// Drive the real post-sync dispatcher: a collector reports a failed additive leg for a run that
+	// already finished (finalize ran before this seam). The state under test is sync_runs.result.
+	spy := &linearCollectorSpy{result: providersync.TeamCatalogResult{TeamsWritten: 2, DegradedLegs: []providersync.DegradedLeg{{
+		Dataset: "teams", Leg: "jira_atlassian_teams", Outcome: "failed", Reason: "unclassified",
+		Detail: "Invalid Organization Ari: some-uuid Authorization: Bearer secret-token-value"}}}}
+	dispatcher := &nativeTeamAutoimportDispatcher{
+		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
+		native:          map[string]providersync.TeamCatalogCollector{"linear": spy},
+		clients:         fakeAutoimportClientResolver{integrationID: "integration-1"},
+		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
+		recordDegraded:  recordSyncRunDegradedLegs(pool),
+	}
+	if err := dispatcher.TeamAutoImport(ctx, syncdispatchruntime.DomainReference{OrganizationID: orgID, SyncRunID: runID}); err != nil {
+		t.Fatalf("TeamAutoImport: %v", err)
 	}
 	var raw []byte
 	if err := pool.QueryRow(ctx, `SELECT result::text FROM sync_runs WHERE id = $1::uuid`, runID).Scan(&raw); err != nil {
@@ -64,7 +74,7 @@ func TestRecordSyncRunDegradedLegsMergesIntoTheRunResult(t *testing.T) {
 	if strings.Contains(string(raw), "secret-token-value") {
 		t.Errorf("the stored detail carries a token: %s", raw)
 	}
-	if err := record(ctx, "another-org", runID, legs); err == nil {
+	if err := recordSyncRunDegradedLegs(pool)(ctx, "another-org", runID, spy.result.DegradedLegs); err == nil {
 		t.Error("a run of another organization must not be written")
 	}
 }

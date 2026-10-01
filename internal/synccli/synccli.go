@@ -268,7 +268,8 @@ type settings struct {
 // redact removes the credential from an error text: the gateway can echo a
 // rejected request.
 func (s settings) redact(err error) error {
-	return secrets.NewBoundary(s.token).Redact(err)
+	// The token and the email (CHAOS-7132): the gateway can echo either into its error text.
+	return secrets.NewBoundaryWith(s.token, s.email).Redact(err)
 }
 
 // envOverrides is what the ATLASSIAN_* environment carries for one run. Every

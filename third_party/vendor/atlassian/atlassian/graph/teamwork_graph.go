@@ -54,7 +54,7 @@ func (c *Client) IterTeamActiveProjects(ctx context.Context, teamID string, page
 			"first":  pageSize,
 			"after":  after,
 		}
-		result, err := c.Execute(ctx, gen.TEAMWORKGRAPH_TEAMACTIVEPROJECTS, vars, "TeamworkGraph_teamActiveProjects", apis, 1)
+		result, err := c.Execute(ctx, gen.TEAMWORKGRAPH_TEAMACTIVEPROJECTS, vars, "TeamworkGraphTeamActiveProjects", apis, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -109,7 +109,7 @@ func (c *Client) IterTeamUsers(ctx context.Context, teamID string, pageSize int)
 			"first":  pageSize,
 			"after":  after,
 		}
-		result, err := c.Execute(ctx, gen.TEAMWORKGRAPH_TEAMUSERS, vars, "TeamworkGraph_teamUsers", apis, 1)
+		result, err := c.Execute(ctx, gen.TEAMWORKGRAPH_TEAMUSERS, vars, "TeamworkGraphTeamUsers", apis, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +164,7 @@ func (c *Client) IterUserTeams(ctx context.Context, userID string, pageSize int)
 			"first":  pageSize,
 			"after":  after,
 		}
-		result, err := c.Execute(ctx, gen.TEAMWORKGRAPH_USERTEAMS, vars, "TeamworkGraph_userTeams", apis, 1)
+		result, err := c.Execute(ctx, gen.TEAMWORKGRAPH_USERTEAMS, vars, "TeamworkGraphUserTeams", apis, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -210,7 +210,7 @@ func (c *Client) GetUserManager(ctx context.Context, userID string) (*atlassian.
 		"userId": uid,
 	}
 
-	result, err := c.ExecuteWithExtraHeaders(ctx, gen.TEAMWORKGRAPH_USERMANAGER, vars, "TeamworkGraph_userManager", apis, 1, twgForceDynamoHeaders)
+	result, err := c.ExecuteWithExtraHeaders(ctx, gen.TEAMWORKGRAPH_USERMANAGER, vars, "TeamworkGraphUserManager", apis, 1, twgForceDynamoHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +252,7 @@ func (c *Client) IterUserDirectReports(ctx context.Context, userID string, pageS
 		"userId": uid,
 	}
 
-	result, err := c.ExecuteWithExtraHeaders(ctx, gen.TEAMWORKGRAPH_USERDIRECTREPORTS, vars, "TeamworkGraph_userDirectReports", apis, 1, twgForceDynamoHeaders)
+	result, err := c.ExecuteWithExtraHeaders(ctx, gen.TEAMWORKGRAPH_USERDIRECTREPORTS, vars, "TeamworkGraphUserDirectReports", apis, 1, twgForceDynamoHeaders)
 	if err != nil {
 		return nil, err
 	}

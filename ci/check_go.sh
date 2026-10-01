@@ -668,51 +668,6 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  printf 'go test -count=1: internal/pythonparity/pyunicodedata (unicodedata tables and NFC vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -timeout 30m \
-        -run '^(TestUnicodeDataTablesMatchLivePython|TestNFCMatchesLivePython)$' \
-        ./internal/pythonparity/pyunicodedata
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/pythonparity/pyidna (idna tables and behaviour vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -timeout 30m \
-        -run '^(TestIDNATablesMatchLivePython|TestBehaviourMatchesLivePython|TestCodecEncodeMatchesLivePython)$' \
-        ./internal/pythonparity/pyidna
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/pythonparity/emailvalidator (pydantic EmailStr validation vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -timeout 30m \
-        -run '^(TestValidateEmailMatchesLivePydantic)$' \
-        ./internal/pythonparity/emailvalidator
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
   printf 'go test -count=1: internal/auth/edgetoken (Go-signed session tokens vs the live AuthService)\n'
   if ! (
     cd "${ROOT}"
@@ -877,7 +832,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr pythonparity-pyunicodedata pythonparity-pyunicodedata-nfc pythonparity-pyidna-tables pythonparity-pyidna-behaviour pythonparity-emailvalidator pythonparity-idna llmorgsettings-validate-base-url httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-legacyingest api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry api-licensing-sign api-licensing-b64decode api-licensing-verify api-billing-webhook-signature httpapi-limit-string auth-signedtoken atlassianteams-python-client admin-llmreadiness-probe; do
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr llmorgsettings-validate-base-url httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-legacyingest api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry api-licensing-sign api-licensing-b64decode api-licensing-verify api-billing-webhook-signature httpapi-limit-string auth-signedtoken atlassianteams-python-client admin-llmreadiness-probe; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2

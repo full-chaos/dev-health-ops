@@ -138,3 +138,54 @@ func TestAnIdTheTestWritesInARequestStaysInItsKeyWhateverTheAnswerScrub(t *testi
 		t.Fatal("the answer Scrub changed a request's key: every merged golden whose requests hold a v4-shaped id or a time would stop matching")
 	}
 }
+
+func TestTheAuthorizationHeaderKeepsItsKeyAndIsNotProjectedTwice(t *testing.T) {
+	g := keyGolden(t, linkScrub)
+	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":1,"exp":61}`, "sig")
+	request := Request{Name: "me", Method: "GET", Path: "/me", Headers: map[string]string{"Authorization": "Bearer " + token}}
+	if got, want := g.keyOf(request), requestKey(request); !reflect.DeepEqual(got, want) {
+		t.Fatalf("a bearer token in authorization changed the key (headersDigest already reduces it to its claims):\n%+v\n%+v", got, want)
+	}
+}
+
+func TestAReplayRequestCarryingAProjectedTokenFindsItsRecordedAnswerOnlyThroughTheProjectedKey(t *testing.T) {
+	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":1,"exp":61}`, "sig")
+	recording := keyGolden(t, nil)
+	real := Request{Name: "refresh", Method: "POST", Path: "/refresh", Body: B64(`{"refresh_token":"` + token + `"}`)}
+	entry := recording.keyOf(real)
+	entry.Status, entry.Body = 200, `{"ok":true}`
+	replay, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay.recording = false
+	replay.loaded = goldenFile{Requests: []goldenRequest{entry}}
+	projected := Request{Name: "refresh", Method: "POST", Path: "/refresh", Body: B64(`{"refresh_token":"` + ProjectTokens(token) + `"}`)}
+	answers, err := replay.frozenAnswers([]Request{projected}, "")
+	if err != nil || len(answers) != 1 || answers[0].Body != `{"ok":true}` {
+		t.Fatalf("a request carrying the projected token did not find its answer: %v %+v", err, answers)
+	}
+	// A replay request that still carries a real token (another mint of the
+	// same caller) finds the answer too: only the projected key says so.
+	replay.served = 0
+	another := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":900,"exp":960}`, "other-signature")
+	if _, err := replay.frozenAnswers([]Request{{Name: "refresh", Method: "POST", Path: "/refresh", Body: B64(`{"refresh_token":"` + another + `"}`)}}, ""); err != nil {
+		t.Fatalf("a request carrying another mint of the same caller did not find the answer: %v", err)
+	}
+	replay.served = 0
+	if _, err := replay.frozenAnswers([]Request{{Name: "refresh", Method: "POST", Path: "/refresh", Body: B64(`{"refresh_token":"other"}`)}}, ""); err == nil {
+		t.Fatal("a request with another body found the recorded answer")
+	}
+}
+
+func TestTwoRequestsOfOneNameThatDifferInTheirBodyAreNotOneKey(t *testing.T) {
+	g := keyGolden(t, nil)
+	first := g.keyOf(Request{Name: "post", Method: "POST", Path: "/x", Body: B64(`{"a":1}`)})
+	first.Status, first.Body = 200, `{"v":1}`
+	g.recorded.Requests = []goldenRequest{first}
+	second := g.keyOf(Request{Name: "post", Method: "POST", Path: "/x", Body: B64(`{"a":2}`)})
+	second.Status, second.Body = 200, `{"v":2}`
+	if err := g.sameKeySameAnswerErr(second); err != nil {
+		t.Fatalf("two requests that differ in their body were taken for one key: %v", err)
+	}
+}

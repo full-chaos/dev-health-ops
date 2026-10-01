@@ -22,6 +22,7 @@ import (
 	_ "embed"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/localgit"
@@ -866,6 +867,53 @@ type localRun struct {
 	target string
 	base   []string // after the target, without --analytics-db
 	env    map[string]string
+	// repoIDs names the repository ids a path-derived repo id can take on this run (the SHA-256 of the path
+	// Python or the port hashes), by what was hashed: the fixture directory, its real path, the path as
+	// given. They are per-run values (the temporary directory differs), so rows are compared with them replaced.
+	repoIDs map[string]string
+}
+
+// normalizeRepoIDs replaces, in every row of every table, a path-derived repository id with the name of the
+// path it came from, so a golden recorded in one temporary directory compares in another and still pins WHICH
+// path each plane hashed. Ids that are not path-derived (a remote URL, REPO_UUID) stay as they are.
+func normalizeRepoIDs(rows map[string][]string, repoIDs map[string]string) map[string][]string {
+	out := map[string][]string{}
+	for table, lines := range rows {
+		replaced := make([]string, len(lines))
+		for i, line := range lines {
+			for id, label := range repoIDs {
+				line = strings.ReplaceAll(line, id, "<repo-id:"+label+">")
+			}
+			replaced[i] = line
+		}
+		sort.Strings(replaced)
+		out[table] = replaced
+	}
+	return out
+}
+
+func pathRepoIDs(f *fixture, repoPath string) map[string]string {
+	ids := map[string]string{}
+	add := func(label, path string) {
+		if path == "" {
+			return
+		}
+		sum := sha256.Sum256([]byte(path))
+		var id uuid.UUID
+		copy(id[:], sum[:16])
+		if _, taken := ids[id.String()]; !taken {
+			ids[id.String()] = label
+		}
+	}
+	add("dir", f.dir)
+	if real, err := filepath.EvalSymlinks(f.dir); err == nil {
+		add("real", real)
+	}
+	if abs, err := filepath.Abs(repoPath); err == nil {
+		add("arg", abs)
+	}
+	add("arg-raw", repoPath)
+	return ids
 }
 
 // prepareLocalRun empties both databases and builds the arguments of one (scenario, target) run.
@@ -903,7 +951,7 @@ func prepareLocalRun(t *testing.T, oracle *localOracle, scenario localScenario, 
 			env[key] = value
 		}
 	}
-	return localRun{target: target, base: base, env: env}
+	return localRun{target: target, base: base, env: env, repoIDs: pathRepoIDs(f, repoPath)}
 }
 
 func localTargets(scenario localScenario) []string {
@@ -958,7 +1006,7 @@ func produceLocal(t *testing.T, root string) []localRecorded {
 			pyArgs := append(append([]string{target}, run.base...), "--analytics-db", oracle.httpDSN)
 			want := oracle.ask(map[string]any{"args": pyArgs, "env": run.env})
 			recorded = append(recorded, localRecorded{scenario.name, target, fmt.Sprint(want["stage"].(map[string]any)["v"]),
-				tablesSnapshot(oracle.ctx, t, oracle.admin, oracle.pythonDatabase)})
+				normalizeRepoIDs(tablesSnapshot(oracle.ctx, t, oracle.admin, oracle.pythonDatabase), run.repoIDs)})
 		}
 	}
 	return recorded
@@ -1045,7 +1093,7 @@ func TestLocalSyncMatchesFrozenPython(t *testing.T) {
 			}
 
 			pythonRows := want.Rows
-			goRows := tablesSnapshot(ctx, t, admin, goDatabase)
+			goRows := normalizeRepoIDs(tablesSnapshot(ctx, t, admin, goDatabase), run.repoIDs)
 			compared++
 			if scenario.allOrNothing && want.Stage != "ok" && len(pythonRows["git_files"]) > 0 {
 				allOrNothingAsserted++

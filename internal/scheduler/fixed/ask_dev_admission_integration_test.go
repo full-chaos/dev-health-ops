@@ -3,19 +3,16 @@
 package fixed
 
 import (
-	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -86,7 +83,7 @@ func TestAskDevRetentionAdmissionUsesEntitlementForFirstUseButNeverStrandsState(
 		{ID: "expired_override_falls_back", StorageValid: true, GloballyEnabled: true, OrgTier: "community", LicenseTier: &community, LicenseOverride: &truth, OrgOverride: &overrideCase{IsEnabled: false, ExpiresAt: &past}},
 		{ID: "invalid_storage", StorageValid: false, GloballyEnabled: true, OrgTier: "community", LicenseTier: &community, LicenseOverride: &truth},
 	}
-	want := pythonAskDevFeatureDecisions(t, cases)
+	want := frozenAskDevFeatureDecisions(t, cases)
 	for _, test := range cases {
 		minTier := "community"
 		if !test.StorageValid {
@@ -140,7 +137,7 @@ VALUES
 		}
 		state := read()
 		if state.FeatureEnabled != want[test.ID] || state.HasPersistedState {
-			t.Errorf("%s SQL state = %+v, live Python decision = %t", test.ID, state, want[test.ID])
+			t.Errorf("%s SQL state = %+v, frozen Python decision = %t", test.ID, state, want[test.ID])
 		}
 	}
 
@@ -155,30 +152,42 @@ VALUES
 	}
 }
 
-func pythonAskDevFeatureDecisions[T any](t *testing.T, cases []T) map[string]bool {
+// askDevGoldens is the set of this package's frozen Python answers: the
+// feature policy of Build (licensing/feature_policy.py), executed once over the
+// cases. Identity names the interpreter that ran it.
+var askDevGoldens = programoracle.Set{
+	Package:  "./internal/scheduler/fixed/",
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0",
+	// The goldenrecord verb writes the digest when it promotes a recording; a
+	// new golden starts as "PIN:" + its file name without ".json".
+	Pins: map[string]string{
+		"ask-dev-feature.golden.json": "7dd05eafb04ce9c1af287720dcd4986d1c3fdbc56276466b97fd303a243e96e7",
+	},
+}
+
+// askDevFeatureScript decides the ask_dev feature for each case on its input
+// with decide_feature of the checkout the script runs in.
+//
+//go:embed testdata/python_ask_dev_feature_oracle.py
+var askDevFeatureScript string
+
+// frozenAskDevFeatureDecisions returns the Python policy's decision for each
+// case, by case id, from the golden. No Python runs.
+func frozenAskDevFeatureDecisions[T any](t *testing.T, cases []T) map[string]bool {
 	t.Helper()
 	encoded, err := json.Marshal(cases)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate Ask Dev Python parity oracle")
-	}
-	script := filepath.Join(filepath.Dir(currentFile), "testdata", "python_ask_dev_feature_oracle.py")
-	python := pyoracle.Resolve(t, repositoryRoot(t))
-	command := exec.Command(python, script)
-	command.Stdin = bytes.NewReader(encoded)
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("execute live Python Ask Dev feature oracle: %v", pyoracle.RunError(python, err, nil))
-	}
+	output := askDevGoldens.Outputs(t, repositoryRoot(t), "ask-dev-feature.golden.json", programoracle.Script("ask dev feature",
+		"internal/scheduler/fixed/testdata/python_ask_dev_feature_oracle.py", askDevFeatureScript, encoded))[0]
 	var decisions map[string]bool
-	if err := json.Unmarshal(output, &decisions); err != nil {
-		t.Fatalf("decode live Python Ask Dev feature oracle: %v", err)
+	if err := json.Unmarshal([]byte(output), &decisions); err != nil {
+		t.Fatalf("decode the frozen Python Ask Dev feature answer: %v\n%s", err, output)
 	}
 	if len(decisions) != len(cases) {
-		t.Fatalf("live Python Ask Dev feature oracle returned %d decisions for %d cases", len(decisions), len(cases))
+		t.Fatalf("the frozen Python Ask Dev feature answer holds %d decisions for %d cases", len(decisions), len(cases))
 	}
 	return decisions
 }

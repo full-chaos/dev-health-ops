@@ -208,6 +208,13 @@ type goldenHeader struct {
 	// on the closed list legacy_python_env_goldens.txt may still hold that.
 	PythonEnv        string `json:"python_env,omitempty"`
 	PythonEnvVersion int    `json:"python_env_version,omitempty"`
+	// RecordedBy is the stamp of the record verb: the recording ran under the
+	// verb (its fixed environment, its two runs, its replay), not under a
+	// hand-started go test. A golden with no stamp was recorded before the
+	// stamp existed; the manifest of its directory holds it by digest
+	// (recordedfiles). The stamp stops an accident: a hand-made golden has
+	// none. It does not stop a hand edit that also writes the stamp.
+	RecordedBy string `json:"recorded_by,omitempty"`
 	// Blanked lists, by pattern, the leaves the recording replaced by a
 	// placeholder, with how many: the paths the golden does not hold by value
 	// (a token projected to its claims, a Volatile header, a generated id or a
@@ -215,6 +222,9 @@ type goldenHeader struct {
 	// recorded before it has none, and is then not checked against it.
 	Blanked map[string]int `json:"blanked"`
 }
+
+// recordVerbName is what the record verb's stamp holds.
+const recordVerbName = "goldenrecord"
 
 // goldenPassedEnv is how the recorder tells a recording which ambient
 // variables it passed by name (comma-separated).
@@ -398,6 +408,11 @@ func OpenGolden(t *testing.T, spec GoldenSpec) *Golden {
 		t.Fatal(err)
 	}
 	g.use = use
+	if recording {
+		// For the whole recording test: a Python child that inherits the
+		// process environment cannot start (producer.go).
+		poisonInheritedEnvironment(t)
+	}
 	return g
 }
 
@@ -411,6 +426,11 @@ func openGolden(spec GoldenSpec, test string, recording bool) (*Golden, error) {
 			return nil, err
 		}
 		g.recorded = goldenFile{Header: goldenHeader{Test: test, PythonBuild: spec.PythonBuild, Recipe: spec.Recipe, PassedEnv: envNames(spec.PassEnv)}, Rows: map[string]goldenRows{}}
+		// The record verb always sets goldenPassedEnv for its runs, with no
+		// names when it passed none: its presence is the verb.
+		if _, byVerb := os.LookupEnv(goldenPassedEnv); byVerb {
+			g.recorded.Header.RecordedBy = recordVerbName
+		}
 		return g, nil
 	}
 	raw, err := os.ReadFile(spec.Path)
@@ -822,7 +842,10 @@ func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, req
 // Python side is not the api's HTTP plane: a program run over a corpus, a CLI
 // verb, a function. While recording, live runs the requests from root, which
 // must be the checkout PythonRoot verified, and the answers are recorded;
-// frozen, they are read from the file and live is never called. A request
+// frozen, they are read from the file and live is never called. live starts
+// Python only with the command its Producer gives (producer.go): the pinned
+// interpreter in the one closed environment. A Python child started any other
+// way with the process environment cannot start while live runs. A request
 // names what was asked (ProgramRequest builds one for a Python program) and a
 // response what came back: Status the exit code, Body the stdout, Headers any
 // other stream. The lifecycle and the accounting are Python's: every answer
@@ -830,14 +853,16 @@ func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, req
 // carries no headers: they are keyed case-folded, as HTTP headers are, and a
 // producer's environment names are case-sensitive, so the environment belongs
 // in the path (ProgramRequest), where it compares exactly.
-func (g *Golden) Produce(t *testing.T, root string, requests []Request, live func(root string, requests []Request) []Response) []Response {
+func (g *Golden) Produce(t *testing.T, root string, requests []Request, live func(producer *Producer, requests []Request) []Response) []Response {
 	t.Helper()
 	if err := producerRequestsErr(requests); err != nil {
 		t.Fatal(err)
 	}
 	return g.answer(t, "Produce", "", requests,
 		func() error { return g.producerRootErr(root) },
-		func() []Response { return live(root, requests) },
+		func() []Response {
+			return live(&Producer{Root: root, t: t}, requests)
+		},
 		func() error { return liveVenueErr(t, "golden "+g.spec.Path+"'s frozen answers") })
 }
 
@@ -1251,6 +1276,9 @@ func (g *Golden) writeCandidate(failed bool) (string, error) {
 	}
 	if len(g.recorded.Header.ProducerDigest) != 64 {
 		return "", fmt.Errorf("recording %s: the Python producer was never verified (golden.PythonRoot was not called)", g.spec.Path)
+	}
+	if g.recorded.Header.RecordedBy != recordVerbName {
+		return "", fmt.Errorf("recording %s: this run was not started by the record verb, so no candidate was written: a golden is recorded under the verb's fixed environment, twice, and replayed before it is promoted (%s)", g.spec.Path, g.spec.Recipe)
 	}
 	g.recorded.Header.Blanked = g.blankedHeader()
 	raw, err := json.MarshalIndent(g.recorded, "", "  ")

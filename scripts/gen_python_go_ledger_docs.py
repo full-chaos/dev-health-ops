@@ -155,7 +155,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "trigger": "follows partition completion (same run)",
         "gate": "none found",
         "writer": "Go-native. CHAOS-3092 PR-A' deleted the bridge's `Finalize` call and the Python finalize branch of the daily execute route; PR-A deleted the rest of the bridge. Run bookkeeping is Go (`internal/jobs/metrics/daily/postgres.go`), and every finalize-scope family (`ic_finalize`, `team_cognitive_load`, `team_complexity`, `benchmarking`, `compounding_risk_team`) is a registered `NativeFinalizeFamilyExecutor`. A recognised finalize family with NO registered executor fails the run loudly with `ErrFinalizeFamilyIncomplete` instead of silently leaving its rows unwritten.",
-        "tables": "`public.daily_metrics_runs` (Go); ClickHouse `user_metrics_daily` (`job_daily.py:2125 write_user_metrics` -> `wellbeing.py`'s sink), `ic_landscape_rolling_30d`, and team-level metric tables (Python finalize compute -- corrected 2026-08-28 per codex review across 2 rounds: an earlier draft omitted the Python writer and its output tables entirely, then a follow-up correction still missed `user_metrics_daily`)",
+        "tables": "`public.daily_metrics_runs` (Go); ClickHouse `user_metrics_daily` and `ic_landscape_rolling_30d` (Go `ic_finalize`, `internal/jobs/metrics/daily/icfinalize`; the Python sink writers for them were deleted under CHAOS-7476), and the team-level metric tables of the Go finalize families",
         "evidence": "argued — code read, not re-executed this session",
         "state": "native",
         "ticket": "CHAOS-3092 (PR-A'/PR-A)",

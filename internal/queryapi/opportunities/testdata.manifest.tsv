@@ -1,5 +1,6 @@
 # Every file under internal/queryapi/opportunities/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 8ebcf5645a8017cc27c7a6caf2e55c58f9c2ef8c4de767898d1bc5a2646d523b	unclassified	no_cards_fallback.json
 f54257d031e1a52f47e50531081141c87233019030e3c4204e4ecccbfc92f8b8	unclassified	org_default.json
 6783796a7ceb213bcb47fee573a9c77950354151ea1905dec6666adf6b6aa7d8	unclassified	pr_rework_ratio_default_experiments.json

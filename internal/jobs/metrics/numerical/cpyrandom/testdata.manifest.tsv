@@ -1,0 +1,4 @@
+# Every file under internal/jobs/metrics/numerical/cpyrandom/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: 531badec6d775c5584a0becf87b9648896492bd0b6b7e9426f799a8715fc7b3b (1 files)
+576ad15d045dab250d239710c6f7d64a5aef539f02e6b8ba450458d1a48fe4e3	header-before-stamp	golden/cpython_random_rot_guard.json

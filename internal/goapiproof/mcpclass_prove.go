@@ -182,7 +182,9 @@ func classifyMCPOutcome(o Outcome) (state, reason string) {
 	switch {
 	case o.Executed:
 		return "executed", ""
-	case o.KnownRefusal != nil:
+	// A known refusal is a corpus tag for a Python-vs-Go divergence (e.g. CHAOS-6108). In doc-route mode both sides are Go, the tag does not
+	// apply, and the shape's TRUE reason (below) is what the receipt must name.
+	case o.KnownRefusal != nil && o.EdgeMode != EdgeModeDocRoute:
 		return "excluded", "known_refusal"
 	case o.RefusalReason == RefusalNeedsInstanceID:
 		return "excluded", "needs_instance_identifier"

@@ -102,12 +102,12 @@ func loopCorpus() []loopCase {
 		// the port exits 1: a named divergence), a rate limit stops Python.
 		for _, batch := range []string{"2", "100"} {
 			for _, concurrent := range []string{"2", "4"} {
-				for name, fails := range map[string][]int{"first": {0}, "middle and last": {2, 4}} {
+				// A slice, not a map: the corpus is the golden's key, so its order must not change between runs.
+				for _, fails := range [][]int{{0}, {2, 4}} {
 					repos := names(5)
 					for _, i := range fails {
 						repos[i].Fail = "error"
 					}
-					_ = name
 					out = append(out, loopCase{provider, repos, batch, concurrent})
 				}
 				for _, at := range []int{1, 4} {

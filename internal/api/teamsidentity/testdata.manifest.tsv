@@ -1,5 +1,6 @@
 # Every file under internal/api/teamsidentity/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 67285628030dd11b6bc0caab917c676564bcd39acf48d86a683a1d6314a2c074	unclassified	github_discover_fixtures/README.md
 2e99908f4c60cdd172335b4def2b2481e6f4577d46a9785918c06a75b0cff4ad	unclassified	github_discover_fixtures/org_detail.json
 996ced01133cf20d355335c1bebab3405c37275f6ef35f4065d2ea4e9d5c571d	unclassified	github_discover_fixtures/team_detail.json

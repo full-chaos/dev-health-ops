@@ -475,7 +475,7 @@ func TestBillingReconcileMatchesTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("reconcile script", reconcilePythonProgram, input, reconcilePythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		pinPythonRoot(t, root)
 		body, err := json.Marshal(reconcileSession(t, true))
 		if err != nil {

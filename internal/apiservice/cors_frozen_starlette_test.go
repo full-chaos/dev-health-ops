@@ -115,7 +115,7 @@ func TestCORSMatchesFrozenStarlette(t *testing.T) {
 	}
 	input, _ := json.Marshal(map[string]any{"configs": configs, "cases": cases})
 	request := venueoracle.ProgramRequest("cors matrix", pythonCORSProgram, input, producerEnv)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		command := exec.Command(python, "-c", pythonCORSProgram)
 		command.Env = producerCommandEnv(root)

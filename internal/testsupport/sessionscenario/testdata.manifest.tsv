@@ -1,3 +1,4 @@
 # Every file under internal/testsupport/sessionscenario/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: 5150c65c7a3002ff1f7f4b8ad9dde54531a4150724f6d7e21491324cdbd52e20 (1 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 457096365286840fb50dffac99d5418e9532183070962fbbadf81e51794b4ae5	python-recorded	python_golden.json

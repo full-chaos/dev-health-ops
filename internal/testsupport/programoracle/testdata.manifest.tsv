@@ -1,5 +1,6 @@
 # Every file under internal/testsupport/programoracle/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	golden/blocks.golden.json
--	header	golden/run.golden.json
--	header	golden/script.golden.json
+# header-before-stamp set: 4604fed15ba8c875db087b36db28c141b767584abc4a30a1b7c5d8da436c25bd (3 files)
+222ea6b4f17e7a0676502feb6a851084e9ef21a933cc63db87c24669ddb8721a	header-before-stamp	golden/blocks.golden.json
+6c3807fe456312d0464a8eca1e752311b8cbbbdd7277792d4d038b73e66b9c45	header-before-stamp	golden/run.golden.json
+d0884e9313816f8f0771546274d5d950cde05fc31606301cb9af9f70de142c88	header-before-stamp	golden/script.golden.json

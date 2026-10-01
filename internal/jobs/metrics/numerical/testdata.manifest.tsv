@@ -1,5 +1,6 @@
 # Every file under internal/jobs/metrics/numerical/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	golden/capacity_forecast_rot_guard.json
--	header	golden/fma_rot_guard.json
--	header	golden/remaining_metrics_rot_guard.json
+# header-before-stamp set: 3d79649c93217a56d4b76e64af57a44d35f28afea685ec430a1a23f1fea37f84 (3 files)
+1b7a1ec86d1a5a635596179d2b5d979cb6444bc4cd9ef47a20d365a6aa5b8c76	header-before-stamp	golden/capacity_forecast_rot_guard.json
+deb571e7b2d94fb8b3f7ffc6e1309daa136ae001942e703954b0c20576a5a5ba	header-before-stamp	golden/fma_rot_guard.json
+22d5bf8fe0990e9a6b14993844854c2fafb52ece749ed1e790f7cbdce8fec033	header-before-stamp	golden/remaining_metrics_rot_guard.json

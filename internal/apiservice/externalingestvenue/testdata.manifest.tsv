@@ -1,5 +1,6 @@
 # Every file under internal/apiservice/externalingestvenue/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	external-ingest-auth-limiter-venue-oracle.json
--	header	external-ingest-limiter-venue-oracle.json
--	header	pager-duty-webhook-limiter-venue-oracle.json
+# header-before-stamp set: 9db91f9a24d6015f7fa11522b7b251ba2470ed774cef68293ab7bdbf5957f466 (3 files)
+44f214d36d43f0e72ff5ffc7ca926f4dd82c8e62d5ba4dd304483dbdcbfc47eb	header-before-stamp	external-ingest-auth-limiter-venue-oracle.json
+6c649c2f430612c0af99d26844e68095a0e8942ccd2223fe9d3817c0de22c735	header-before-stamp	external-ingest-limiter-venue-oracle.json
+29159fd65bc328c5e4bfbc6eb048c516e1c07a2560014e3aeabc2beffc170858	header-before-stamp	pager-duty-webhook-limiter-venue-oracle.json

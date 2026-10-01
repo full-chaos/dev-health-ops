@@ -51,16 +51,30 @@ const (
 	HandWritten = "hand-written"
 	// GoGenerated is written by Go code of this repository.
 	GoGenerated = "go-generated"
-	// Header is a golden the record verb wrote: it holds a header and is
-	// pinned by a digest in its own test, so its row holds no digest.
+	// Header is a golden the record verb wrote: it holds a header with the
+	// verb's stamp and is pinned by a digest in its own test, so its row
+	// holds no digest.
 	Header = "header"
+	// HeaderBeforeStamp is a golden with a header and no stamp of the record
+	// verb: it was recorded before the stamp existed. Its row holds its
+	// digest. The set of these rows is a RECORD of how the goldens of that
+	// time were made, not open work: it only shrinks, a golden leaves it
+	// when another ticket has it recorded again, and emptying it gates
+	// nothing (once the Python tree is deleted nothing can be recorded
+	// again). No row of this kind is added after the first ones: a golden
+	// with no stamp that is not in the set was made by hand.
+	HeaderBeforeStamp = "header-before-stamp"
 	// Unclassified is a file nobody classified when the manifests were first
 	// written. It is allowed only for the files of the day-one list.
 	Unclassified = "unclassified"
 )
 
 // Kinds is every kind a row may hold.
-var Kinds = []string{PythonRecorded, ProviderRecorded, HandWritten, GoGenerated, Header, Unclassified}
+var Kinds = []string{PythonRecorded, ProviderRecorded, HandWritten, GoGenerated, Header, HeaderBeforeStamp, Unclassified}
+
+// recordVerbStamp is what the record verb writes into a golden's header
+// (venueoracle's recorded_by).
+const recordVerbStamp = "goldenrecord"
 
 // unclassifiedDayOne is how many files the day-one list holds. It only goes
 // down: a file leaves the list when it gets a kind, and no file is added.
@@ -185,25 +199,39 @@ func Digest(repo, file string) (string, error) {
 // HasGoldenHeader tells whether the file at the repository path is a golden
 // of the record verb: a JSON document whose header names its Python build.
 func HasGoldenHeader(repo, file string) bool {
+	golden, _ := goldenHeader(repo, file)
+	return golden
+}
+
+// goldenHeader tells whether the file at the repository path is a golden with
+// a header, and whether that header holds the record verb's stamp.
+func goldenHeader(repo, file string) (golden, stamped bool) {
 	raw, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(file)))
 	if err != nil {
-		return false
+		return false, false
 	}
 	var document struct {
 		Header struct {
 			PythonBuild string `json:"python_build"`
+			RecordedBy  string `json:"recorded_by"`
 		} `json:"header"`
 	}
-	return json.Unmarshal(raw, &document) == nil && document.Header.PythonBuild != ""
+	if json.Unmarshal(raw, &document) != nil || document.Header.PythonBuild == "" {
+		return false, false
+	}
+	return true, document.Header.RecordedBy == recordVerbStamp
 }
 
 // SetDigest is the digest of the python-recorded rows as a set, and how many
 // they are: any recorded file that changes, comes or goes changes it.
-func SetDigest(rows []Row) (string, int) {
+func SetDigest(rows []Row) (string, int) { return setDigest(rows, PythonRecorded) }
+
+// setDigest is the digest of the rows of one kind as a set, and their number.
+func setDigest(rows []Row, kind string) (string, int) {
 	hash := sha256.New()
 	count := 0
 	for _, row := range sorted(rows) {
-		if row.Kind == PythonRecorded {
+		if row.Kind == kind {
 			fmt.Fprintf(hash, "%s  %s\n", row.Digest, row.Path)
 			count++
 		}
@@ -223,6 +251,10 @@ func (m Manifest) Bytes() []byte {
 	fmt.Fprintf(&out, "# Every file under %s: sha256, kind, path. Written by `%s`; never edit it by hand.\n", m.Root, Verb)
 	digest, count := SetDigest(m.Rows)
 	fmt.Fprintf(&out, "# python-recorded set: %s (%d files)\n", digest, count)
+	// The goldens recorded before the record verb stamped its work: a record
+	// that only shrinks, never open work (HeaderBeforeStamp).
+	digest, count = setDigest(m.Rows, HeaderBeforeStamp)
+	fmt.Fprintf(&out, "# %s set: %s (%d files)\n", HeaderBeforeStamp, digest, count)
 	for _, row := range sorted(m.Rows) {
 		fmt.Fprintf(&out, "%s\t%s\t%s\n", row.Digest, row.Kind, row.Path)
 	}
@@ -392,9 +424,21 @@ func problems(repo string, roots, dayOne []string, dayOneCount int) ([]string, e
 					out = append(out, fmt.Sprintf("%s is %s in %s and is not on the day-one list (%s): a new file gets a kind. Give it one: %s -kind <%s> %s", full, Unclassified, ManifestPath(root), DayOneList, Verb, strings.Join(addable(), "|"), full))
 				}
 			}
+			golden, stamped := goldenHeader(repo, full)
 			if row.Kind == Header {
-				if !HasGoldenHeader(repo, full) {
+				switch {
+				case !golden:
 					out = append(out, fmt.Sprintf("%s has the kind %s in %s and holds no golden header: only a golden the record verb wrote has that kind", full, Header, ManifestPath(root)))
+				case !stamped:
+					out = append(out, fmt.Sprintf("%s has the kind %s in %s and its header holds no stamp of the record verb (recorded_by): the verb did not make it. A golden is recorded by the verb, never by hand: record it (its test's recipe), then %s %s", full, Header, ManifestPath(root), Verb, full))
+				}
+				continue
+			}
+			if row.Kind == HeaderBeforeStamp && (!golden || stamped) {
+				if stamped {
+					out = append(out, fmt.Sprintf("%s is %s in %s and its header holds the record verb's stamp now: it was recorded again; write its row: %s %s", full, HeaderBeforeStamp, ManifestPath(root), Verb, full))
+				} else {
+					out = append(out, fmt.Sprintf("%s is %s in %s and holds no golden header", full, HeaderBeforeStamp, ManifestPath(root)))
 				}
 				continue
 			}
@@ -407,6 +451,9 @@ func problems(repo string, roots, dayOne []string, dayOneCount int) ([]string, e
 			case row.Kind == PythonRecorded:
 				out = append(out, fmt.Sprintf("%s changed (sha256 %s, its row in %s holds %s). It is a recorded answer of a Python producer: it changes only when it is recorded again, never by an edit. If it was recorded again: %s -recorded-again -kind %s %s",
 					full, digest, ManifestPath(root), row.Digest, Verb, PythonRecorded, full))
+			case row.Kind == HeaderBeforeStamp:
+				out = append(out, fmt.Sprintf("%s changed (sha256 %s, its row in %s holds %s). It is a golden recorded before the record verb stamped its work: it changes only when the verb records it again, which stamps it; then: %s %s",
+					full, digest, ManifestPath(root), row.Digest, Verb, full))
 			case row.Kind == Unclassified:
 				out = append(out, fmt.Sprintf("%s changed (sha256 %s, its row in %s holds %s). It has no kind yet: if the change is meant, give it its kind, which also takes it off the day-one list: %s -kind <%s> %s",
 					full, digest, ManifestPath(root), row.Digest, Verb, strings.Join(addable(), "|"), full))
@@ -508,8 +555,9 @@ type Change struct {
 	Kind string
 	// RecordedAgain allows a python-recorded row to change or to go.
 	RecordedAgain bool
-	// DayOne allows the kind unclassified and puts the file on the day-one
-	// list: for the first manifests only.
+	// DayOne is for the first manifests only: it allows the kind unclassified
+	// (and puts the file on the day-one list), and it gives a golden with no
+	// stamp of the record verb the kind header-before-stamp.
 	DayOne bool
 }
 
@@ -536,14 +584,20 @@ func Set(repo string, files []string, change Change) ([]string, error) {
 		if info, err := os.Stat(filepath.Join(repo, filepath.FromSlash(file))); err != nil || !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("%s is not a file of this tree", file)
 		}
-		kind, golden := change.Kind, HasGoldenHeader(repo, file)
+		kind := change.Kind
+		golden, stamped := goldenHeader(repo, file)
 		switch {
 		case golden && kind != "" && kind != Header:
 			return nil, fmt.Errorf("%s holds a golden header: the record verb wrote it, its kind is %s (give no -kind)", file, Header)
-		case golden:
+		case golden && stamped:
 			kind = Header
-		case kind == Header:
-			return nil, fmt.Errorf("%s holds no golden header: only a golden the record verb wrote has the kind %s", file, Header)
+		case golden && change.DayOne:
+			// The first manifests: a golden recorded before the stamp existed.
+			kind = HeaderBeforeStamp
+		case golden:
+			return nil, fmt.Errorf("%s holds a golden header and no stamp of the record verb (recorded_by): the verb did not make it. A golden is recorded by the verb, never by hand (its test's recipe names the command)", file)
+		case kind == Header || kind == HeaderBeforeStamp:
+			return nil, fmt.Errorf("%s holds no golden header: only a golden the record verb wrote has the kind %s", file, kind)
 		case kind == "":
 			return nil, fmt.Errorf("%s needs a kind: -kind <%s>", file, strings.Join(addable(), "|"))
 		case !knownKind(kind):
@@ -574,6 +628,9 @@ func Set(repo string, files []string, change Change) ([]string, error) {
 		}
 		if at >= 0 {
 			existing := manifest.Rows[at]
+			if existing.Kind == HeaderBeforeStamp && kind == HeaderBeforeStamp && existing != row {
+				return nil, fmt.Errorf("%s is %s and its bytes changed with no stamp of the record verb: a golden changes only when the verb records it again", file, HeaderBeforeStamp)
+			}
 			if existing.Kind == PythonRecorded && existing != row && !change.RecordedAgain {
 				return nil, fmt.Errorf("%s is %s (sha256 %s in its row, %s now, kind asked %s): a recorded answer of a Python producer changes only when it is recorded again; if it was, add -recorded-again", file, PythonRecorded, existing.Digest, row.Digest, kind)
 			}
@@ -661,8 +718,8 @@ func Sync(repo string, change Change) ([]string, error) {
 			switch {
 			case present[row.Path]:
 				kept = append(kept, row)
-			case row.Kind == PythonRecorded && !change.RecordedAgain:
-				return nil, fmt.Errorf("%s/%s is %s and the file is gone: a recorded answer of a Python producer goes only on purpose; if it was replaced or deleted on purpose, add -recorded-again", root, row.Path, PythonRecorded)
+			case (row.Kind == PythonRecorded || row.Kind == HeaderBeforeStamp) && !change.RecordedAgain:
+				return nil, fmt.Errorf("%s/%s is %s and the file is gone: a recorded answer of a Python producer goes only on purpose; if it was replaced or deleted on purpose, add -recorded-again", root, row.Path, row.Kind)
 			default:
 				delete(listed, root+"/"+row.Path)
 			}
@@ -683,8 +740,8 @@ func Sync(repo string, change Change) ([]string, error) {
 			return nil, err
 		}
 		for _, row := range manifest.Rows {
-			if row.Kind == PythonRecorded && !change.RecordedAgain {
-				return nil, fmt.Errorf("%s/%s is %s and its directory is gone: a recorded answer of a Python producer goes only on purpose; if so, add -recorded-again", root, row.Path, PythonRecorded)
+			if (row.Kind == PythonRecorded || row.Kind == HeaderBeforeStamp) && !change.RecordedAgain {
+				return nil, fmt.Errorf("%s/%s is %s and its directory is gone: a recorded answer of a Python producer goes only on purpose; if so, add -recorded-again", root, row.Path, row.Kind)
 			}
 			delete(listed, root+"/"+row.Path)
 		}

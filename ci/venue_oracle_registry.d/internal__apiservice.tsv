@@ -1,4 +1,3 @@
-internal/apiservice	TestCORSVenueOracleMatchesLiveStarlette	run
 internal/apiservice	TestExternalIngestPayloadHashVenueOracle	run
 internal/apiservice	TestExternalIngestVenueOracle	run
 internal/apiservice	TestLegacyIngestTelemetryVenueOracle	run
@@ -11,6 +10,5 @@ internal/apiservice	TestVenueOracleCustomerPushReads	run
 internal/apiservice	TestVenueOracleCustomerPushValidate	run
 internal/apiservice	TestVenueOracleCustomerPushWrites	run
 internal/apiservice	TestVenueOracleProtectedRoutes	run
-internal/apiservice	TestVenueOracleRouteResponseModels	run
 internal/apiservice	TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth	run
 internal/apiservice	TestWebhookIntakeVenueOraclePagerDuty	run

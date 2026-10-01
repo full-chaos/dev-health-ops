@@ -11,7 +11,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -66,6 +65,21 @@ var goRoutesWithoutPython = map[string]string{
 	"OPTIONS /api/v1/auth/oauth/{first}/{second}": "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
 }
 
+// retiredPythonRoutes are the table's routes the pinned FastAPI build no longer
+// has: the Go api serves them (the stripe webhook), so the comparison with the
+// FastAPI route table stops at them.
+var retiredPythonRoutes = map[string]string{
+	"POST /api/v1/billing/webhooks/stripe": "the Python Stripe webhook route was deleted before the pinned build; billingvenue freezes its answers",
+}
+
+// internalListenerRoutes are the table's routes FastAPI still has and the Go api
+// serves on its internal listener only (CHAOS-7192 removed their public compat
+// copies): they are compared with FastAPI, not with the public route set.
+var internalListenerRoutes = map[string]string{
+	"GET /api/v1/internal/acr/health":                "served by the internal listener (internal_listener_test.go)",
+	"GET /api/v1/internal/acr/entitlements/{org_id}": "served by the internal listener (internal_listener_test.go)",
+}
+
 var routeParameter = regexp.MustCompile(`\{[^}]+\}`)
 
 func routeShape(method, path string) string {
@@ -76,25 +90,29 @@ func routeShape(method, path string) string {
 	return method + " " + routeParameter.ReplaceAllString(trimmed, "{}")
 }
 
-// TestVenueOracleRouteResponseModels pins every dho api route's
-// ResponseModel flag against the live FastAPI app: a route whose Python
+// TestRouteResponseModelsMatchTheFrozenFastAPITable pins every dho api route's
+// ResponseModel flag against the FastAPI app frozen in its golden: a route whose Python
 // counterpart writes its success body as a response_model must be
 // flagged (its handlers then write with policy.WriteModel, and the venues
 // fail on a WriteJSON success body there), every other route must not be,
 // and each named exception must still be what it says.
-func TestVenueOracleRouteResponseModels(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh")
-	}
+func TestRouteResponseModelsMatchTheFrozenFastAPITable(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, programGolden("route-response-models", t.Name(), "cdd360911251cf04b25a7adff727ac6a4a09639f64f94470bf16e0d0a7fcdd31"))
 	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "-c", pythonRouteTableProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("live FastAPI route table: %v", pyoracle.RunError(python, err, output))
-	}
+	root := golden.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")))
+	request := venueoracle.ProgramRequest("fastapi route table", pythonRouteTableProgram, nil, producerEnv)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		python := pyoracle.Resolve(t, root)
+		command := exec.Command(python, "-c", pythonRouteTableProgram)
+		command.Env = producerCommandEnv(root)
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("live FastAPI route table: %v", pyoracle.RunError(python, err, output))
+		}
+		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
+	})
+	golden.Consumed(t, answers...)
+	output := []byte(answers[0].Body)
 	var table [][3]any
 	for _, line := range strings.Split(string(output), "\n") {
 		if rest, ok := strings.CutPrefix(line, "ROUTES "); ok {
@@ -165,6 +183,14 @@ func TestVenueOracleRouteResponseModels(t *testing.T) {
 	for key, flag := range responseModelRoutes {
 		method, path, _ := strings.Cut(key, " ")
 		model, ok := pythonModel[routeShape(method, path)]
+		if reason, retired := retiredPythonRoutes[key]; retired {
+			// The table still names a route the Go api serves whose FastAPI route is
+			// gone from the pinned build: the exception holds only while that is so.
+			if ok {
+				t.Errorf("%s is named as retired from FastAPI (%s), but FastAPI has a route for it", key, reason)
+			}
+			continue
+		}
 		if !ok {
 			t.Errorf("responseModelRoutes names %s, which FastAPI has no route for", key)
 			continue
@@ -181,6 +207,9 @@ func TestVenueOracleRouteResponseModels(t *testing.T) {
 			t.Errorf("%s: table says %v, FastAPI writes it as a response_model=%v", key, flag, model)
 		}
 		route, served := servingRoute(patterns, method, path)
+		if _, internal := internalListenerRoutes[key]; internal && !served {
+			continue
+		}
 		if !served {
 			t.Errorf("responseModelRoutes names %s, which no Go route serves", key)
 			continue
@@ -198,8 +227,9 @@ func TestVenueOracleRouteResponseModels(t *testing.T) {
 	if compared == 0 || flagged == 0 {
 		t.Fatalf("compared %d routes, %d flagged: the comparison measured nothing", compared, flagged)
 	}
-	venueoracle.WriteProof(t)
-	t.Logf("%d Python routes the dho api serves compared with the live FastAPI table; %d write a response_model body", compared, flagged)
+	t.Logf("%d Python routes the dho api serves compared with the frozen FastAPI table; %d write a response_model body", compared, flagged)
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 // servingRoute is the Go route that serves method and path: the route

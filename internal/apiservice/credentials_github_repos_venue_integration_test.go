@@ -349,6 +349,7 @@ func githubRepoRequests(tokens map[string]string, ids map[string]string) []venue
 // differential: the real Python api and this Go api answer every request the
 // same and send the same requests to the GitHub stub.
 func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-credential-git-hub-repos", t.Name(), "ee92b71ba4ed644d5b2b1cfc3ed05868fc954de5f9b2bcdaa6e866840b52884e"))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	stub := newGitHubRepoStub(t)
@@ -377,7 +378,7 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 	var ids map[string]string
 	rows := githubRepoSeedRows(pemKey)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey,
 			"VENUE_PROVIDER_STUB_PORT=" + stub.port(),
@@ -398,9 +399,11 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := githubRepoRequests(venue.Tokens, ids)
-	pythonResponses := venue.ServePython(t, requests)
-	pythonProvider := stub.take()
-	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{})
+	pythonResponses := golden.Python(t, venue, requests)
+	pythonProvider := strings.Split(golden.InspectRows(t, "python provider requests", func() string {
+		return strings.Join(stub.take(), "\n")
+	}), "\n")
+	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{Golden: golden})
 	goProvider := stub.take()
 
 	providerSame := len(goProvider) > 0 && strings.Join(pythonProvider, "\n") == strings.Join(goProvider, "\n")
@@ -408,4 +411,5 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 		t.Errorf("provider requests differ:\n python:\n%s\n go:\n%s", strings.Join(pythonProvider, "\n"), strings.Join(goProvider, "\n"))
 	}
 	t.Logf("\n%sprovider requests (%d): %s\n", receipt, len(goProvider), venueoracle.Mark(providerSame))
+	golden.Finish(t)
 }

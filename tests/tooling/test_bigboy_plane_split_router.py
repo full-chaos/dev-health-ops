@@ -757,3 +757,187 @@ def test_every_emitted_router_file_loads(
     routed = yaml.safe_load(capsys.readouterr().out)
     assert _route(routed, "/a-b/1_y") == "http://go-api:8000"
     assert _route(routed, "/c-d") == "http://query-api:8090"
+
+
+# ---- an allow-list entry that names its backend (`service: query-api`) ----
+# Prod changes the backend of /graphql INSIDE the Ingress object that holds the path: the
+# allow-list entry gets `service: query-api`. The router must send that path to query-api,
+# take it out of the Python rule, and keep refusing half a change.
+
+_GRAPHQL_PYTHON = {"path": "/graphql$", "pathType": "ImplementationSpecific"}
+_GRAPHQL_QUERY = {**_GRAPHQL_PYTHON, "service": "query-api"}
+_METRICS = {"path": "/metrics$", "pathType": "ImplementationSpecific"}
+
+
+def _named_backend_values(shared: list[dict], own: list[dict] | None = None) -> dict:
+    """VALUES with a shared allow-list and, when `own` is given, one host with its own list."""
+    doc = yaml.safe_load(yaml.safe_dump(VALUES))
+    hosts = [{"host": "api.example", "pythonAllowList": True}]
+    if own is not None:
+        hosts.append({"host": "in-cluster.example", "pythonAllowList": own})
+    doc["ops"] = {"ingress": {"pythonAllowList": shared, "hosts": hosts}}
+    return doc
+
+
+def _emit(gen: ModuleType, doc: dict) -> dict:
+    go_paths, query_paths = gen.paths_from_doc(doc)
+    return yaml.safe_load(
+        gen.emit_dynamic_config(
+            gen.combined_regex(go_paths),
+            gen.combined_regex(query_paths),
+            gen.python_allow_list_from_doc(doc),
+        )
+    )
+
+
+def test_an_entry_that_names_query_api_is_routed_to_query_api(gen: ModuleType) -> None:
+    doc = _named_backend_values([_GRAPHQL_QUERY], [_GRAPHQL_QUERY, _METRICS])
+    assert gen.paths_on_two_planes(doc) == []
+    assert gen.paths_in_two_objects(doc) == []
+    routed = _emit(gen, doc)
+    assert _route(routed, "/graphql") == "http://query-api:8090"
+    for lookalike in ("/graphqlx", "/graphql/", "/graphql/x"):
+        assert _route(routed, lookalike) == "http://go-api:8000", lookalike
+    assert "graphql" not in routed["http"]["routers"]["python-allowlist"]["rule"]
+
+
+def test_an_entry_with_service_api_or_no_key_stays_on_python(gen: ModuleType) -> None:
+    for entry in (_GRAPHQL_PYTHON, {**_GRAPHQL_PYTHON, "service": "api"}):
+        routed = _emit(gen, _named_backend_values([entry], [entry, _METRICS]))
+        assert _route(routed, "/graphql") == "http://api:8000", entry
+
+
+def test_the_named_backend_gives_the_router_of_a_query_api_paths_entry(
+    gen: ModuleType,
+) -> None:
+    """Both ways of sending /graphql to query-api give bigboy the same router, so a proof on
+    bigboy holds for either."""
+    by_entry = _named_backend_values([_GRAPHQL_QUERY])
+    by_table = _named_backend_values([])
+    by_table["ingress"]["queryApiPaths"].append(
+        {"path": "/graphql", "pathType": "Exact"}
+    )
+    assert _emit(gen, by_entry) == _emit(gen, by_table)
+
+
+@pytest.mark.parametrize(
+    ("shared", "own", "python_list", "go_list"),
+    [
+        (
+            [_GRAPHQL_QUERY],
+            [_GRAPHQL_PYTHON, _METRICS],
+            "ops.ingress.hosts[in-cluster.example].pythonAllowList",
+            "ops.ingress.pythonAllowList (service: query-api)",
+        ),
+        (
+            [_GRAPHQL_PYTHON],
+            [_GRAPHQL_QUERY, _METRICS],
+            "ops.ingress.pythonAllowList",
+            "ops.ingress.hosts[in-cluster.example].pythonAllowList (service: query-api)",
+        ),
+    ],
+)
+def test_half_a_backend_change_is_refused(
+    gen: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    shared: list[dict],
+    own: list[dict],
+    python_list: str,
+    go_list: str,
+) -> None:
+    """/graphql on query-api on one list and on Python on the other is one path on two
+    backends: prod would serve it differently per host, and bigboy would prove one of them."""
+    values = tmp_path / "values.prod.yaml"
+    values.write_text(yaml.safe_dump(_named_backend_values(shared, own)))
+    assert gen.main([str(values), "--format", "dynamic"]) == 4
+    captured = capsys.readouterr()
+    assert captured.out == "" and "REFUSED: one path, two backends" in captured.err
+    assert f"{python_list} entry {{path: /graphql$" in captured.err
+    assert f"and {go_list} entry /graphql$" in captured.err
+
+
+@pytest.mark.parametrize(
+    "table_entry",
+    [
+        ("queryApiPaths", {"path": "/graphql", "pathType": "Exact"}),
+        ("goApiPaths", {"path": "/graphql"}),
+        (
+            "queryApiPaths",
+            {"path": "/graph[^/]+", "pathType": "ImplementationSpecific"},
+        ),
+    ],
+)
+def test_a_named_backend_and_a_path_table_for_one_path_are_refused(
+    gen: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    table_entry: tuple[str, dict],
+) -> None:
+    """The allow-list is one Ingress object on prod and each path table is another; two live
+    objects for one host and path are denied by the ingress admission webhook."""
+    table, entry = table_entry
+    doc = _named_backend_values([_GRAPHQL_QUERY])
+    doc["ingress"][table].append(entry)
+    values = tmp_path / "values.prod.yaml"
+    values.write_text(yaml.safe_dump(doc))
+    assert gen.main([str(values), "--format", "dynamic"]) == 4
+    captured = capsys.readouterr()
+    assert (
+        captured.out == "" and "REFUSED: one path, two Ingress objects" in captured.err
+    )
+    assert "service: query-api} and ingress." + table in captured.err
+
+
+@pytest.mark.parametrize(
+    ("entry", "reason"),
+    [
+        (
+            {"path": "/graphql", "pathType": "Prefix", "service": "query-api"},
+            "is not one path",
+        ),
+        (
+            {
+                "path": "/graphql[^/]+",
+                "pathType": "ImplementationSpecific",
+                "service": "query-api",
+            },
+            "is not one path",
+        ),
+        (
+            {**_GRAPHQL_PYTHON, "service": "go-api"},
+            "routes to api (the Python api, the default) or to query-api",
+        ),
+        (
+            {**_GRAPHQL_PYTHON, "service": None},
+            "routes to api (the Python api, the default) or to query-api",
+        ),
+        (
+            {**_GRAPHQL_PYTHON, "service": ""},
+            "routes to api (the Python api, the default) or to query-api",
+        ),
+    ],
+)
+def test_a_named_backend_this_router_cannot_route_is_refused(
+    gen: ModuleType, tmp_path: Path, entry: dict, reason: str
+) -> None:
+    for doc in (
+        _named_backend_values([entry]),
+        _named_backend_values([], [entry]),
+    ):
+        values = tmp_path / "values.prod.yaml"
+        values.write_text(yaml.safe_dump(doc))
+        with pytest.raises(SystemExit) as refused:
+            gen.main([str(values), "--format", "dynamic"])
+        assert reason in str(refused.value), refused.value
+
+
+def test_an_exact_entry_that_names_query_api_is_routed_literally(
+    gen: ModuleType,
+) -> None:
+    doc = _named_backend_values(
+        [{"path": "/graphql", "pathType": "Exact", "service": "query-api"}]
+    )
+    routed = _emit(gen, doc)
+    assert _route(routed, "/graphql") == "http://query-api:8090"
+    assert _route(routed, "/graphqlx") == "http://go-api:8000"

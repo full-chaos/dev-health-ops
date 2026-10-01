@@ -70,6 +70,15 @@ route prod may not have. The check is on the paths the rules match, not on the t
   ingress-nginx renders for a Prefix on a host in regex mode, and it contains this router's own
   reading (the path, or anything under it).
 - A Go plane wildcard (`{param}`, `[^/]+`) never crosses a `/`, so the answer is exact.
+- An allow-list entry may name its backend: `service: query-api`. The router then sends that
+  path to query-api and leaves it out of the Python rule, and the entry counts as a Go plane path
+  in this check, on whichever list it is: the same path still on Python on another list is half
+  a change and is refused. Such an entry must be one path (`Exact`, or an anchored
+  `ImplementationSpecific`); a `Prefix` is refused.
+- One more refusal, `one path, two Ingress objects`: an entry that names query-api while
+  `ingress.goApiPaths` or `ingress.queryApiPaths` also claims the path. Prod renders the
+  allow-list in one Ingress object and the path tables in others, and its ingress admission
+  denies two live objects for one host and path.
 - An allow-list entry of a shape the ops chart does not accept (an unanchored
   `ImplementationSpecific`, an unknown `pathType`) is refused too, not read as a literal.
 

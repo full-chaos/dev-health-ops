@@ -125,6 +125,11 @@ func TestQueryAPIRoleDriverObservesAMissingColumnGrant(t *testing.T) {
 			t.Errorf("with SELECT on %s.%s withheld, probe = %v, want a 42501 permission denial naming %s",
 				column.TableName, column.ColumnName, err, column.TableName)
 		}
+		// The refusal an operator reads names the grant the role lacks.
+		if missing := policy.MissingGrant(err); !strings.Contains(missing, column.TableName+" (") || !strings.Contains(missing, column.ColumnName) {
+			t.Errorf("with SELECT on %s.%s withheld, the store names the missing grant as %q, want it to name that table and column",
+				column.TableName, column.ColumnName, missing)
+		}
 		grant := "GRANT SELECT (" + column.ColumnName + ") ON public." + column.TableName + " TO " + fixture.role
 		if _, err := fixture.admin.Exec(ctx, grant); err != nil {
 			t.Fatalf("%s: %v", grant, err)

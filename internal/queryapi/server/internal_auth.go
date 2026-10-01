@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -168,6 +169,17 @@ func decidedScope(ctx context.Context, _ *policy.User) (string, *policy.Imperson
 	return policy.OrgIDFrom(ctx), policy.ImpersonationFrom(ctx), nil
 }
 
+// storeFailureReason is the logged reason for an identity read that failed:
+// reason itself, or, when the database role was denied the read, a reason that
+// names the grant that is missing, so an operator sees what the migration has
+// not applied yet.
+func storeFailureReason(reason string, err error) string {
+	if grant := policy.MissingGrant(err); grant != "" {
+		return "edge_grant_missing missing_grant=" + strconv.Quote(grant)
+	}
+	return reason
+}
+
 // roleInOrg is the caller's role in the org the request acts in, and whether
 // the caller may act there at all. A member holds the membership's role. A
 // caller who is not a member may act only as a live superuser in an org other
@@ -204,9 +216,9 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 	user, err := edgeAuth.Authenticate(ctx, token)
 	if err != nil {
 		internalidentity.RecordOutcome("edge", "invalid")
-		if errors.Is(err, policy.ErrUnavailable) {
-			log.Printf("query-api: internal request refused: reason=edge_store_unavailable carrier=edge path=%s request_id=%s",
-				r.URL.Path, envelopeRequestID(r))
+		if errors.Is(err, policy.ErrUnavailable) || policy.MissingGrant(err) != "" {
+			log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
+				storeFailureReason("edge_store_unavailable", err), r.URL.Path, envelopeRequestID(r))
 			return authctx.Claims{}, edgeUnavailable
 		}
 		noteRefusal(r, "edge_rejected", "edge")
@@ -232,7 +244,7 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 			reason = "edge_impersonation_undecided"
 		}
 		log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
-			reason, r.URL.Path, envelopeRequestID(r))
+			storeFailureReason(reason, scopeErr), r.URL.Path, envelopeRequestID(r))
 		return authctx.Claims{}, edgeUnavailable
 	}
 
@@ -254,8 +266,10 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 		// verified an X-Org-Id, so within the request this is its answer.
 		memberRole, member, memberErr := edgeAuth.Membership(ctx, user.UserID, orgID)
 		if memberErr != nil {
-			log.Printf("query-api: internal request refused: reason=edge_membership_lookup_failed carrier=edge path=%s request_id=%s",
-				r.URL.Path, envelopeRequestID(r))
+			// The role could not be read, so there is no role: the request
+			// is refused, never served with a default one.
+			log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
+				storeFailureReason("edge_membership_lookup_failed", memberErr), r.URL.Path, envelopeRequestID(r))
 			return authctx.Claims{}, edgeUnavailable
 		}
 		orgRole, allowed := roleInOrg(user, orgID, memberRole, member)

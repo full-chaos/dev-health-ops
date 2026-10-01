@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // withReads runs fn inside a request auth is bound to (ReadOnce).
@@ -89,4 +90,31 @@ func TestReadOnceAnswersAreNotShared(t *testing.T) {
 			t.Fatal("the bound authenticator is not the one ReadOnce bound")
 		}
 	})
+}
+
+// TestStoreErrorNamesAMissingGrant: a permission denial (42501) on a store
+// read names the grant the role lacks; every other failure is classified as
+// before and names none.
+func TestStoreErrorNamesAMissingGrant(t *testing.T) {
+	const grant = "SELECT on memberships (user_id, org_id, role)"
+	denied := storeError(&pgconn.PgError{Code: "42501", Message: "permission denied for table memberships"}, grant)
+	if MissingGrant(denied) != grant || isUnavailable(denied) {
+		t.Fatalf("a 42501 denial: missing grant %q unavailable=%v, want %q and not unavailable", MissingGrant(denied), isUnavailable(denied), grant)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(denied, &pgErr) || pgErr.Code != "42501" {
+		t.Fatalf("the driver error is not kept: %v", denied)
+	}
+	for name, err := range map[string]error{
+		"another SQLSTATE":  &pgconn.PgError{Code: "42P01", Message: "relation does not exist"},
+		"a lost connection": &pgconn.PgError{Code: "08006"},
+		"a plain error":     errors.New("boom"),
+	} {
+		if got := MissingGrant(storeError(err, grant)); got != "" {
+			t.Errorf("%s: names a missing grant %q, want none", name, got)
+		}
+	}
+	if !isUnavailable(storeError(&pgconn.PgError{Code: "08006"}, grant)) {
+		t.Fatal("a connection-class failure is no longer unavailable")
+	}
 }

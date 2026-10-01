@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -100,13 +101,19 @@ func irGraphQL(t *testing.T, handler http.Handler, token, orgHeader, document st
 	return recorder
 }
 
-// irCaptureIdentityLog sends the Debug log to a buffer for the test.
+// irCaptureIdentityLog sends every log line of the test to a buffer: the
+// structured Debug log and, because slog.SetDefault redirects it, the log
+// package's lines too. It puts both back when the test ends.
 func irCaptureIdentityLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buffer bytes.Buffer
-	previous := slog.Default()
+	previous, writer, flags := slog.Default(), log.Writer(), log.Flags()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	t.Cleanup(func() {
+		slog.SetDefault(previous)
+		log.SetOutput(writer)
+		log.SetFlags(flags)
+	})
 	return &buffer
 }
 
@@ -255,5 +262,91 @@ func TestQueryEdgeCarrierStatesTheMembershipRole(t *testing.T) {
 	rec := ecPost(handler, ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", tokenVersion: 5}))
 	if rec.Code != http.StatusOK || len(*seen) != 1 || (*seen)[0].Role != "viewer" || (*seen)[0].OrgID != ecOrg.String() {
 		t.Fatalf("got %d claims=%+v, want role viewer (the membership's) in the token's org", rec.Code, *seen)
+	}
+}
+
+// TestAnEmptyRoleIsNoPrivilege: a membership whose role is empty (a NULL
+// reads as "") gives the caller no role in the org. The one reader that
+// requires a role (the data-health operator gate) refuses; a read that needs
+// only the org is served; and a superuser acting in an org they are not a
+// member of holds the empty role and passes that gate by IsSuperuser alone.
+func TestAnEmptyRoleIsNoPrivilege(t *testing.T) {
+	plain := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", tokenVersion: 5})
+	for name, tc := range map[string]struct {
+		state    policy.UserState
+		token    string
+		header   string
+		org      uuid.UUID
+		operator bool
+	}{
+		"member with an empty role":           {policy.UserState{IsActive: true, TokenVersion: 5}, plain, "", ecOrg, false},
+		"superuser in an org they are not in": {policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}, irToken(t, true), irTargetOrg.String(), irTargetOrg, true},
+	} {
+		store := &fakeEdgeStore{
+			states:  map[uuid.UUID]policy.UserState{ecUser: tc.state},
+			found:   map[uuid.UUID]bool{ecUser: true},
+			members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
+			roles:   map[[2]uuid.UUID]string{{ecUser, ecOrg}: ""},
+		}
+		logged := irCaptureIdentityLog(t)
+		handler, _ := identityResolutionHarness(t, store)
+		busFactor := irGraphQL(t, handler, tc.token, tc.header, irBusFactorDocument, map[string]any{"orgId": tc.org.String()})
+		if busFactor.Code != http.StatusOK || !strings.Contains(busFactor.Body.String(), `"orgId":"`+tc.org.String()+`"`) {
+			t.Errorf("%s: busFactor %d %s, want it served for %s", name, busFactor.Code, busFactor.Body.String(), tc.org)
+		}
+		if !strings.Contains(logged.String(), "role= ") && !strings.Contains(logged.String(), `role=""`) {
+			t.Errorf("%s: identity log %q, want an empty role", name, logged.String())
+		}
+		dataHealth := irGraphQL(t, handler, tc.token, tc.header, irDataHealthDocument, map[string]any{"team": "t1"})
+		refused := strings.Contains(dataHealth.Body.String(), "Data health requires operator access")
+		if dataHealth.Code != http.StatusOK || refused == tc.operator {
+			t.Errorf("%s: dataHealth %d %s, want served=%v", name, dataHealth.Code, dataHealth.Body.String(), tc.operator)
+		}
+	}
+}
+
+// TestAMissingGrantRefusesAndIsNamed: when query-api's database role cannot
+// make an identity read (the binary rolled before the migration granted it:
+// memberships.role, or the users columns), /graphql and /query refuse, nothing
+// runs, no default role is used, and the log line names the grant that is
+// missing.
+func TestAMissingGrantRefusesAndIsNamed(t *testing.T) {
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", tokenVersion: 5})
+	logged := irCaptureIdentityLog(t)
+	for grant, withhold := range map[string]func(*fakeEdgeStore, error){
+		"memberships (user_id, org_id, role)":                func(store *fakeEdgeStore, err error) { store.errIsMember = err },
+		"users (id, is_active, is_superuser, token_version)": func(store *fakeEdgeStore, err error) { store.errUserState = err },
+	} {
+		newStore := func() *fakeEdgeStore {
+			store := &fakeEdgeStore{
+				states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}},
+				found:   map[uuid.UUID]bool{ecUser: true},
+				members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true, {ecUser, irOtherOrg}: true},
+			}
+			withhold(store, &policy.GrantError{Grant: "SELECT on " + grant, Err: errors.New("permission denied")})
+			return store
+		}
+
+		// /graphql, with the read made by the pipeline (no X-Org-Id) and by
+		// the org scope (X-Org-Id): the 500 either way.
+		for name, header := range map[string]string{"no X-Org-Id": "", "X-Org-Id": irOtherOrg.String()} {
+			logged.Reset()
+			handler, clickHouse := identityResolutionHarness(t, newStore())
+			recorder := irGraphQL(t, handler, token, header, irBusFactorDocument, map[string]any{"orgId": ecOrg.String()})
+			if recorder.Code != http.StatusInternalServerError || len(clickHouse.bound) != 0 || !strings.Contains(logged.String(), grant) {
+				t.Errorf("/graphql %s, %s withheld: %d bound=%v logs %q, want the 500, nothing run, and the grant named",
+					name, grant, recorder.Code, clickHouse.bound, logged.String())
+			}
+		}
+
+		// /query, the edge token carrier: its bare 401, nothing runs, the grant named.
+		logged.Reset()
+		store := newStore()
+		handler, seen := iaDispatchWithEdge(t, nil, ecEdgeAuth(t, store), store)
+		rec := ecPost(handler, token)
+		if rec.Code != http.StatusUnauthorized || len(*seen) != 0 ||
+			!strings.Contains(logged.String(), "reason=edge_grant_missing") || !strings.Contains(logged.String(), grant) {
+			t.Errorf("/query, %s withheld: %d ran=%v logged %q, want the 401, nothing run, and the grant named", grant, rec.Code, *seen, logged.String())
+		}
 	}
 }

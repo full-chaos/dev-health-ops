@@ -52,7 +52,7 @@ func (s PGStore) UserState(ctx context.Context, id uuid.UUID) (UserState, bool, 
 		return UserState{}, false, nil
 	}
 	if err != nil {
-		return UserState{}, false, classifyStoreError(err)
+		return UserState{}, false, storeError(err, "SELECT on users (id, is_active, is_superuser, token_version)")
 	}
 	state := UserState{IsActive: active != nil && *active, IsSuperuser: superuser != nil && *superuser}
 	if version != nil {
@@ -73,7 +73,7 @@ func (s PGStore) Membership(ctx context.Context, userID, orgID uuid.UUID) (strin
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, classifyStoreError(err)
+		return "", false, storeError(err, "SELECT on memberships (user_id, org_id, role)")
 	}
 	if role == nil {
 		return "", true, nil
@@ -98,9 +98,42 @@ LIMIT 1`, adminID, s.now().UTC(),
 		return nil, nil
 	}
 	if err != nil {
-		return nil, classifyStoreError(err)
+		return nil, storeError(err, "SELECT on impersonation_sessions (id, admin_user_id, target_user_id, target_org_id, target_role, expires_at, ended_at) and users (id, email)")
 	}
 	return &session, nil
+}
+
+// GrantError is a read the store's own database role is not allowed to make
+// (SQLSTATE 42501): a privilege its manifest declares has not been applied,
+// as when a binary rolls before the migration that grants it. It names the
+// grant, so the line that logs the refusal says what to apply. It is never a
+// reason to answer with less: the read failed and the request is refused.
+type GrantError struct {
+	Grant string
+	Err   error
+}
+
+func (e *GrantError) Error() string { return "policy: the database role lacks " + e.Grant }
+
+func (e *GrantError) Unwrap() error { return e.Err }
+
+// MissingGrant is the grant err reports as missing, or "".
+func MissingGrant(err error) string {
+	var grant *GrantError
+	if errors.As(err, &grant) {
+		return grant.Grant
+	}
+	return ""
+}
+
+// storeError is classifyStoreError for a read that needs grant: a permission
+// denial names the grant; every other failure is classified as before.
+func storeError(err error, grant string) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "42501" {
+		return &GrantError{Grant: grant, Err: err}
+	}
+	return classifyStoreError(err)
 }
 
 // classifyStoreError maps a driver error to ErrUnavailable when

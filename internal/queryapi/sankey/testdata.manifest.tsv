@@ -1,0 +1,6 @@
+# Every file under internal/queryapi/sankey/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+7b22f215cf896f33df8bab9aed257ffeb623a8245ea303133dd0324116ed1b9a	unclassified	expense.json
+9e991e2bb0c7c01dfa431b8037a5ee6d72d5f01bd3e287ff84550c7314fdf24c	unclassified	hotspot.json
+ad4b19bae736324054c3c4eb28405ad14edf656df41155055061e10ee39a7224	unclassified	investment.json
+a45ee49f9b1d9722dea7dedd144fa49b27fdf7e3753b9394ef53d549703991c2	unclassified	state.json

@@ -1,0 +1,17 @@
+# Every file under internal/apiservice/billingvenue/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/TestInvoiceWebhookAppliesTestModeEvents.json
+-	header	golden/TestRefundEventOwnershipGrid.json
+-	header	golden/TestRefundEventSettledGrid.json
+-	header	golden/TestVenueOracleBillingEdge.json
+-	header	golden/TestVenueOracleBillingLedger.json
+-	header	golden/TestVenueOracleBillingPlansCheckout.json
+-	header	golden/TestVenueOracleBillingWebhook.json
+-	header	golden/TestVenueOracleBillingWithoutStripeKey.json
+d00f839575e704311cdb864eede032a62f5d03de23d67c7ed013c804465b42f8	unclassified	stripe_webhook/charge.refund.updated.json
+07436f41e6791beaac77b21bb814cef35f8b1c1f9f5cd91895617cba70e3e152	unclassified	stripe_webhook/charge.refunded.json
+51470a47c7062c69257881824ec04b3d7a332069748c3fbeaf443ce4004509d7	unclassified	stripe_webhook/checkout.session.completed.json
+9fc642de67f0be87da473873bb89679882bf660cdb48984745511529ebca89a5	unclassified	stripe_webhook/customer.subscription.updated.json
+14bc49a55a55d01594c46f83474d4fe13fefc080cfe6a3b7cb48b7faa5148f2f	unclassified	stripe_webhook/invoice.paid.json
+b745882d4682113b2510ac03733973760167b4e9491475ada7aee710c24ad463	unclassified	stripe_webhook/refund.created.json
+175c9ecd2528d68d3be0b5cdb886e33f458dd79298a6ff91c1df5c6afb07c008	unclassified	stripe_webhook/refund.updated.json

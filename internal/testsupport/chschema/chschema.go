@@ -28,11 +28,11 @@ package chschema
 import (
 	"context"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 	"os"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 	"log/slog"
 	"math/big"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 )
 
 // An operational_* table exists in one of two column shapes. Contract 1 is the

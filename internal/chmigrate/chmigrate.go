@@ -38,11 +38,12 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 	"io/fs"
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 )
 
 // SchemaMigrationsTable records applied versions. Its shape is the one the

@@ -1037,7 +1037,8 @@ func TestLocalSyncMatchesFrozenPython(t *testing.T) {
 	})
 	root := golden.PythonRoot(t, repoRoot)
 	request := venueoracle.ProgramRequest("local sync corpus", localSyncOracleProgram, localCorpusKey(), localPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		root := producer.Root
 		body, err := json.Marshal(produceLocal(t, root))
 		if err != nil {
 			t.Fatal(err)
@@ -1248,7 +1249,8 @@ func TestLocalSyncRerunKeepsHeldColumnsUnlikePythonFrozen(t *testing.T) {
 	})
 	root := golden.PythonRoot(t, repoRoot)
 	request := venueoracle.ProgramRequest("local sync rerun over a held row", localSyncOracleProgram, []byte("held pull request 5; prs rerun"), localPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		root := producer.Root
 		oracle := newLocalOracle(t)
 		oracle.startPython(root)
 		f, id := rerunFixture(oracle.ctx, t)

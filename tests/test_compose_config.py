@@ -847,6 +847,31 @@ def test_platform_compose_has_no_unused_operator_credential() -> None:
         assert _operator_credential_leftovers(document) == []
 
 
+def test_platform_compose_exposes_the_route_operator() -> None:
+    """The optional monorepo Compose surface must expose the route operator.
+
+    CHAOS-4054 deleted the ``DEV_HEALTH_ENV``/``GO_PROVIDER_ROUTES``
+    local-all preset outright (the ``.env.go-all`` convenience file and the
+    per-pair ``WORKER_*_ENABLED`` switch census it used to wire into every
+    service are both gone -- a shipped route is always executable, so there
+    is nothing left for a preset to turn on). What survives from this test is
+    the route operator's coordinator wiring. (CHAOS-7056 removed the
+    ``WORKER_OPERATOR_TOKEN`` assertion: that credential is retired.)
+    """
+
+    compose_path = _platform_compose_path()
+    if compose_path is None:
+        pytest.skip("platform compose.yml is only present in the monorepo checkout")
+
+    services = _load_yaml(compose_path).get("services") or {}
+    operator = services.get("go-workerctl")
+    assert operator is not None, "platform Compose must expose the route operator"
+    operator_environment = operator.get("environment") or {}
+    assert operator_environment["COORDINATOR_DATABASE_URI"].startswith(
+        "postgresql://${RIVER_COORDINATOR_DATABASE_ROLE"
+    )
+
+
 def test_platform_compose_applies_sync_routes_before_readiness() -> None:
     """Local no-Celery startup must converge routes without a readiness cycle."""
 

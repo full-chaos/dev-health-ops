@@ -1,0 +1,40 @@
+{
+  "header": {
+    "test": "TestRunAnswersFromTheGolden",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/testsupport/programoracle/ -test '^TestRunAnswersFromTheGolden$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "upper",
+      "method": "PYTHON",
+      "path": "program sha256 1168b89bf52e7aef2e798967871953d4120133b56c2038f8df6c2348c7b58a96 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "619e1fe4b126e252d580a45380c8bf3e7b4412a4be2e9dac6e522e5d0b5de3c7",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "CORPUS"
+    },
+    {
+      "name": "fails",
+      "method": "PYTHON",
+      "path": "program sha256 8df164f06fb5dd39740aa1736d3e29f137f5dbe8bb741b615ee959f56f89ac3b env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 3,
+      "headers": {},
+      "body": "partial"
+    },
+    {
+      "name": "environment",
+      "method": "PYTHON",
+      "path": "program sha256 53ff9ee4e19fb9e58aabaa3407127b216fc868aa5975c05816fbd8c9f31e6cf9 env sha256 9206f50f008782d8f931737ad3cfbd1e5cc059f14375db95d5839e45dc6b6b34",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "keyed 0 1\n"
+    }
+  ]
+}

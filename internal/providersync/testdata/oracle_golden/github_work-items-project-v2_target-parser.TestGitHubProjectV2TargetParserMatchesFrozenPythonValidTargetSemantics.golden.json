@@ -13,7 +13,7 @@
       "body_sha256": "9c63891cc76a0af4b467f4eb2fe926ad40c5bab230217c532d5b0d33b85da58b",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"ordered_duplicates\", \"row\": {\"targets\": [{\"t\": \"str\", \"v\": \"acme:3\"}, {\"t\": \"str\", \"v\": \"labs:12\"}, {\"t\": \"str\", \"v\": \"acme:3\"}]}}], \"excluded_fields\": {}}\n"
     }
   ]

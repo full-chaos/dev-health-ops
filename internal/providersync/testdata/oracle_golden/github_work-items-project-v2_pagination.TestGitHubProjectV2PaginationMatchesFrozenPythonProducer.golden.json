@@ -13,7 +13,7 @@
       "body_sha256": "ac4b3b848488716fd2da7c91a35de153810388d87efe9315c5b258b14385c31b",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"outer_and_nested\", \"row\": {\"item_ids\": [{\"t\": \"str\", \"v\": \"PVTI_1\"}, {\"t\": \"str\", \"v\": \"PVTI_2\"}], \"change_counts\": [{\"t\": \"int\", \"v\": \"2\"}, {\"t\": \"int\", \"v\": \"0\"}], \"outer_after\": [{\"t\": \"str\", \"v\": \"\u003cnone\u003e\"}, {\"t\": \"str\", \"v\": \"item-1\"}], \"change_after\": [{\"t\": \"str\", \"v\": \"PVTI_1:change-1\"}]}}], \"excluded_fields\": {}}\n"
     }
   ]

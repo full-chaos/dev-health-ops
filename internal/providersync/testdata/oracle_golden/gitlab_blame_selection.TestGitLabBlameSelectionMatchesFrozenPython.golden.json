@@ -13,7 +13,7 @@
       "body_sha256": "fe71a25decc1c9739c048042f6793afcb7a79512cb7d1b6bce07fa14495549ab",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"empty\", \"row\": {\"paths\": []}}, {\"id\": \"partial\", \"row\": {\"paths\": [{\"t\": \"str\", \"v\": \"z.go\"}, {\"t\": \"str\", \"v\": \"m.go\"}]}}, {\"id\": \"complete\", \"row\": {\"paths\": []}}, {\"id\": \"duplicate_tree_entry\", \"row\": {\"paths\": [{\"t\": \"str\", \"v\": \"a.go\"}, {\"t\": \"str\", \"v\": \"a.go\"}]}}], \"excluded_fields\": {}}\n"
     }
   ]

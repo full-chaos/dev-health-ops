@@ -13,7 +13,7 @@
       "body_sha256": "ccf6dd0510155a708f93b57b738bb12e88301e956ab9386830d0c60464353ae5",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"team_memberships_conflict\", \"row\": {\"change_id\": {\"t\": \"str\", \"v\": \"604f7e2f55869e3108c4d76ce623bc8b3a1d97c58ff0d4d06a27249f119fb8d6\"}}}, {\"id\": \"member_fallback_conflict\", \"row\": {\"change_id\": {\"t\": \"str\", \"v\": \"331259ea34946521b0b17fcc64f83bd391b5e6be291614ec8ea7b338d221dc66\"}}}], \"excluded_fields\": {}}\n"
     }
   ]

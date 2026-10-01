@@ -13,7 +13,7 @@
       "body_sha256": "34e35e91743cb11cd28685b6a10f4ec4059e1835d5df3149a2931e6c2f768ece",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"name_field_ascii\", \"row\": {\"change_id\": {\"t\": \"str\", \"v\": \"6a623c9ba3756df3fc63455fac11be939c8ff5968a54534bf71fba774b5d83b8\"}}}, {\"id\": \"members_field_list\", \"row\": {\"change_id\": {\"t\": \"str\", \"v\": \"88aeb07ca418e8a2b7be30b63ec40990dec48b4127e6ab6e51e53919c4322380\"}}}, {\"id\": \"description_field_non_ascii_and_null\", \"row\": {\"change_id\": {\"t\": \"str\", \"v\": \"020af19229a1a817629c6985dad46dad2654dd468df776fefcb718b706ae92c1\"}}}], \"excluded_fields\": {}}\n"
     }
   ]

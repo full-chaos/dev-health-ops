@@ -1,16 +1,18 @@
-package emailvalidator
+package emailvalidator_test
 
 import (
 	"bytes"
 	"encoding/json"
 	"os"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/emailvalidator"
 )
 
-// goldenPath holds a slice of pydantic's own answers, cut from the live
-// oracle run (TestValidateEmailMatchesLivePydantic checks it is still
-// exactly what the live interpreter says), so the ordinary test run pins
-// the port without Python.
+// goldenPath holds a slice of pydantic's own answers as text, cut from
+// TestValidateEmailMatchesFrozenPydantic (which checks it is still that
+// slice of the frozen answers), so a difference can be read here, answer by
+// answer.
 const goldenPath = "testdata/validate_email_golden.jsonl"
 
 type goldenCase struct {
@@ -38,8 +40,8 @@ func TestValidateEmailMatchesGolden(t *testing.T) {
 	}
 	failures := 0
 	for _, c := range cases {
-		email, reason, ok := ValidateEmail(c.Input)
-		if ok != c.OK || reason != c.Reason || !equalRunes(email, c.Email) {
+		email, reason, ok := emailvalidator.ValidateEmail(c.Input)
+		if ok != c.OK || reason != c.Reason || !emailvalidator.EqualRunes(email, c.Email) {
 			failures++
 			if failures <= 10 {
 				t.Errorf("%s: go ok=%v %q %s, python ok=%v %q %s", codepoints(c.Input), ok, reason, codepoints(email), c.OK, c.Reason, codepoints(c.Email))

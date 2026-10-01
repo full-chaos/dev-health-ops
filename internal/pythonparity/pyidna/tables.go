@@ -1,4 +1,4 @@
-// Code generated from idna 3.20 (data 18.0.0) by TestIDNATablesMatchLivePython; DO NOT EDIT.
+// Code generated from idna 3.20 (data 18.0.0) by TestIDNATablesMatchFrozenPython; DO NOT EDIT.
 
 package pyidna
 

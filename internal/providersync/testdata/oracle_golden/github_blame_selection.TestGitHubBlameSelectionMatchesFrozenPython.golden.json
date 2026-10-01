@@ -13,7 +13,7 @@
       "body_sha256": "27a2e286191dcdf89aab3752647058fc2363324b8e9685d624f8e85c7996a7d9",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"empty\", \"row\": {\"paths\": []}}, {\"id\": \"partial\", \"row\": {\"paths\": [{\"t\": \"str\", \"v\": \"z.go\"}, {\"t\": \"str\", \"v\": \"m.go\"}]}}, {\"id\": \"complete\", \"row\": {\"paths\": []}}, {\"id\": \"bounded\", \"row\": {\"paths\": [{\"t\": \"str\", \"v\": \"a.go\"}, {\"t\": \"str\", \"v\": \"c.go\"}, {\"t\": \"str\", \"v\": \"d.go\"}]}}], \"excluded_fields\": {}}\n"
     }
   ]

@@ -326,8 +326,8 @@ ASSERT_SUMMARY_JSON="${METRICS_PROOF_SUMMARY_JSON_FILE:-${TMP_DIR}/family-summar
 # identical causal chain as team_cognitive_load, so it is satisfied by the
 # same seeding with no separate fixture path needed.
 assert_readback() {
-  PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
-    --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
+  # The DSN reaches the script by environment (it reads CLICKHOUSE_URI), not argv: it can hold a password.
+  CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
     --org-id "${ORG_ID}" \
     --run-start "${RUN_START}" \
     --families cicd deploy testops_pipeline testops_test testops_coverage dora repo_user_commit team_wellbeing team_cognitive_load compounding_risk compounding_risk_team ic_finalize \

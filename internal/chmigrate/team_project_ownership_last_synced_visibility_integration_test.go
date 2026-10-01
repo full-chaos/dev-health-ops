@@ -53,6 +53,14 @@ func TestLastSyncedCursorContractAgainstRealClickHouse(t *testing.T) {
 		}
 		return out
 	}
+	text := func(query string) string {
+		t.Helper()
+		var out string
+		if err := conn.QueryRow(ctx, query).Scan(&out); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		return out
+	}
 	const cols = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) `
 	const stampOf = `SELECT toUnixTimestamp64Milli(last_synced) FROM team_project_ownership WHERE project_id = '%s'`
 	stamp := func(project string) int64 { return millis(fmt.Sprintf(stampOf, project)) }
@@ -121,24 +129,47 @@ func TestLastSyncedCursorContractAgainstRealClickHouse(t *testing.T) {
 	// Cell 4, ReplacingMergeTree dedup: the surviving version is the one with the greatest updated_at
 	// (equal updated_at: the last inserted), and its stamp is the surviving row's stamp. A later-stamped
 	// row with an OLDER updated_at is a stale write that a merge drops.
+	//
+	// Merges are stopped while the raw rows are inspected: a background merge of the two small parts drops
+	// the older-version row at any moment, and a raw read after that sees only the kept row (so the "stale"
+	// stamp equals the kept one and the row count is 1). That is not a defect and not a wall-clock
+	// question, it is a race between the test's read and the merge. Stamps are the server's insert time:
+	// they may be equal or ordered, so no sleep is used to separate them and only the reader-visible
+	// property is asserted.
+	exec(`SYSTEM STOP MERGES team_project_ownership`)
 	exec(cols + `VALUES ('o', 'jira', 'T', 'RMT', 'RMT', 'native', '2020-01-01 00:00:00', NULL, '2020-01-01 00:00:20')`)
 	newerVersionStamp := stamp("RMT")
-	time.Sleep(20 * time.Millisecond)
-	exec(cols + `VALUES ('o', 'jira', 'T', 'RMT', 'RMT', 'native', '2020-01-01 00:00:00', NULL, '2020-01-01 00:00:10')`) // older version, later stamp
-	if got := millis(`SELECT toUnixTimestamp64Milli(max(last_synced)) FROM team_project_ownership WHERE project_id = 'RMT'`); got <= newerVersionStamp {
-		t.Fatalf("raw read: the stale write's stamp %d is not after the kept version's %d", got, newerVersionStamp)
+	exec(cols + `VALUES ('o', 'jira', 'T', 'RMT', 'RMT', 'native', '2020-01-01 00:00:00', NULL, '2020-01-01 00:00:10')`) // older version, later (or equal) stamp
+	if rows := millis(`SELECT toInt64(count()) FROM team_project_ownership WHERE project_id = 'RMT'`); rows != 2 {
+		t.Fatalf("with merges stopped the raw table holds %d RMT rows, want both versions (2)", rows)
 	}
+	if got := millis(`SELECT toUnixTimestamp64Milli(max(last_synced)) FROM team_project_ownership WHERE project_id = 'RMT'`); got < newerVersionStamp {
+		t.Fatalf("raw read: the later write's stamp %d is before the kept version's %d: a stamp must never go backwards (equal is legal)", got, newerVersionStamp)
+	}
+	// The reader window: a cursor at the kept version's stamp, read 300 s behind it, deduplicated by key with
+	// FINAL, returns exactly the kept version whether the two stamps are equal or ordered.
+	readerWindow := fmt.Sprintf(`FROM team_project_ownership FINAL WHERE project_id = 'RMT' AND last_synced > toDateTime64(%d / 1000, 3, 'UTC') - INTERVAL 300 SECOND`, newerVersionStamp)
+	if rows := millis(`SELECT toInt64(count()) ` + readerWindow); rows != 1 {
+		t.Fatalf("reader window returned %d RMT rows, want exactly the kept version (1)", rows)
+	}
+	if kept := text(`SELECT toString(updated_at) ` + readerWindow); kept != "2020-01-01 00:00:20.000" {
+		t.Fatalf("reader window kept the version with updated_at %s, want the greater one 2020-01-01 00:00:20.000", kept)
+	}
+	exec(`SYSTEM START MERGES team_project_ownership`)
 	exec(`OPTIMIZE TABLE team_project_ownership FINAL`)
 	if got := stamp("RMT"); got != newerVersionStamp {
 		t.Fatalf("after dedup the surviving row carries stamp %d, want the greater-updated_at version's %d", got, newerVersionStamp)
 	}
-	// Equal updated_at (one provider stamp for a whole write): the later insert survives with its own, later, stamp.
-	exec(cols + `VALUES ('o', 'jira', 'T', 'EQ', 'EQ', 'native', '2020-01-01 00:00:00', NULL, '2020-01-01 00:00:30')`)
+	// Equal updated_at (one provider stamp for a whole write): the later insert survives. The two inserts are
+	// told apart by project_key, not by stamp order: their stamps may be equal.
+	exec(cols + `VALUES ('o', 'jira', 'T', 'EQ', 'EQ-first', 'native', '2020-01-01 00:00:00', NULL, '2020-01-01 00:00:30')`)
 	first := stamp("EQ")
-	time.Sleep(20 * time.Millisecond)
-	exec(cols + `VALUES ('o', 'jira', 'T', 'EQ', 'EQ', 'native', '2020-01-01 00:00:00', NULL, '2020-01-01 00:00:30')`)
+	exec(cols + `VALUES ('o', 'jira', 'T', 'EQ', 'EQ-second', 'native', '2020-01-01 00:00:00', NULL, '2020-01-01 00:00:30')`)
 	exec(`OPTIMIZE TABLE team_project_ownership FINAL`)
-	if got := stamp("EQ"); got <= first {
-		t.Fatalf("equal updated_at: surviving stamp %d, want the later insert's (> %d)", got, first)
+	if survivor := text(`SELECT project_key FROM team_project_ownership FINAL WHERE project_id = 'EQ'`); survivor != "EQ-second" {
+		t.Fatalf("equal updated_at: the surviving row is %q, want the later insert's EQ-second", survivor)
+	}
+	if got := stamp("EQ"); got < first {
+		t.Fatalf("equal updated_at: surviving stamp %d is before the first insert's %d", got, first)
 	}
 }

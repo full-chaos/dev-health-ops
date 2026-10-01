@@ -20,12 +20,12 @@
     {
       "name": "stripe signature",
       "method": "PYTHON",
-      "path": "program sha256 a39c35bcdabb18869cda9019492cb1337c4499ebe79d39715a3b465c8d7f1254 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
-      "body_sha256": "06262a5c042af61caf8dfc2d05dba57ae3f53146f3d4cc3ab373e38116f92984",
+      "path": "program sha256 339c12424d034b86ae821c5566afbe4af69cd2ad5a8f1d5f7a872a03d613fe30 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "8da5b78a078bd1f920ee1e65fcfa77fea33e81d55abfbec0fac8a69f5fcf0397",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": {},
-      "body": "[\"ok\", \"sig\", \"ok\", \"ok\", \"sig\", \"sig\", \"ok\", \"ok\", \"sig\", \"sig\", \"ok\", \"ok\", \"ok\", \"ok\", \"ok\", \"ok\", \"ok\", \"sig\", \"sig\", \"sig\", \"sig\", \"sig\", \"sig\", \"sig\", \"sig\", \"sig\", \"sig\", \"crash:TypeError\", \"ok\", \"crash:UnicodeDecodeError\", \"ok\", \"ok\", \"sig\"]\n"
+      "body": "[\"ok\", \"sig\", \"ok\", \"ok\", \"sig\", \"sig\", \"ok\", \"ok\", \"sig\", \"sig\", \"ok\", \"ok\", \"ok\", \"ok\", \"ok\", \"ok\", \"ok\", \"sig\", \"sig\", \"sig\", \"sig\", \"sig\", \"sig\", \"sig\", \"sig\", \"sig\", \"sig\", \"crash:TypeError\", \"ok\", \"crash:UnicodeDecodeError\", \"ok\", \"ok\", \"sig\", \"ok\", \"ok\", \"sig\"]\n"
     }
   ]
 }

@@ -24,10 +24,10 @@ import base64, json, sys, time
 from stripe import SignatureVerificationError
 from stripe._webhook import WebhookSignature, Webhook
 cases = json.loads(sys.stdin.read())
-# Both planes judge the tolerance at the same instant.
-time.time = lambda: cases["now"]
 out = []
-for payload, header in cases["cases"]:
+for payload, header, now in cases["cases"]:
+    # Both planes judge the tolerance of a case at the same instant.
+    time.time = lambda now=now: now
     try:
         WebhookSignature.verify_header(base64.b64decode(payload), base64.b64decode(header).decode("latin-1"), cases["secret"], Webhook.DEFAULT_TOLERANCE)
         out.append("ok")
@@ -66,47 +66,63 @@ func TestStripeSignatureMatchesFrozenPython(t *testing.T) {
 	type sigCase struct {
 		payload []byte
 		header  string
+		// whole is a case judged at the whole second itself, not half a
+		// second past it.
+		whole bool
 	}
 	cases := []sigCase{
-		{body, fmt.Sprintf("t=%d,v1=%s", fresh, good(fresh))},
-		{body, fmt.Sprintf("t=%d,v1=%s", old, good(old))},
-		{body, fmt.Sprintf("t=%d,v1=%s", future, good(future))},
-		{body, fmt.Sprintf("t=%d,v1=%s", now-299, good(now-299))},
-		{body, fmt.Sprintf("t=%d,v1=%s", now-300, good(now-300))},
-		{body, fmt.Sprintf("t=%d,v1=%s", now-301, good(now-301))},
-		{body, fmt.Sprintf("v1=%s,t=%d", good(fresh), fresh)},
-		{body, fmt.Sprintf("t=%d,v1=deadbeef,v1=%s", fresh, good(fresh))},
-		{body, fmt.Sprintf("t=%d,v0=%s", fresh, good(fresh))},
-		{body, fmt.Sprintf("t=%d,v1=%s", fresh, strings.ToUpper(good(fresh)))},
-		{body, fmt.Sprintf("t=%d,v1=%s=extra", fresh, good(fresh))},
-		{body, fmt.Sprintf("t=+%d,v1=%s", fresh, good(fresh))},
-		{body, fmt.Sprintf("t= %d ,v1=%s", fresh, good(fresh))},
-		{body, fmt.Sprintf("t=\xa0%d\xa0,v1=%s", fresh, good(fresh))},
-		{body, fmt.Sprintf("t=%s_%s,v1=%s", fmt.Sprint(fresh)[:4], fmt.Sprint(fresh)[4:], good(fresh))},
-		{body, fmt.Sprintf("t=0%d,v1=%s", fresh, good(fresh))},
-		{body, fmt.Sprintf("t=%d,t=%d,v1=%s", fresh, old, good(fresh))},
-		{body, fmt.Sprintf("t=%d,t,v1=%s", fresh, good(fresh))},
-		{body, fmt.Sprintf("t=%d,v1,v1=%s", fresh, good(fresh))},
-		{body, fmt.Sprintf("t=abc,v1=%s", good(fresh))},
-		{body, fmt.Sprintf("v1=%s", good(fresh))},
-		{body, fmt.Sprintf("t=%d", fresh)},
-		{body, ""},
-		{body, ","},
-		{body, "garbage"},
-		{body, fmt.Sprintf(" t=%d,v1=%s", fresh, good(fresh))},
-		{body, fmt.Sprintf("t=%d, v1=%s", fresh, good(fresh))},
-		{body, fmt.Sprintf("t=%d,v1=\xe9\xe9,v1=%s", fresh, good(fresh))},
-		{body, fmt.Sprintf("t=%d,v1=%s,v1=\xe9", fresh, good(fresh))},
-		{[]byte("\xff\xfe not utf-8"), fmt.Sprintf("t=%d,v1=%s", fresh, sign(secret, fmt.Sprint(fresh), []byte("\xff\xfe not utf-8")))},
-		{[]byte(""), fmt.Sprintf("t=%d,v1=%s", fresh, sign(secret, fmt.Sprint(fresh), nil))},
-		{[]byte("\ufeff{}"), fmt.Sprintf("t=%d,v1=%s", fresh, sign(secret, fmt.Sprint(fresh), []byte("\ufeff{}")))},
-		{body, fmt.Sprintf("t=%d,v1=%s", fresh, sign("whsec_other", fmt.Sprint(fresh), body))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", old, good(old))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", future, good(future))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", now-299, good(now-299))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", now-300, good(now-300))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", now-301, good(now-301))},
+		{payload: body, header: fmt.Sprintf("v1=%s,t=%d", good(fresh), fresh)},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=deadbeef,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,v0=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", fresh, strings.ToUpper(good(fresh)))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s=extra", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=+%d,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t= %d ,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=\xa0%d\xa0,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%s_%s,v1=%s", fmt.Sprint(fresh)[:4], fmt.Sprint(fresh)[4:], good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=0%d,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,t=%d,v1=%s", fresh, old, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,t,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=abc,v1=%s", good(fresh))},
+		{payload: body, header: fmt.Sprintf("v1=%s", good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d", fresh)},
+		{payload: body, header: ""},
+		{payload: body, header: ","},
+		{payload: body, header: "garbage"},
+		{payload: body, header: fmt.Sprintf(" t=%d,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d, v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=\xe9\xe9,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s,v1=\xe9", fresh, good(fresh))},
+		{payload: []byte("\xff\xfe not utf-8"), header: fmt.Sprintf("t=%d,v1=%s", fresh, sign(secret, fmt.Sprint(fresh), []byte("\xff\xfe not utf-8")))},
+		{payload: []byte(""), header: fmt.Sprintf("t=%d,v1=%s", fresh, sign(secret, fmt.Sprint(fresh), nil))},
+		{payload: []byte("\ufeff{}"), header: fmt.Sprintf("t=%d,v1=%s", fresh, sign(secret, fmt.Sprint(fresh), []byte("\ufeff{}")))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", fresh, sign("whsec_other", fmt.Sprint(fresh), body))},
+		// The boundary at the whole second itself: t = now-300 is then
+		// not too old (it is not less than now-300), t = now-301 is.
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", now-299, good(now-299)), whole: true},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", now-300, good(now-300)), whole: true},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", now-301, good(now-301)), whole: true},
 	}
-	encoded := make([][2]string, len(cases))
+	instant := func(c sigCase) time.Time {
+		if c.whole {
+			return time.Unix(now, 0)
+		}
+		return reference
+	}
+	encoded := make([][3]any, len(cases))
 	for index, c := range cases {
-		encoded[index] = [2]string{base64.StdEncoding.EncodeToString(c.payload), base64.StdEncoding.EncodeToString([]byte(c.header))}
+		at := instant(c)
+		encoded[index] = [3]any{base64.StdEncoding.EncodeToString(c.payload), base64.StdEncoding.EncodeToString([]byte(c.header)),
+			float64(at.Unix()) + float64(at.Nanosecond())/1e9}
 	}
-	input, err := json.Marshal(map[string]any{"cases": encoded, "secret": secret, "now": float64(now) + 0.5})
+	input, err := json.Marshal(map[string]any{"cases": encoded, "secret": secret})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +139,7 @@ func TestStripeSignatureMatchesFrozenPython(t *testing.T) {
 	verdicts := map[string]int{}
 	for index, c := range cases {
 		got := "ok"
-		switch err := verifyStripeSignature(c.payload, c.header, secret, reference); err {
+		switch err := verifyStripeSignature(c.payload, c.header, secret, instant(c)); err {
 		case nil:
 		case errSignature:
 			got = "sig"
@@ -136,7 +152,7 @@ func TestStripeSignatureMatchesFrozenPython(t *testing.T) {
 		}
 		verdicts[wanted]++
 		if got != wanted {
-			t.Errorf("case %d header %q: go %s, python %s", index, c.header, got, want[index])
+			t.Errorf("case %d header %q at %s: go %s, python %s", index, c.header, instant(c).UTC().Format(time.RFC3339Nano), got, want[index])
 		}
 	}
 	for _, verdict := range []string{"ok", "sig", "crash"} {

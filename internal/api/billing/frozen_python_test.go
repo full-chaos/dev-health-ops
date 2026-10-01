@@ -24,7 +24,7 @@ var billingGoldens = programoracle.Set{
 	Pins: map[string]string{
 		"billing-bodies.golden.json":   "06792c4c527015100942788b97b8b158af574c2c373385269151c661f57b83d4",
 		"billing-helpers.golden.json":  "cfacd91e3e9112b20ed4e94d5fb58c9a1b0b11609831e52b00017d29d1a52ea6",
-		"stripe-signature.golden.json": "f541fcbfb12cae5491e5a7ef03bbad6dba15cb44c09b874a2e115389003df38e",
+		"stripe-signature.golden.json": "3650f0bf59c5a5bababba1eb721666d2f6d4aca7d3a195326aa1324c6d98dc7f",
 	},
 }
 

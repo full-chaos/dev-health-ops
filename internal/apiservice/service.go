@@ -449,6 +449,7 @@ func NewInternalServer(cfg config.Config, logger *slog.Logger, routes []httpapi.
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:                "internal-http",
 		Listener:            "internal",
+		TrustRemoteSampling: true,
 		Address:             cfg.APIInternalAddress,
 		Logger:              logger,
 		Routes:              routes,

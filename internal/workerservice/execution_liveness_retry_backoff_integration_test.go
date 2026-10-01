@@ -5,6 +5,7 @@ package workerservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -355,25 +356,53 @@ func TestExecutionLivenessIgnoresATransientIdempotencyFailureThatRecovers(t *tes
 	// and River client finished starting. Age it from the moment the job exists.
 	f.claim.recordClaim("retention", time.Now())
 	id := f.insert(t)
-	deadline := time.Now().Add(45 * time.Second)
-	var sawRetryable bool
+	started := time.Now()
+	deadline := started.Add(45 * time.Second)
+	// timeline records every observed transition so a failure names the missing
+	// signal (which state was never seen, and when) instead of "wrong state".
+	var timeline []string
+	var last string
+	var retryableReadySamples int
+	var maxGap, prev time.Duration
 	for {
 		state, attempt := f.jobState(t, id)
-		if state == "retryable" {
-			sawRetryable = true
+		at := time.Since(started)
+		if gap := at - prev; gap > maxGap {
+			maxGap = gap
+		}
+		prev = at
+		if key := fmt.Sprintf("%s/%d", state, attempt); key != last {
+			last = key
+			timeline = append(timeline, fmt.Sprintf("+%s %s", at.Round(time.Millisecond), key))
 		}
 		if err := f.ready(context.Background()); err != nil {
 			t.Fatalf("a single transient Begin failure turned readiness red (state=%s attempt=%d): %v", state, attempt, err)
+		}
+		if state == "retryable" {
+			retryableReadySamples++
 		}
 		if state == "completed" {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the job never completed (state=%s attempt=%d)", state, attempt)
+			t.Fatalf("the job never completed (state=%s attempt=%d) timeline=%v", state, attempt, timeline)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if !sawRetryable {
-		t.Fatal("the transient failure never parked the job as retryable: the control ran the wrong state")
+	// Durable mechanism evidence, independent of what the poll happened to see:
+	// River recorded one failed attempt and Begin ran twice (fail, then proceed).
+	var attempt, errorCount int
+	if err := f.pool.QueryRow(context.Background(),
+		`SELECT attempt, COALESCE(cardinality(errors), 0) FROM river.river_job WHERE id = $1`, id).Scan(&attempt, &errorCount); err != nil {
+		t.Fatal(err)
+	}
+	if attempt != 2 || errorCount != 1 {
+		t.Fatalf("the transient Begin failure was not recorded as exactly one failed attempt (attempt=%d errors=%d) timeline=%v", attempt, errorCount, timeline)
+	}
+	// The control is only meaningful if readiness was sampled INSIDE the backoff
+	// gap. A poll loop that never saw the gap proves nothing.
+	if retryableReadySamples < 3 {
+		t.Fatalf("readiness was sampled only %d times while the job was retryable (need >=3; longest poll gap %s): the control did not observe the backoff gap; timeline=%v",
+			retryableReadySamples, maxGap.Round(time.Millisecond), timeline)
 	}
 }

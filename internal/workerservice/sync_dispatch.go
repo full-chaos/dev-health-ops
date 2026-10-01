@@ -3,9 +3,9 @@ package workerservice
 import (
 	"context"
 	"encoding/json"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
@@ -454,7 +454,7 @@ func buildSyncCoordinatorWorker(
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	budgetEstimator, err := syncdispatchruntime.NewInProcessBudgetEstimator(syncdispatchruntime.BudgetEstimatorDependencies{
-		Pool: postgresDatabase.pools.Domain, Decryptor: credentialCipher, Getenv: os.Getenv, Logger: logger,
+		Pool: postgresDatabase.pools.Domain, Decryptor: credentialCipher, Getenv: envsecrets.ProcessGetenv, Logger: logger,
 		// The same PagerDuty hydration provider sync runs (provider_sync.go).
 		PagerDutyOAuth: providerfoundation.PagerDutyOAuthHydrator{
 			Repository: providerfoundation.PostgresPagerDutyOAuthTokenRepository{

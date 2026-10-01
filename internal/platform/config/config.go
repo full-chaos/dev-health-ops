@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
-	"os"
 	"reflect"
 	"slices"
 	"strconv"
@@ -441,7 +440,7 @@ type Config struct {
 func Load(spec Spec) (Config, error) {
 	environment := spec.LookupEnv
 	if environment == nil {
-		environment = os.LookupEnv
+		environment = secrets.ProcessLookup
 	}
 	if err := validateOverrides(spec.Overrides); err != nil {
 		return Config{}, err
@@ -600,6 +599,13 @@ func Load(spec Spec) (Config, error) {
 		value, _, resolveErr := secrets.Resolve(item.name, lookup)
 		if resolveErr != nil {
 			return Config{}, resolveErr
+		}
+		switch item.name {
+		case "VALKEY_URI":
+			secrets.RegisterDSN(item.name, value.Reveal())
+		case "PAGER_DUTY_CLIENT_ID":
+		default:
+			secrets.Register(item.name, value.Reveal())
 		}
 		*item.target = value
 	}
@@ -971,7 +977,7 @@ func Load(spec Spec) (Config, error) {
 		}
 		cfg.CORSAllowedOrigins = parseCORSOrigins(corsOrigins)
 		cfg.PagerDutyOAuthRedirectURI, _ = lookup("PAGER_DUTY_REDIRECT_URI")
-		cfg.APIJWTSecret, _, err = secrets.Resolve("JWT_SECRET_KEY", lookup)
+		cfg.APIJWTSecret, _, err = secrets.ResolveSecret("JWT_SECRET_KEY", lookup)
 		if err != nil {
 			return Config{}, err
 		}
@@ -2013,6 +2019,17 @@ func componentEndpointError(spec ComponentSpec) error {
 // whitespace-only counts as set and still triggers exclusivity exactly
 // like any other non-empty raw value.
 func ResolveDSN(lookup secrets.LookupEnv, rawKey string, spec ComponentSpec) (value secrets.Value, configured bool, err error) {
+	value, configured, err = resolveDSN(lookup, rawKey, spec)
+	// Every DSN this process resolves puts its password (by value) and its
+	// login (in the shapes a server echoes it) into the process logger's
+	// redaction registry; the name is the setting's, never its value.
+	if configured && err == nil {
+		secrets.RegisterDSN(rawKey, value.Reveal())
+	}
+	return value, configured, err
+}
+
+func resolveDSN(lookup secrets.LookupEnv, rawKey string, spec ComponentSpec) (value secrets.Value, configured bool, err error) {
 	foundKeys, setErr := spec.setComponentKeys(lookup)
 	if setErr != nil {
 		return secrets.Value{}, false, setErr

@@ -1094,3 +1094,33 @@ func (b *syncBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
+
+// A store password resolved by config.Load is redacted by value from every log
+// line the process writes, including one a call site writes through
+// slog.Default(), a logger bound with With, or an error attribute, with no
+// verb or call-site wrap (CHAOS-7409).
+func TestDaemonLoggerRedactsResolvedStorePasswordAtTheRoot(t *testing.T) {
+	const password = "Pw7409-shell-planted"
+	var stdout, stderr bytes.Buffer
+	code := Execute(context.Background(), Spec{
+		Service: "dev-health-worker",
+		ConfigureDependencies: func(ctx context.Context, _ config.Config, _ *health.Registry) ([]lifecycle.Component, error) {
+			slog.Default().WarnContext(ctx, "dial failed: password="+password, "error", errors.New("code: 516, message: "+password))
+			slog.Default().With("peer", password).Warn("bound " + password)
+			return []lifecycle.Component{failingComponent{err: errors.New("stop")}}, nil
+		},
+	}, nil, testLookup(map[string]string{
+		"DEV_HEALTH_HTTP_ADDR": "127.0.0.1:0",
+		"CLICKHOUSE_URI":       "clickhouse://shell_login_7409:" + password + "@localhost:9000/db",
+	}), IO{Stdout: &stdout, Stderr: &stderr})
+	if code == 0 {
+		t.Fatal("expected the runtime component to fail")
+	}
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, "dial failed") || !strings.Contains(combined, "bound") {
+		t.Fatalf("the planted log lines did not reach the log: %s", combined)
+	}
+	if strings.Contains(combined, password) {
+		t.Fatalf("a resolved store password reached the log: %s", combined)
+	}
+}

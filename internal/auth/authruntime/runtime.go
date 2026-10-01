@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"log/slog"
 	"os"
@@ -64,7 +65,7 @@ func Routes() []httpapi.Route { return nil }
 
 // Main runs the command and exits with its status.
 func Main() {
-	os.Exit(Execute(context.Background(), os.Args[1:], os.LookupEnv, IO{
+	os.Exit(Execute(context.Background(), os.Args[1:], envsecrets.ProcessLookup, IO{
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	}))

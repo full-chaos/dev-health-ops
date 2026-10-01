@@ -4,8 +4,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"net/http"
-	"os"
 
 	"context"
 	"fmt"
@@ -294,14 +294,14 @@ func buildDeps(
 	// license, verified once here as the Python lifespan does. It never
 	// stops start-up; anything short of a license in force is the community
 	// tier, logged with its reason.
-	processlicense.Install(ctx, os.LookupEnv, logger, time.Now().Unix())
+	processlicense.Install(ctx, envsecrets.ProcessLookup, logger, time.Now().Unix())
 
 	// verify_rate_limit_config: a deployment that serves the limited routes
 	// (it has its database) must count them in the shared store outside
 	// development, else every limit is per replica. A process with no
 	// database configured (the pre-bootstrap shape) serves none of them and
 	// still starts.
-	if cfg.APIDatabaseURI.Configured() && !cfg.ValkeyURI.Configured() && !developmentEnvironment(os.LookupEnv) {
+	if cfg.APIDatabaseURI.Configured() && !cfg.ValkeyURI.Configured() && !developmentEnvironment(envsecrets.ProcessLookup) {
 		return Deps{}, nil, dependencyFailure(ctx, logger, "api_rate_limiter", "api_rate_limiter_shared_store_required", errSharedLimiterRequired)
 	}
 

@@ -1,0 +1,5 @@
+# Every file under internal/queryapi/workunitexplain/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: 367f2deb439d8ef4584e478f7dc7b449e9740140cc6936a172250a05ac497522 (3 files)
+437de0bf79ced602e3854183563711bec6a0f5c221c4eba7f5fbdedf76701631	python-recorded	build_prompt_python_golden.json
+c815aa761947157f71bde0e76c8e1bfb16fedbd702c29ae91a01ad0ca49cb74e	python-recorded	explain_work_unit_python_golden.json
+015d5336ab5ab00057c1dd1dae3f13e36091743a1da15274e4ae18456502eb36	python-recorded	section_extraction_python_golden.json

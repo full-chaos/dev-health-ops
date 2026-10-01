@@ -1,0 +1,6 @@
+# Every file under internal/pgmigrate/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/alias.json
+-	header	golden/history.json
+-	header	golden/revisions.json
+c3d8806acf042551eaa0b99f4854a7aa8779946b0e86b070b32c90ea5295e64f	unclassified	hand_ddl_ledger.tsv

@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte/non-ascii_and_html_characters",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "script oracle json-dumps-evidence: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "json-dumps-evidence",
+      "method": "PYTHON",
+      "path": "program sha256 41ce217970897810a82e29faec93ade45cc5708b68c839350983c814f0096b6b env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"label\": \"ai-g\\u00e9n\\u00e9r\\u00e9 \u003ctag\u003e \u0026 more \\u2026 \\ud83e\\udd16\"}"
+    }
+  ]
+}

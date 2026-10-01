@@ -784,31 +784,67 @@ def test_platform_compose_provider_worker_consumes_sync_dispatch_queue() -> None
     assert "sync" in queues
 
 
-def test_platform_compose_operator_credential_is_wired() -> None:
-    """The optional monorepo Compose surface must expose the route operator.
+def _operator_credential_leftovers(compose: dict) -> list[str]:
+    """Every trace of the retired local route-operator credential in a compose document.
 
-    CHAOS-4054 deleted the ``DEV_HEALTH_ENV``/``GO_PROVIDER_ROUTES``
-    local-all preset outright (the ``.env.go-all`` convenience file and the
-    per-pair ``WORKER_*_ENABLED`` switch census it used to wire into every
-    service are both gone -- a shipped route is always executable, so there
-    is nothing left for a preset to turn on). What survives from this test is
-    the operator-credential wiring, which has nothing to do with switches.
+    CHAOS-7056: ``go-worker-operator-credential`` minted a ``svc_worker_*`` token into a
+    volume and mounted it into the Go workers as ``WORKER_OPERATOR_TOKEN_FILE``. Nothing
+    reads that file (``dho workers`` takes no token; the credential class is
+    ``unconsumed``, contracts/auth/v1/credential-classes.json), so the service, its
+    ``depends_on`` edges, its env and its volume are gone.
     """
 
-    compose_path = _platform_compose_path()
-    if compose_path is None:
-        pytest.skip("platform compose.yml is only present in the monorepo checkout")
+    found: list[str] = []
+    services = compose.get("services") or {}
+    if "go-worker-operator-credential" in services:
+        found.append("service go-worker-operator-credential")
+    if "go_worker_operator_token" in (compose.get("volumes") or {}):
+        found.append("volume go_worker_operator_token")
+    for name, service in services.items():
+        if "go-worker-operator-credential" in (service.get("depends_on") or {}):
+            found.append(f"{name}: depends_on go-worker-operator-credential")
+        for key in service.get("environment") or {}:
+            if str(key).startswith("WORKER_OPERATOR_TOKEN"):
+                found.append(f"{name}: environment {key}")
+        for volume in service.get("volumes") or []:
+            if "go_worker_operator_token" in str(volume):
+                found.append(f"{name}: volume mount {volume}")
+    return found
 
-    services = _load_yaml(compose_path).get("services") or {}
-    operator = services.get("go-workerctl")
-    assert operator is not None, "platform Compose must expose the route operator"
-    operator_environment = operator.get("environment") or {}
-    assert operator_environment["COORDINATOR_DATABASE_URI"].startswith(
-        "postgresql://${RIVER_COORDINATOR_DATABASE_ROLE"
-    )
-    assert operator_environment["WORKER_OPERATOR_TOKEN"] == (
-        "${WORKER_OPERATOR_TOKEN:-}"
-    )
+
+def test_operator_credential_leftovers_are_detected() -> None:
+    """The check below can fail: it names each kind of leftover in a document that still has them."""
+
+    stale = {
+        "volumes": {"go_worker_operator_token": {}},
+        "services": {
+            "go-worker-operator-credential": {},
+            "go-worker": {
+                "depends_on": {"go-worker-operator-credential": {}},
+                "environment": {
+                    "WORKER_OPERATOR_TOKEN_FILE": "/run/go-worker-operator/token"
+                },
+                "volumes": ["go_worker_operator_token:/run/go-worker-operator:ro"],
+            },
+        },
+    }
+    assert len(_operator_credential_leftovers(stale)) == 5
+    assert _operator_credential_leftovers({"services": {"go-worker": {}}}) == []
+
+
+def test_platform_compose_has_no_unused_operator_credential() -> None:
+    documents = []
+    for parent in _REPO_ROOT.parents:
+        go_workers = parent / "compose" / "compose.go.workers.yml"
+        if go_workers.exists():
+            documents.append(_load_yaml(go_workers))
+            if (parent / "compose.yml").exists():
+                documents.append(_load_yaml(parent / "compose.yml"))
+            break
+    if not documents:
+        pytest.skip("platform compose files are only present in the monorepo checkout")
+    for document in documents:
+        assert _operator_credential_leftovers(document) == []
 
 
 def test_platform_compose_applies_sync_routes_before_readiness() -> None:
@@ -835,9 +871,7 @@ def test_platform_compose_applies_sync_routes_before_readiness() -> None:
         assert command[-1] == kind
         dependencies = service.get("depends_on") or {}
         assert "go-worker-ready" not in dependencies
-        assert dependencies["go-worker-operator-credential"]["condition"] == (
-            "service_completed_successfully"
-        )
+        assert "go-worker-operator-credential" not in dependencies
         assert dependencies["go-worker"]["condition"] == "service_started"
         assert dependencies["go-reconciler"]["condition"] == "service_started"
         if index:

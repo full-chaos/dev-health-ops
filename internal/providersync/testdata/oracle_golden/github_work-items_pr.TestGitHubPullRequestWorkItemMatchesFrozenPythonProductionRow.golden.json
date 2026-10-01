@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestGitHubPullRequestWorkItemMatchesFrozenPythonProductionRow",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair github/work-items/pr: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGitHubPullRequestWorkItemMatchesFrozenPythonProductionRow$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "github/work-items/pr",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "be669de61d428574959c999b7335608564e29fecf28268619550024ee403adc4",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"merged_priority_pr\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"ghpr:acme/api#17\"}, \"provider\": {\"t\": \"str\", \"v\": \"github\"}, \"title\": {\"t\": \"str\", \"v\": \"Repair delivery path\"}, \"type\": {\"t\": \"str\", \"v\": \"pr\"}, \"status\": {\"t\": \"str\", \"v\": \"done\"}, \"status_raw\": {\"t\": \"str\", \"v\": \"merged\"}, \"description\": {\"t\": \"str\", \"v\": \"Routine repair\"}, \"repo_id\": {\"t\": \"uuid\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"native_team_key\": null, \"project_key\": null, \"project_id\": {\"t\": \"str\", \"v\": \"acme/api\"}, \"project_name\": null, \"assignees\": [{\"t\": \"str\", \"v\": \"github:reviewer\"}], \"reporter\": {\"t\": \"str\", \"v\": \"github:author\"}, \"created_at\": {\"t\": \"datetime\", \"v\": \"2026-08-01T08:00:00.123456Z\"}, \"updated_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T09:30:00.654321Z\"}, \"started_at\": {\"t\": \"datetime\", \"v\": \"2026-08-01T08:00:00.123456Z\"}, \"completed_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T09:29:00Z\"}, \"closed_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T09:30:00Z\"}, \"labels\": [{\"t\": \"str\", \"v\": \"p1\"}], \"story_points\": null, \"sprint_id\": null, \"sprint_name\": null, \"parent_id\": null, \"epic_id\": null, \"url\": {\"t\": \"str\", \"v\": \"https://github.com/acme/api/pull/17\"}, \"priority_raw\": {\"t\": \"str\", \"v\": \"high\"}, \"service_class\": {\"t\": \"str\", \"v\": \"fixed_date\"}, \"due_at\": null, \"org_id\": {\"t\": \"str\", \"v\": \"77777777-7777-4777-8777-777777777777\"}}}], \"excluded_fields\": {}}\n"
+    }
+  ]
+}

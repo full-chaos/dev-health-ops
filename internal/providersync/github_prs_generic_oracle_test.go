@@ -10,7 +10,7 @@ import (
 // This file wires the (github, prs) row-construction boundary
 // (normalizeGitHubPullRequest) to the generic, declarative Python<->Go
 // oracle comparator built for CHAOS-3162 (oracle_compare_test.go), backed by
-// the live registration in
+// the registration in
 // testdata/oracle_pairs/github_prs_row.py ("github/prs/row").
 //
 // This does NOT replace github_prs_normalization_oracle_test.go's
@@ -202,13 +202,13 @@ func oraclePullRequestCases() []oracleCase {
 	}
 }
 
-// TestGenericOracleMatchesLivePythonForRowConstruction is the "current code
+// TestGenericOracleMatchesFrozenPythonForRowConstruction is the "current code
 // is clean" half of CHAOS-3162's acceptance test: the real, current,
-// unmodified Go row-construction path against the real, live Python
+// unmodified Go row-construction path against the recorded answer of the real Python
 // build_git_pull_request chain, diffed field-by-field with zero undeclared
 // exclusions beyond what both oracle_pairs/github_prs_row.py and
 // oraclePullRequestGoOnlyFields declare in writing.
-func TestGenericOracleMatchesLivePythonForRowConstruction(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForRowConstruction(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "github/prs/row", oraclePullRequestCases(),
 		buildPullRequestRowForOracle, oraclePullRequestGoOnlyFields,

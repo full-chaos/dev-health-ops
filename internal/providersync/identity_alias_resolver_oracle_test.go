@@ -9,15 +9,16 @@ import (
 )
 
 // identity_alias_resolver_oracle_test.go proves internal/identityalias's Go
-// port of providers/identity.py's IdentityResolver matches the LIVE Python
+// port of providers/identity.py's IdentityResolver matches the recorded Python
 // resolver under a SEEDED, non-empty alias config. The existing
 // github/team-catalog/facets pair (github_team_catalog_generic_oracle_test.go)
 // only ever runs against this deployment's checked-in EMPTY
 // identity_mapping.yaml, so it proves the unaliased fallback ladder matches
 // but says nothing about alias resolution itself. This test seeds a temp
-// config, points IDENTITY_MAPPING_PATH at it (inherited by the Python
-// subprocess exec.Command spawns, since Cmd.Env is nil), and compares both
-// sides under the SAME config. See testdata/oracle_pairs/identity_alias_resolve.py.
+// config, points IDENTITY_MAPPING_PATH at it (the frozen answer is keyed on the
+// digest of that file, and a recording hands the path to the producer: see
+// oraclePairFileEnv), and compares both sides under the SAME config. See
+// testdata/oracle_pairs/identity_alias_resolve.py.
 func seedIdentityAliasMapping(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
@@ -46,14 +47,14 @@ type identityAliasResolveProducerRow struct {
 	Facets   []string `json:"facets"`
 }
 
-// TestIdentityAliasResolverMatchesLivePythonResolverWithSeededAliases is a
+// TestIdentityAliasResolverMatchesFrozenPythonResolverWithSeededAliases is a
 // red-first parity proof: five scenarios the ported Go resolver
-// must match the live Python IdentityResolver on -- exact login alias,
+// must match the recorded Python IdentityResolver on -- exact login alias,
 // case-different login alias (normKey lowercases before lookup), an email
 // alias, an unmapped identity (falls back to the provider-qualified id),
 // and a provider id that maps via alias to a DIFFERENT canonical person than
 // its raw qualified form would suggest.
-func TestIdentityAliasResolverMatchesLivePythonResolverWithSeededAliases(t *testing.T) {
+func TestIdentityAliasResolverMatchesFrozenPythonResolverWithSeededAliases(t *testing.T) {
 	seedIdentityAliasMapping(t)
 	compareRowsAgainstPythonOracle(
 		t, "identity/alias/resolve",

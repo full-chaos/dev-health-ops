@@ -6,10 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os/exec"
-	"path/filepath"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,21 +15,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-func TestLaunchDarklyNormalizationMatchesLivePythonFunctions(t *testing.T) {
-	python := pythonExecutable(t)
-	_, currentFile, _, _ := runtime.Caller(0)
-	packageDir := filepath.Dir(currentFile)
-	output, err := exec.Command(
-		python,
-		filepath.Join(packageDir, "testdata", "python_launchdarkly_normalization_oracle.py"),
-		filepath.Join(
-			packageDir, "..", "..", "src", "dev_health_ops",
-			"processors", "launchdarkly.py",
-		),
-	).CombinedOutput()
-	if err != nil {
-		t.Fatalf("execute Python LaunchDarkly oracle: %v: %s", err, output)
-	}
+func TestLaunchDarklyNormalizationMatchesFrozenPythonFunctions(t *testing.T) {
+	output := frozenScriptAnswer(t, scriptOracle{
+		name:    "launchdarkly-normalization",
+		script:  "testdata/python_launchdarkly_normalization_oracle.py",
+		sources: []string{"src/dev_health_ops/processors/launchdarkly.py"},
+	})
 	var want struct {
 		Flags  []launchDarklyFlagRow  `json:"flags"`
 		Events []launchDarklyEventRow `json:"events"`

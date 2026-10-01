@@ -74,7 +74,12 @@ GO_TEST = re.compile(r"\bgo test\b")
 # so a double-quoted duplicate was invisible.
 SELECTOR = re.compile(r"-run\s+(?:'([^']*)'|\"([^\"]*)\")")
 PACKAGE = re.compile(r"(\./[A-Za-z0-9_./-]+)")
-DECLARED_TEST = re.compile(r"^func (Test[A-Za-z0-9_]+)", re.M)
+# `func TestMain(m *testing.M)` is the package's test entry point, not a test:
+# `go test` never runs it as one and no `-run` selector matches it. Counting it
+# would report two packages that each declare one as a test executed twice.
+DECLARED_TEST = re.compile(
+    r"^func (Test[A-Za-z0-9_]+)\((?!\s*\w+\s+\*testing\.M\s*\))", re.M
+)
 
 ORACLE_ENV = "DEV_HEALTH_LIVE_PYTHON_ORACLES=1"
 
@@ -251,6 +256,17 @@ def test_no_go_test_is_executed_by_two_invocations() -> None:
         "build tags), say so with a reason in this file rather than deleting "
         "this assertion."
     )
+
+
+def test_a_test_main_is_not_counted_as_a_test() -> None:
+    """The inventory holds tests, not the package entry point."""
+    source = (
+        "func TestMain(m *testing.M) {\n"
+        "func TestAlpha(t *testing.T) {\n"
+        "func TestMainline(t *testing.T) {\n"
+        "func TestBeta( t *testing.T ) {\n"
+    )
+    assert DECLARED_TEST.findall(source) == ["TestAlpha", "TestMainline", "TestBeta"]
 
 
 def test_the_parser_finds_a_plausible_number_of_invocations() -> None:

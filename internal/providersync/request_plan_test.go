@@ -2,31 +2,23 @@ package providersync
 
 import (
 	"encoding/json"
-	"os/exec"
-	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"testing"
 )
 
-func TestProviderRequestPlansMatchLivePythonBudgetFunctions(t *testing.T) {
-	python := pythonExecutable(t)
-	_, currentFile, _, _ := runtime.Caller(0)
-	packageDir := filepath.Dir(currentFile)
-	root := filepath.Join(packageDir, "..", "..")
-	output, err := exec.Command(
-		python,
-		filepath.Join(packageDir, "testdata", "python_provider_budget_oracle.py"),
-		filepath.Join(root, "src", "dev_health_ops", "providers", "github", "budget.py"),
-		filepath.Join(root, "src", "dev_health_ops", "providers", "gitlab", "budget.py"),
-		filepath.Join(root, "src", "dev_health_ops", "providers", "linear", "budget.py"),
-		filepath.Join(root, "src", "dev_health_ops", "providers", "jira", "budget.py"),
-		filepath.Join(root, "src", "dev_health_ops", "providers", "launchdarkly", "budget.py"),
-	).CombinedOutput()
-	if err != nil {
-		t.Fatalf("execute Python provider budget oracle: %v: %s", err, output)
-	}
+func TestProviderRequestPlansMatchFrozenPythonBudgetFunctions(t *testing.T) {
+	output := frozenScriptAnswer(t, scriptOracle{
+		name:   "provider-budget",
+		script: "testdata/python_provider_budget_oracle.py",
+		sources: []string{
+			"src/dev_health_ops/providers/github/budget.py",
+			"src/dev_health_ops/providers/gitlab/budget.py",
+			"src/dev_health_ops/providers/linear/budget.py",
+			"src/dev_health_ops/providers/jira/budget.py",
+			"src/dev_health_ops/providers/launchdarkly/budget.py",
+		},
+	})
 	var cases []struct {
 		Provider          string            `json:"provider"`
 		Dataset           string            `json:"dataset"`
@@ -131,7 +123,7 @@ func TestGitHubWorkItemRequestPlansCoverEveryAliasAndPRPressure(t *testing.T) {
 	}
 }
 
-// expectedGoPlan is the live Python oracle's own estimates, widened with
+// expectedGoPlan is the frozen Python oracle's own estimates, widened with
 // every DOCUMENTED, computed Go-only delta -- a named mechanism and
 // direction, never a blanket allowance. Every dataset not named here
 // stays exact-equal to Python: a new, unnamed delta on ANY other

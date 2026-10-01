@@ -158,7 +158,7 @@ func pagerDutyIncidentOracleParent() map[string]any {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForPagerDutyIncidentRows(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForPagerDutyIncidentRows(t *testing.T) {
 	base := pagerDutyIncidentOracleBase()
 	cases := []oracleCase{
 		{ID: "resolved_full", Input: map[string]any{
@@ -182,7 +182,7 @@ func TestGenericOracleMatchesLivePythonForPagerDutyIncidentRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "pagerduty/incidents/row", cases, buildPagerDutyIncidentRowForOracle, nil)
 }
 
-func TestGenericOracleMatchesLivePythonForPagerDutyAlertRows(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForPagerDutyAlertRows(t *testing.T) {
 	cases := []oracleCase{
 		{ID: "resolved_critical", Input: map[string]any{
 			"org_id": "org-acme", "provider_instance_id": "Acme", "observed_at": "2026-07-19T19:00:00.987654Z", "incident": pagerDutyIncidentOracleParent(),
@@ -196,7 +196,7 @@ func TestGenericOracleMatchesLivePythonForPagerDutyAlertRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "pagerduty/incident-alerts/row", cases, buildPagerDutyAlertRowForOracle, nil)
 }
 
-func TestGenericOracleMatchesLivePythonForPagerDutyLogEntryRows(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForPagerDutyLogEntryRows(t *testing.T) {
 	cases := []oracleCase{
 		{ID: "typed_summary", Input: map[string]any{
 			"org_id": "org-acme", "provider_instance_id": "Acme", "observed_at": "2026-07-19T19:00:00.987654Z", "incident": pagerDutyIncidentOracleParent(),
@@ -210,7 +210,7 @@ func TestGenericOracleMatchesLivePythonForPagerDutyLogEntryRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "pagerduty/incident-log-entries/row", cases, buildPagerDutyLogEntryRowForOracle, nil)
 }
 
-func TestGenericOracleMatchesLivePythonForPagerDutyNoteRows(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForPagerDutyNoteRows(t *testing.T) {
 	cases := []oracleCase{
 		{ID: "content_with_user", Input: map[string]any{
 			"org_id": "org-acme", "provider_instance_id": "Acme", "observed_at": "2026-07-19T19:00:00.987654Z", "incident": pagerDutyIncidentOracleParent(),

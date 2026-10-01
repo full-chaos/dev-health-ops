@@ -28,28 +28,6 @@ require_cmd() {
   fi
 }
 
-run_dev_hops() {
-  if command -v dev-hops >/dev/null 2>&1; then
-    dev-hops "$@"
-    return
-  fi
-  # CHAOS-4411/4181/4407: `uv run dev-hops` here would trigger uv's own
-  # implicit sync of the local editable project -- reintroducing both the
-  # shared-cache lock (no UV_CACHE_DIR carries into a fresh `uv run`) and the
-  # setuptools_scm worktree hang the AGENTS.md `--no-install-project` recipe
-  # exists to avoid. The pure-module invocation needs neither.
-  python3 -m dev_health_ops.cli "$@"
-}
-
-exec_dev_hops() {
-  if command -v dev-hops >/dev/null 2>&1; then
-    exec dev-hops "$@"
-  fi
-  # See run_dev_hops() above (CHAOS-4411/4181/4407) for why `uv run dev-hops`
-  # is skipped here too.
-  exec python3 -m dev_health_ops.cli "$@"
-}
-
 run_python() {
   if command -v python3 >/dev/null 2>&1; then
     python3 "$@"
@@ -283,17 +261,11 @@ API_HOST="${LIVE_E2E_API_HOST:-127.0.0.1}"
 API_PORT="${LIVE_E2E_API_PORT:-18080}"
 BASE_URL="http://${API_HOST}:${API_PORT}"
 
-# CHAOS-7039: BASE_URL is `dho api` (the Go binary) -- health/ready and the
-# customer-push live e2e test below run against it. The Python `dev-hops
-# api` process still boots too, on an INTERNAL-ONLY port never exposed as
-# BASE_URL, solely so go_api_prove_e2e_edge_status (ci/lib/go_api_prove_e2e.sh)
-# can exercise its GraphQL edge dispatcher (x-dev-health-plane stamping,
-# principal/token_version checks) -- that dispatcher has no Go equivalent
-# yet. CHAOS-6263 (after CHAOS-6084) moves that leg onto query-api and
-# retires this process from the harness entirely.
-EDGE_API_HOST="${LIVE_E2E_EDGE_API_HOST:-127.0.0.1}"
-EDGE_API_PORT="${LIVE_E2E_EDGE_API_PORT:-18082}"
-EDGE_BASE_URL="http://${EDGE_API_HOST}:${EDGE_API_PORT}"
+# BASE_URL is `dho api` (the Go binary) -- health/ready and the
+# customer-push live e2e test below run against it. No Python api process
+# boots in this harness: the GraphQL edge the prover leg measures is
+# query-api's own /graphql (ci/lib/go_api_prove_e2e.sh), which stamps the
+# plane and checks the principal and token_version itself.
 
 # CHAOS-7039: `dho api`'s OWN operator listener (/healthz, /readyz,
 # /metrics -- internal/platform/shell, distinct from the api-addr business
@@ -336,7 +308,9 @@ CLICKHOUSE_URI_HTTP="${CLICKHOUSE_URI}"
 CLICKHOUSE_NATIVE_PORT="${CLICKHOUSE_NATIVE_PORT:-9000}"
 # Go's clickhouse-go speaks the native wire protocol, not Python's
 # clickhouse-connect HTTP port -- see start_worker_stack's own comment.
-CLICKHOUSE_URI_NATIVE="clickhouse://ch:ch@127.0.0.1:${CLICKHOUSE_NATIVE_PORT}/default"
+# Derived from the HTTP DSN (clickhouse_native_uri): one address, so an override of any part of
+# CLICKHOUSE_URI reaches the migrate, the worker and the fixtures alike, or fails loudly.
+CLICKHOUSE_URI_NATIVE="$(clickhouse_native_uri "${CLICKHOUSE_URI_HTTP}" "${CLICKHOUSE_NATIVE_PORT}" CLICKHOUSE_URI)"
 
 VALKEY_HOST="${LIVE_E2E_VALKEY_HOST:-127.0.0.1}"
 VALKEY_PORT="${LIVE_E2E_VALKEY_PORT:-6379}"
@@ -362,9 +336,7 @@ TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/live-backend-e2e.XXXXXX")"
 BIN_DIR="${TMP_DIR}/bin"
 mkdir -p "${BIN_DIR}"
 API_LOG_FILE="${LIVE_E2E_API_LOG_FILE:-${TMP_DIR}/api.log}"
-EDGE_API_LOG_FILE="${LIVE_E2E_EDGE_API_LOG_FILE:-${TMP_DIR}/edge-api.log}"
 API_PID=""
-EDGE_API_PID=""
 WORKER_PID=""
 RECONCILER_PID=""
 QUERY_API_PID=""
@@ -399,7 +371,6 @@ cleanup() {
   stop_worker_stack
   stop_service "query-api" "${QUERY_API_PID}"
   stop_service "dho api" "${API_PID}"
-  stop_service "dev-hops edge api" "${EDGE_API_PID}"
   rm -rf "${TMP_DIR}" >/dev/null 2>&1 || true
   return "${rc}"
 }
@@ -561,14 +532,22 @@ wait_for_redis
 # Python compute of any kind. For real executed-proof of the metrics
 # pipeline generally, see the `metrics-executed-proof` job in
 # .github/workflows/live-e2e.yml and ci/assert_metrics_executed_proof.py.
+# dho loads a frozen world (CHAOS-7301) into a migrated ClickHouse: migrate first,
+# to the head (ordering contract 2, which the worker started later must also use).
+export OPERATIONAL_ORDERING_CONTRACT=2
+build_go_binaries
+CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}" "${BIN_DIR}/dho" migrate clickhouse upgrade
+FIXTURES_SINK="$(clickhouse_http_sink "${CLICKHOUSE_URI}" CLICKHOUSE_URI)"
 echo "==> generating deterministic ClickHouse fixtures (raw git/PR/team data only)"
 (
   export ORG_ID="${E2E_ORG_ID}"
   unset POSTGRES_URI
   unset DATABASE_URI
   unset DATABASE_URL
-  run_dev_hops fixtures generate \
-    --sink "${CLICKHOUSE_URI}" \
+  # http:// spelled explicitly: dho reads a clickhouse:// DSN as native except on port 8123 and
+  # CLICKHOUSE_URI is overrideable.
+  # The DSN reaches dho by environment, not argv (it can hold a password).
+  CLICKHOUSE_URI="${FIXTURES_SINK}" "${BIN_DIR}/dho" fixtures generate \
     --db-type clickhouse \
     --repo-name "${FIXTURE_REPO_NAME}" \
     --provider "${FIXTURE_PROVIDER}" \
@@ -639,30 +618,8 @@ echo "==> starting dho api at ${BASE_URL}"
 ) >"${API_LOG_FILE}" 2>&1 &
 API_PID="$!"
 
-# CHAOS-7039: the Python `dev-hops api` process, retained ONLY for
-# go_api_prove_e2e_edge_status's /graphql leg -- see the BASE_URL/
-# EDGE_BASE_URL comment above. Never exposed as BASE_URL.
-echo "==> starting dev-hops edge api at ${EDGE_BASE_URL}"
-(
-  export DATABASE_URI="${DATABASE_URI}"
-  export CLICKHOUSE_URI="${CLICKHOUSE_URI}"
-  export POSTGRES_URI="${POSTGRES_URI}"
-  export JWT_SECRET_KEY="${JWT_SECRET_KEY}"
-  # The edge stamps x-dev-health-plane on the GraphQL responses it serves,
-  # as prod does. go-api-prove refuses a baseline leg without it (see
-  # ci/lib/go_api_prove_e2e.sh).
-  export GO_API_PLANE_HEADER_ENABLED="true"
-  exec_dev_hops \
-    --db "${POSTGRES_URI}" \
-    --analytics-db "${CLICKHOUSE_URI}" \
-    api --host "${EDGE_API_HOST}" --port "${EDGE_API_PORT}"
-) >"${EDGE_API_LOG_FILE}" 2>&1 &
-EDGE_API_PID="$!"
-
 echo "==> waiting for readiness"
 wait_for_ready
-echo "==> waiting for dev-hops edge api readiness"
-wait_for_http_ready "dev-hops edge api" "${EDGE_BASE_URL}/health" "${EDGE_API_LOG_FILE}" EDGE_API_PID
 
 # CHAOS-5362: drive the real Go dispatch/compute pipeline for every family
 # whose Python compute is deleted, now that the --with-metrics/
@@ -767,7 +724,7 @@ echo "==> running customer-push external-ingest live e2e test (CHAOS-2702)"
   export REDIS_URL="${REDIS_URL}"
   export JWT_SECRET_KEY="${JWT_SECRET_KEY}"
   # Point the test's black-box `client` fixture at the real, already-booted
-  # `dev-hops api` server process (BASE_URL, computed above) instead of an
+  # `dho api` server process (BASE_URL, computed above) instead of an
   # in-process ASGITransport -- proves the real route-mounting/startup/
   # uvicorn-config path, not just the FastAPI app object.
   export LIVE_E2E_BASE_URL="${BASE_URL}"

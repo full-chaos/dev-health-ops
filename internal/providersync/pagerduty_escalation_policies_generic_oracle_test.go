@@ -67,7 +67,7 @@ func oraclePagerDutyEscalationPolicyCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForPagerDutyEscalationPolicyRow(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForPagerDutyEscalationPolicyRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "pagerduty/escalation-policies/row", oraclePagerDutyEscalationPolicyCases(),
 		buildPagerDutyEscalationPolicyRowForOracle, nil,

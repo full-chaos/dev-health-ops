@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestTeamCatalogChangeIDMatchesFrozenPythonProducer",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair team-catalog/drift/change-id: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestTeamCatalogChangeIDMatchesFrozenPythonProducer$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "team-catalog/drift/change-id",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "34e35e91743cb11cd28685b6a10f4ec4059e1835d5df3149a2931e6c2f768ece",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"name_field_ascii\", \"row\": {\"change_id\": {\"t\": \"str\", \"v\": \"6a623c9ba3756df3fc63455fac11be939c8ff5968a54534bf71fba774b5d83b8\"}}}, {\"id\": \"members_field_list\", \"row\": {\"change_id\": {\"t\": \"str\", \"v\": \"88aeb07ca418e8a2b7be30b63ec40990dec48b4127e6ab6e51e53919c4322380\"}}}, {\"id\": \"description_field_non_ascii_and_null\", \"row\": {\"change_id\": {\"t\": \"str\", \"v\": \"020af19229a1a817629c6985dad46dad2654dd468df776fefcb718b706ae92c1\"}}}], \"excluded_fields\": {}}\n"
+    }
+  ]
+}

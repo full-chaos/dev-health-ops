@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestLinearReferenceTeamMatchesLivePythonProducer(t *testing.T) {
+func TestLinearReferenceTeamMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "linear/work-items/team", []oracleCase{
 			{
@@ -60,7 +60,7 @@ func buildLinearReferenceTeamOracleRow(t *testing.T, input map[string]any) linea
 	return team
 }
 
-func TestLinearDependencyMatchesLivePythonProductionRows(t *testing.T) {
+func TestLinearDependencyMatchesFrozenPythonProductionRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "linear/work-items/dependency", []oracleCase{
 			{
@@ -102,7 +102,7 @@ func TestLinearDependencyMatchesLivePythonProductionRows(t *testing.T) {
 	)
 }
 
-func TestLinearReopenMatchesLivePythonProductionRows(t *testing.T) {
+func TestLinearReopenMatchesFrozenPythonProductionRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "linear/work-items/reopen", []oracleCase{{
 			ID: "completed_to_started",
@@ -121,7 +121,7 @@ func TestLinearReopenMatchesLivePythonProductionRows(t *testing.T) {
 	)
 }
 
-func TestLinearInteractionMatchesLivePythonProductionRows(t *testing.T) {
+func TestLinearInteractionMatchesFrozenPythonProductionRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "linear/work-items/interaction", []oracleCase{{
 			ID: "unicode_comment",
@@ -138,7 +138,7 @@ func TestLinearInteractionMatchesLivePythonProductionRows(t *testing.T) {
 	)
 }
 
-func TestLinearSprintMatchesLivePythonProductionRows(t *testing.T) {
+func TestLinearSprintMatchesFrozenPythonProductionRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "linear/work-items/sprint", []oracleCase{
 			{

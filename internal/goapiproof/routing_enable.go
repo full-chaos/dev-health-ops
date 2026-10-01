@@ -69,6 +69,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -132,6 +133,11 @@ type EnableRequest struct {
 	// verified credential carried. It is NOT RecordedBy, which is what
 	// the operator typed about themselves and is verified by nothing.
 	PrincipalID string
+
+	// AllowExcluded names OPERATIONS whose excluded (unmeasured) shapes on an MCP class receipt the operator accepts (CHAOS-7512). Empty (the
+	// default) refuses any class receipt that lists an excluded shape. A name counts only if the go-served ledger also holds an UNPROVEN
+	// named-limit entry for that operation; a name with no such entry changes nothing.
+	AllowExcluded []string
 
 	// Ledger is the go-served ledger whose written limits admit an
 	// operation with no store proof. Nil means the ledger this binary was
@@ -369,6 +375,13 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 			return nil, err
 		}
 	}
+	// CHAOS-7512: a class receipt admits the root on its measured shapes only. Refuse the WHOLE enable (nothing written) when the
+	// receipt lists a shape that was not measured, unless the operator named that shape's operation AND the ledger holds an unproven
+	// named-limit entry for it.
+	allowedExcluded, err := checkClassExclusions(ctx, pool, request, proven, ledger)
+	if err != nil {
+		return nil, err
+	}
 	namedLimit := make(map[string]string, len(unproven))
 	var refused []string
 	for _, operation := range unproven {
@@ -397,6 +410,9 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 	outcomes := make([]EnableOutcome, 0, len(request.Operations))
 	for _, operation := range request.Operations {
 		evidence := request.ReviewEvidence
+		if names := allowedExcluded[operation]; len(names) > 0 {
+			evidence += " [allow-excluded: " + strings.Join(names, ",") + "]"
+		}
 		reason := namedLimit[operation]
 		if !proven[operation] {
 			evidence = NamedLimitEvidence(reason, evidence)
@@ -532,4 +548,66 @@ const EnforcedRolloutPercentage = 100
 // believe in a staged rollout that is not there.
 func ErrRolloutNotEnforced(percentage int) error {
 	return fmt.Errorf("goapiproof: rollout percentage %d is refused: neither plane enforces rollout_percentage or eligible_orgs, so a canary or primary row is on for EVERY authenticated org whatever it records, and these operations have no Python resolver for an org outside a cohort to fall back to; the only control is the mode (turn it off with `disable`)", percentage)
+}
+
+// checkClassExclusions applies the CHAOS-7512 rule to every PROVEN class operation of the request: read the provenance of the same newest
+// admissible class receipt `enable` just admitted and refuse when it is unreadable, or lists an excluded shape that is not allowed. It returns,
+// per class operation, the operation names that were allowed (for the durable evidence). Nothing is written here.
+func checkClassExclusions(ctx context.Context, db Querier, request EnableRequest, proven map[string]bool, ledger *GoServedLedger) (map[string][]string, error) {
+	allowed := map[string]bool{}
+	for _, name := range request.AllowExcluded {
+		allowed[strings.TrimSpace(name)] = true
+	}
+	used := map[string][]string{}
+	var problems []string
+	for _, operation := range request.Operations {
+		if !mcpclass.IsOperation(operation) || !proven[operation] {
+			continue
+		}
+		provenance, err := classReceiptProvenance(ctx, db, request.SchemaDigest, operation, request.RunningBuild)
+		if err != nil {
+			return nil, err
+		}
+		if provenance == nil {
+			problems = append(problems, operation+": the class receipt carries no readable provenance, so what it measured cannot be told (re-run `dho goapi prove -mcp-roots`)")
+			continue
+		}
+		// The provenance must describe THIS root: a receipt written for another root must not authorize this one.
+		if root, _ := mcpclass.Root(operation); provenance.Root != root {
+			problems = append(problems, operation+": the class receipt's provenance names root "+provenance.Root+", not "+root)
+			continue
+		}
+		seen := map[string]bool{}
+		for _, item := range provenance.Excluded {
+			name := item
+			if i := strings.IndexAny(item, ":="); i >= 0 {
+				name = item[:i]
+			}
+			if allowed[name] && ledgerHoldsUnprovenLimit(ledger, name) {
+				if !seen[name] {
+					seen[name] = true
+					used[operation] = append(used[operation], name)
+				}
+				continue
+			}
+			problems = append(problems, operation+": excluded (unmeasured) shape "+item)
+		}
+	}
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		return nil, fmt.Errorf("%w: a class receipt lists shapes that were NOT measured and are not accepted: %s\n"+
+			"  Measure them (e.g. supply -instance-id to `dho goapi prove`) and re-prove; a shape is accepted only if -allow-excluded names its operation AND the go-served ledger holds an unproven named-limit entry for it",
+			ErrEnableRequestRefused, strings.Join(problems, "; "))
+	}
+	for operation := range used {
+		sort.Strings(used[operation])
+	}
+	return used, nil
+}
+
+// ledgerHoldsUnprovenLimit reports whether the ledger has an entry for operation with a written UnprovenReason (a named limit: no two-plane run
+// ever proved it).
+func ledgerHoldsUnprovenLimit(ledger *GoServedLedger, operation string) bool {
+	entry, ok := ledger.Entry(operation)
+	return ok && strings.TrimSpace(entry.UnprovenReason) != ""
 }

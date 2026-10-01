@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 	"log/slog"
 	"math/big"
 	"os"
@@ -279,8 +280,7 @@ func (contract operationalStorageContract) latestQuery(legacyColumns, table, whe
 		return "SELECT " + columns + " FROM " + table + " FINAL WHERE " + where +
 			" AND " + operationalLegacyShapeGuard(table) + " LIMIT 1"
 	}
-	return "SELECT " + columns + " FROM " + table + " WHERE " + where +
-		" ORDER BY source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1"
+	return operationalordering.LatestRevisionRow(columns, table, where)
 }
 
 // activeQuery selects the newest stored version of every id matching where,
@@ -291,9 +291,7 @@ func (contract operationalStorageContract) activeQuery(legacyColumns, table, whe
 		return "SELECT " + columns + " FROM (SELECT " + columns + " FROM " + table +
 			" FINAL WHERE " + where + " AND " + operationalLegacyShapeGuard(table) + ") WHERE " + active
 	}
-	return "SELECT " + columns + " FROM (SELECT " + columns + " FROM " + table + " WHERE " + where +
-		" ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1 BY org_id, id) WHERE " +
-		active
+	return operationalordering.RevisionActiveRows(columns, table, where, active)
 }
 
 // fromCurrentValues reduces a value or scan-target list written in the

@@ -11,6 +11,7 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -254,9 +255,7 @@ func currentRowsSQL(table string, contract Contract) string {
 	if contract == ContractLegacy {
 		return "(SELECT * FROM (SELECT * FROM " + table + " FINAL WHERE org_id = {org_id:String}) WHERE id IN {ids:Array(String)})"
 	}
-	return "(SELECT * FROM (SELECT * FROM " + table + " WHERE org_id = {org_id:String} " +
-		"ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC " +
-		"LIMIT 1 BY org_id, id) WHERE id IN {ids:Array(String)})"
+	return operationalordering.RevisionCurrentRows(table, "org_id = {org_id:String}", []string{"id IN {ids:Array(String)}"})
 }
 
 func currentIdentityIDs(ctx context.Context, conn driver.Conn, table, orgID string, expected map[string]bool, contract Contract) (map[string]bool, error) {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/localgit"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // runLocalRepo is sync_local_target for git and prs (CHAOS-6775) and blame (CHAOS-6776): main()'s
@@ -28,7 +29,7 @@ func runLocalRepo(ctx context.Context, deps InlineDeps, lookups dbLookups, plan 
 	}
 	conn, err := deps.OpenStore(ctx, plan.SinkURI)
 	if err != nil {
-		return fmt.Errorf("open ClickHouse: %w", errors.New(redactDSN(err.Error(), plan.SinkURI)))
+		return fmt.Errorf("open ClickHouse: %w", errors.New(secrets.NewBoundary(plan.SinkURI).RedactText(err.Error())))
 	}
 	if closer, ok := conn.(interface{ Close() error }); ok {
 		defer func() { _ = closer.Close() }()

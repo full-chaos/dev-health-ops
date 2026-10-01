@@ -164,3 +164,16 @@ func TestEnableExcludedShapeNeedsBothTheLedgerEntryAndTheOperatorsName(t *testin
 		refused(t, excludedOtherOp+"=needs_instance_identifier", ledger, excludedOtherOp)
 	})
 }
+
+// r1: the provenance is bound to the root being enabled: a receipt whose provenance names ANOTHER root authorizes nothing.
+func TestEnableRefusesAClassReceiptWhoseProvenanceNamesAnotherRoot(t *testing.T) {
+	pool := startAuditedRegistryPostgres(t)
+	op := seedAndProveClass(t, pool, "hotspots", classProvenance(t, "workGraphEdges", nil))
+	_, err := enableClass(pool, op)
+	if err == nil || !errors.Is(err, ErrEnableRequestRefused) || !strings.Contains(err.Error(), "names root workGraphEdges, not hotspots") {
+		t.Fatalf("err = %v, want the wrong-root provenance refusal", err)
+	}
+	if got := classRowMode(t, pool, op); got != "shadow" {
+		t.Fatalf("mode = %s", got)
+	}
+}

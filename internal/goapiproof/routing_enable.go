@@ -572,6 +572,11 @@ func checkClassExclusions(ctx context.Context, db Querier, request EnableRequest
 			problems = append(problems, operation+": the class receipt carries no readable provenance, so what it measured cannot be told (re-run `dho goapi prove -mcp-roots`)")
 			continue
 		}
+		// The provenance must describe THIS root: a receipt written for another root must not authorize this one.
+		if root, _ := mcpclass.Root(operation); provenance.Root != root {
+			problems = append(problems, operation+": the class receipt's provenance names root "+provenance.Root+", not "+root)
+			continue
+		}
 		seen := map[string]bool{}
 		for _, item := range provenance.Excluded {
 			name := item

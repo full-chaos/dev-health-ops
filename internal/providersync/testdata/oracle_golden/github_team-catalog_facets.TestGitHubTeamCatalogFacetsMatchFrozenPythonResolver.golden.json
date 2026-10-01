@@ -13,7 +13,7 @@
       "body_sha256": "9c7829a310c18f8ca0a891584bcebaedbdbca19c9f9a19a7d0254628bf9bc525",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"login_with_email\", \"row\": {\"facets\": [{\"t\": \"str\", \"v\": \"github:octocat\"}, {\"t\": \"str\", \"v\": \"octocat@example.com\"}]}}, {\"id\": \"login_without_email\", \"row\": {\"facets\": [{\"t\": \"str\", \"v\": \"github:monalisa\"}]}}], \"excluded_fields\": {}}\n"
     }
   ]

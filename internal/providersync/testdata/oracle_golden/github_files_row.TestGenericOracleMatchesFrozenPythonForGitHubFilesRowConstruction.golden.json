@@ -13,7 +13,7 @@
       "body_sha256": "d9d106a23bd89005d8fe9d5676fb4c8a54b80826ad63adc270fe6b91a4253a42",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"scannable_content\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"path\": {\"t\": \"str\", \"v\": \"src/main.go\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": {\"t\": \"str\", \"v\": \"package main\\n\"}}}, {\"id\": \"path_only\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"path\": {\"t\": \"str\", \"v\": \"README.md\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": null}}], \"excluded_fields\": {\"last_synced\": \"stamped by ClickHouseStore.insert_git_file_data, not backfill_file_records\"}}\n"
     }
   ]

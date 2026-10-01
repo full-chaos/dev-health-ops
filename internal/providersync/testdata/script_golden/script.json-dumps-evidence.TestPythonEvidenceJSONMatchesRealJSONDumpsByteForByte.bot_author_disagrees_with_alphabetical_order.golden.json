@@ -13,7 +13,7 @@
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"login\": \"copilot[bot]\", \"user_type\": \"Bot\", \"app_slug\": \"github-copilot\", \"known_ai_bot\": true}"
     }
   ]

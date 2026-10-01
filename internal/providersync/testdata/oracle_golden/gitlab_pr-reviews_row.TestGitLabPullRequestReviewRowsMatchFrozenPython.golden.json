@@ -13,7 +13,7 @@
       "body_sha256": "7f97827f0af589a7ebff780da2ffdbc0bb132b84d2bfcd0d0a6939f1809a5841",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"approval_note_diff_note_and_approval_backfill\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"number\": {\"t\": \"int\", \"v\": \"7\"}, \"review_id\": {\"t\": \"str\", \"v\": \"note-1\"}, \"reviewer\": {\"t\": \"str\", \"v\": \"reviewer\"}, \"state\": {\"t\": \"str\", \"v\": \"APPROVED\"}, \"submitted_at\": {\"t\": \"datetime\", \"v\": \"2026-07-16T11:00:00Z\"}}}, {\"id\": \"merged_mr_unapproval_is_dismissed\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"number\": {\"t\": \"int\", \"v\": \"8\"}, \"review_id\": {\"t\": \"str\", \"v\": \"note-5\"}, \"reviewer\": {\"t\": \"str\", \"v\": \"reviewer\"}, \"state\": {\"t\": \"str\", \"v\": \"DISMISSED\"}, \"submitted_at\": {\"t\": \"datetime\", \"v\": \"2026-07-23T11:00:00Z\"}}}, {\"id\": \"approval_only_without_timestamp\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"number\": {\"t\": \"int\", \"v\": \"9\"}, \"review_id\": {\"t\": \"str\", \"v\": \"approval-91\"}, \"reviewer\": {\"t\": \"str\", \"v\": \"reviewer3\"}, \"state\": {\"t\": \"str\", \"v\": \"APPROVED\"}, \"submitted_at\": {\"t\": \"datetime\", \"v\": \"2026-07-12T10:00:00Z\"}}}], \"excluded_fields\": {\"last_synced\": \"stamped from the Go collection instant, not the Python mapper\"}}\n"
     }
   ]

@@ -13,7 +13,7 @@
       "body_sha256": "49d4c36295b2141d2df286d056cc69ff711d7abd69e91f980f833ce489421c57",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"merged_after_reopen\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"ghpr:acme/api#17\"}, \"provider\": {\"t\": \"str\", \"v\": \"github\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T09:29:00Z\"}, \"from_status_raw\": null, \"to_status_raw\": {\"t\": \"str\", \"v\": \"merged\"}, \"from_status\": {\"t\": \"str\", \"v\": \"in_progress\"}, \"to_status\": {\"t\": \"str\", \"v\": \"done\"}, \"actor\": null, \"org_id\": {\"t\": \"str\", \"v\": \"77777777-7777-4777-8777-777777777777\"}}}, {\"id\": \"issue_labeled_in_progress\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"gh:acme/api#42\"}, \"provider\": {\"t\": \"str\", \"v\": \"github\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-08-02T09:00:00Z\"}, \"from_status_raw\": null, \"to_status_raw\": {\"t\": \"str\", \"v\": \"doing\"}, \"from_status\": {\"t\": \"str\", \"v\": \"unknown\"}, \"to_status\": {\"t\": \"str\", \"v\": \"in_progress\"}, \"actor\": null, \"org_id\": {\"t\": \"str\", \"v\": \"77777777-7777-4777-8777-777777777777\"}}}], \"excluded_fields\": {}}\n"
     }
   ]

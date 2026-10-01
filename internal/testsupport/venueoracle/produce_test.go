@@ -164,3 +164,61 @@ func TestAPackedBodyUnpacksToTheSameBytesAndPacksTheSameWay(t *testing.T) {
 		}
 	}
 }
+
+// A variable the recorder passes by name is part of the golden: the recording
+// is refused unless the spec declares exactly the passed names, the header
+// holds them, and a frozen run refuses a header that differs from the spec.
+func TestAPassedVariableIsPartOfTheGolden(t *testing.T) {
+	spec := GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}
+	for name, c := range map[string]struct {
+		declared []string
+		passed   string
+		ok       bool
+	}{
+		"nothing passed, nothing declared": {nil, "", true},
+		"passed but not declared":          {nil, "SECRET_KEY", false},
+		"declared but not passed":          {[]string{"SECRET_KEY"}, "", false},
+		"the same names, any order":        {[]string{"B", "A"}, "A,B", true},
+		"another name":                     {[]string{"A"}, "a", false},
+		"one more passed":                  {[]string{"A"}, "A,B", false},
+	} {
+		spec.PassEnv = c.declared
+		if err := passedEnvErr(spec, c.passed); (err == nil) != c.ok {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+
+	// Recording: openGolden reads what the recorder passed.
+	spec.PassEnv = nil
+	t.Setenv(goldenPassedEnv, "SECRET_KEY")
+	if _, err := openGolden(spec, "TestSample", true); err == nil || !strings.Contains(err.Error(), "SECRET_KEY") {
+		t.Fatalf("a recording with an undeclared passed variable was opened: %v", err)
+	}
+	spec.PassEnv = []string{"SECRET_KEY"}
+	recording, err := openGolden(spec, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := recording.recorded.Header.PassedEnv; len(got) != 1 || got[0] != "SECRET_KEY" {
+		t.Fatalf("the header holds %q", got)
+	}
+
+	// Frozen: the header's names must be the spec's.
+	t.Setenv(goldenPassedEnv, "")
+	t.Setenv(goldenUpdateEnv, "")
+	t.Setenv(goldenCandidateEnv, "")
+	request := ProgramRequest("corpus", sampleProgram, []byte("abc"), nil)
+	file := goldenFile{Header: goldenHeader{Test: "TestSample", PythonBuild: goldenBuild, ProducerDigest: strings.Repeat("a", 64), Recipe: "record it", PassedEnv: []string{"SECRET_KEY"}}}
+	entry := requestKey(request)
+	entry.Body = "ABC\n"
+	file.Requests = append(file.Requests, entry)
+	path, digest := writeGoldenFile(t, t.TempDir(), file)
+	frozen := GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}
+	if _, err := openGolden(frozen, "TestSample", false); err == nil || !strings.Contains(err.Error(), "SECRET_KEY") {
+		t.Fatalf("a golden recorded with a passed variable the test does not declare was opened: %v", err)
+	}
+	frozen.PassEnv = []string{"SECRET_KEY"}
+	if _, err := openGolden(frozen, "TestSample", false); err != nil {
+		t.Fatalf("the golden with its declared passed variable was refused: %v", err)
+	}
+}

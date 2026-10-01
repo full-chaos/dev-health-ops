@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyheaders"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -158,7 +159,7 @@ func TestCORSMatchesFrozenStarlette(t *testing.T) {
 		if !reflect.DeepEqual(append([]string{}, goOrigins...), append([]string{}, config.AllowOrigins...)) {
 			t.Errorf("config=%s allow_origins: go %q, python %q", name, goOrigins, config.AllowOrigins)
 		}
-		cors := NewCORS(goOrigins)
+		cors := pyheaders.NewCORS(goOrigins)
 		for index, c := range cases {
 			vary := c.Vary
 			handler := cors.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

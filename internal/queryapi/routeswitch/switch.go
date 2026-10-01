@@ -101,13 +101,20 @@ func (m *Mux) Register(operation string, handler http.Handler) {
 // only when m.sw.Enabled(operation) is true. Otherwise it writes 404,
 // whether or not a handler is registered.
 func (m *Mux) Dispatch(operation string, w http.ResponseWriter, r *http.Request) {
+	m.DispatchOr(operation, w, r, http.NotFound)
+}
+
+// DispatchOr is Dispatch with refuse answering an operation that is not
+// reachable (its switch off or unreadable, or no handler), in place of the
+// 404. The switch is read once, so the answer and the decision agree.
+func (m *Mux) DispatchOr(operation string, w http.ResponseWriter, r *http.Request, refuse http.HandlerFunc) {
 	if !m.sw.Enabled(operation) {
-		http.NotFound(w, r)
+		refuse(w, r)
 		return
 	}
 	handler, ok := m.handlers[operation]
 	if !ok {
-		http.NotFound(w, r)
+		refuse(w, r)
 		return
 	}
 	handler.ServeHTTP(w, r)

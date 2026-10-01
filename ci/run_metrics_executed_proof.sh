@@ -272,7 +272,7 @@ echo "   -- fixtures generate (CHAOS-4276: git_commits + a repo-pattern team for
 # HTTP port here is overrideable.
 env -u DATABASE_URI -u POSTGRES_URI -u DATABASE_URL ORG_ID="${ORG_ID}" OTEL_ENABLED=false \
   "${BIN_DIR}/dho" fixtures generate \
-  --sink "http://${CLICKHOUSE_URI_HTTP#clickhouse://}" \
+  --sink "${CLICKHOUSE_URI_HTTP/#clickhouse:\/\//http://}" \
   --db-type clickhouse \
   --org "${ORG_ID}" \
   --provider synthetic \

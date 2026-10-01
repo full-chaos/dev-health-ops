@@ -562,7 +562,7 @@ echo "==> generating deterministic ClickHouse fixtures (raw git/PR/team data onl
   # http:// spelled explicitly: dho reads a clickhouse:// DSN as native except on port 8123 and
   # CLICKHOUSE_URI is overrideable.
   "${BIN_DIR}/dho" fixtures generate \
-    --sink "http://${CLICKHOUSE_URI#clickhouse://}" \
+    --sink "${CLICKHOUSE_URI/#clickhouse:\/\//http://}" \
     --db-type clickhouse \
     --repo-name "${FIXTURE_REPO_NAME}" \
     --provider "${FIXTURE_PROVIDER}" \

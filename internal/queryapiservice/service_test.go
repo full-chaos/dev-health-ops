@@ -296,6 +296,47 @@ func TestOpensTheInternalListenerWhenItsAddressIsSet(t *testing.T) {
 	}
 }
 
+// CHAOS-7085: --mcp-addr (QUERY_API_MCP_ADDR) opens the MCP caller-class
+// listener, the fourth. It serves the MCP class's /query and nothing else:
+// no /registry, /buildinfo or /metrics fallthrough (here /query itself is not
+// configured, so every path answers 404), and it closes on shutdown.
+func TestOpensTheMCPListenerWhenItsAddressIsSet(t *testing.T) {
+	addrs := freeAddrs(t, 4)
+	query, internal, mcp, operator := addrs[0], addrs[1], addrs[2], addrs[3]
+	r := start(t, []string{"--query-addr", query, "--internal-addr", internal, "--mcp-addr", mcp, "--http-addr", operator}, nil)
+	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
+	waitFor(t, r, "http://"+internal+"/metrics", http.StatusOK)
+	for _, path := range []string{"/metrics", "/healthz", "/readyz", "/registry", "/buildinfo", "/query"} {
+		waitFor(t, r, "http://"+mcp+path, http.StatusNotFound)
+	}
+	stop(t, r)
+	if connection, err := net.DialTimeout("tcp", mcp, time.Second); err == nil {
+		_ = connection.Close()
+		t.Fatalf("%s still accepts connections after shutdown", mcp)
+	}
+}
+
+func TestTheMCPListenerMustNotShareAnAddress(t *testing.T) {
+	for name, args := range map[string]func(string) []string{
+		"query":    func(a string) []string { return []string{"--query-addr", a, "--mcp-addr", a} },
+		"internal": func(a string) []string { return []string{"--internal-addr", a, "--mcp-addr", a} },
+		"operator": func(a string) []string { return []string{"--http-addr", a, "--mcp-addr", a} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			addr := freeAddr(t)
+			r := start(t, args(addr), nil)
+			select {
+			case code := <-r.done:
+				if code != 1 || !strings.Contains(r.stderr.String(), "must differ") {
+					t.Fatalf("exit %d stderr %q, want 1 naming that the listeners must differ", code, r.stderr.String())
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("did not return")
+			}
+		})
+	}
+}
+
 func TestTwoListenersOnOneAddressAreRefusedBeforeServing(t *testing.T) {
 	addr := freeAddr(t)
 	r := start(t, []string{"--query-addr", addr, "--http-addr", addr}, nil)

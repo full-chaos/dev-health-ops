@@ -121,7 +121,7 @@ flowchart TD
     S["ClickHouse sink<br/>external_clickhouse.go"]
     T[("project_membership_transitions<br/>ReplacingMergeTree(last_synced)<br/>ORDER BY org_id, subject_kind, repo_id,<br/>subject_id, occurred_at, event_id")]
     MS["worker_external_project_memberships_sunk_total<br/>{provider}"]
-    PR[["project_membership_presence<br/>per (subject, project): active iff the latest<br/>row touching it JOINED it<br/>else work_items column, per subject"]]
+    PR[["project_membership_presence<br/>per (subject, project): active iff the latest<br/>row touching it JOINED it<br/>else work_items column, per subject<br/>last_synced = server insert time (ingested_at, mig 100):<br/>re-read a 300 s window behind the cursor, dedup with FINAL"]]
     W[("work_items FINAL<br/>current-value column, no history")]
     CF["Context Fabric devhealthsource<br/>BELONGS_TO_PROJECT edge"]
     RC["ExternalRecomputeScope<br/>planned and dispatched synchronously after commit"]

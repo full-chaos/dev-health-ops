@@ -77,6 +77,57 @@ Python resolver once over scripted rows and compared by a Go test on every run:
 `internal/hotspots/testdata/hotspots_golden.json` and
 `internal/graph/testdata/pr_golden.json`.
 
+## The listeners (CHAOS-6780, CHAOS-7097, CHAOS-7085)
+
+query-api serves up to four listeners. Each is its own `http.Server` with its
+own route set; a route mounted on one is unreachable from another.
+
+| Listener | Setting | Route set | Identity |
+| -- | -- | -- | -- |
+| public (`query-http`) | `QUERY_API_ADDR` | `Plane.Handler`: `/query`, `/query/proof`, `/registry`, `/buildinfo`, `/api/v1/*` | deletes the `X-DH-Internal-*` headers; envelope or edge bearer only |
+| internal (`query-internal-http`) | `QUERY_API_INTERNAL_ADDR` | `Plane.InternalHandler`: the public set plus `/query/proof-write` and `/metrics` | honours the four headers (`internalidentity.Internal`) |
+| MCP caller class (`query-mcp-http`) | `QUERY_API_MCP_ADDR`, `QUERY_API_MCP_ALLOWED_CIDRS` | `Plane.MCPHandler`: POST `/query` of the MCP class ONLY, no fallthrough | the four headers only (`internalidentity.MCP`); any `Authorization` header is refused |
+| operator | `DEV_HEALTH_HTTP_ADDR` | `/healthz`, `/readyz`, `/metrics` | none |
+
+**The MCP caller class (CHAOS-7085, with CHAOS-7091)** is the validated
+free-form query of the hosted MCP (design CHAOS-7036 r5 D.8 form (iii)) and
+the K17 option (b) narrow carrier. `mcp_route.go` refuses, before any
+resolver runs (so with zero ClickHouse queries): any carrier except the four
+headers; a claim of superuser, impersonation or an operator role
+(admin/owner/operator) -- refused 403 `elevated_claim` with an ERROR line and
+`devhealth_query_api_mcp_elevated_claims_total{claim}` (every other role is
+forced to `""`, both flags to false); anything but one query operation
+(mutation/subscription refused by type); `__schema`/`__type`; APQ or any body
+member but `query`/`variables`/`operationName`; GET, multipart, a JSON-array
+batch; a root field outside `mcpRootFieldAllowlist` (14 fields, reviewed by
+PR); depth > 10, aliases > 15, complexity > 150; an `orgId`/`org_id` that is
+not the header org, at any depth, inside input objects and variables
+(`hotspots`/`cognitiveLoad` carry it in `input`, which
+`graph.OperationOrgGuard` does not read); a root field whose class routing row
+is not canary/primary. Class rows live in `go_api_routing_state` keyed
+(`schema_digest`, `sha256("dev-health-ops/mcp-freeform-class/v1")`,
+`mcp:<rootField>`); no row = refused, so the class ships dormant. What passes
+runs on its own gqlgen server (POST only, no introspection/APQ, the same caps,
+the operation guard again) over its own ClickHouse client:
+`MaxBytesToRead` 4 GiB and `max_execution_time` 10 s (CHAOS-7091; the shared
+path stays unrestricted). A ClickHouse budget error (codes 307/158/159, or
+the 10 s query deadline -- clickhouse-go sends the server a
+`max_execution_time` a few seconds past the client deadline, so the ceiling
+normally fires client-side as `context.DeadlineExceeded`) anywhere in the
+request, also one a resolver swallows, replaces the whole
+response with a typed refusal (422, `MCP_READ_BUDGET_EXCEEDED`). One log line
+(`query-api: mcp request:` caller_class, outcome, reason, status,
+document_digest, root_fields, aliases, depth, complexity, clickhouse_queries,
+duration_ms; never a variable value or the query text) plus
+`devhealth_query_api_mcp_requests_total{caller_class,outcome,reason}` and
+`devhealth_query_api_mcp_request_duration_seconds` per request.
+
+Accepted residual (K17 option b): the headers are assertions, so a taken-over
+acr-api still reads any org through the allowlisted root fields; it can no
+longer write or reach operator/superuser views. The network is the boundary
+(chart `queryApi.mcp.allowedFrom` = acr-api pods; `QUERY_API_MCP_ALLOWED_CIDRS`
+where no NetworkPolicy exists) -- no service-to-service credential, by rule.
+
 ## Wave 3: cognitiveLoad (CHAOS-4369, extended to a third path by CHAOS-4462)
 
 `internal/cognitiveload` ports the Python `cognitive_load.resolve_cognitive_load`

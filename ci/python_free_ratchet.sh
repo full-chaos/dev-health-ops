@@ -35,6 +35,26 @@ SKIP_GATE='DEV_HEALTH_LIVE_PYTHON_ORACLE'
 die() { printf 'python_free_ratchet: %s\n' "$1" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || die "jq is required"
 
+# print_failure_output prints stdin under a NON-TRIPWIRE FAILURE line. A cause can be the first line (what a
+# TestMain or a build says before a long cleanup) or the last (the assertion), so a long output keeps both
+# ends: the first FAILURE_HEAD_LINES and the last FAILURE_TAIL_LINES, with a line between them that counts
+# what was left out and names where the whole output is. Nothing is cut without that line.
+FAILURE_HEAD_LINES=40
+FAILURE_TAIL_LINES=60
+print_failure_output() {
+  awk -v head="${FAILURE_HEAD_LINES}" -v tail="${FAILURE_TAIL_LINES}" '
+    { line[NR] = $0 }
+    END {
+      if (NR <= head + tail) {
+        for (i = 1; i <= NR; i++) print "    | " line[i]
+      } else {
+        for (i = 1; i <= head; i++) print "    | " line[i]
+        printf "    | ... (%d lines left out here; the whole output is in this shard'"'"'s go test stream artifact, python-free-stream-*)\n", NR - head - tail
+        for (i = NR - tail + 1; i <= NR; i++) print "    | " line[i]
+      }
+    }'
+}
+
 classify() {
   local json="${1:?classify needs GO_TEST_JSON}" hits_out="${2:?classify needs HITS_OUT}" log="${3:-}"
   [ -s "${json}" ] || die "no go test output in ${json}: a measurement that did not happen is a failure"
@@ -93,10 +113,31 @@ classify() {
       printf '%s\t%s\ttripwire\n' "${pkg}" "${test}" >>"${hits_out}"
     else
       printf 'NON-TRIPWIRE FAILURE: %s %s\n' "${pkg}" "${test}" >&2
-      # The failing test's own output (the first 30 lines), so a real failure is diagnosable from the log.
-      jq -rs --arg p "${pkg}" --arg t "${test}" '
-        map(select(.Package == $p and .Test != null and (.Test | split("/")[0]) == $t and .Action == "output") | .Output) | join("")
-      ' "${json}" 2>/dev/null | head -30 | sed 's/^/    | /' >&2 || true
+      if [ "${test}" = "(package-level failure)" ]; then
+        # No test failed, so no test's output says why: print the package's own output (what the test
+        # binary printed outside a test: a TestMain's exit, a panic, "signal: killed") and the output of the
+        # build that failed (go test -json reports it under ImportPath, the one the package's fail event
+        # names in FailedBuild: "<pkg> [<pkg>.test]" for the package itself or its vet, "<dep>" for a
+        # dependency), so a package-level failure is diagnosable from the log.
+        local detail
+        detail="$(jq -rs --arg p "${pkg}" '
+          ( map(select(.Action == "fail" and .Package == $p and .Test == null and .FailedBuild != null) | .FailedBuild) ) as $builds
+          | map(select(
+              (.Package == $p and .Test == null and .Action == "output")
+              or (.Action == "build-output" and .ImportPath != null and (.ImportPath as $ip | $builds | index($ip)) != null)
+            ) | .Output) | join("")
+        ' "${json}")" || detail=""
+        if [ -n "${detail}" ]; then
+          printf '%s\n' "${detail}" | print_failure_output >&2
+        else
+          printf '    | (the go test -json stream holds no output for this package: see the shard json artifact)\n' >&2
+        fi
+      else
+        # The failing test's own output, so a real failure is diagnosable from the log.
+        jq -rj --arg p "${pkg}" --arg t "${test}" -s '
+          map(select(.Package == $p and .Test != null and (.Test | split("/")[0]) == $t and .Action == "output") | .Output) | join("")
+        ' "${json}" | print_failure_output >&2 || true
+      fi
       rc=1
     fi
   done <"${tmp}/failed.tsv"

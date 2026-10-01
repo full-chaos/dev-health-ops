@@ -3,12 +3,11 @@ package adminops
 import (
 	"bufio"
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"io"
 	"math/rand"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -104,19 +103,17 @@ func TestCredentialArgsMatchTheFrozenPythonParser(t *testing.T) {
 	}
 	env := map[string]string{"PYTHONHASHSEED": "0", "DISABLE_DOTENV": "1", "OTEL_ENABLED": "false"}
 	request := venueoracle.ProgramRequest("credential args corpus", credentialArgsOracleProgram, input.Bytes(), env)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
-		command := exec.Command(python, "-c", credentialArgsOracleProgram)
-		command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
-		for key, value := range env {
-			command.Env = append(command.Env, key+"="+value)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		command, err := producer.Command(context.Background(), env, nil, "-c", credentialArgsOracleProgram)
+		if err != nil {
+			t.Fatal(err)
 		}
 		command.Stdin = bytes.NewReader(input.Bytes())
 		var stderr strings.Builder
 		command.Stderr = &stderr
 		output, err := command.Output()
 		if err != nil {
-			t.Fatalf("live python: %v\n%s", pyoracle.RunError(python, err, nil), stderr.String())
+			t.Fatalf("live python: %v\n%s", pyoracle.RunError(command.Path, err, nil), stderr.String())
 		}
 		// Packed: the corpus answers are megabytes of near-identical lines.
 		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}

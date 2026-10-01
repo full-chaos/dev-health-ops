@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"math"
 	"math/big"
 	"sort"
@@ -93,7 +94,7 @@ type batchFailure struct {
 func runBatch(ctx context.Context, deps InlineDeps, plan Plan, datasets []string, run providersync.InProcessRun, env cli.Env) error {
 	secretValues := batchSecrets(run)
 	redact := func(err error) string {
-		text := redactDSN(err.Error(), plan.SinkURI)
+		text := secrets.NewBoundary(plan.SinkURI).RedactText(err.Error())
 		for _, secret := range secretValues {
 			text = strings.ReplaceAll(text, secret, "<redacted>")
 		}

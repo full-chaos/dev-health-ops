@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -28,7 +29,7 @@ func runLocalRepo(ctx context.Context, deps InlineDeps, lookups dbLookups, plan 
 	}
 	conn, err := deps.OpenStore(ctx, plan.SinkURI)
 	if err != nil {
-		return fmt.Errorf("open ClickHouse: %w", errors.New(redactDSN(err.Error(), plan.SinkURI)))
+		return fmt.Errorf("open ClickHouse: %w", errors.New(secrets.NewBoundary(plan.SinkURI).RedactText(err.Error())))
 	}
 	if closer, ok := conn.(interface{ Close() error }); ok {
 		defer func() { _ = closer.Close() }()

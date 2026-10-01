@@ -80,7 +80,7 @@ func (collector jiraCombinedTeamCatalogCollector) newClient(gatewayURL string, a
 	}
 	return &graph.Client{
 		BaseURL: gatewayURL, Auth: auth, Strict: true,
-		HTTPClient: &http.Client{Timeout: 45 * time.Second, Transport: atlassianteams.CompletePagesOnly(nil)},
+		HTTPClient: atlassianteams.GatewayHTTPClient(45 * time.Second),
 	}
 }
 
@@ -90,7 +90,7 @@ func (collector jiraCombinedTeamCatalogCollector) newOrganizationResolver(gatewa
 	}
 	return &graph.Client{
 		BaseURL: gatewayURL, Auth: auth, Strict: true,
-		HTTPClient: &http.Client{Timeout: 45 * time.Second, Transport: atlassianteams.CompletePagesOnly(nil)},
+		HTTPClient: atlassianteams.GatewayHTTPClient(45 * time.Second),
 	}
 }
 
@@ -213,7 +213,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	cloudID := strings.TrimSpace(credential.Config["atlassian_cloud_id"])
 	doer := collector.Doer
 	if doer == nil {
-		doer = &http.Client{Timeout: 45 * time.Second}
+		doer = &http.Client{Timeout: 45 * time.Second, CheckRedirect: providerfoundation.DropCredentialsOnHostChange}
 	}
 	if cloudID == "" {
 		cloudID, err = atlassianteams.ResolveCloudID(ctx, doer, tenant)

@@ -1,4 +1,3 @@
-internal/apiservice	TestCORSVenueOracleMatchesLiveStarlette	2
 internal/apiservice	TestExternalIngestPayloadHashVenueOracle	242
 internal/apiservice	TestExternalIngestVenueOracle	67
 internal/apiservice	TestLegacyIngestTelemetryVenueOracle	54
@@ -11,6 +10,5 @@ internal/apiservice	TestVenueOracleCustomerPushReads	70
 internal/apiservice	TestVenueOracleCustomerPushValidate	56
 internal/apiservice	TestVenueOracleCustomerPushWrites	64
 internal/apiservice	TestVenueOracleProtectedRoutes	131
-internal/apiservice	TestVenueOracleRouteResponseModels	6
 internal/apiservice	TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth	54
 internal/apiservice	TestWebhookIntakeVenueOraclePagerDuty	60

@@ -107,8 +107,12 @@ type deps struct {
 	openStore               func(ctx context.Context, dsn string) (driver.Conn, error)
 	now                     func() time.Time
 	// doer is the HTTP client of a catalog provider, and (for --provider
-	// jira) the stored-credential resolution's jira/tenant-info client (nil:
-	// a 45 s client); tests replace it.
+	// jira) the stored-credential resolution's jira/tenant-info client.
+	// defaultDeps sets a 45 s client: the stored-credential path hands this
+	// field straight to providerfoundation.NewJiraClient, which refuses a nil
+	// doer, so a nil default made the verb fail in production (CHAOS-7132
+	// follow-up) while every test, which injects a doer, passed. Tests replace
+	// it.
 	doer providerfoundation.HTTPDoer
 	// openPostgres opens the domain database the stored jira credential is
 	// resolved from; tests replace it (no live Postgres in unit tests).
@@ -116,6 +120,14 @@ type deps struct {
 	// decryptor decrypts the resolved credential's ciphertext
 	// (SETTINGS_ENCRYPTION_KEY); tests replace it.
 	decryptor func(env cli.Env) (providerfoundation.CredentialDecryptor, error)
+}
+
+// productionDoer is the HTTP client the verb talks to providers with (45 s). It follows redirects, as the
+// tenant lookup (unauthenticated) needs when a tenant answers with its canonical host, but never replays a
+// credential to another host (providerfoundation.DropCredentialsOnHostChange); the provider clients also
+// guard their own credential origin.
+func productionDoer() *http.Client {
+	return &http.Client{Timeout: 45 * time.Second, CheckRedirect: providerfoundation.DropCredentialsOnHostChange}
 }
 
 func defaultDeps() deps {
@@ -126,19 +138,20 @@ func defaultDeps() deps {
 			// page that promises a next page without a cursor fails it too.
 			return &graph.Client{
 				BaseURL: gatewayURL, Auth: auth, Strict: true,
-				HTTPClient: &http.Client{Timeout: 30 * time.Second, Transport: atlassianteams.CompletePagesOnly(nil)},
+				HTTPClient: atlassianteams.GatewayHTTPClient(30 * time.Second),
 			}
 		},
 		newOrganizationResolver: func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.OrganizationResolver {
 			return &graph.Client{
 				BaseURL: gatewayURL, Auth: auth, Strict: true,
-				HTTPClient: &http.Client{Timeout: 30 * time.Second, Transport: atlassianteams.CompletePagesOnly(nil)},
+				HTTPClient: atlassianteams.GatewayHTTPClient(30 * time.Second),
 			}
 		},
 		openStore: func(ctx context.Context, dsn string) (driver.Conn, error) {
 			return clickhousestore.Open(ctx, clickhousestore.DefaultConfig(dsn))
 		},
 		now:          time.Now,
+		doer:         productionDoer(),
 		openPostgres: openPostgresPool,
 		decryptor: func(env cli.Env) (providerfoundation.CredentialDecryptor, error) {
 			decryptor, err := settingsDecryptor(env)

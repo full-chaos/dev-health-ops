@@ -893,7 +893,7 @@ func commitTree(cfg Config, commit string) (string, func(), error) {
 		cleanup()
 		return "", nil, err
 	}
-	extractErr := extractTar(stream, dir)
+	extractErr := extractTar(stream, dir, maxTreeBytes)
 	if extractErr != nil {
 		_, _ = io.Copy(io.Discard, stream)
 	}
@@ -908,9 +908,17 @@ func commitTree(cfg Config, commit string) (string, func(), error) {
 	return dir, cleanup, nil
 }
 
-// extractTar writes the directories, files and symbolic links of a tar stream under dir.
-func extractTar(stream io.Reader, dir string) error {
+// maxTreeBytes bounds what commitTree unpacks: a source tree of this repository
+// is some hundreds of megabytes, and an archive that claims more is refused
+// before its content is written.
+const maxTreeBytes = 4 << 30
+
+// extractTar writes the directories, files and symbolic links of a tar stream
+// under dir. It writes at most limit bytes of file content, each file exactly
+// the size its header declares.
+func extractTar(stream io.Reader, dir string, limit int64) error {
 	reader := tar.NewReader(stream)
+	var written int64
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
@@ -935,13 +943,17 @@ func extractTar(stream io.Reader, dir string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
+			if header.Size < 0 || header.Size > limit-written {
+				return fmt.Errorf("the archive holds more than %d bytes of files (at %q): not a source tree of this repository", limit, header.Name)
+			}
+			written += header.Size
 			file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fs.FileMode(header.Mode)&0o777|0o600)
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(file, reader); err != nil {
+			if _, err := io.CopyN(file, reader, header.Size); err != nil {
 				file.Close()
-				return err
+				return fmt.Errorf("%q: %w", header.Name, err)
 			}
 			if err := file.Close(); err != nil {
 				return err

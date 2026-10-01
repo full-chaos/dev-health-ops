@@ -671,7 +671,7 @@ func TestATreeIsUnpackedFromAnArchiveAndNeverOutsideItsDirectory(t *testing.T) {
 		tar.Header{Name: "internal/pkg/a.go", Typeflag: tar.TypeReg, Mode: 0o644},
 		tar.Header{Name: "scripts/run.sh", Typeflag: tar.TypeReg, Mode: 0o755},
 		tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "internal/pkg/a.go"},
-	), dir)
+	), dir, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,13 +684,24 @@ func TestATreeIsUnpackedFromAnArchiveAndNeverOutsideItsDirectory(t *testing.T) {
 	if target, _ := os.Readlink(filepath.Join(dir, "link")); target != "internal/pkg/a.go" {
 		t.Fatalf("link target %q", target)
 	}
+	// The content written is bounded: an archive that holds more than the limit is refused at the
+	// file that crosses it, and nothing of that file is written.
+	small := []tar.Header{{Name: "a.go", Typeflag: tar.TypeReg, Mode: 0o644}, {Name: "b.go", Typeflag: tar.TypeReg, Mode: 0o644}}
+	bounded := t.TempDir()
+	if err := extractTar(archive(small...), bounded, int64(len("content of a.go")+len("content of b.go"))); err != nil {
+		t.Fatalf("an archive of exactly the limit: %v", err)
+	}
+	bounded = t.TempDir()
+	if err := extractTar(archive(small...), bounded, int64(len("content of a.go")+len("content of b.go"))-1); err == nil || !strings.Contains(err.Error(), "holds more than") || exists(filepath.Join(bounded, "b.go")) {
+		t.Fatalf("an archive one byte over the limit: err %v, b.go written %v", err, exists(filepath.Join(bounded, "b.go")))
+	}
 	for name, header := range map[string]tar.Header{
 		"a path that leaves the tree": {Name: "../escape.go", Typeflag: tar.TypeReg, Mode: 0o644},
 		"an absolute path":            {Name: "/etc/escape", Typeflag: tar.TypeReg, Mode: 0o644},
 		"a device":                    {Name: "dev", Typeflag: tar.TypeChar},
 	} {
 		outside := t.TempDir()
-		if err := extractTar(archive(header), filepath.Join(outside, "tree")); err == nil {
+		if err := extractTar(archive(header), filepath.Join(outside, "tree"), 1<<20); err == nil {
 			t.Errorf("%s: unpacked", name)
 		}
 		if exists(filepath.Join(outside, "escape.go")) {

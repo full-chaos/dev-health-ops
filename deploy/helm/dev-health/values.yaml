@@ -266,6 +266,13 @@ queryApi:
   #    a time and one stays ready).
   rollingUpdate: {}
   port: 8090
+  # -- Comma-separated CORS allow-list for /graphql, the product GraphQL path
+  #    query-api answers (CHAOS-6263): same format and meaning as the Python
+  #    api's CORS_ALLOWED_ORIGINS and goApi.corsAllowedOrigins, and it must be
+  #    the same value. Empty keeps the binary's default (http://localhost:3000).
+  #    A value kept in a Secret goes in queryApi.extraEnv as CORS_ALLOWED_ORIGINS
+  #    with a secretKeyRef instead; setting both fails the render.
+  corsAllowedOrigins: ""
   # -- The internal listener (QUERY_API_INTERNAL_ADDR): X-DH-Internal-* identity routes,
   #    /metrics and /query/proof-write, none of them on the public `port`. Off by default
   #    because the umbrella deploy chart renders its own internal Service and NetworkPolicy
@@ -1026,9 +1033,13 @@ ingress:
   #    to an Ingress that carries only the hosts with an anchored entry. A Prefix
   #    entry (e.g. /api/v1/internal, when a values file keeps it) stays an
   #    unanchored regex in regex mode.
-  pythonAllowList:
-    - path: /graphql$
-      pathType: ImplementationSpecific
+  #    CHAOS-6263: EMPTY by default. query-api answers /graphql itself, so no
+  #    path is the Python api's unless a values file lists one. A host that
+  #    opts in with an empty effective list renders only its own paths and needs
+  #    no Python api Service. A values file that still wants Python to answer
+  #    /graphql lists `{path: "/graphql$", pathType: ImplementationSpecific}`
+  #    here (the rollback); it must not also route /graphql to query-api.
+  pythonAllowList: []
   tls: []
   #  - secretName: dev-health-tls
   #    hosts:

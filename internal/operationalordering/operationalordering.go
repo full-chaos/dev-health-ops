@@ -14,8 +14,9 @@ package operationalordering
 
 import (
 	"fmt"
-	"os"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // Env is the process variable that names the ordering contract.
@@ -93,7 +94,7 @@ func ResolveValue(value string, set bool) (Contract, error) {
 // Resolve is ResolveValue over a lookup (os.LookupEnv when lookup is nil).
 func Resolve(lookup func(string) (string, bool)) (Contract, error) {
 	if lookup == nil {
-		lookup = os.LookupEnv
+		lookup = secrets.ProcessLookup
 	}
 	value, set := lookup(Env)
 	return ResolveValue(value, set)

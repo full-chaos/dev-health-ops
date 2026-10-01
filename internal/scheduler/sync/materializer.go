@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"log/slog"
 	"os"
@@ -952,7 +953,7 @@ func (materializer *NativeMaterializer) stampCredentialFingerprint(ctx context.C
 	if loaded.credentialID != nil && materializer.fingerprintDecryptor == nil {
 		return refuse("no credential decryptor (settings encryption key unavailable)")
 	}
-	loader := syncbudget.Loader{DB: materializer.domainPool, Decryptor: materializer.fingerprintDecryptor, Getenv: os.Getenv}
+	loader := syncbudget.Loader{DB: materializer.domainPool, Decryptor: materializer.fingerprintDecryptor, Getenv: envsecrets.ProcessGetenv}
 	fingerprint, err := loader.PlanFingerprint(ctx, loaded.input.OrgID, loaded.input.IntegrationID, loaded.provider, loaded.credentialID)
 	if err != nil {
 		return refuse(err.Error())

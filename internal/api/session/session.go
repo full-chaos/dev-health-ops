@@ -11,9 +11,9 @@
 package session
 
 import (
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -70,7 +70,7 @@ type handlers struct {
 
 func (d Deps) withDefaults() Deps {
 	if d.Getenv == nil {
-		d.Getenv = os.Getenv
+		d.Getenv = envsecrets.ProcessGetenv
 	}
 	if d.Audit == nil {
 		d.Audit = audit.PGWriter{Now: d.Now}

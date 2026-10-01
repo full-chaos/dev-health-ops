@@ -121,7 +121,7 @@ func deleteConfigFrom(env cli.Env, analyticsDB string) (admin.DeleteOrgConfig, f
 // and salt values, so an error text can have them removed.
 func settingsDecryptor(env cli.Env) (providerfoundation.FernetDecryptor, []string, error) {
 	var decryptor providerfoundation.FernetDecryptor
-	key, _, err := secrets.Resolve("SETTINGS_ENCRYPTION_KEY", env.Lookup)
+	key, _, err := secrets.ResolveSecret("SETTINGS_ENCRYPTION_KEY", env.Lookup)
 	if err != nil {
 		return decryptor, nil, err
 	}

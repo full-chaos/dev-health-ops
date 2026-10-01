@@ -53,6 +53,10 @@ var payloadKnownDefects = map[string]struct{ goText, pythonText string }{
 	"payload_big_int": {`{"i":9007199254740992}`, `{"i":9007199254740993}`},
 }
 
+// refusedBelowClickHouseMin are corpus shapes Python's row holds but the consumer still refuses: their
+// timestamp is before ClickHouse's DateTime64 range, where the Go driver would store 1970 silently.
+var refusedBelowClickHouseMin = map[string]struct{}{"ts_year1": {}}
+
 type parityStreams struct{ fields map[string]string }
 
 func (p *parityStreams) Append(_ context.Context, _ string, fields [][2]string) error {
@@ -83,25 +87,23 @@ func TestConsumerStoresEveryIntakeAcceptedShapeAsPythonStoredIt(t *testing.T) {
 		}
 		stored++
 		t.Run(name, func(t *testing.T) {
-			body, err := json.Marshal(map[string]any{"events": []any{want.Raw}})
-			if err != nil {
-				t.Fatal(err)
+			if _, refused := refusedBelowClickHouseMin[name]; refused {
+				entry := intakeEntryFor(t, want.Raw)
+				handler, err := NewProductTelemetryHandler(&productSink{batch: &productBatch{}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := handler.Handle(context.Background(), entry); !streamrunner.IsPermanent(err) {
+					t.Fatalf("a timestamp before ClickHouse's DateTime64 range: err = %v, want a permanent refusal", err)
+				}
+				return
 			}
-			streams := &parityStreams{}
-			route := producttelemetry.Routes(streams, slog.New(slog.NewTextHandler(io.Discard, nil)))[0]
-			request := httptest.NewRequest(http.MethodPost, route.Pattern, strings.NewReader(string(body)))
-			request.Header.Set("Content-Type", "application/json")
-			recorder := httptest.NewRecorder()
-			route.Handler.ServeHTTP(recorder, request)
-			if recorder.Code != http.StatusAccepted || streams.fields == nil {
-				t.Fatalf("intake did not accept %s: status %d fields %v", name, recorder.Code, streams.fields)
-			}
+			message := intakeEntryFor(t, want.Raw)
 			sink := &productSink{batch: &productBatch{}}
 			handler, err := NewProductTelemetryHandler(sink)
 			if err != nil {
 				t.Fatal(err)
 			}
-			message := streamrunner.Message{Stream: "product-telemetry:h:events", ID: "1-0", Fields: streams.fields}
 			if err := handler.Handle(context.Background(), message); err != nil {
 				t.Fatalf("consumer refused an entry the intake wrote: %v", err)
 			}
@@ -170,4 +172,24 @@ func TestConsumerStillRefusesAMissingOrNullRequiredField(t *testing.T) {
 			}
 		}
 	}
+}
+
+// intakeEntryFor posts one corpus event to the real intake route and returns the exact stream entry it
+// writes.
+func intakeEntryFor(t *testing.T, raw map[string]any) streamrunner.Message {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"events": []any{raw}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	streams := &parityStreams{}
+	route := producttelemetry.Routes(streams, slog.New(slog.NewTextHandler(io.Discard, nil)))[0]
+	request := httptest.NewRequest(http.MethodPost, route.Pattern, strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	route.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted || streams.fields == nil {
+		t.Fatalf("intake did not accept the event: status %d fields %v", recorder.Code, streams.fields)
+	}
+	return streamrunner.Message{Stream: "product-telemetry:h:events", ID: "1-0", Fields: streams.fields}
 }

@@ -29,6 +29,12 @@ var blockedProductPayloadKeys = map[string]struct{}{
 	"email": {}, "name": {}, "userId": {}, "orgId": {}, "url": {}, "query": {}, "search": {}, "stack": {}, "message": {}, "title": {}, "body": {},
 }
 
+// clickHouseMinYear is the first year ClickHouse's DateTime64 holds. An earlier timestamp cannot be
+// stored as sent (the driver writes the zero time as 1970), so the entry is refused as it was before
+// the intake shapes were accepted; the Python consumer's row held the year, whether its insert kept
+// it was not measured (CHAOS-7467 RISK-NOTES).
+const clickHouseMinYear = 1900
+
 // presentString is a required JSON string that may be empty: pydantic's `str` field accepts "" and
 // refuses a missing or null value, and so does this type (Set is false for both).
 type presentString struct {
@@ -169,7 +175,7 @@ func (h *ProductTelemetryHandler) Handle(ctx context.Context, message streamrunn
 }
 
 func validateProductEvent(event productEvent) (string, error) {
-	if _, ok := productTelemetryNames[event.Name]; !ok || !event.SchemaVersion.Set || !event.EventID.Set || !event.Timestamp.Set || !event.SessionID.Set || !event.AnonymousUserID.Set || event.Payload == nil {
+	if _, ok := productTelemetryNames[event.Name]; !ok || !event.SchemaVersion.Set || !event.EventID.Set || !event.Timestamp.Set || event.Timestamp.Time.Year() < clickHouseMinYear || !event.SessionID.Set || !event.AnonymousUserID.Set || event.Payload == nil {
 		return "", &streamrunner.PermanentError{Reason: "invalid_telemetry_event"}
 	}
 	for key, value := range event.Payload {

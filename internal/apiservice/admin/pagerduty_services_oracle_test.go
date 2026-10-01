@@ -375,6 +375,7 @@ func runPagerDutyServicesOracle(t *testing.T, mode, digest string) {
 	}
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden:    golden,
 		Root:      root,
 		JWTKey:    jwtKey,
 		PythonEnv: pythonEnv,

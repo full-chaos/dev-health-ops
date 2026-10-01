@@ -51,6 +51,7 @@ func TestPagerDutyWebhookBindingsVenueOracle(t *testing.T) {
 	adminID, memberID, superID := uuid.MustParse(venueoracle.StableUUID("pd-bind-admin")), uuid.MustParse(venueoracle.StableUUID("pd-bind-member")), uuid.MustParse(venueoracle.StableUUID("pd-bind-super"))
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden:    golden,
 		Root:      root,
 		JWTKey:    jwtKey,
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + pagerDutyBindingsVenueEncryptionKey},

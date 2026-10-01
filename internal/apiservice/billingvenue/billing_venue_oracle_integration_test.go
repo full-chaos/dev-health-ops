@@ -845,7 +845,8 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	}
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Golden: golden,
+		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			return seed.tokenSpecs()
@@ -1002,7 +1003,8 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 	pythonEnv = append(pythonEnv, "VENUE_STRIPE_API_BASE=http://127.0.0.1:9/unreachable")
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Golden: golden,
+		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			ledgerSeed(t, ctx, admin, seed)

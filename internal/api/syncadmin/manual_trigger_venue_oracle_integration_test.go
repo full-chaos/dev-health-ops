@@ -392,6 +392,7 @@ func runManualTriggerOracle(t *testing.T, golden *venueoracle.Golden) {
 	v := newManualIDs(manualRequestNames())
 	t.Setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "6")
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{

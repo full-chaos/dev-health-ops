@@ -23,7 +23,7 @@
         "www-authenticate": "Bearer",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "623173bc-41a0-4d3b-9bbe-fca03c454f06"
+        "x-request-id": "512f4f60-97bc-41ce-8ae0-5e7e1005528f"
       },
       "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
     },
@@ -43,7 +43,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b1ad9c75-b92d-4eb9-bb55-317ed9d8f2f4"
+        "x-request-id": "780e376c-b5b0-4207-978d-5905663bf9f7"
       },
       "body": "{\"detail\":\"Admin access required\"}"
     },
@@ -63,7 +63,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "2a815467-ae81-4490-bd31-bb30e12780ec"
+        "x-request-id": "13571dfe-5fc3-4d01-8d10-91295d63c896"
       },
       "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",8],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
     },
@@ -83,7 +83,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "dda4ac32-4f92-46a8-9398-c25e522af85f"
+        "x-request-id": "9e482aea-a370-4d41-8596-3a7dd7a1602c"
       },
       "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[\"x\"]}]}"
     },
@@ -103,7 +103,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "05043a05-20f8-41b5-8feb-4bde26704655"
+        "x-request-id": "4d44716d-41eb-4fdf-a871-2c12d3073892"
       },
       "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"name\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"provider\"],\"msg\":\"Field required\",\"input\":{}}]}"
     },
@@ -123,7 +123,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "86f576c1-cd0a-45d3-b9a2-8fa81c811108"
+        "x-request-id": "3beb059c-6e6a-473f-b95a-4bc4472eecb6"
       },
       "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"name\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
     },
@@ -143,7 +143,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "beb9fe3a-d85c-4beb-81b2-6b17c4a26385"
+        "x-request-id": "685a2cfc-bed1-4729-904a-2f6c9d784b07"
       },
       "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"credential_id\"],\"msg\":\"Input should be a valid string\",\"input\":5},{\"type\":\"list_type\",\"loc\":[\"body\",\"sync_targets\"],\"msg\":\"Input should be a valid list\",\"input\":\"work-items\"},{\"type\":\"dict_type\",\"loc\":[\"body\",\"sync_options\"],\"msg\":\"Input should be a valid dictionary\",\"input\":[]},{\"type\":\"string_type\",\"loc\":[\"body\",\"schedule_cron\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"string_type\",\"loc\":[\"body\",\"timezone\"],\"msg\":\"Input should be a valid string\",\"input\":[]},{\"type\":\"int_parsing\",\"loc\":[\"body\",\"initial_sync_depth\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"abc\"}]}"
     },
@@ -163,7 +163,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "839384d5-e6ca-4266-b67e-aeef2d8c26e2"
+        "x-request-id": "a08f2421-f336-4c43-8ad3-c212a9129aa8"
       },
       "body": "{\"detail\":[{\"type\":\"list_type\",\"loc\":[\"body\",\"sync_targets\"],\"msg\":\"Input should be a valid list\",\"input\":null},{\"type\":\"dict_type\",\"loc\":[\"body\",\"sync_options\"],\"msg\":\"Input should be a valid dictionary\",\"input\":null}]}"
     },
@@ -183,7 +183,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "466f1e90-2693-438f-ba28-62cc26c662e2"
+        "x-request-id": "1a04ae87-17df-42f8-8539-3c1c1d223e6d"
       },
       "body": "{\"detail\":\"feature_disabled: canonical incident ingestion is disabled (org_override_disabled)\"}"
     },
@@ -203,7 +203,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1b065f8e-24a7-444f-bf4a-1d7ea9d6cfaf"
+        "x-request-id": "cc2346bf-f09a-4753-b3ad-c6ccf6c2ad9f"
       },
       "body": "{\"detail\":\"github/gitlab sync configs require repository selection via POST /sync-configs/batch, or sync_options.all_repos=true\"}"
     },
@@ -223,9 +223,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "643bafa5-113b-4bea-a17e-fabae192e211"
+        "x-request-id": "c1dd600f-78a4-4340-a960-d962973918b3"
       },
-      "body": "{\"id\":\"fe8c0ac9-a773-4856-9a24-a47283cd27ed\",\"name\":\"gh all\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"all_repos\":true,\"schedule_cron\":\"0 */6 * * *\",\"timezone\":\"Europe/Paris\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"8c5994f1-5f70-4d56-bc67-20343d00e939\",\"name\":\"gh all\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"all_repos\":true,\"schedule_cron\":\"0 */6 * * *\",\"timezone\":\"Europe/Paris\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "github malformed work-item option",
@@ -256,9 +256,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5330685a-c462-41fc-8b11-c5064d0b1997"
+        "x-request-id": "569e57fb-350b-432a-b837-aebce8994740"
       },
-      "body": "{\"id\":\"544f2a0c-149d-4821-a510-ab94538470cf\",\"name\":\"gl all\",\"provider\":\"GitLab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"cicd\"],\"sync_options\":{\"all_repos\":true,\"group\":\"acme\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"1d8390ae-8472-4ed3-80f7-f7bed6847842\",\"name\":\"gl all\",\"provider\":\"GitLab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"cicd\"],\"sync_options\":{\"all_repos\":true,\"group\":\"acme\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "jira explicit project",
@@ -276,9 +276,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3c5d706f-3420-4a37-bdfe-8ae5c3963c7a"
+        "x-request-id": "c93a0a6b-6109-4e98-99d8-9d724c11efca"
       },
-      "body": "{\"id\":\"d27037cb-6198-4231-abd9-ed6b53163287\",\"name\":\"jira eng\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"ENG\",\"full_name\":\"Engineering\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"519b190a-c4a9-4cd9-b405-0f81acf8b16c\",\"name\":\"jira eng\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"ENG\",\"full_name\":\"Engineering\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "jira discovered",
@@ -296,9 +296,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "598d40cb-3abb-4979-bf9a-f5232a5bb982"
+        "x-request-id": "e64a54e7-aa29-4d31-87de-eaeffa41a4d9"
       },
-      "body": "{\"id\":\"db0af880-5de1-41fb-ba51-be5846c6b02b\",\"name\":\"jira all\",\"provider\":\"jira\",\"credential_id\":\"099b1037-175b-5156-a66f-00366f3c809e\",\"sync_targets\":[\"work-items\"],\"sync_options\":{\"schedule_cron\":\"0 0 * * 1\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"0a9438e8-2e77-436b-a53e-7102f449f829\",\"name\":\"jira all\",\"provider\":\"jira\",\"credential_id\":\"099b1037-175b-5156-a66f-00366f3c809e\",\"sync_targets\":[\"work-items\"],\"sync_options\":{\"schedule_cron\":\"0 0 * * 1\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "jira discovery refused",
@@ -316,9 +316,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b142046b-7741-4b12-889b-5aea55010eb5"
+        "x-request-id": "07821560-ba5d-4b05-ba16-049a6448f8ec"
       },
-      "body": "{\"id\":\"c2e982bc-cfcc-4c92-9841-21f7df8ba8d5\",\"name\":\"jira bad cred\",\"provider\":\"jira\",\"credential_id\":\"8dee7a01-e5d4-5e74-ba10-4987b825a8c6\",\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"0b7dc174-bc12-404b-aa02-4282257b176d\",\"name\":\"jira bad cred\",\"provider\":\"jira\",\"credential_id\":\"8dee7a01-e5d4-5e74-ba10-4987b825a8c6\",\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "jira inactive credential",
@@ -336,9 +336,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5dc4c4ec-afe5-4063-8ebe-2cfd3fdf6d5a"
+        "x-request-id": "e0010b71-1f6a-490d-8b7a-1033d320308e"
       },
-      "body": "{\"id\":\"30445a18-6677-4cd7-8f5c-7c452b38a500\",\"name\":\"jira inactive cred\",\"provider\":\"jira\",\"credential_id\":\"3b8783cb-7954-53a3-9b36-e3a23ba83e83\",\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"2a98beb0-b457-48ec-98f9-f930bc574df8\",\"name\":\"jira inactive cred\",\"provider\":\"jira\",\"credential_id\":\"3b8783cb-7954-53a3-9b36-e3a23ba83e83\",\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "jira no credential",
@@ -356,9 +356,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "6f0e43ce-9c62-4b8c-a6c0-769df3d922fb"
+        "x-request-id": "967e35e6-71a9-40f2-a699-e8a314111799"
       },
-      "body": "{\"id\":\"89741f9b-0e09-4423-a95a-36163a51242c\",\"name\":\"jira no cred\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"7e116765-9826-468d-8cca-2ba5d3959946\",\"name\":\"jira no cred\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "jira whitespace project",
@@ -376,9 +376,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "780c5f50-3029-44d8-9280-cc99af7d3629"
+        "x-request-id": "c8b64e61-e54d-4fba-be66-9529f87561b3"
       },
-      "body": "{\"id\":\"4d461fbe-5aa9-4793-8199-e187f8dddf92\",\"name\":\"jira blank\",\"provider\":\"Jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"   \"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"c15e83ab-03d1-48df-82ea-709900c1c21e\",\"name\":\"jira blank\",\"provider\":\"Jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"   \"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "linear org-wide",
@@ -396,9 +396,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0c0774e1-3ad9-40c3-9f28-377d6d63b77b"
+        "x-request-id": "6838b820-0fa5-473e-a15a-31739c5e5f02"
       },
-      "body": "{\"id\":\"602e3cfc-9048-4742-83b5-52c809ff42d1\",\"name\":\"linear all\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"auto_import_projects\":true},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"e6b8202b-a4e5-4ef4-9fea-8831987a04ac\",\"name\":\"linear all\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"auto_import_projects\":true},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "linear team",
@@ -416,9 +416,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "4ee3a0b7-c25c-44ea-b784-ddc835c24d4d"
+        "x-request-id": "ce108fda-db53-4268-a776-01dd8658b5cf"
       },
-      "body": "{\"id\":\"846cdb74-149b-480b-9252-ca3fa613f7b3\",\"name\":\"linear team\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"team_id\":7},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"04b20c2c-06ff-4b60-8f09-1dd244331340\",\"name\":\"linear team\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"team_id\":7},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "launchdarkly",
@@ -436,9 +436,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5d533c43-498a-4dba-afcd-c35b574a04b8"
+        "x-request-id": "10b2a8a2-332e-4722-9022-9b978a88768e"
       },
-      "body": "{\"id\":\"65a01c21-c864-4e26-9f6d-93fd33628409\",\"name\":\"ld\",\"provider\":\"launchdarkly\",\"credential_id\":null,\"sync_targets\":[\"feature-flags\"],\"sync_options\":{\"project_key\":\"default\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"1212d908-4680-427b-862d-9209015caf9f\",\"name\":\"ld\",\"provider\":\"launchdarkly\",\"credential_id\":null,\"sync_targets\":[\"feature-flags\"],\"sync_options\":{\"project_key\":\"default\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "pagerduty usable credential",
@@ -456,9 +456,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "b31d34d8-e9cf-4d8e-b57d-8db237180e40"
+        "x-request-id": "3e8ca677-743b-4dd3-9f31-39a7e5460ed9"
       },
-      "body": "{\"id\":\"bca919e8-3d23-478e-8045-cab05b5aca69\",\"name\":\"pd\",\"provider\":\"pagerduty\",\"credential_id\":\"efb0713f-19d9-59ec-bbd1-5a7c0e3119c4\",\"sync_targets\":[\"operational\"],\"sync_options\":{\"service_repository_mappings\":{\"svc\":[\"repo\"]}},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"b043e513-56cd-4204-aac5-6e4d3303936b\",\"name\":\"pd\",\"provider\":\"pagerduty\",\"credential_id\":\"efb0713f-19d9-59ec-bbd1-5a7c0e3119c4\",\"sync_targets\":[\"operational\"],\"sync_options\":{\"service_repository_mappings\":{\"svc\":[\"repo\"]}},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "pagerduty unusable credential",
@@ -476,9 +476,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "980bf1a2-fccc-402c-92db-5d886872bd01"
+        "x-request-id": "734f74a2-3210-4e4f-826b-d0d9eb427e7a"
       },
-      "body": "{\"id\":\"9ca81f22-79ac-47e1-a957-548beca686e0\",\"name\":\"pd bad\",\"provider\":\"pagerduty\",\"credential_id\":\"bea054cf-e6d3-5fed-ab5b-87d3771a09d9\",\"sync_targets\":[\"operational\"],\"sync_options\":{},\"is_active\":false,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":\"2026-09-24T12:34:56.123456Z\",\"last_sync_success\":false,\"last_sync_error\":\"PagerDuty credential account identity is invalid\",\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"0b7ffa5e-72b7-4029-aa4a-cc1cd2df5115\",\"name\":\"pd bad\",\"provider\":\"pagerduty\",\"credential_id\":\"bea054cf-e6d3-5fed-ab5b-87d3771a09d9\",\"sync_targets\":[\"operational\"],\"sync_options\":{},\"is_active\":false,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":\"2026-09-24T12:34:56.123456Z\",\"last_sync_success\":false,\"last_sync_error\":\"PagerDuty credential account identity is invalid\",\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "pagerduty not operational",
@@ -522,9 +522,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "42a344bc-0206-42a3-8bf6-f2db0657ef79"
+        "x-request-id": "2c4676c5-e6c1-40c6-b81a-3296a6a87a13"
       },
-      "body": "{\"id\":\"f1b8de5d-36d0-487f-9c7b-4a74fe236568\",\"name\":\"empty cred id\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"Y\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"c04e56c7-9a83-4287-8e51-22ca18d75075\",\"name\":\"empty cred id\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"Y\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "malformed auto-import flags",
@@ -542,7 +542,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "8b55c27a-2dd9-43b3-87be-8512ad3c23c4"
+        "x-request-id": "e3eb01c2-26bd-4bea-bd8d-cd458824e001"
       },
       "body": "{\"detail\":{\"message\":\"auto-import category flags must be true or false\",\"malformed_auto_import_category_values\":{\"auto_import_teams\":\"yes\",\"auto_import_members\":\"None\"}}}"
     },
@@ -562,7 +562,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "16223d74-9787-421c-8ab3-7f92a790cb7f"
+        "x-request-id": "29c4a4d1-1cb8-477c-bb02-70a806e1a0ed"
       },
       "body": "{\"detail\":{\"message\":\"github does not support the requested auto-import categories\",\"unsupported_auto_import_categories\":{\"projects\":\"GitHub attributes ownership via repos, not projects.\"}}}"
     },
@@ -582,9 +582,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "ebf16ec1-826c-43bb-b909-8bd09df5abc5"
+        "x-request-id": "a09684a7-3c28-4a92-aa96-cbbb81d5c707"
       },
-      "body": "{\"id\":\"6fbdc18a-6ff3-47cd-bf6c-ce2a3452418b\",\"name\":\"depth str\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"D1\",\"initial_sync_depth\":\"20\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"09150d1f-ce7d-4f18-be93-cb3c083f710c\",\"name\":\"depth str\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"D1\",\"initial_sync_depth\":\"20\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "initial depth, float in options",
@@ -602,9 +602,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "1c9c971e-6ffa-42a5-aba7-74f81403c867"
+        "x-request-id": "c4eb779d-a80b-4c87-8c82-645dc949b7a3"
       },
-      "body": "{\"id\":\"31ea832c-0c96-414a-8d03-8b4a4179b48b\",\"name\":\"depth float\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"D2\",\"initial_sync_depth\":29.9},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"73151a9e-5046-4d7b-a026-f7b37cebc7be\",\"name\":\"depth float\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"D2\",\"initial_sync_depth\":29.9},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "initial depth, list in options",
@@ -635,7 +635,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d10dabe9-2a6f-45ff-a773-cb0ac6b87dac"
+        "x-request-id": "b00cb9b1-cc73-4b3a-811a-3c9f7289f9cf"
       },
       "body": "{\"detail\":\"Sync interval 0.08h is below the minimum 0.25h allowed for your tier\"}"
     },
@@ -655,7 +655,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "d0516a58-6323-4687-8f0e-5e8643554a63"
+        "x-request-id": "f4ced863-1fde-4a03-a909-8ac83e2a8079"
       },
       "body": "{\"detail\":\"Invalid cron expression: [60 * * * *] is not acceptable, out of range\"}"
     },
@@ -675,7 +675,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5cc3ca72-1cfa-4ca0-b2f8-8f90fb7cc0ea"
+        "x-request-id": "6bd160b1-5f3d-4314-8d0c-dc8a7f372e9c"
       },
       "body": "{\"detail\":\"Invalid cron expression: 'int' object has no attribute 'lower'\"}"
     },
@@ -695,7 +695,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3fe63147-dd4c-4833-a033-65787ad0cbd4"
+        "x-request-id": "f697b260-4d42-49c8-9f10-0f26f3b3961c"
       },
       "body": "{\"detail\":\"Invalid timezone: 'Mars/Base'\"}"
     },
@@ -728,9 +728,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "5b50215b-ad9c-44b7-b0ab-ef8ab1944a43"
+        "x-request-id": "e29c494e-a915-41a0-a351-cec2631c2911"
       },
-      "body": "{\"id\":\"8bc04bf7-9a17-488a-9659-187254b13df5\",\"name\":\"tz only\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"T3\",\"timezone\":\"Mars/Base\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"d492913a-98ca-47f4-80c9-d4529a064b11\",\"name\":\"tz only\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"T3\",\"timezone\":\"Mars/Base\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "community schedule",
@@ -748,7 +748,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "03fd44fe-914e-4a72-92dd-56ac24c41fc5"
+        "x-request-id": "cbab379e-42ef-4dc1-bc8e-0e517c68954d"
       },
       "body": "{\"detail\":\"scheduled_jobs feature requires Team tier or higher\"}"
     },
@@ -768,7 +768,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "278ae37d-fd3b-4b74-b007-e1a1b152bd02"
+        "x-request-id": "20896033-a6c3-47a6-b42e-ac5f352537bf"
       },
       "body": "{\"detail\":\"Backfill limit exceeded: requested 31 days, limit is 30 days\"}"
     },
@@ -788,9 +788,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "a8deaec4-277d-4bc8-bd82-425108d552df"
+        "x-request-id": "40a218bc-2350-4866-90b8-cacb07abf60f"
       },
-      "body": "{\"id\":\"480ede38-fbc0-4067-8f0f-63120d10d680\",\"name\":\"b ok\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"B3\",\"initial_sync_depth\":30},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"98385b4b-7852-406c-ad2a-30ec802ba40a\",\"name\":\"b ok\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"B3\",\"initial_sync_depth\":30},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "team at the repo limit",
@@ -808,7 +808,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "3888a554-1333-44d4-a00a-ac6ca39c1541"
+        "x-request-id": "4bc294ed-69b1-498b-aef7-6971e08571eb"
       },
       "body": "{\"detail\":\"Limit exceeded: max_repos (11/10)\"}"
     },
@@ -828,9 +828,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "76755508-4670-4994-b166-cd0879c7f8fa"
+        "x-request-id": "442726fc-0f6b-4036-b4df-b4f6f8c10711"
       },
-      "body": "{\"id\":\"6dce8801-d0bd-4720-9dbf-207bca633768\",\"name\":\"c jira\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"c63c9a56-fddd-4f30-88f0-ffaa06f6959a\",\"name\":\"c jira\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "team schedule below its minimum",
@@ -848,7 +848,7 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "e4527f2d-1c77-47ea-a641-7062863a5869"
+        "x-request-id": "4560ce88-3f4e-4e2c-afdc-b42132ec2db9"
       },
       "body": "{\"detail\":\"Limit exceeded: max_repos (11/10)\"}"
     },
@@ -868,9 +868,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "79ffb9ca-140c-4110-a3ff-af44e239f9c8"
+        "x-request-id": "71f6b45f-f7cc-4e27-9618-624d4e805027"
       },
-      "body": "[{\"id\":\"544f2a0c-149d-4821-a510-ab94538470cf\",\"name\":\"gl all\",\"provider\":\"GitLab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"cicd\"],\"sync_options\":{\"all_repos\":true,\"group\":\"acme\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"4d461fbe-5aa9-4793-8199-e187f8dddf92\",\"name\":\"jira blank\",\"provider\":\"Jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"   \"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"fe8c0ac9-a773-4856-9a24-a47283cd27ed\",\"name\":\"gh all\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"all_repos\":true,\"schedule_cron\":\"0 */6 * * *\",\"timezone\":\"Europe/Paris\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"31ea832c-0c96-414a-8d03-8b4a4179b48b\",\"name\":\"depth float\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"D2\",\"initial_sync_depth\":29.9},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"6fbdc18a-6ff3-47cd-bf6c-ce2a3452418b\",\"name\":\"depth str\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"D1\",\"initial_sync_depth\":\"20\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"f1b8de5d-36d0-487f-9c7b-4a74fe236568\",\"name\":\"empty cred id\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"Y\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"db0af880-5de1-41fb-ba51-be5846c6b02b\",\"name\":\"jira all\",\"provider\":\"jira\",\"credential_id\":\"099b1037-175b-5156-a66f-00366f3c809e\",\"sync_targets\":[\"work-items\"],\"sync_options\":{\"schedule_cron\":\"0 0 * * 1\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"c2e982bc-cfcc-4c92-9841-21f7df8ba8d5\",\"name\":\"jira bad cred\",\"provider\":\"jira\",\"credential_id\":\"8dee7a01-e5d4-5e74-ba10-4987b825a8c6\",\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"d27037cb-6198-4231-abd9-ed6b53163287\",\"name\":\"jira eng\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"ENG\",\"full_name\":\"Engineering\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"30445a18-6677-4cd7-8f5c-7c452b38a500\",\"name\":\"jira inactive cred\",\"provider\":\"jira\",\"credential_id\":\"3b8783cb-7954-53a3-9b36-e3a23ba83e83\",\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"89741f9b-0e09-4423-a95a-36163a51242c\",\"name\":\"jira no cred\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"8bc04bf7-9a17-488a-9659-187254b13df5\",\"name\":\"tz only\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"T3\",\"timezone\":\"Mars/Base\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"65a01c21-c864-4e26-9f6d-93fd33628409\",\"name\":\"ld\",\"provider\":\"launchdarkly\",\"credential_id\":null,\"sync_targets\":[\"feature-flags\"],\"sync_options\":{\"project_key\":\"default\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"602e3cfc-9048-4742-83b5-52c809ff42d1\",\"name\":\"linear all\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"auto_import_projects\":true},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"846cdb74-149b-480b-9252-ca3fa613f7b3\",\"name\":\"linear team\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"team_id\":7},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}]"
+      "body": "[{\"id\":\"1d8390ae-8472-4ed3-80f7-f7bed6847842\",\"name\":\"gl all\",\"provider\":\"GitLab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"cicd\"],\"sync_options\":{\"all_repos\":true,\"group\":\"acme\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"c15e83ab-03d1-48df-82ea-709900c1c21e\",\"name\":\"jira blank\",\"provider\":\"Jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"   \"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"8c5994f1-5f70-4d56-bc67-20343d00e939\",\"name\":\"gh all\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"all_repos\":true,\"schedule_cron\":\"0 */6 * * *\",\"timezone\":\"Europe/Paris\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"519b190a-c4a9-4cd9-b405-0f81acf8b16c\",\"name\":\"jira eng\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"ENG\",\"full_name\":\"Engineering\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"0a9438e8-2e77-436b-a53e-7102f449f829\",\"name\":\"jira all\",\"provider\":\"jira\",\"credential_id\":\"099b1037-175b-5156-a66f-00366f3c809e\",\"sync_targets\":[\"work-items\"],\"sync_options\":{\"schedule_cron\":\"0 0 * * 1\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"0b7dc174-bc12-404b-aa02-4282257b176d\",\"name\":\"jira bad cred\",\"provider\":\"jira\",\"credential_id\":\"8dee7a01-e5d4-5e74-ba10-4987b825a8c6\",\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"2a98beb0-b457-48ec-98f9-f930bc574df8\",\"name\":\"jira inactive cred\",\"provider\":\"jira\",\"credential_id\":\"3b8783cb-7954-53a3-9b36-e3a23ba83e83\",\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"7e116765-9826-468d-8cca-2ba5d3959946\",\"name\":\"jira no cred\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"c04e56c7-9a83-4287-8e51-22ca18d75075\",\"name\":\"empty cred id\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"project_key\":\"Y\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"09150d1f-ce7d-4f18-be93-cb3c083f710c\",\"name\":\"depth str\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"D1\",\"initial_sync_depth\":\"20\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"73151a9e-5046-4d7b-a026-f7b37cebc7be\",\"name\":\"depth float\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"D2\",\"initial_sync_depth\":29.9},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"d492913a-98ca-47f4-80c9-d4529a064b11\",\"name\":\"tz only\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"T3\",\"timezone\":\"Mars/Base\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"1212d908-4680-427b-862d-9209015caf9f\",\"name\":\"ld\",\"provider\":\"launchdarkly\",\"credential_id\":null,\"sync_targets\":[\"feature-flags\"],\"sync_options\":{\"project_key\":\"default\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"e6b8202b-a4e5-4ef4-9fea-8831987a04ac\",\"name\":\"linear all\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"auto_import_projects\":true},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"04b20c2c-06ff-4b60-8f09-1dd244331340\",\"name\":\"linear team\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"team_id\":7},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}]"
     },
     {
       "name": "croniter-only alias",
@@ -888,9 +888,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "40ffbcba-0cc1-4b4b-95e5-13730a9dbb81"
+        "x-request-id": "8e3a51b0-f31c-4a53-a842-6051f7073197"
       },
-      "body": "{\"id\":\"3efa843e-a274-482e-b859-d4a4a25a0eb0\",\"name\":\"d alias\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"DA\",\"schedule_cron\":\"@hourly\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"1f8477f0-b37c-4783-abca-6f40d7d8c85f\",\"name\":\"d alias\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"DA\",\"schedule_cron\":\"@hourly\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "croniter-only seconds field",
@@ -908,9 +908,9 @@
         "vary": "Origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
-        "x-request-id": "0069e113-bda6-4134-a284-c58dc59a77fe"
+        "x-request-id": "72fa067f-aade-45b4-8f13-82bab153ad87"
       },
-      "body": "{\"id\":\"b0ad3acd-6150-4922-9a5a-f4bb01c51be8\",\"name\":\"d seconds\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"DS\",\"schedule_cron\":\"0 0 * * * 0\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
+      "body": "{\"id\":\"642e0e34-05ff-4d5b-ae08-8df64b29ce9c\",\"name\":\"d seconds\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"project_key\":\"DS\",\"schedule_cron\":\"0 0 * * * 0\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}"
     },
     {
       "name": "jira explicit project, same name",

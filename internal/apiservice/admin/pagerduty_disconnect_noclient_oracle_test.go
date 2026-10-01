@@ -50,6 +50,7 @@ func TestPagerDutyDisconnectWithoutClientIDVenueOracle(t *testing.T) {
 	adminID := uuid.MustParse(venueoracle.StableUUID("pd-noclient-admin"))
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		// The Python api has no PagerDuty client id: the case under test.

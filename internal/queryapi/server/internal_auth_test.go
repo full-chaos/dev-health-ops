@@ -301,7 +301,10 @@ func TestOnlyInternalPathsReadTheInternalIdentity(t *testing.T) {
 	if checked < 20 {
 		t.Fatalf("scanned %d source files; the scan is not measuring the package", checked)
 	}
-	wantImporters := map[string]bool{"internal_auth.go": true, "server.go": true}
+	// mcp_route.go (CHAOS-7085) reads the headers only for a request marked
+	// by internalidentity.MCP -- the MCP caller-class listener, a port no
+	// Ingress routes to -- and refuses everything else (off_mcp_listener).
+	wantImporters := map[string]bool{"internal_auth.go": true, "server.go": true, "mcp_route.go": true}
 	wantCallers := map[string]bool{"internal_auth.go": true, "query_route.go": true, "buildinfo_route.go": true}
 	if !sameSet(importers, wantImporters) {
 		t.Fatalf("files importing internalidentity: %v, want %v", importers, wantImporters)
@@ -522,6 +525,9 @@ func TestOnlyTheServerPackageImportsTheInternalIdentityPackage(t *testing.T) {
 	want := map[string]bool{
 		"internal/queryapi/server/internal_auth.go": true,
 		"internal/queryapi/server/server.go":        true,
+		// CHAOS-7085: the MCP caller-class route, served only on the MCP
+		// listener (internalidentity.MCP marks it; no Ingress routes to it).
+		"internal/queryapi/server/mcp_route.go": true,
 	}
 	if !sameSet(importers, want) {
 		t.Fatalf("packages importing internalidentity: %v, want %v", importers, want)

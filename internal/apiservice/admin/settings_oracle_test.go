@@ -61,6 +61,7 @@ func runSettingsOracle(t *testing.T, withKey bool, mode, digest string) {
 		pythonEnv = []string{"SETTINGS_ENCRYPTION_KEY=" + settingsVenueEncryptionKey}
 	}
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden:    golden,
 		Root:      root,
 		JWTKey:    jwtKey,
 		PythonEnv: pythonEnv,

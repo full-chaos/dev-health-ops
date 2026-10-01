@@ -50,7 +50,7 @@ const ingestAPIKey = "venue-metrics-ingest-key"
 // then proves nothing.
 func TestCounterParityVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, goldenSpec("counter_parity", "TestCounterParityVenueOracle", "19059a0c2a990430e44ff39f14fcad42412791baae3425cc0c92d3d7781defb5"))
+	golden := venueoracle.OpenGolden(t, goldenSpec("counter_parity", "TestCounterParityVenueOracle", "57bb60df28cb43002eecbbc3ad05be70856e95511969c2a58e3a28e13c6436d7"))
 	nextID := func() func() uuid.UUID {
 		next := 0
 		return func() uuid.UUID {
@@ -65,6 +65,7 @@ func TestCounterParityVenueOracle(t *testing.T) {
 	garbled, notJSON, emptyList, oddProvider := nextID(), nextID(), nextID(), nextID()
 	jwtKey := nextID().String() + nextID().String()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden:    golden,
 		Root:      golden.PythonRoot(t, venueRoot()),
 		JWTKey:    jwtKey,
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + encryptionKey, "INGEST_API_KEYS=" + ingestAPIKey},
@@ -194,7 +195,11 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 	t.Log("\n" + receipt)
 	goMetrics := operator()
 
-	checkPythonMetricsTable(t)
+	// The families the Python api registers at import: listed by the pinned
+	// build's interpreter while recording, frozen in the golden otherwise.
+	checkPythonMetricsTable(t, golden.InspectRows(t, "python metric families", func() string {
+		return listPythonMetricFamilies(t, venue.Root)
+	}))
 
 	for _, counter := range routeCounters {
 		pythonSamples := samples(t, pythonMetrics.Body, counter.metric)
@@ -250,22 +255,11 @@ var tableStatuses = map[string]bool{
 // moves to import time needs its row corrected). Every "ported" or
 // "partial" row must be a counter this oracle compares, and every counter
 // the oracle compares must have such a row.
-func checkPythonMetricsTable(t *testing.T) {
+func checkPythonMetricsTable(t *testing.T, families string) {
 	t.Helper()
-	command := exec.Command("python3", "-c", pythonMetricFamilies)
-	command.Dir = venueRoot()
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(venueRoot(), "src"))
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("list the Python api's metric families: %v", err)
-	}
 	var live map[string]string
-	for _, line := range strings.Split(string(output), "\n") {
-		if rest, ok := strings.CutPrefix(line, "RESULT "); ok {
-			if err := json.Unmarshal([]byte(rest), &live); err != nil {
-				t.Fatal(err)
-			}
-		}
+	if err := json.Unmarshal([]byte(families), &live); err != nil {
+		t.Fatalf("the Python api's metric families %q: %v", families, err)
 	}
 	if len(live) == 0 {
 		t.Fatal("the Python api registered no metric families; the listing did not run")
@@ -324,6 +318,26 @@ func checkPythonMetricsTable(t *testing.T) {
 		}
 	}
 	t.Logf("python_metrics.tsv: %d families (%d lazy); every import-time family of the live Python api is named", len(table), lazy)
+}
+
+// listPythonMetricFamilies runs pythonMetricFamilies with the Python of root
+// (the pinned build while recording) and returns its RESULT object as text.
+func listPythonMetricFamilies(t *testing.T, root string) string {
+	t.Helper()
+	command := exec.Command("python3", "-c", pythonMetricFamilies)
+	command.Dir = root
+	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("list the Python api's metric families: %v", err)
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		if rest, ok := strings.CutPrefix(line, "RESULT "); ok {
+			return rest
+		}
+	}
+	t.Fatal("the Python api's metric family listing printed no RESULT line")
+	return ""
 }
 
 // tableRow is one python_metrics.tsv row: <family> <type> <status>

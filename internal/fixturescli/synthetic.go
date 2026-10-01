@@ -210,7 +210,9 @@ func (table FrozenTable) Structure() string {
 // loader never sends them, because a replayed capture-time value would place the loaded rows behind
 // any reader cursor taken after the capture (team_project_ownership.last_synced, CHAOS-7264).
 var serverStampedColumns = map[string]map[string]bool{
-	"team_project_ownership": {"last_synced": true},
+	"team_project_ownership":         {"last_synced": true},
+	"project_membership_transitions": {"ingested_at": true}, // CHAOS-7265
+	"work_items":                     {"ingested_at": true}, // CHAOS-7265
 }
 
 // WithoutServerStamped is the table without its server-stamped columns, rows included, so an insert

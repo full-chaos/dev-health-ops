@@ -26,7 +26,11 @@
 //
 // The oracle needs the live Python api: Start skips unless
 // DEV_HEALTH_LIVE_PYTHON_ORACLES=1, and ci/check_go.sh live-python-oracles
-// sets it.
+// sets it. A venue built for a frozen golden or a Go-only test
+// (Options.Golden, Options.GoOnly) runs no Python at all: its schemas come
+// from pgmigrate and chmigrate, its tokens from the Go minter and CallPython
+// from the Go ports (gosubstrate.go); a golden's recording builds its schemas
+// the same way, so a recording and its replay read one physical layout.
 package venueoracle
 
 import (
@@ -45,6 +49,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -403,6 +408,17 @@ type Options struct {
 	Seed func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *Venue) map[string]map[string]any
 	// Logger receives the River migration logs (nil = discard).
 	Logger *slog.Logger
+	// Golden is the test's golden, when it has one. Its venue's schemas come
+	// from pgmigrate and chmigrate in both modes, so a recording and its
+	// replay see one physical layout (gosubstrate.go). A frozen golden (a run
+	// that is not recording) also runs no Python at all: the tokens come
+	// from the Go minter and CallPython from the Go ports. A recording run
+	// mints and calls through the pinned build's Python.
+	Golden *Golden
+	// GoOnly is a test that compares nothing with the Python plane (it
+	// writes the Go-only proof, WriteGoOnlyProof): its venue is built without
+	// Python, as a frozen golden's is.
+	GoOnly bool
 }
 
 // Venue is a built venue.
@@ -428,6 +444,10 @@ type Venue struct {
 	clickHouseURI, clickHouseHTTPURI     string
 	PythonClickHouseDB, GoClickHouseDB   string
 	clickHouseAPIRole, clickHouseAPIPass string
+
+	// frozen is a venue built for a frozen golden or a Go-only test: it runs
+	// no Python.
+	frozen bool
 }
 
 // Start builds the venue; see the package comment. It skips unless
@@ -449,18 +469,30 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	python := pyoracle.Resolve(t, options.Root)
-	bin, err := interpreterDir(python)
-	if err != nil {
-		t.Fatalf("venue: %v", err)
+	frozen := options.GoOnly || (options.Golden != nil && !options.Golden.Recording())
+	goSchema := options.GoOnly || options.Golden != nil
+	if options.GoOnly && options.Golden != nil {
+		t.Fatal("venue: a GoOnly venue has no golden: a golden holds the Python plane's answers, which a Go-only test never compares")
 	}
-	// Activate the interpreter's environment as `source bin/activate` does:
-	// its directory goes first on PATH, and the program runs as "python3".
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
-		t.Fatalf("venue: python3 on PATH is %q (%v), want the one in %s", found, err, bin)
+	v := &Venue{Root: options.Root, Tokens: map[string]string{}, Roles: map[string]string{}, frozen: frozen}
+	if !options.GoOnly && options.Golden == nil {
+		liveVenues.Store(t, struct{}{})
+		t.Cleanup(func() { liveVenues.Delete(t) })
 	}
-	v := &Venue{Root: options.Root, Python: filepath.Join(bin, "python3"), Tokens: map[string]string{}, Roles: map[string]string{}}
+	if !frozen {
+		python := pyoracle.Resolve(t, options.Root)
+		bin, err := interpreterDir(python)
+		if err != nil {
+			t.Fatalf("venue: %v", err)
+		}
+		// Activate the interpreter's environment as `source bin/activate` does:
+		// its directory goes first on PATH, and the program runs as "python3".
+		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
+			t.Fatalf("venue: python3 on PATH is %q (%v), want the one in %s", found, err, bin)
+		}
+		v.Python = filepath.Join(bin, "python3")
+	}
 
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -519,7 +551,11 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		}
 	}
 	for _, database := range []string{v.PythonClickHouseDB, v.GoClickHouseDB} {
-		v.migrateClickHouse(t, ctx, database)
+		if goSchema {
+			v.migrateClickHouseGo(t, ctx, database)
+		} else {
+			v.migrateClickHouse(t, ctx, database)
+		}
 	}
 	chRole, err := containers.RoleName("venue_ch_api", instance)
 	if err != nil {
@@ -548,7 +584,11 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		options.PythonEnv...)
 
 	// 1. The real schema, then one seed and its tokens.
-	v.runPython(t, nil, "migrate")
+	if goSchema {
+		v.migratePostgresGo(t, ctx)
+	} else {
+		v.runPython(t, nil, "migrate")
+	}
 	admin, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
@@ -559,7 +599,9 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	}
 	admin.Close()
 	if len(specs) > 0 {
-		if err := json.Unmarshal(v.runPython(t, specs, "mint"), &v.Tokens); err != nil {
+		if frozen {
+			v.Tokens = v.mintGo(t, options.JWTKey, specs)
+		} else if err := json.Unmarshal(v.runPython(t, specs, "mint"), &v.Tokens); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -630,6 +672,20 @@ func (v *Venue) GoAPIDatabaseURI(t *testing.T) string {
 	return withDatabase(t, v.postgresURI, v.GoDB, v.Roles["api"], APIPassword)
 }
 
+// liveVenues holds each test that started a live venue: one built with
+// Python, with no Options.GoOnly and no Options.Golden. A Go-only proof or a
+// frozen golden's answers in such a test would hide that the test still needs
+// Python. A venue a parent test started is not seen from its subtests.
+var liveVenues sync.Map // *testing.T -> struct{}
+
+// liveVenueErr is an error when t started a live venue.
+func liveVenueErr(t *testing.T, what string) error {
+	if _, live := liveVenues.Load(t); live {
+		return fmt.Errorf("%s in a test whose venue was built with Python (Start without Options.GoOnly or Options.Golden): the test still needs Python; pass Options.GoOnly for a Go-only test, or the golden for a frozen one", what)
+	}
+	return nil
+}
+
 // AdminClickHouseURI is the ClickHouse server's admin connection (native
 // protocol), scoped to database.
 func (v *Venue) AdminClickHouseURI(t *testing.T, database string) string {
@@ -672,9 +728,13 @@ type PythonCall struct {
 
 // CallPython runs calls in one Python process with the Python plane's
 // environment (the source database, Valkey and PythonEnv) and returns each
-// result as raw JSON, in order.
+// result as raw JSON, in order. A frozen venue answers them with the Go ports
+// instead (goCallPorts), and fails naming a target that has none.
 func (v *Venue) CallPython(t *testing.T, calls ...PythonCall) []json.RawMessage {
 	t.Helper()
+	if v.frozen {
+		return v.callGo(t, calls)
+	}
 	var out []json.RawMessage
 	if err := json.Unmarshal(v.runPython(t, calls, "call"), &out); err != nil {
 		t.Fatal(err)
@@ -689,6 +749,9 @@ func (v *Venue) CallPython(t *testing.T, calls ...PythonCall) []json.RawMessage 
 // process.
 func (v *Venue) ServePython(t *testing.T, requests []Request) []Response {
 	t.Helper()
+	if v.frozen {
+		t.Fatal("venue: a frozen venue serves no Python plane; its answers come from the golden (Golden.Python)")
+	}
 	var out []Response
 	if err := json.Unmarshal(v.runPython(t, requests, "serve"), &out); err != nil {
 		t.Fatal(err)
@@ -719,6 +782,9 @@ func (v *Venue) ServePythonWithEnv(t *testing.T, extra []string, requests []Requ
 
 func (v *Venue) runPython(t *testing.T, stdin any, args ...string) []byte {
 	t.Helper()
+	if v.frozen {
+		t.Fatalf("venue: a frozen venue runs no Python (python %v)", args)
+	}
 	// Start put the chosen interpreter's directory first on PATH. The
 	// program is the compiled-in pythonProgram; only its mode and the JSON
 	// on stdin vary.
@@ -1222,6 +1288,9 @@ func WriteGoOnlyProof(t *testing.T, reason string) {
 	t.Helper()
 	if strings.TrimSpace(reason) == "" || strings.ContainsAny(reason, "\n\r") {
 		t.Fatal("WriteGoOnlyProof needs a one-line reason naming what the test measures instead of a Python response")
+	}
+	if err := liveVenueErr(t, "a Go-only proof"); err != nil {
+		t.Fatal(err)
 	}
 	writeProofText(t, "go-only: "+reason)
 }

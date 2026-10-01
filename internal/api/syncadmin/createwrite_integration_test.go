@@ -33,7 +33,8 @@ func TestCreateWriteVenueOracleSequenceUnderTheAPIRole(t *testing.T) {
 	org := uuid.New().String()
 	goodCredential, badCredential, otherOrgCredential := uuid.New(), uuid.New(), uuid.New()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root,
+		GoOnly: true,
+		Root:   root,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 			for _, statement := range []struct {

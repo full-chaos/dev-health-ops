@@ -650,12 +650,14 @@ func venuePythonEnvReport(t *testing.T, options Options) {
 // startHead is where the report call goes: the first statement of Start.
 var startHead = regexp.MustCompile(`func Start\(t \*testing\.T, ctx context\.Context, options Options\) \*Venue \{\n\tt\.Helper\(\)\n`)
 
-// legacyPlaneEnv is the statement with which venueoracle.Start built the
-// Python plane's environment in every commit before a golden kept its key. A
-// golden recorded then got exactly this environment around its test's JWT key
-// and PythonEnv; pythonPlaneEnv of the working tree must give the same one (a
-// test in package venueoracle holds that), so the key the working tree
-// computes for a test's Options is the key of what the recording ran under.
+// legacyPlaneEnv is the statement with which venueoracle.Start set the Python
+// plane's environment in every commit before a golden kept its key. For a
+// golden recorded then, the harness set exactly these entries around the
+// test's JWT key and PythonEnv; pythonPlaneEnv of the working tree must give
+// the same ones (a test in package venueoracle holds that), so the key the
+// working tree computes for a test's Options is the key of what the harness
+// set at the recording. What the Python child inherited from the recording
+// process is not in that statement and in no key.
 const legacyPlaneEnv = `v.pythonEnv = append([]string{"PYTHONPATH=" + filepath.Join(options.Root, "src"), "POSTGRES_URI=" + async,
 		"JWT_SECRET_KEY=" + options.JWTKey, "OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
 		"PGBOUNCER_TRANSACTION_MODE=true", "ENVIRONMENT=test", "REDIS_URL=" + v.PythonValkeyURI,
@@ -704,8 +706,8 @@ func sameCode(a, b string) bool {
 	return err == nil && left == right
 }
 
-// harnessEnvErr is an error unless the harness of tree hands the Python plane
-// the environment the harness of root does. A tree from before the key built
+// harnessEnvErr is an error unless the harness of tree sets for the Python
+// plane the environment the harness of root sets. A tree from before the key built
 // it in Start with the legacy statement; a later tree builds it in
 // pythonPlaneEnv, which must be the function of root. A tree that does
 // neither cannot be shown to have recorded under today's harness settings.
@@ -717,7 +719,7 @@ func harnessEnvErr(root, tree string) error {
 	}
 	if statement := planeEnvStatement.Find(start); statement != nil {
 		if !sameCode(string(statement), legacyPlaneEnv) {
-			return errors.New("the harness of that commit handed the Python plane another environment than the one known for goldens from before the key")
+			return errors.New("the harness of that commit set for the Python plane another environment than the one known for goldens from before the key")
 		}
 		return nil
 	}
@@ -731,7 +733,7 @@ func harnessEnvErr(root, tree string) error {
 	}
 	then, now := planeEnvFunction.Find(theirs), planeEnvFunction.Find(ours)
 	if then == nil || now == nil || !sameCode(string(then), string(now)) {
-		return errors.New("the harness of that commit handed the Python plane another environment than the harness of the working tree does")
+		return errors.New("the harness of that commit set for the Python plane another environment than the harness of the working tree does")
 	}
 	return nil
 }

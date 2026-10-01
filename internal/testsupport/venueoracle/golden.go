@@ -172,8 +172,8 @@ type goldenHeader struct {
 	// PassedEnv is the sorted names of the ambient variables the recorder
 	// passed to the recording beyond its fixed set (GoldenSpec.PassEnv).
 	PassedEnv []string `json:"passed_env,omitempty"`
-	// PythonEnv is the key of the environment the venue handed to the Python
-	// plane when the answers were recorded (pythonEnvKey over pythonPlaneEnv:
+	// PythonEnv is the key of the environment Start set for the Python plane
+	// when the answers were recorded (pythonEnvKey over pythonPlaneEnv:
 	// the harness's settings, Options.JWTKey and Options.PythonEnv):
 	// a frozen run with other settings is refused instead of being served
 	// answers the real Python api would not give under them.

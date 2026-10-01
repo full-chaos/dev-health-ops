@@ -486,8 +486,9 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		t.Fatal("venue: a GoOnly venue has no golden: a golden holds the Python plane's answers, which a Go-only test never compares")
 	}
 	if options.Golden != nil {
-		// The environment this venue hands to the Python plane is part of the
-		// golden's key: the harness's settings, the JWT key and PythonEnv.
+		// The environment this venue sets for the Python plane is part of the
+		// golden's key: the harness's settings, the JWT key and PythonEnv. What
+		// the child inherits from the test process is not (pythonPlaneEnv).
 		if err := options.Golden.bindPythonEnv(pythonPlaneEnv(options, nil)); err != nil {
 			t.Fatal(err)
 		}

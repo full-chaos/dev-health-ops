@@ -28,13 +28,19 @@ var perRunPythonEnv = map[string]string{
 	"VENUE_STRIPE_API_BASE":               "the address of the test's fake Stripe server",
 }
 
-// pythonPlaneEnv is the whole environment Start hands to the Python plane, in
-// the one place both its users read: Start builds the plane from it, and the
-// golden's key is taken over it, so nothing reaches the Python plane that the
-// key does not hold. It is the harness's own settings, the test's JWT key
-// (Options.JWTKey), and the test's PythonEnv last (a later entry wins).
-// perRun holds the values made for one run (the venue's databases, cache and
-// checkout); the key needs none of them, a per-run name is keyed by name only.
+// pythonPlaneEnv is the environment Start sets for the Python plane, in the
+// one place both its users read: Start builds the plane with it, and the
+// golden's key is taken over it. It is the harness's own settings, the test's
+// JWT key (Options.JWTKey), and the test's PythonEnv last (a later entry
+// wins). perRun holds the values made for one run (the venue's databases,
+// cache and checkout); the key needs none of them, a per-run name is keyed by
+// name only.
+//
+// It is NOT everything the Python process sees: the child also inherits the
+// test process's environment (the shell's or the CI job's variables, and
+// every variable a test sets with t.Setenv), and that inherited part is in no
+// key. A changed inherited value that changes what Python answers, and not
+// what Go answers, still passes a frozen run.
 func pythonPlaneEnv(options Options, perRun map[string]string) []string {
 	return append([]string{"PYTHONPATH=" + perRun["PYTHONPATH"], "POSTGRES_URI=" + perRun["POSTGRES_URI"],
 		"JWT_SECRET_KEY=" + options.JWTKey, "OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",

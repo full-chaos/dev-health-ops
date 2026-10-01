@@ -267,12 +267,13 @@ func TestStartRefusesAGoldenRecordedUnderOtherPythonSettings(t *testing.T) {
 	}
 }
 
-// The key is taken over the whole environment the Python plane gets: the
-// harness's own settings, the JWT key and PythonEnv. And that environment is
+// The key is taken over the environment Start sets for the Python plane: the
+// harness's own settings, the JWT key and PythonEnv (not over what the child
+// inherits from the test process). And that environment is
 // the one Start built before a golden kept its key, entry for entry: a golden
 // from before the key can only be given the key of today's environment
 // because the two are the same.
-func TestThePlaneEnvironmentIsKeyedWholeAndIsTheOneOfTheGoldensFromBeforeTheKey(t *testing.T) {
+func TestTheEnvironmentStartSetsIsKeyedAndIsTheOneOfTheGoldensFromBeforeTheKey(t *testing.T) {
 	options := Options{JWTKey: "jwt", PythonEnv: []string{"TRIAL_DAYS=7", "ENVIRONMENT=other"}}
 	perRun := map[string]string{"PYTHONPATH": "/checkout/src", "POSTGRES_URI": "postgresql+asyncpg://db", "REDIS_URL": "redis://cache", "CLICKHOUSE_URI": "http://ch"}
 	want := []string{"PYTHONPATH=/checkout/src", "POSTGRES_URI=postgresql+asyncpg://db",

@@ -714,8 +714,8 @@ func TestTheStartOfThisTreeHasTheFormTheReportIsPutInto(t *testing.T) {
 	}
 }
 
-// The harness of a recording commit must have handed the Python plane the
-// environment the working tree's harness does: the legacy statement in Start
+// The harness of a recording commit must have set for the Python plane the
+// environment the working tree's harness sets: the legacy statement in Start
 // for a commit from before the key, the same pythonPlaneEnv after it.
 func TestTheHarnessOfARecordingCommitMustHandThePythonPlaneTheSameEnvironment(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
@@ -773,7 +773,7 @@ func TestTheHarnessOfARecordingCommitMustHandThePythonPlaneTheSameEnvironment(t 
 	// The default reader of the declared keys makes that check before it runs any test of a recording commit's tree.
 	other := tree(strings.Replace(legacy, "ENVIRONMENT=test", "ENVIRONMENT=dev", 1), "")
 	if keys, err := declaredKeys(Config{Root: root, Package: "./internal/testsupport/venueoracle/", Test: "^TestNone$"}, other); err == nil || !strings.Contains(err.Error(), "another environment than the one known") || keys != nil {
-		t.Fatalf("the keys of a tree whose harness handed Python another environment were read: %v %v", keys, err)
+		t.Fatalf("the keys of a tree whose harness set another environment for Python were read: %v %v", keys, err)
 	}
 }
 

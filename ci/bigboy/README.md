@@ -73,14 +73,19 @@ route prod may not have. The check is on the paths the rules match, not on the t
 - An allow-list entry may name its backend: `service: query-api`. The router then sends that
   path to query-api and leaves it out of the Python rule, and the entry counts as a Go plane path
   in this check, on whichever list it is: the same path still on Python on another list is half
-  a change and is refused. Such an entry must be one path (`Exact`, or an anchored
-  `ImplementationSpecific`); a `Prefix` is refused. It must also be a path the ops chart
-  renders: not `/`, no `.` or `..` segment, and for `Exact` the chart's literal form.
-- A second refusal, `one path, a backend that differs by host`: an entry that names query-api
-  on one allow-list while another allow-list does not name the path at all. Each list is the
-  list of prod hosts, so prod would answer the path from query-api on one host and from the Go
-  api's default on another. This router has one host and cannot show both. The entry must be
-  on every allow-list: the shared one and each host's own.
+  a change and is refused. Such an entry must be ANCHORED (`ImplementationSpecific`,
+  `/literal$`, no `.` or `..` segment): the one shape that is one path on every host. An
+  `Exact` or `Prefix` entry is refused: the chart reads those by the host they are on.
+- A second refusal, `one path, a backend that differs by host`. This router has one host and
+  prod has several, so it can prove the backend of such a path only when every host that
+  serves the api gives it that backend. Each host of `ops.ingress.hosts` must be one of two
+  kinds: a host that carries the entry on the allow-list it uses (the shared one if it opts in
+  with `pythonAllowList: true`, or its own) and has no path of its own beside `/`; or a web
+  host (all its paths go to `web`). Any other host is refused. A list that no host uses is not
+  read: the chart renders nothing from it.
+- This generator does not read the chart's rules a second time for such an entry: a shape it
+  would have to read the way the chart does is refused. The shape in use passes: a public api
+  host on the shared list, an in-cluster api host with its own list, a web host.
 - One more refusal, `one path, two Ingress objects`: an entry that names query-api while
   `ingress.goApiPaths` or `ingress.queryApiPaths` also claims the path. Prod renders the
   allow-list in one Ingress object and the path tables in others, and its ingress admission

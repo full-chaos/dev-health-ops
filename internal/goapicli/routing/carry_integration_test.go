@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 )
 
 // The deployed process in these tests computes a digest this binary does
@@ -549,4 +550,87 @@ func TestStatusSaysWhenItsClassificationIsAnAssumptionNotAReading(t *testing.T) 
 	if strings.Contains(upOut, "that is an assumption, not a reading of what is live") {
 		t.Fatalf("the fallback caveat must not print when the deployed process answered:\n%s", upOut)
 	}
+}
+
+func seedLiveClassRow(t *testing.T, dsn, operation, mode string) {
+	t.Helper()
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	digest := mcpclass.DocumentDigest()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+		carryDeployedSchemaDigest, digest, operation, verbTestBuild); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build,
+			 owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', $5, 100, 'the original class decision', 'operator')`,
+		carryDeployedSchemaDigest, digest, operation, verbTestBuild, mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// `carry -operations mcp:<root>` is the selective carry of a class row: the verb
+// resolves the filter by the class's own rules (the root is in no catalog), carries
+// exactly the named class row and nothing else, and refuses a filter that mixes the
+// two kinds or names a root outside the allowlist.
+func TestCarryOperationsFilterCarriesANamedMCPClassRow(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := carryTestDocumentDigest()
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	documentsPath := writeDocumentsDump(t, map[string]string{verbTestOperation: carryTestDocument})
+	t.Setenv(bearerEnvVar, verbTestBearer)
+	server := startQueryAPI(t, carryDeployedSchemaDigest, map[string]string{verbTestOperation: digest})
+	seedLiveRow(t, dsn, digest, "canary")
+	seedLiveClassRow(t, dsn, "mcp:hotspots", "canary")
+	seedLiveClassRow(t, dsn, "mcp:analytics", "canary")
+
+	for _, bad := range []string{"mcp:hotspots," + verbTestOperation, "mcp:dataHealth", "mcp:home"} {
+		if _, _, err := captureVerb(t, carryArgs(server, dsn, catalogPath, documentsPath, "-operations", bad)...); err == nil {
+			t.Fatalf("-operations %q was accepted", bad)
+		}
+	}
+	if got := countRowsAt(t, dsn, localSchemaDigest()); got != 0 {
+		t.Fatalf("a refused carry wrote %d row(s)", got)
+	}
+
+	out, errOut, err := captureVerb(t, carryArgs(server, dsn, catalogPath, documentsPath, "-operations", "mcp:hotspots")...)
+	if err != nil {
+		t.Fatalf("carry -operations mcp:hotspots: %v\nstdout:%s\nstderr:%s", err, out, errOut)
+	}
+	carried := operationsAt(t, dsn, localSchemaDigest())
+	if len(carried) != 1 || carried[0] != "mcp:hotspots" {
+		t.Fatalf("rows at this binary's digest = %v, want exactly mcp:hotspots (not the sibling class row, not the document row)\nstdout:%s", carried, out)
+	}
+}
+
+func operationsAt(t *testing.T, dsn, schemaDigest string) []string {
+	t.Helper()
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	rows, err := pool.Query(ctx, `SELECT selected_operation FROM go_api_routing_state WHERE schema_digest = $1 ORDER BY 1`, schemaDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var op string
+		if err := rows.Scan(&op); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, op)
+	}
+	return out
 }

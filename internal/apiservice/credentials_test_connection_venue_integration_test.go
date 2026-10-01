@@ -34,7 +34,7 @@ import (
 
 // connectionTestOracleGoldenDigest is the SHA-256 pinned for the connection
 // test route's oracle.
-const connectionTestOracleGoldenDigest = "d394ad275cb58cbeb3e07dd152660047ca6df3ea2d96b369e41e01c71cf9b184"
+const connectionTestOracleGoldenDigest = "cfef12dbe9723569aa8591710fa8d593cb0d0375c6013b9aa7b7ef0cf07d1e2f"
 
 // probeStub is the provider both planes reach for the credential connection
 // test. Responses are chosen by the credential the request carries (its token

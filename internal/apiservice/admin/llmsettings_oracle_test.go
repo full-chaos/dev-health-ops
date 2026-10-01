@@ -35,8 +35,8 @@ const llmVenueOperatorMax = "10000000"
 // keys on (key/token/secret/password/api/auth/access/client/passwd), each on
 // its own declaration line with no such word sharing the line.
 const (
-	llmSettingsRoutesEncryptedGoldenDigest    = "35a7b8c5a64b9ab4ddcf97d59ecbb787eb2be349191176df02fd3d731e6b75c0"
-	llmSettingsRoutesNoEncryptionGoldenDigest = "180f0262b7d7da2f56590c2b4f00ed46306c26dfd9e0f94783e9037d6acfc431"
+	llmSettingsRoutesEncryptedGoldenDigest    = "e50536c6c9448be20fd2e3694cb42670b22b1cf68d090809904073040f7fdf81"
+	llmSettingsRoutesNoEncryptionGoldenDigest = "8c6aa9f2083adc58c6a1787be353d890a24f95f2ef56fb8795142363a45520ac"
 )
 
 func TestLLMSettingsRoutesVenueOracle(t *testing.T) {

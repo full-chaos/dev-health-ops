@@ -3,7 +3,8 @@
     "test": "TestPagerDutyServicesWithoutOAuthAppVenueOracle",
     "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
     "producer_digest": "c0f6de73e34fa0583fea646a33b5f133309c1639cf5fc59dd5ebe0f439faed19",
-    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestPagerDutyServicesWithoutOAuthAppVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestPagerDutyServicesWithoutOAuthAppVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "7243758297ddb1c50a97a437f641b8969ce703b56e9a5c6decaf9454c8500e67"
   },
   "requests": [
     {

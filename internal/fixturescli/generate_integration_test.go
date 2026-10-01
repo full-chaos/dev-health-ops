@@ -143,6 +143,91 @@ func producedWorld(t *testing.T, org string, p GenerateParams, at time.Time) (ta
 	return tables, ch.httpDSN, started, finished
 }
 
+// serverStampProblems lists every server-stamped column (serverStampedColumns) of a table the
+// producer wrote whose values are not all inside the run's real-clock window. Such a column is left
+// out of a dump, because the server writes it at insert time, so it is outside the comparison by
+// value and this is the only place its class is held: a column default that stamps another time (a
+// constant, a date in the future) or a writer that sends its own value would otherwise pass.
+func serverStampProblems(t *testing.T, dsn string, from, to time.Time) []string {
+	t.Helper()
+	var names []string
+	for table, columns := range serverStampedColumns {
+		for column := range columns {
+			names = append(names, table+"."+column)
+		}
+	}
+	sort.Strings(names)
+	var problems []string
+	for _, name := range names {
+		table, column, _ := strings.Cut(name, ".")
+		answer := strings.Split(strings.TrimSpace(clickHouseHTTP(t, dsn, fmt.Sprintf(
+			"SELECT count(), countIf(`%[2]s` >= fromUnixTimestamp64Milli(%[3]d, 'UTC') AND `%[2]s` <= fromUnixTimestamp64Milli(%[4]d, 'UTC')), toString(min(`%[2]s`)), toString(max(`%[2]s`)) FROM `%[1]s` FORMAT TSV",
+			table, column, from.Add(-time.Second).UnixMilli(), to.Add(time.Second).UnixMilli()))), "\t")
+		if len(answer) != 4 {
+			problems = append(problems, fmt.Sprintf("%s (%s): the stamp query answered %q", name, serverStamp, answer))
+			continue
+		}
+		if answer[0] != answer[1] {
+			problems = append(problems, fmt.Sprintf("%s (%s): %s of %s rows are stamped inside the run's clock window %s .. %s; the column holds %s .. %s",
+				name, serverStamp, answer[1], answer[0], from.Format(producerClockLayout), to.Format(producerClockLayout), answer[2], answer[3]))
+		}
+	}
+	return problems
+}
+
+// A server-stamped column is held to the run's clock window on the live rows: a row stamped by the
+// server inside the window is no problem; a column default that stamps another time, and a writer
+// that sends its own value, are each reported for the table and column they are in.
+func TestServerStampProblemsHoldEveryStampedColumnToTheRunsWindow(t *testing.T) {
+	ch := startClickHouse(t)
+	requireUTCServer(t, ch.httpDSN)
+	var names []string
+	for table, columns := range serverStampedColumns {
+		for column := range columns {
+			names = append(names, table+"."+column)
+		}
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		t.Fatal("no server-stamped column: the check would hold nothing")
+	}
+	// No row: nothing to hold.
+	from := time.Now().UTC()
+	if problems := serverStampProblems(t, ch.httpDSN, from, from); len(problems) != 0 {
+		t.Fatalf("empty tables: %v", problems)
+	}
+	// One row per table that names no stamped column: the server stamps it now.
+	for table := range serverStampedColumns {
+		clickHouseHTTP(t, ch.httpDSN, "INSERT INTO `"+table+"` (org_id) VALUES ('11111111-2222-4333-8444-555555555555')")
+	}
+	to := time.Now().UTC()
+	if problems := serverStampProblems(t, ch.httpDSN, from, to); len(problems) != 0 {
+		t.Fatalf("rows the server stamped inside the window are reported: %v", problems)
+	}
+	// The same rows, asked about a window that ended before they were written, and one that starts after.
+	for name, window := range map[string][2]time.Time{"an earlier window": {from.Add(-time.Hour), from.Add(-time.Minute)}, "a later window": {to.Add(time.Minute), to.Add(time.Hour)}} {
+		problems := serverStampProblems(t, ch.httpDSN, window[0], window[1])
+		if len(problems) != len(names) {
+			t.Fatalf("%s: %d problems for %d stamped columns: %v", name, len(problems), len(names), problems)
+		}
+		for index, column := range names {
+			if !strings.HasPrefix(problems[index], column+" (server-stamp): 0 of 1 rows") {
+				t.Fatalf("%s: problem %q does not name %s and its rows", name, problems[index], column)
+			}
+		}
+	}
+	// A default that stamps a constant in the future, and a writer that sends its own old value: one
+	// more row each, in two of the tables; the third stays clean.
+	clickHouseHTTP(t, ch.httpDSN, "ALTER TABLE work_items MODIFY COLUMN ingested_at DEFAULT toDateTime64('2099-01-01 00:00:00', 3, 'UTC')")
+	clickHouseHTTP(t, ch.httpDSN, "INSERT INTO work_items (org_id) VALUES ('11111111-2222-4333-8444-555555555555')")
+	clickHouseHTTP(t, ch.httpDSN, "INSERT INTO team_project_ownership (org_id, last_synced) VALUES ('11111111-2222-4333-8444-555555555555', toDateTime64('2000-01-01 00:00:00', 3, 'UTC'))")
+	problems := serverStampProblems(t, ch.httpDSN, from, time.Now().UTC())
+	if len(problems) != 2 || !strings.HasPrefix(problems[0], "team_project_ownership.last_synced (server-stamp): 1 of 2 rows") || !strings.Contains(problems[0], "the column holds 2000-01-01") ||
+		!strings.HasPrefix(problems[1], "work_items.ingested_at (server-stamp): 1 of 2 rows") || !strings.Contains(problems[1], ".. 2099-01-01") {
+		t.Fatalf("a future default and a sent old value: %q", problems)
+	}
+}
+
 // worldColumns reads a table's columns in order. The server must run in UTC, so a DateTime without
 // a zone is UTC too; an alias or ephemeral column would not round-trip and is refused, a materialized one is recomputed by the insert.
 func worldColumns(t *testing.T, dsn, table string) []FrozenColumn {
@@ -313,11 +398,13 @@ func TestFreezeGenerateWorlds(t *testing.T) {
 	produced := make([][]WorldTable, len(generateParameterSets))
 	var unstable []string
 	for index, set := range generateParameterSets {
-		tables, _, started, finished := producedWorld(t, set.Org, set.Params, frozenAt)
-		again, _, againStarted, againFinished := producedWorld(t, set.Org, set.Params, frozenAt)
+		tables, dsn, started, finished := producedWorld(t, set.Org, set.Params, frozenAt)
+		stampProblems := serverStampProblems(t, dsn, started, finished)
+		again, againDSN, againStarted, againFinished := producedWorld(t, set.Org, set.Params, frozenAt)
+		stampProblems = append(stampProblems, serverStampProblems(t, againDSN, againStarted, againFinished)...)
 		content, problems := worldContent(tables, started, finished)
 		againContent, againProblems := worldContent(again, againStarted, againFinished)
-		moved := append(append(contentDiff(againContent, content), problems...), againProblems...)
+		moved := append(append(append(contentDiff(againContent, content), problems...), againProblems...), stampProblems...)
 		if len(moved) > 0 {
 			unstable = append(unstable, fmt.Sprintf("%s:\n%s", set.Params, strings.Join(moved, "\n")))
 		}
@@ -543,6 +630,8 @@ func TestGenerateVenueOracleMatchesThePythonProducer(t *testing.T) {
 		// values of every column. The classified unpinned columns (a server stamp, a clock read the
 		// harness cannot pin, a random id) are checked against their class instead.
 		got, problems := worldContent(produced, started, finished)
+		// The server-stamped columns are not in a world: their class is held here, on the live rows.
+		problems = append(problems, serverStampProblems(t, ch.httpDSN, started, finished)...)
 		want, frozenProblems := worldContent(world.Tables, frozenAt, frozenAt.Add(frozenStampWindow))
 		if moved := append(append(contentDiff(got, want), problems...), frozenProblems...); len(moved) > 0 {
 			t.Fatalf("%s: the live Python producer, pinned to the world's frozen_at %s, does not write the frozen world; the world is stale, re-freeze it (TestFreezeGenerateWorlds):\n%s",

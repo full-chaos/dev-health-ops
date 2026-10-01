@@ -11,7 +11,6 @@ each responsible for one table family:
   CIMixin                   — CI/CD, deploy, incident, testops pipeline/test/coverage,
                               release confidence, feature flags, telemetry, release impact
   DoraMixin                 — DORA metrics
-  WellbeingMixin            — user metrics, quality drag, pipeline stability
   InvestmentMixin           — investment classifications/metrics, work-unit investments
   WorkGraphMixin            — work graph edges, work items, git/repo/file metrics, forecasts
   AIAttributionMixin        — AI attribution records (ai_attribution table)
@@ -30,7 +29,6 @@ each responsible for one table family:
   CIMixin               — CI/CD, deploy, incident, testops pipeline/test/coverage,
                           release confidence, feature flags, telemetry, release impact
   DoraMixin             — DORA metrics
-  WellbeingMixin        — user metrics, quality drag, pipeline stability
   InvestmentMixin       — investment classifications/metrics, work-unit investments
   WorkGraphMixin        — work graph edges, work items, git/repo/file metrics, forecasts
   AIAttributionMixin    — AI attribution records (ai_attribution table)
@@ -55,7 +53,6 @@ from dev_health_ops.metrics.sinks.clickhouse.recommendations import Recommendati
 from dev_health_ops.metrics.sinks.clickhouse.team_cognitive_load import (
     TeamCognitiveLoadMixin,
 )
-from dev_health_ops.metrics.sinks.clickhouse.wellbeing import WellbeingMixin
 from dev_health_ops.metrics.sinks.clickhouse.work_graph import WorkGraphMixin
 
 
@@ -71,7 +68,6 @@ class ClickHouseMetricsSink(
     CompoundingRiskMixin,
     TeamCognitiveLoadMixin,
     DoraMixin,
-    WellbeingMixin,
     InvestmentMixin,
     LLMTokenUsageMixin,
     WorkGraphMixin,

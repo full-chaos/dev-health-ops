@@ -1,0 +1,216 @@
+package venueoracle
+
+import (
+	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// mintJWT is a token with the given signature text, built at test time so no
+// token-shaped string is in this source.
+func mintJWT(header, claims, signature string) string {
+	enc := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+	return enc(header) + "." + enc(claims) + "." + enc(signature)
+}
+
+// tokenSamples holds one planted token per shape, assembled at run time.
+func tokenSamples() map[string]string {
+	rep := strings.Repeat
+	return map[string]string{
+		"jwt":                      mintJWT(`{"alg":"HS256","typ":"JWT"}`, `{"sub":"u1","iat":1}`, "sig"),
+		"github-token":             "gh" + "p_" + rep("a", 36),
+		"github-fine-grained-pat":  "github" + "_pat_" + rep("b", 30),
+		"gitlab-pat":               "gl" + "pat-" + rep("c", 24),
+		"slack-token":              "xo" + "xb-" + rep("1", 14),
+		"stripe-key":               "sk" + "_live_" + rep("d", 20),
+		"aws-access-key":           "AK" + "IA" + rep("E", 16),
+		"google-api-key":           "AI" + "za" + rep("f", 35),
+		"private-key-block":        "-----BEGIN " + "RSA PRIVATE KEY-----",
+		"anthropic-key":            "sk-" + "ant-" + rep("g", 24),
+		"openai-key":               "sk-" + rep("h", 40),
+		"linear-key":               "lin" + "_api_" + rep("i", 36),
+		"authorization-credential": "Bear" + "er " + rep("j", 30),
+	}
+}
+
+func TestEveryTokenShapeIsFoundAndNamed(t *testing.T) {
+	samples := tokenSamples()
+	names := TokenShapeNames()
+	if len(names) != 13 || len(samples) != 13 {
+		t.Fatalf("shapes = %d, samples = %d, want 13 each", len(names), len(samples))
+	}
+	for _, name := range names {
+		sample, ok := samples[name]
+		if !ok {
+			t.Fatalf("no planted sample for shape %q", name)
+		}
+		found := strings.Join(TokenShapesIn(`{"body":"x `+sample+` y"}`), ",")
+		if !strings.Contains(found, name) {
+			t.Errorf("a planted %s was not found (found %q)", name, found)
+		}
+		if got := TokenShapesIn("a plain body with a stable id 3f2a9c10-0000-5000-8000-000000000001"); len(got) != 0 {
+			t.Errorf("a stable id read as a token: %v", got)
+		}
+	}
+}
+
+func TestProjectionDropsSignatureAndVolatileValuesAndKeepsTheRest(t *testing.T) {
+	a := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","role":"admin","iat":100,"exp":200,"jti":"x","n":3}`, "signature-one")
+	b := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","role":"admin","iat":999,"exp":5000,"jti":"y","n":3}`, "signature-two")
+	other := mintJWT(`{"alg":"HS256"}`, `{"sub":"u2","role":"admin","iat":100,"exp":200,"jti":"x","n":3}`, "signature-one")
+	pa, pb, po := ProjectTokens(`{"t":"`+a+`"}`), ProjectTokens(`{"t":"`+b+`"}`), ProjectTokens(`{"t":"`+other+`"}`)
+	if pa != pb {
+		t.Fatalf("two tokens of one caller project differently:\n%s\n%s", pa, pb)
+	}
+	if pa == po {
+		t.Fatal("a different subject projects the same")
+	}
+	for _, want := range []string{"sub=string:u1", "role=string:admin", "iat=number:", "exp=number:", "jti=string:", "n=number:3", "hdr.alg=string:HS256"} {
+		if !strings.Contains(pa, want) {
+			t.Errorf("projection %s lacks %q", pa, want)
+		}
+	}
+	if strings.Contains(pa, "signature") || strings.Contains(pa, "100") {
+		t.Errorf("projection keeps a signature or a volatile value: %s", pa)
+	}
+	if found := TokenShapesIn(pa); len(found) > 0 {
+		t.Errorf("a projection still holds a token shape: %v", found)
+	}
+	if again := ProjectTokens(pa); again != pa {
+		t.Errorf("projection is not idempotent:\n%s\n%s", pa, again)
+	}
+	if strings.ContainsAny(strings.TrimPrefix(strings.TrimSuffix(pa, `"}`), `{"t":"`), `"\`) {
+		t.Errorf("projection breaks the surrounding JSON string: %s", pa)
+	}
+}
+
+func TestTheRecorderRefusesACandidateHoldingATokenShape(t *testing.T) {
+	final := filepath.Join(t.TempDir(), "g.json")
+	for name, sample := range tokenSamples() {
+		golden, err := openGolden(GoldenSpec{Path: final, PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		golden.recorded.Header.ProducerDigest = strings.Repeat("c", 64)
+		golden.recorded.Requests = []goldenRequest{{Name: "a", Body: "x " + sample}}
+		if _, err := golden.writeCandidate(false); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: the recorder wrote a candidate holding it: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(final + GoldenCandidateSuffix); err == nil {
+		t.Fatal("a candidate holding a token is on disk")
+	}
+}
+
+func TestRecordingProjectsAJWTAndScrubsWhatTheSpecNames(t *testing.T) {
+	final := filepath.Join(t.TempDir(), "g.json")
+	scrub := func(text string) string { return strings.ReplaceAll(text, "opaque-session-12345", "<session>") }
+	golden, err := openGolden(GoldenSpec{Path: final, PythonBuild: goldenBuild, Recipe: "record it", Scrub: scrub}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":7}`, "sig")
+	got := golden.projectResponse(Response{Status: 200, Headers: map[string]string{"set-cookie": "session=opaque-session-12345; token=" + token}, Body: `{"access_token":"` + token + `"}`})
+	if found := TokenShapesIn(got.Body + got.Headers["set-cookie"]); len(found) > 0 {
+		t.Fatalf("projected answer holds %v", found)
+	}
+	if !strings.Contains(got.Headers["set-cookie"], "session=<session>;") || !strings.Contains(got.Body, "sub=string:u1") {
+		t.Fatalf("projection or scrub missing: %+v", got)
+	}
+}
+
+// TestDiffComparesBothPlanesAsProjected is the Go side of the projection: the
+// frozen answer holds a projected token, the Go plane mints a fresh one.
+func TestDiffComparesBothPlanesAsProjected(t *testing.T) {
+	t.Setenv(goldenUpdateEnv, "")
+	t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
+	requests := []Request{{Name: "login", Method: "GET", Path: "/x"}}
+	python := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":1,"exp":2}`, "python-signature")
+	file := sampleGolden(requests)
+	file.Header.Test = t.Name()
+	file.Requests[0].Status = 200
+	file.Requests[0].Headers = map[string]string{"content-type": "application/json", "content-length": "999"}
+	file.Requests[0].Body = ProjectTokens(`{"token":"` + python + `"}`)
+	path, digest := writeGoldenFile(t, t.TempDir(), file)
+	goPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token":"` + mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":123456,"exp":999999}`, "go-signature-longer") + `"}`))
+	}))
+	t.Cleanup(goPlane.Close)
+	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+	answers := golden.Python(t, nil, requests)
+	golden.CompareRows(t, "rows", func() string { return "" }, "a | b")
+	Diff(t, goPlane.URL, requests, answers, DiffOptions{Golden: golden})
+	golden.Finish(t)
+}
+
+// goldenTokenViolations walks root for golden files (a JSON file under a
+// testdata directory with a golden header) and names each that holds a token.
+func goldenTokenViolations(t *testing.T, root string) (checked int, violations []string) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if name := entry.Name(); name == ".git" || name == "node_modules" || name == ".venv" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".json") || !strings.Contains(filepath.ToSlash(path), "/testdata/") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil || !strings.Contains(string(raw), `"python_build"`) {
+			return nil
+		}
+		checked++
+		if err := tokenShapeErr(path, raw); err != nil {
+			violations = append(violations, err.Error())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return checked, violations
+}
+
+func TestNoGoldenInTheRepoHoldsATokenShape(t *testing.T) {
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked, violations := goldenTokenViolations(t, root)
+	if checked == 0 {
+		t.Fatal("the walk found no golden: a gate that checks nothing passes everything")
+	}
+	if len(violations) > 0 {
+		t.Fatalf("goldens hold token shapes:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+// TestTheGateFailsOnAPlantedToken is verification rule 2 for the walk above:
+// the same walk over a tree with one planted token per shape reports each.
+func TestTheGateFailsOnAPlantedToken(t *testing.T) {
+	dir := t.TempDir()
+	for name, sample := range tokenSamples() {
+		sub := filepath.Join(dir, name, "testdata")
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := `{"header":{"python_build":"x"},"requests":[{"body":"` + sample + `"}]}`
+		if err := os.WriteFile(filepath.Join(sub, "g.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checked, violations := goldenTokenViolations(t, dir)
+	if checked != 13 || len(violations) != 13 {
+		t.Fatalf("planted 13 tokens: checked %d, reported %d", checked, len(violations))
+	}
+}

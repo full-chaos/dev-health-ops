@@ -971,7 +971,17 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 		if options.Inspect != nil {
 			options.Inspect(request, goResponse)
 		}
-		same, compared, pyShown, goShown := Compare(request, python[index], goResponse, options)
+		pythonResponse, compareOptions := python[index], options
+		if options.Golden != nil {
+			// A golden stores no token value: both planes are compared as
+			// projected, and a projected body has another length.
+			projectedPython, projectedGo := options.Golden.projectResponse(pythonResponse), options.Golden.projectResponse(goResponse)
+			if projectedPython.Body != pythonResponse.Body || projectedGo.Body != goResponse.Body {
+				compareOptions.SkipContentLength = func(r Request) bool { return true }
+			}
+			pythonResponse, goResponse = projectedPython, projectedGo
+		}
+		same, compared, pyShown, goShown := Compare(request, pythonResponse, goResponse, compareOptions)
 		fmt.Fprintf(&receipt, "%-58s python=%d go=%d %s\n", request.Name, python[index].Status, goResponse.Status, Mark(same))
 		if !same {
 			t.Errorf("%s:\n python %d %s %v\n go     %d %s %v", request.Name, python[index].Status, pyShown.Body,

@@ -483,7 +483,8 @@ func TestGoAPIRoutingMatchesFrozenPython(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("go-api routing scenarios", routingPythonProgram, input, routingPythonSettings)
-	answers := golden.Produce(t, pyRoot, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, pyRoot, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		root := producer.Root
 		pyPool, pyDSN := startVerbPostgres(t)
 		py := oraclePlane{pyPool, pyDSN}
 		var recorded routingRecorded

@@ -678,7 +678,8 @@ func TestDowngradeMatchesFrozenPythonDowngrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("downgrade cells", downgradePythonProgram, input, downgradePythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		root := producer.Root
 		body, err := json.Marshal(produceDowngrade(t, root))
 		if err != nil {
 			t.Fatal(err)

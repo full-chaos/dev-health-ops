@@ -33,8 +33,10 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -194,13 +196,15 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 	sort.Strings(passed)
 	base := []string{"DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=" + proofDir, passedEnvName + "=" + strings.Join(passed, ",")}
 	discard := func() { removeAll(packageDir) }
+	// Both recording runs get this one list: they may differ in time only.
+	recordEnv := append(append([]string{}, base...), "DHO_VENUE_GOLDEN_UPDATE=1", "DHO_VENUE_GOLDEN_PYTHON_ROOT="+cfg.PythonRoot, "PYTHONDONTWRITEBYTECODE=1")
 
 	// A bytecode cache in the pinned checkout can run code older than its source:
 	// clear it, and stop the recording writing a new one.
 	if err := clearBytecode(filepath.Join(cfg.PythonRoot, "src")); err != nil {
 		return Result{}, fmt.Errorf("clearing the bytecode cache of %s: %w", cfg.PythonRoot, err)
 	}
-	if err := cfg.Run(cfg, append(append([]string{}, base...), "DHO_VENUE_GOLDEN_UPDATE=1", "DHO_VENUE_GOLDEN_PYTHON_ROOT="+cfg.PythonRoot, "PYTHONDONTWRITEBYTECODE=1")); err != nil {
+	if err := cfg.Run(cfg, recordEnv); err != nil {
 		discard()
 		return Result{}, fmt.Errorf("the recording run failed (a golden is only recorded from a run that passed every check, cleanups included): %w", err)
 	}
@@ -221,6 +225,36 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 			return Result{}, err
 		}
 		replayed[candidate] = raw
+	}
+	// Record a second time, in a fresh process, from the same producer: a value
+	// that differs between the two runs is a per-run value (a random id, a
+	// timestamp, a minted token) the golden would pin to one run. It needs a
+	// pin in the test or a typed placeholder (GoldenSpec.Scrub), and the
+	// candidates are compared as written, after projection and scrub.
+	for _, candidate := range found {
+		if err := os.Remove(candidate); err != nil {
+			discard()
+			return Result{}, err
+		}
+	}
+	if err := cfg.Run(cfg, recordEnv); err != nil {
+		discard()
+		return Result{}, fmt.Errorf("the second recording run failed: %w", err)
+	}
+	second, err := candidates(packageDir)
+	if err != nil {
+		discard()
+		return Result{}, err
+	}
+	if err := compareRuns(replayed, second); err != nil {
+		discard()
+		return Result{}, err
+	}
+	for _, candidate := range found {
+		if err := os.WriteFile(candidate, replayed[candidate], 0o644); err != nil {
+			discard()
+			return Result{}, err
+		}
 	}
 	if err := cfg.Run(cfg, append(append([]string{}, base...), "DHO_VENUE_GOLDEN_CANDIDATE=1")); err != nil {
 		discard()
@@ -1047,4 +1081,269 @@ func clearBytecode(dir string) error {
 		}
 		return nil
 	})
+}
+
+// compareRuns is an error unless the second recording wrote exactly the
+// candidates of the first, byte for byte. The error names the first request
+// (or row comparison) and the field that differs, with the length and a digest
+// prefix of each value, never the value: a per-run value may be a secret.
+func compareRuns(first map[string][]byte, secondPaths []string) error {
+	second := map[string][]byte{}
+	for _, path := range secondPaths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		second[path] = raw
+	}
+	var names []string
+	for path := range first {
+		names = append(names, path)
+	}
+	sort.Strings(names)
+	for _, path := range names {
+		other, ok := second[path]
+		if !ok {
+			return fmt.Errorf("the second recording run wrote no candidate %s: a recording that is not repeatable is not recorded", path)
+		}
+		if bytes.Equal(first[path], other) {
+			continue
+		}
+		return fmt.Errorf("the two recording runs of %s differ at %s: a value that changes between runs cannot be pinned; make it deterministic in the test (stable ids, a fixed clock) or turn it into a typed placeholder with GoldenSpec.Scrub", path, firstDifference(first[path], other))
+	}
+	for path := range second {
+		if _, ok := first[path]; !ok {
+			return fmt.Errorf("the second recording run wrote a candidate %s the first did not", path)
+		}
+	}
+	return nil
+}
+
+// maxReported is how many differences a refusal lists before it counts the rest.
+const maxReported = 5
+
+// goldenDoc is the part of a golden file the comparison reads.
+type goldenDoc struct {
+	Header   map[string]any `json:"header"`
+	Requests []struct {
+		Name    string            `json:"name"`
+		Status  json.Number       `json:"status"`
+		Headers map[string]string `json:"headers"`
+		Body    string            `json:"body"`
+	} `json:"requests"`
+	Rows map[string]struct {
+		Rows string `json:"rows"`
+	} `json:"rows"`
+}
+
+func parseDoc(raw []byte) (goldenDoc, bool) {
+	var doc goldenDoc
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	return doc, decoder.Decode(&doc) == nil
+}
+
+// firstDifference lists up to maxReported differences between two golden
+// files, then the count of the rest. A value is never printed (a per-run reset
+// token has no shape a redaction could match): each side is shown as its kind,
+// length and the head of its sha256.
+func firstDifference(a, b []byte) string {
+	left, lok := parseDoc(a)
+	right, rok := parseDoc(b)
+	if !lok || !rok {
+		return "the file (not a golden file)"
+	}
+	var found []string
+	add := func(where string, x, y string) {
+		found = append(found, fmt.Sprintf("%s (first run: %s, second run: %s)", where, describe(x), describe(y)))
+	}
+	names := map[string]bool{}
+	for k := range left.Header {
+		names[k] = true
+	}
+	for k := range right.Header {
+		names[k] = true
+	}
+	for _, k := range sortedKeys(names) {
+		if x, y := fmt.Sprint(left.Header[k]), fmt.Sprint(right.Header[k]); x != y {
+			add("header."+k, x, y)
+		}
+	}
+	if len(left.Requests) != len(right.Requests) {
+		found = append(found, fmt.Sprintf("requests count (first run: %d, second run: %d)", len(left.Requests), len(right.Requests)))
+	}
+	for i := 0; i < len(left.Requests) && i < len(right.Requests); i++ {
+		x, y := left.Requests[i], right.Requests[i]
+		where := "request " + x.Name
+		if x.Name != y.Name {
+			add(fmt.Sprintf("request #%d name", i), x.Name, y.Name)
+			continue
+		}
+		if x.Status.String() != y.Status.String() {
+			found = append(found, fmt.Sprintf("%s status (first run: %s, second run: %s)", where, x.Status, y.Status))
+		}
+		hn := map[string]bool{}
+		for k := range x.Headers {
+			hn[k] = true
+		}
+		for k := range y.Headers {
+			hn[k] = true
+		}
+		for _, k := range sortedKeys(hn) {
+			if x.Headers[k] != y.Headers[k] {
+				add(where+" header "+k, x.Headers[k], y.Headers[k])
+			}
+		}
+		if x.Body != y.Body {
+			add(where+" body "+bodyDifference(x.Body, y.Body), x.Body, y.Body)
+		}
+	}
+	rn := map[string]bool{}
+	for k := range left.Rows {
+		rn[k] = true
+	}
+	for k := range right.Rows {
+		rn[k] = true
+	}
+	for _, k := range sortedKeys(rn) {
+		if x, y := left.Rows[k].Rows, right.Rows[k].Rows; x != y {
+			add("rows "+k+" "+lineDifference(x, y), x, y)
+		}
+	}
+	if len(found) == 0 {
+		return "the file (bytes differ, compared fields equal)"
+	}
+	out := strings.Join(found[:min(len(found), maxReported)], "; ")
+	if len(found) > maxReported {
+		out += fmt.Sprintf("; and %d more", len(found)-maxReported)
+	}
+	return out
+}
+
+func sortedKeys(set map[string]bool) []string {
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// bodyDifference is the JSON path of the first differing leaf of two bodies,
+// after unpacking a packed body, else the first differing line.
+func bodyDifference(x, y string) string {
+	if a, ok := unpack(x); ok {
+		x = a
+	}
+	if b, ok := unpack(y); ok {
+		y = b
+	}
+	var left, right any
+	ld, rd := json.NewDecoder(strings.NewReader(x)), json.NewDecoder(strings.NewReader(y))
+	ld.UseNumber()
+	rd.UseNumber()
+	if ld.Decode(&left) == nil && rd.Decode(&right) == nil {
+		if path, ok := firstLeaf(left, right, "$"); ok {
+			return path
+		}
+	}
+	return lineDifference(x, y)
+}
+
+// unpack undoes venueoracle.PackBody (gzip, then base64, behind the prefix).
+func unpack(body string) (string, bool) {
+	encoded, ok := strings.CutPrefix(body, "gzip+base64:")
+	if !ok {
+		return "", false
+	}
+	packed, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", false
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(packed))
+	if err != nil {
+		return "", false
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		return "", false
+	}
+	return string(raw), true
+}
+
+func lineDifference(x, y string) string {
+	left, right := strings.Split(x, "\n"), strings.Split(y, "\n")
+	for i := 0; i < len(left) || i < len(right); i++ {
+		var a, b string
+		if i < len(left) {
+			a = left[i]
+		}
+		if i < len(right) {
+			b = right[i]
+		}
+		if a != b {
+			return fmt.Sprintf("line %d", i+1)
+		}
+	}
+	return "line 1"
+}
+
+// firstLeaf walks two parsed JSON values in key order and returns the path of
+// the first leaf whose literal text differs.
+func firstLeaf(a, b any, path string) (string, bool) {
+	switch x := a.(type) {
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		if !ok {
+			return path, true
+		}
+		keys := map[string]bool{}
+		for k := range x {
+			keys[k] = true
+		}
+		for k := range y {
+			keys[k] = true
+		}
+		for _, k := range sortedKeys(keys) {
+			xv, xok := x[k]
+			yv, yok := y[k]
+			// A key can be a secret too: it is named by its digest, never as written.
+			label := path + ".<key sha256 " + keyDigest(k) + ">"
+			if !xok || !yok {
+				return label, true
+			}
+			if p, ok := firstLeaf(xv, yv, label); ok {
+				return p, true
+			}
+		}
+		return "", false
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return path + "[length]", true
+		}
+		for i := range x {
+			if p, ok := firstLeaf(x[i], y[i], fmt.Sprintf("%s[%d]", path, i)); ok {
+				return p, true
+			}
+		}
+		return "", false
+	default:
+		if fmt.Sprintf("%T:%v", a, a) == fmt.Sprintf("%T:%v", b, b) {
+			return "", false
+		}
+		return path, true
+	}
+}
+
+// describe is a value's length and the head of its digest, never the value.
+func describe(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return fmt.Sprintf("%d bytes, sha256 %s", len(text), hex.EncodeToString(sum[:])[:8])
+}
+
+// keyDigest is the head of a JSON key's sha256.
+func keyDigest(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])[:8]
 }

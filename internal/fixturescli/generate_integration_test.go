@@ -54,17 +54,45 @@ var generateParameterSets = []struct {
 	}},
 }
 
+// pinnedGenerateProgram runs `dev-hops fixtures generate` with the producer's clock pinned to
+// argv[1]. The generator reads datetime.now() in dozens of places (the day loops of the daily
+// metrics, the start of the generated window, computed_at stamps), so what it writes depends on the
+// date and on the time of day of the run (CHAOS-7329: release_impact_daily 53 rows just after
+// midnight, 56 later; sprints by weekday). fixtures.world._frozen_clock is the producer's own
+// switch for that (`fixtures world` uses it): no production code changes, only who calls it, and
+// for which modules. Its list misses modules the generate path stamps rows from (it was built for
+// `fixtures world`, which leaves models.teams on the real clock on purpose for its multi-repo team
+// write); the program adds them, so those stamps are pinned too and compare by value. What still
+// cannot be pinned this way is listed, by class, in unpinnedColumns (generate_test.go).
+const pinnedGenerateProgram = `import sys
+from datetime import datetime
+from dev_health_ops import cli
+from dev_health_ops.fixtures import world
+# The modules below read the clock on the generate path and are not in the producer's own list.
+world._CLOCK_PATCHED_MODULES = tuple(world._CLOCK_PATCHED_MODULES) + (
+    "dev_health_ops.metrics.sinks.clickhouse.ai_workflow",
+    "dev_health_ops.models.ai_attribution",
+    "dev_health_ops.models.teams",
+    "dev_health_ops.models.work_items",
+    "dev_health_ops.storage.repository_rows",
+    "dev_health_ops.work_graph.models",
+)
+with world._frozen_clock(datetime.fromisoformat(sys.argv[1])):
+    code = cli.main(sys.argv[2:])
+raise SystemExit(code)
+`
+
 // pythonGenerate runs the real `dev-hops fixtures generate` against the ClickHouse at dsn as a caller
-// does, with no PostgreSQL configured, and returns the instant it started.
-func pythonGenerate(t *testing.T, dsn, org string, p GenerateParams) time.Time {
+// does, with no PostgreSQL configured and with the producer's clock pinned to at.
+func pythonGenerate(t *testing.T, dsn, org string, p GenerateParams, at time.Time) {
 	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
 	python := pyoracle.Resolve(t, root)
-	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-	args := []string{"-c", program, "fixtures", "generate", "--sink", dsn, "--db-type", "clickhouse", "--repo-name", p.RepoName,
+	args := []string{"-c", pinnedGenerateProgram, at.UTC().Format(producerClockLayout),
+		"fixtures", "generate", "--sink", dsn, "--db-type", "clickhouse", "--repo-name", p.RepoName,
 		"--repo-count", fmt.Sprint(p.RepoCount), "--provider", p.Provider, "--days", fmt.Sprint(p.Days),
 		"--commits-per-day", fmt.Sprint(p.CommitsPerDay), "--pr-count", fmt.Sprint(p.PRCount),
 		"--team-count", fmt.Sprint(p.TeamCount), "--seed", fmt.Sprint(p.Seed)}
@@ -75,14 +103,129 @@ func pythonGenerate(t *testing.T, dsn, org string, p GenerateParams) time.Time {
 		args = append(args, "--with-work-graph")
 	}
 	command := exec.Command(python, args...)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "ORG_ID="+org, "OTEL_ENABLED=false")
-	// No PostgreSQL: the analytics rows only.
-	command.Env = append(command.Env, "DATABASE_URI=", "POSTGRES_URI=", "DATABASE_URL=")
-	started := time.Now().UTC()
+	// The producer's whole environment: nothing ambient shapes what it writes. No PostgreSQL: the
+	// analytics rows only. The test schema is ordering contract 2 (startClickHouse), so the producer
+	// is told to stamp the four ordering columns of the operational tables: without it it writes
+	// ordering_contract 0 and the schema's constraint refuses the insert. The stamped columns are
+	// left out of a world by name (withoutOrdering); their values are checked by the ordering oracle.
+	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"),
+		"PYTHONDONTWRITEBYTECODE=1", "PYTHONHASHSEED=0", "ORG_ID=" + org, "OTEL_ENABLED=false",
+		"OPERATIONAL_ORDERING_CONTRACT=2", "DATABASE_URI=", "POSTGRES_URI=", "DATABASE_URL="}
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("the Python fixtures generate failed: %v", pyoracle.RunError(python, err, output))
 	}
-	return started
+}
+
+// producedWorld runs the producer at the pinned instant at against a fresh ClickHouse and returns
+// what it wrote, as a world holds it (every base table whose row count changed, dumped), and the
+// real-clock window of the run: the unpinned stamp columns must lie inside it.
+func producedWorld(t *testing.T, org string, p GenerateParams, at time.Time) (tables []WorldTable, dsn string, started, finished time.Time) {
+	t.Helper()
+	ch := startClickHouse(t)
+	requireUTCServer(t, ch.httpDSN)
+	stopMerges(t, ch.httpDSN)
+	before := rowCounts(t, ch.httpDSN)
+	started = time.Now().UTC()
+	pythonGenerate(t, ch.httpDSN, org, p, at)
+	finished = time.Now().UTC()
+	after := rowCounts(t, ch.httpDSN)
+	derived := derivedTables(t, ch.httpDSN)
+	for _, name := range baseTables(t, ch.httpDSN) {
+		if before[name] == after[name] {
+			continue
+		}
+		dumped := dumpWorldTable(t, ch.httpDSN, name)
+		if len(dumped.Rows) == 0 {
+			continue
+		}
+		tables = append(tables, WorldTable{FrozenTable: dumped, Derived: derived[name]})
+	}
+	return tables, ch.httpDSN, started, finished
+}
+
+// serverStampProblems lists every server-stamped column (serverStampedColumns) of a table the
+// producer wrote whose values are not all inside the run's real-clock window. Such a column is left
+// out of a dump, because the server writes it at insert time, so it is outside the comparison by
+// value and this is the only place its class is held: a column default that stamps another time (a
+// constant, a date in the future) or a writer that sends its own value would otherwise pass.
+func serverStampProblems(t *testing.T, dsn string, from, to time.Time) []string {
+	t.Helper()
+	var names []string
+	for table, columns := range serverStampedColumns {
+		for column := range columns {
+			names = append(names, table+"."+column)
+		}
+	}
+	sort.Strings(names)
+	var problems []string
+	for _, name := range names {
+		table, column, _ := strings.Cut(name, ".")
+		answer := strings.Split(strings.TrimSpace(clickHouseHTTP(t, dsn, fmt.Sprintf(
+			"SELECT count(), countIf(`%[2]s` >= fromUnixTimestamp64Milli(%[3]d, 'UTC') AND `%[2]s` <= fromUnixTimestamp64Milli(%[4]d, 'UTC')), toString(min(`%[2]s`)), toString(max(`%[2]s`)) FROM `%[1]s` FORMAT TSV",
+			table, column, from.Add(-time.Second).UnixMilli(), to.Add(time.Second).UnixMilli()))), "\t")
+		if len(answer) != 4 {
+			problems = append(problems, fmt.Sprintf("%s (%s): the stamp query answered %q", name, serverStamp, answer))
+			continue
+		}
+		if answer[0] != answer[1] {
+			problems = append(problems, fmt.Sprintf("%s (%s): %s of %s rows are stamped inside the run's clock window %s .. %s; the column holds %s .. %s",
+				name, serverStamp, answer[1], answer[0], from.Format(producerClockLayout), to.Format(producerClockLayout), answer[2], answer[3]))
+		}
+	}
+	return problems
+}
+
+// A server-stamped column is held to the run's clock window on the live rows: a row stamped by the
+// server inside the window is no problem; a column default that stamps another time, and a writer
+// that sends its own value, are each reported for the table and column they are in.
+func TestServerStampProblemsHoldEveryStampedColumnToTheRunsWindow(t *testing.T) {
+	ch := startClickHouse(t)
+	requireUTCServer(t, ch.httpDSN)
+	var names []string
+	for table, columns := range serverStampedColumns {
+		for column := range columns {
+			names = append(names, table+"."+column)
+		}
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		t.Fatal("no server-stamped column: the check would hold nothing")
+	}
+	// No row: nothing to hold.
+	from := time.Now().UTC()
+	if problems := serverStampProblems(t, ch.httpDSN, from, from); len(problems) != 0 {
+		t.Fatalf("empty tables: %v", problems)
+	}
+	// One row per table that names no stamped column: the server stamps it now.
+	for table := range serverStampedColumns {
+		clickHouseHTTP(t, ch.httpDSN, "INSERT INTO `"+table+"` (org_id) VALUES ('11111111-2222-4333-8444-555555555555')")
+	}
+	to := time.Now().UTC()
+	if problems := serverStampProblems(t, ch.httpDSN, from, to); len(problems) != 0 {
+		t.Fatalf("rows the server stamped inside the window are reported: %v", problems)
+	}
+	// The same rows, asked about a window that ended before they were written, and one that starts after.
+	for name, window := range map[string][2]time.Time{"an earlier window": {from.Add(-time.Hour), from.Add(-time.Minute)}, "a later window": {to.Add(time.Minute), to.Add(time.Hour)}} {
+		problems := serverStampProblems(t, ch.httpDSN, window[0], window[1])
+		if len(problems) != len(names) {
+			t.Fatalf("%s: %d problems for %d stamped columns: %v", name, len(problems), len(names), problems)
+		}
+		for index, column := range names {
+			if !strings.HasPrefix(problems[index], column+" (server-stamp): 0 of 1 rows") {
+				t.Fatalf("%s: problem %q does not name %s and its rows", name, problems[index], column)
+			}
+		}
+	}
+	// A default that stamps a constant in the future, and a writer that sends its own old value: one
+	// more row each, in two of the tables; the third stays clean.
+	clickHouseHTTP(t, ch.httpDSN, "ALTER TABLE work_items MODIFY COLUMN ingested_at DEFAULT toDateTime64('2099-01-01 00:00:00', 3, 'UTC')")
+	clickHouseHTTP(t, ch.httpDSN, "INSERT INTO work_items (org_id) VALUES ('11111111-2222-4333-8444-555555555555')")
+	clickHouseHTTP(t, ch.httpDSN, "INSERT INTO team_project_ownership (org_id, last_synced) VALUES ('11111111-2222-4333-8444-555555555555', toDateTime64('2000-01-01 00:00:00', 3, 'UTC'))")
+	problems := serverStampProblems(t, ch.httpDSN, from, time.Now().UTC())
+	if len(problems) != 2 || !strings.HasPrefix(problems[0], "team_project_ownership.last_synced (server-stamp): 1 of 2 rows") || !strings.Contains(problems[0], "the column holds 2000-01-01") ||
+		!strings.HasPrefix(problems[1], "work_items.ingested_at (server-stamp): 1 of 2 rows") || !strings.Contains(problems[1], ".. 2099-01-01") {
+		t.Fatalf("a future default and a sent old value: %q", problems)
+	}
 }
 
 // worldColumns reads a table's columns in order. The server must run in UTC, so a DateTime without
@@ -230,6 +373,14 @@ func requireUTCServer(t *testing.T, dsn string) {
 // TestFreezeGenerateWorlds writes the frozen worlds from the real Python producer. It is not a check:
 // it runs only with DHO_GENERATE_FREEZE=1, needs the full project Python environment, and rewrites
 // testdata/generate.
+//
+// The producer runs with its clock pinned to one instant, and the world stores exactly that instant
+// (frozen_at): the oracle below pins a fresh run to it, so a world can be checked on any later day
+// and hour. Before a world is written the producer runs twice at the instant, against two fresh
+// servers, and both runs must write the same content (worldContent: every column of every table by
+// value, except the classified unpinned columns): a producer that is not a function of its pinned
+// clock cannot be frozen, and the freeze names the column that moved instead of writing a world the
+// oracle would then fail on.
 func TestFreezeGenerateWorlds(t *testing.T) {
 	if os.Getenv(worldFreezeEnv) != "1" {
 		t.Skip("set " + worldFreezeEnv + "=1 (and " + worldProducerEnv + "=<commit>) to re-freeze the generate worlds from the live Python producer")
@@ -241,24 +392,34 @@ func TestFreezeGenerateWorlds(t *testing.T) {
 	if err := os.MkdirAll("testdata/generate", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, set := range generateParameterSets {
-		ch := startClickHouse(t)
-		requireUTCServer(t, ch.httpDSN)
-		stopMerges(t, ch.httpDSN)
-		before := rowCounts(t, ch.httpDSN)
-		startedAt := pythonGenerate(t, ch.httpDSN, set.Org, set.Params)
-		after := rowCounts(t, ch.httpDSN)
-		derived := derivedTables(t, ch.httpDSN)
-		world := FrozenWorld{Producer: producer, FrozenAt: startedAt.Format(time.RFC3339Nano), OrgID: set.Org, Params: set.Params}
+	frozenAt := time.Now().UTC().Truncate(time.Microsecond)
+	// Every world is produced twice and checked before any file is written: a freeze is all the
+	// worlds at one instant, or none.
+	produced := make([][]WorldTable, len(generateParameterSets))
+	var unstable []string
+	for index, set := range generateParameterSets {
+		tables, dsn, started, finished := producedWorld(t, set.Org, set.Params, frozenAt)
+		stampProblems := serverStampProblems(t, dsn, started, finished)
+		again, againDSN, againStarted, againFinished := producedWorld(t, set.Org, set.Params, frozenAt)
+		stampProblems = append(stampProblems, serverStampProblems(t, againDSN, againStarted, againFinished)...)
+		content, problems := worldContent(tables, started, finished)
+		againContent, againProblems := worldContent(again, againStarted, againFinished)
+		moved := append(append(append(contentDiff(againContent, content), problems...), againProblems...), stampProblems...)
+		if len(moved) > 0 {
+			unstable = append(unstable, fmt.Sprintf("%s:\n%s", set.Params, strings.Join(moved, "\n")))
+		}
+		produced[index] = tables
+	}
+	if len(unstable) > 0 {
+		t.Fatalf("two runs of the producer pinned to %s differ, so no world is frozen (no tolerance: a column that differs is pinned, or classified in unpinnedColumns with its source):\n%s",
+			frozenAt.Format(producerClockLayout), strings.Join(unstable, "\n"))
+	}
+	for index, set := range generateParameterSets {
+		tables := produced[index]
+		world := FrozenWorld{Producer: producer, FrozenAt: frozenAt.Format(producerClockLayout), OrgID: set.Org, Params: set.Params}
 		orgLeaks := 0
-		for _, name := range baseTables(t, ch.httpDSN) {
-			if before[name] == after[name] {
-				continue
-			}
-			dumped := dumpWorldTable(t, ch.httpDSN, name)
-			if len(dumped.Rows) == 0 {
-				continue
-			}
+		for _, table := range tables {
+			dumped := table.FrozenTable
 			// The organization is replaced by value in String and UUID columns only: every other
 			// place it appears would keep the frozen organization.
 			for _, row := range dumped.Rows {
@@ -269,7 +430,7 @@ func TestFreezeGenerateWorlds(t *testing.T) {
 					}
 				}
 			}
-			world.Tables = append(world.Tables, WorldTable{FrozenTable: dumped, Derived: derived[name]})
+			world.Tables = append(world.Tables, table)
 		}
 		if orgLeaks > 0 {
 			t.Fatalf("the organization appears in %d value(s) that are not a whole String/UUID column value: substituting it would leave it behind", orgLeaks)
@@ -431,10 +592,13 @@ func TestLoadWorldReproducesTheRecordedCapture(t *testing.T) {
 }
 
 // The differential guard against the REAL producer while it exists: a fresh run of the Python verb
-// for each frozen parameter set writes the same tables, with the same columns and the same number of
-// rows in each, as the world holds (the ids and timestamps of two runs never agree, the shape does).
-// A change of the generator that would make the frozen worlds stale turns this red. It needs the full
-// project Python environment; CI runs it in the venue-oracles job.
+// for each frozen parameter set, with the producer's clock pinned to the world's frozen_at, writes
+// the same tables, with the same columns, the same number of rows and the same values in every
+// column, as the world holds (unpinnedColumns lists what cannot agree and why). A change of the generator
+// that would make the frozen worlds stale turns this red, on any day and at any hour: the producer
+// reads the clock in its day loops, and unpinned it wrote 53 release_impact_daily rows just after
+// midnight where the world held 56 (CHAOS-7329). It needs the full project Python environment; CI
+// runs it in the venue-oracles job.
 func TestGenerateVenueOracleMatchesThePythonProducer(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
@@ -445,11 +609,15 @@ func TestGenerateVenueOracleMatchesThePythonProducer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ch := startClickHouse(t)
-		stopMerges(t, ch.httpDSN)
-		before := rowCounts(t, ch.httpDSN)
+		// The producer's clock is the world's: what it writes is a function of that instant, so the
+		// comparison below holds on any day and at any hour.
+		frozenAt, err := time.Parse(producerClockLayout, world.FrozenAt)
+		if err != nil {
+			t.Fatalf("%s: frozen_at %q is not a pinned producer instant (%v): re-freeze the world (TestFreezeGenerateWorlds)", set.Params, world.FrozenAt, err)
+		}
 		pythonStart := time.Now().UTC().Add(-time.Second)
-		pythonGenerate(t, ch.httpDSN, set.Org, set.Params)
+		produced, dsn, started, finished := producedWorld(t, set.Org, set.Params, frozenAt)
+		ch := clickHouse{httpDSN: dsn}
 		// CHAOS-7265 executed cell: the Python work_items writers name their columns and omit
 		// ingested_at, so every row they write has a value at or after the run start (the column exists, the DEFAULT applied, no insert broke).
 		// NOT pinned here: server time vs a client clock, which this predicate cannot tell apart; that is
@@ -458,34 +626,19 @@ func TestGenerateVenueOracleMatchesThePythonProducer(t *testing.T) {
 		if len(stamped) != 2 || stamped[0] == "0" || stamped[0] != stamped[1] {
 			t.Fatalf("Python producer work_items rows / rows server-stamped at write = %v, want all, and at least one", stamped)
 		}
-		after := rowCounts(t, ch.httpDSN)
-		changed := map[string]int{}
-		for name, count := range after {
-			if before[name] != count {
-				var n int
-				fmt.Sscan(count, &n)
-				changed[name] = n
-			}
+		// Hard equality, table by table and column by column: the columns, the number of rows and the
+		// values of every column. The classified unpinned columns (a server stamp, a clock read the
+		// harness cannot pin, a random id) are checked against their class instead.
+		got, problems := worldContent(produced, started, finished)
+		// The server-stamped columns are not in a world: their class is held here, on the live rows.
+		problems = append(problems, serverStampProblems(t, ch.httpDSN, started, finished)...)
+		want, frozenProblems := worldContent(world.Tables, frozenAt, frozenAt.Add(frozenStampWindow))
+		if moved := append(append(contentDiff(got, want), problems...), frozenProblems...); len(moved) > 0 {
+			t.Fatalf("%s: the live Python producer, pinned to the world's frozen_at %s, does not write the frozen world; the world is stale, re-freeze it (TestFreezeGenerateWorlds):\n%s",
+				set.Params, world.FrozenAt, strings.Join(moved, "\n"))
 		}
-		frozen := map[string]int{}
 		for _, table := range world.Tables {
-			frozen[table.Name] = len(table.Rows)
-			// The frozen world never carries a server-stamped column (the loader would refuse to replay it).
-			var columns []FrozenColumn
-			for _, column := range worldColumns(t, ch.httpDSN, table.Name) {
-				if !serverStampedColumns[table.Name][column.Name] {
-					columns = append(columns, column)
-				}
-			}
-			if !reflect.DeepEqual(columns, table.Columns) {
-				t.Fatalf("%s: the schema's columns differ from the frozen ones", table.Name)
-			}
-		}
-		if !reflect.DeepEqual(changed, frozen) {
-			t.Fatalf("%s: the live Python producer wrote %v, the frozen world holds %v: the world is stale; re-freeze it (TestFreezeGenerateWorlds)", set.Params, changed, frozen)
-		}
-		for _, count := range frozen {
-			compared += count
+			compared += len(table.Rows)
 		}
 	}
 	if compared == 0 {

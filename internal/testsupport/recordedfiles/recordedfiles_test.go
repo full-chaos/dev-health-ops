@@ -41,7 +41,10 @@ func TestRemainingCountsTheDayOneListByTopLevelPackage(t *testing.T) {
 	}
 }
 
-const goldenText = `{"header": {"test": "TestX", "python_build": "0123456789012345678901234567890123456789"}, "requests": []}`
+const goldenText = `{"header": {"test": "TestX", "python_build": "0123456789012345678901234567890123456789", "recorded_by": "goldenrecord"}, "requests": []}`
+
+// oldGoldenText is a golden recorded before the record verb stamped its work.
+const oldGoldenText = `{"header": {"test": "TestOld", "python_build": "0123456789012345678901234567890123456789"}, "requests": []}`
 
 // tree builds a small repository whose manifests the verb's own code wrote:
 // one testdata directory with a file of each kind, tests/fixtures, and a
@@ -55,6 +58,7 @@ func tree(t *testing.T) string {
 		"a/testdata/recorded.json":           `{"python": "said this"}`,
 		"a/testdata/sub/second_recorded.txt": "and this\n",
 		"a/testdata/golden/TestX.json":       goldenText,
+		"a/testdata/golden/TestOld.json":     oldGoldenText,
 		"a/testdata/pages/page_0.json":       `{"page": 0}`,
 		"a/testdata/old.sql":                 "select 1;\n",
 		fixtures + "/x_python_golden.json":   `{"x": 1.5}`,
@@ -62,6 +66,7 @@ func tree(t *testing.T) string {
 		write(t, repo, file, text)
 	}
 	set(t, repo, Change{}, "a/testdata/golden/TestX.json")
+	set(t, repo, Change{DayOne: true}, "a/testdata/golden/TestOld.json")
 	set(t, repo, Change{Kind: HandWritten}, "a/testdata/case.json")
 	set(t, repo, Change{Kind: PythonRecorded}, "a/testdata/recorded.json", "a/testdata/sub/second_recorded.txt", fixtures+"/x_python_golden.json")
 	set(t, repo, Change{Kind: ProviderRecorded}, "a/testdata/pages/page_0.json")
@@ -161,7 +166,7 @@ func TestTheGuardRefusesEachWayAFileCanChangeUnseen(t *testing.T) {
 		}, [][]string{{"a/testdata.manifest.tsv is not in the form the verb writes", "python-recorded set line does not match its rows"}}},
 		{"two rows swapped by hand", func(t *testing.T, repo string) {
 			lines := strings.Split(read(t, repo, "a/testdata.manifest.tsv"), "\n")
-			lines[2], lines[3] = lines[3], lines[2]
+			lines[3], lines[4] = lines[4], lines[3]
 			write(t, repo, "a/testdata.manifest.tsv", strings.Join(lines, "\n"))
 		}, [][]string{{"is not in the form the verb writes"}}},
 		{"a kind that does not exist, typed by hand", func(t *testing.T, repo string) {
@@ -173,6 +178,20 @@ func TestTheGuardRefusesEachWayAFileCanChangeUnseen(t *testing.T) {
 		{"the kind header on a file with no golden header", func(t *testing.T, repo string) {
 			write(t, repo, "a/testdata/golden/TestX.json", `{"requests": []}`)
 		}, [][]string{{"a/testdata/golden/TestX.json has the kind header", "holds no golden header"}}},
+		{"a golden made by hand in the place of one the verb recorded", func(t *testing.T, repo string) {
+			write(t, repo, "a/testdata/golden/TestX.json", oldGoldenText)
+		}, [][]string{{"a/testdata/golden/TestX.json has the kind header", "holds no stamp of the record verb", "never by hand"}}},
+		{"one byte more in a golden recorded before the stamp", func(t *testing.T, repo string) {
+			write(t, repo, "a/testdata/golden/TestOld.json", oldGoldenText+" ")
+		}, [][]string{{"a/testdata/golden/TestOld.json changed", "recorded before the record verb stamped its work", "changes only when the verb records it again"}}},
+		{"a golden recorded before the stamp recorded again, its row left", func(t *testing.T, repo string) {
+			write(t, repo, "a/testdata/golden/TestOld.json", goldenText)
+		}, [][]string{{"a/testdata/golden/TestOld.json is header-before-stamp", "holds the record verb's stamp now", "write its row"}}},
+		{"a before-stamp row turned into a header row by hand", func(t *testing.T, repo string) {
+			manifest := read(t, repo, "a/testdata.manifest.tsv")
+			digest, _ := Digest(repo, "a/testdata/golden/TestOld.json")
+			write(t, repo, "a/testdata.manifest.tsv", strings.Replace(manifest, digest+"\theader-before-stamp\tgolden/TestOld.json", "-\theader\tgolden/TestOld.json", 1))
+		}, [][]string{{"is not in the form the verb writes"}}},
 		{"a golden with a header recorded again (its own test pins its bytes)", func(t *testing.T, repo string) {
 			write(t, repo, "a/testdata/golden/TestX.json", strings.Replace(goldenText, `"requests": []`, `"requests": [1]`, 1))
 		}, nil},
@@ -326,6 +345,32 @@ func TestTheVerbRefusesWhatOnlyARecordingMayChange(t *testing.T) {
 		_, err := Set(repo, []string{"a/testdata/case.json"}, Change{Kind: Header})
 		refused(t, err, "holds no golden header")
 	})
+	t.Run("a golden with no stamp of the record verb", func(t *testing.T) {
+		repo := tree(t)
+		write(t, repo, "a/testdata/golden/TestHand.json", oldGoldenText)
+		_, err := Set(repo, []string{"a/testdata/golden/TestHand.json"}, Change{})
+		refused(t, err, "no stamp of the record verb")
+	})
+	t.Run("a golden recorded before the stamp with other bytes", func(t *testing.T) {
+		repo := tree(t)
+		write(t, repo, "a/testdata/golden/TestOld.json", oldGoldenText+" ")
+		_, err := Set(repo, []string{"a/testdata/golden/TestOld.json"}, Change{DayOne: true})
+		refused(t, err, "a golden changes only when the verb records it again")
+		_, err = Set(repo, []string{"a/testdata/golden/TestOld.json"}, Change{})
+		refused(t, err, "no stamp of the record verb")
+	})
+	t.Run("a golden recorded before the stamp deleted", func(t *testing.T) {
+		repo := tree(t)
+		remove(t, repo, "a/testdata/golden/TestOld.json")
+		_, err := Sync(repo, Change{})
+		refused(t, err, "goes only on purpose")
+		if _, err := Sync(repo, Change{RecordedAgain: true}); err != nil {
+			t.Fatal(err)
+		}
+		if got := found(t, repo, 1); len(got) != 0 {
+			t.Errorf("after -sync -recorded-again: %q", got)
+		}
+	})
 	t.Run("a file outside the roots", func(t *testing.T) {
 		repo := tree(t)
 		write(t, repo, "a/other/x.json", "{}")
@@ -350,12 +395,12 @@ func TestTheVerbWritesWhatTheGuardAccepts(t *testing.T) {
 	if got := found(t, repo, 1); len(got) != 0 {
 		t.Fatalf("problems after the verb: %q", got)
 	}
-	rows := strings.Split(strings.TrimSpace(read(t, repo, "a/testdata.manifest.tsv")), "\n")[2:]
+	rows := strings.Split(strings.TrimSpace(read(t, repo, "a/testdata.manifest.tsv")), "\n")[3:]
 	var paths []string
 	for _, row := range rows {
 		paths = append(paths, strings.Split(row, "\t")[2])
 	}
-	if got, want := strings.Join(paths, " "), "case.json golden/TestX.json new.json old.sql recorded.json sub/second_recorded.txt"; got != want {
+	if got, want := strings.Join(paths, " "), "case.json golden/TestOld.json golden/TestX.json new.json old.sql recorded.json sub/second_recorded.txt"; got != want {
 		t.Errorf("rows = %q, want %q (in order of path)", got, want)
 	}
 	if !strings.Contains(read(t, repo, "a/testdata.manifest.tsv"), "-\theader\tgolden/TestX.json\n") {
@@ -398,5 +443,34 @@ func TestRootsAreTheOutermostTestdataDirectoriesAndTheFixtures(t *testing.T) {
 		if err != nil || root+"|"+relative != want {
 			t.Errorf("RootOf(%s) = %s|%s, %v, want %s", file, root, relative, err, want)
 		}
+	}
+}
+
+// The set line of the goldens recorded before the stamp: it follows only those
+// rows, and a golden leaves the set when the verb records it again.
+func TestTheBeforeStampSetOnlyShrinksWhenAGoldenIsRecordedAgain(t *testing.T) {
+	repo := tree(t)
+	line := func() string { return strings.Split(read(t, repo, "a/testdata.manifest.tsv"), "\n")[2] }
+	first := line()
+	if !strings.HasPrefix(first, "# header-before-stamp set: ") || !strings.HasSuffix(first, " (1 files)") {
+		t.Fatalf("set line = %q", first)
+	}
+	write(t, repo, "a/testdata/case.json", `{"case": 2}`)
+	set(t, repo, Change{Kind: HandWritten}, "a/testdata/case.json")
+	if line() != first {
+		t.Errorf("the set line changed with a file that is not a golden: %q", line())
+	}
+	// The record verb records it again: the header holds the stamp, the row
+	// becomes a header row with no digest, and the set is empty.
+	write(t, repo, "a/testdata/golden/TestOld.json", goldenText)
+	set(t, repo, Change{}, "a/testdata/golden/TestOld.json")
+	if got := line(); got == first || !strings.HasSuffix(got, " (0 files)") {
+		t.Errorf("after the golden was recorded again the set line is %q", got)
+	}
+	if !strings.Contains(read(t, repo, "a/testdata.manifest.tsv"), "-\theader\tgolden/TestOld.json\n") {
+		t.Error("the golden recorded again has no header row")
+	}
+	if got := found(t, repo, 1); len(got) != 0 {
+		t.Errorf("problems: %q", got)
 	}
 }

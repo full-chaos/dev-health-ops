@@ -284,7 +284,7 @@ func TestFrozenProduceIsRefusedInATestWithALiveVenue(t *testing.T) {
 		request := ProgramRequest("corpus", sampleProgram, []byte("abc"), nil)
 		path, digest := programGolden(child, []Request{request}, "ABC\n")
 		golden := OpenGolden(child, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
-		answers := golden.Produce(child, "/no/python/here", []Request{request}, func(string, []Request) []Response { return nil })
+		answers := golden.Produce(child, "/no/python/here", []Request{request}, func(*Producer, []Request) []Response { return nil })
 		// Reached only if Produce served the answer: the proof guard in
 		// Finish would still fail the test, so the answer is the marker.
 		child.Logf("ANSWER SERVED %q", answers[0].Body)
@@ -351,7 +351,7 @@ func TestStartRefusesALiveVenueAfterAFrozenAnswerInItsTree(t *testing.T) {
 		request := ProgramRequest("corpus", sampleProgram, []byte("abc"), nil)
 		path, digest := programGolden(child, []Request{request}, "ABC\n")
 		golden := OpenGolden(child, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
-		answers := golden.Produce(child, "/no/python/here", []Request{request}, func(string, []Request) []Response { return nil })
+		answers := golden.Produce(child, "/no/python/here", []Request{request}, func(*Producer, []Request) []Response { return nil })
 		golden.Consumed(child, answers...)
 		golden.SkipDiff(child)
 		golden.Finish(child)

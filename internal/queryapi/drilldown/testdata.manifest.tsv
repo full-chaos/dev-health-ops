@@ -1,5 +1,6 @@
 # Every file under internal/queryapi/drilldown/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 f415ec612ca2e97ff8f9498536847678fa5eef86755331bddc82f7c49e3df91d	unclassified	get_default_org_scope.json
 49f5c832bb7cf9947d7b3f1bc0cb0b1343393bd0c9b03c93771eb270df43bbe2	unclassified	get_default_org_scope_issues.json
 a6f5c21f0fa8ef3cbce6e0e07fa6eb091cc894a6d58af9083ca32723241bb5f1	unclassified	get_repo_scope_explicit_dates.json

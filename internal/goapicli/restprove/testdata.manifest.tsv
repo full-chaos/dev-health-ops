@@ -1,5 +1,6 @@
 # Every file under internal/goapicli/restprove/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 1988f415a488abab9769a576eee9b9896b3d714e8bb3413b239a4443092017f4	unclassified	investmentflow_dynamicorg_baseline_1988f415.json
 acc5f56bc4526b91ad690cca2f9d8b5e2947f767d5601c29b547b45f29d61aa7	unclassified	investmentflow_reposcoped_emptyrepo_baseline_acc5f56b.json
 2a7a073ad4faf1af432047f5ec4c33b770eeda910347ee8a05f7892c2a1dae08	unclassified	investmentflow_reposcoped_emptyrepo_candidate_2a7a073a.json

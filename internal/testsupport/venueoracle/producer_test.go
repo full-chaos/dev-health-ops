@@ -158,6 +158,22 @@ func TestTheProducersCommandRefusesTheOptionsThatIgnoreTheEnvironment(t *testing
 		{[]string{"-I", "-c", "pass"}, true},
 		{[]string{"-sE", "-c", "pass"}, true},
 		{[]string{"-u", "-BI", "-m", "x"}, true},
+		// An option with a value: the value is not a cluster of flags, and
+		// what comes after it is still an option.
+		{[]string{"-Werror::ImportWarning", "-c", "pass"}, false},
+		{[]string{"-XfrozEn_modules", "-c", "pass"}, false},
+		{[]string{"-X", "utf8", "-c", "pass"}, false},
+		{[]string{"-uc", "pass", "-I"}, false},
+		{[]string{"-cIMPORTANT = 1"}, false}, // the program's text, joined to -c
+		{[]string{"-umIPython"}, false},
+		{[]string{"-", "-E"}, false},  // the program comes from standard input
+		{[]string{"--", "-E"}, false}, // "--" ends the options: -E is the script's name
+		{[]string{"-X", "utf8", "-E", "-c", "pass"}, true},
+		{[]string{"-W", "error", "-I", "-c", "pass"}, true},
+		{[]string{"-BW", "error", "-I", "-c", "pass"}, true},
+		{[]string{"-Werror", "-E", "-c", "pass"}, true},
+		{[]string{"--check-hash-based-pycs", "default", "-E", "-c", "pass"}, true},
+		{[]string{"--version", "-I"}, true},
 	} {
 		_, err := producer.Command(context.Background(), nil, nil, row.args...)
 		if refused := err != nil && strings.Contains(err.Error(), "makes Python ignore its environment variables"); refused != row.refused {

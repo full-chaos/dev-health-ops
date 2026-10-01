@@ -58,18 +58,35 @@ func poisonInheritedEnvironment(t *testing.T) {
 
 // ignoresEnvironment reports the interpreter option among args that makes
 // Python ignore its PYTHON* variables: -E or -I, alone or in a cluster of
-// short options, before the program (-c, -m or a script).
+// short options, before the program (-c, -m, a script, "-", or what follows
+// "--"). It reads the options as the interpreter does: -X and -W take a value
+// (the rest of the argument, else the next argument), and so does
+// --check-hash-based-pycs; a value is never read as flags, and the options
+// after it still count.
 func ignoresEnvironment(args []string) string {
-	for _, arg := range args {
-		if arg == "-c" || arg == "-m" || arg == "-" || len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" || len(arg) < 2 || arg[0] != '-' {
 			return ""
 		}
-		if arg[1] == 'X' || arg[1] == 'W' {
-			continue // an option with a value, not a cluster of flags
+		if arg[1] == '-' {
+			if arg == "--check-hash-based-pycs" {
+				index++
+			}
+			continue
 		}
-		for _, flag := range arg[1:] {
-			if flag == 'E' || flag == 'I' {
+	cluster:
+		for position, flag := range arg[1:] {
+			switch flag {
+			case 'E', 'I':
 				return arg
+			case 'c', 'm':
+				return "" // the program: what follows is its text and its arguments
+			case 'X', 'W':
+				if position == len(arg)-2 {
+					index++ // the value is the next argument
+				}
+				break cluster
 			}
 		}
 	}

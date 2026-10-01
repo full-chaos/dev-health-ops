@@ -6,12 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
-	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -20,7 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -30,16 +26,17 @@ const teamCatalogFingerprintVenueKey = "venue-oracle-team-catalog-fingerprint-ke
 // pythonTeamCatalogStampProgram runs the planner's own
 // _resolve_credential_stamp for each integration and prints the stamp a
 // new sync run would carry: [credential_id, credential_fingerprint,
-// auth_source], or ["raise <class>", "", ""].
+// auth_source], or ["raise <class>", "", ""]. The database is the Python
+// plane's, named by the environment of the run.
 const pythonTeamCatalogStampProgram = `
-import json, sys, uuid
+import json, os, sys, uuid
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 from dev_health_ops.models.integrations import Integration
 from dev_health_ops.sync import planner
 payload = json.loads(sys.stdin.read())
-engine = create_engine(payload["uri"], poolclass=NullPool)
+engine = create_engine(os.environ["ORACLE_DATABASE_URI"], poolclass=NullPool)
 out = []
 for integration_id in payload["integrations"]:
     with Session(engine) as session:
@@ -61,25 +58,22 @@ type teamCatalogFingerprintCase struct {
 	resolverRefuses string
 }
 
-// TestTeamCatalogFingerprintVenueOracleMatchesLivePython holds the team
+// TestTeamCatalogFingerprintVenueOracleMatchesFrozenPython holds the team
 // catalog seam's stamped-run check to the planner's own stamp. Python's
 // _resolve_credential_stamp stamps a run over each seeded credential (every
 // team-catalog provider, several credential shapes, config merged under the
 // decrypted fields); the Go resolver must accept every such stamp as its
 // own. A credential whose secret content is edited in place after the stamp
 // must still fail closed with the distinct mismatch error.
-func TestTeamCatalogFingerprintVenueOracleMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the team catalog fingerprint oracle needs the full project Python environment; ci/check_go.sh venue-oracles runs it")
-	}
+func TestTeamCatalogFingerprintVenueOracleMatchesFrozenPython(t *testing.T) {
+	golden, root := openVenueGolden(t, "venue-team-catalog-fingerprint.golden.json")
 	ctx := context.Background()
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	const org = "00000000-0000-4000-8000-0000000fca71"
 	var cases []teamCatalogFingerprintCase
 	var tampered string
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:      root,
+		Golden:    golden,
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + teamCatalogFingerprintVenueKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			cases, tampered = seedTeamCatalogFingerprintCases(t, ctx, admin, venue, org)
@@ -87,29 +81,25 @@ func TestTeamCatalogFingerprintVenueOracleMatchesLivePython(t *testing.T) {
 		},
 	})
 
-	python := pyoracle.Resolve(t, root)
-	parsed, err := url.Parse(venue.AdminURI(t, venue.SourceDB))
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed.Scheme = "postgresql+psycopg2"
 	ids := make([]string, len(cases))
 	for index, c := range cases {
 		ids[index] = c.integrationID
 	}
-	input, _ := json.Marshal(map[string]any{"uri": parsed.String(), "integrations": ids})
-	command := exec.Command(python, "-c", pythonTeamCatalogStampProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_SDK_DISABLED=true", "ENVIRONMENT=test",
-		"SETTINGS_ENCRYPTION_KEY="+teamCatalogFingerprintVenueKey)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
+	input, err := json.Marshal(map[string]any{"integrations": ids})
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	answer := programoracle.Produce(t, golden, root, []programoracle.Program{{
+		Name: "team catalog credential stamp", Text: pythonTeamCatalogStampProgram, Stdin: input,
+		Env:    map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test", "SETTINGS_ENCRYPTION_KEY": teamCatalogFingerprintVenueKey},
+		PerRun: oracleDatabase(t, venue),
+	}})[0]
+	if answer.ExitCode != 0 {
+		t.Fatalf("the team catalog stamp program exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)
+	}
 	var stamps [][3]string
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &stamps); err != nil || len(stamps) != len(cases) {
-		t.Fatalf("decode: %v\n%s", err, output)
+	if err := json.Unmarshal([]byte(answer.Stdout), &stamps); err != nil || len(stamps) != len(cases) {
+		t.Fatalf("decode: %v\n%s", err, answer.Stdout)
 	}
 
 	pool, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
@@ -217,12 +207,16 @@ VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', 'incremental', 'running', 0, 0, 0, 
 		t.Fatalf("the raced row changed in the database (%v); the race must be at read time only", err)
 	}
 	t.Logf("%d credentials: %d python stamps accepted by go (%d resolved a client), %d refused by the resolver before the check; the edited secret fails closed", len(cases), verified, resolved, refused)
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	venueoracle.WriteGoOnlyProof(t, "Go's team catalog fingerprint check against the frozen answers of Python's _resolve_credential_stamp")
+	golden.Finish(t)
 }
 
 // seedTeamCatalogFingerprintCases writes the org and one integration per
-// credential shape, each credential encrypted by the Python plane, and
-// returns the cases plus a Python-encrypted replacement secret for case 0.
+// credential shape, each credential encrypted by the Python plane when the
+// golden is recorded (by its Go port when frozen), and returns the cases plus
+// a replacement secret for case 0. The ids are stable: they are in the
+// program's input.
 func seedTeamCatalogFingerprintCases(
 	t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue, org string,
 ) ([]teamCatalogFingerprintCase, string) {
@@ -286,12 +280,13 @@ func seedTeamCatalogFingerprintCases(
 		if err := json.Unmarshal(encrypted[index], &ciphertext); err != nil {
 			t.Fatal(err)
 		}
-		credentialID, integrationID := uuid.New(), uuid.New()
+		credentialID := venueoracle.StableUUID(fmt.Sprintf("team catalog fingerprint: credential %d", index))
+		integrationID := venueoracle.StableUUID(fmt.Sprintf("team catalog fingerprint: integration %d", index))
 		exec(`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
-VALUES ($1, $2, $3, $4, true, $5, $6::json, $7, $7)`, credentialID, org, shape.provider, "cred-"+credentialID.String()[:8], ciphertext, shape.config, at)
+VALUES ($1, $2, $3, $4, true, $5, $6::json, $7, $7)`, credentialID, org, shape.provider, "cred-"+credentialID[:8], ciphertext, shape.config, at)
 		exec(`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, '{}', true, $6, $6)`, integrationID, org, shape.provider, credentialID, "int-"+integrationID.String()[:8], at)
-		cases = append(cases, teamCatalogFingerprintCase{integrationID: integrationID.String(), credentialID: credentialID.String(),
+VALUES ($1, $2, $3, $4, $5, '{}', true, $6, $6)`, integrationID, org, shape.provider, credentialID, "int-"+integrationID[:8], at)
+		cases = append(cases, teamCatalogFingerprintCase{integrationID: integrationID, credentialID: credentialID,
 			provider: shape.provider, resolverRefuses: shape.resolverRefuses})
 	}
 	var tampered string

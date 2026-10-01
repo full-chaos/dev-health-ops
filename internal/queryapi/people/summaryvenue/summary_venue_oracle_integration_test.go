@@ -5,25 +5,23 @@ package summaryvenue
 import (
 	"context"
 	"crypto/md5"
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -41,7 +39,7 @@ const (
 // as a `date`, written as a midnight datetime) and last_ingested_at (a
 // DateTime('UTC') column clickhouse-connect returns naive).
 func TestPeopleSummaryVenueOracle(t *testing.T) {
-	runPeopleSummaryVenue(t)
+	runPeopleSummaryVenue(t, "venue-people-summary.golden.json")
 }
 
 // TestPeopleSummaryServerZoneVenueOracle is the same comparison against a
@@ -49,14 +47,15 @@ func TestPeopleSummaryVenueOracle(t *testing.T) {
 // driver decodes a Date and a DateTime.
 func TestPeopleSummaryServerZoneVenueOracle(t *testing.T) {
 	t.Setenv(containers.ClickHouseTimezoneEnv, "America/Los_Angeles")
-	runPeopleSummaryVenue(t)
+	runPeopleSummaryVenue(t, "venue-people-summary-zone.golden.json")
 }
 
-func runPeopleSummaryVenue(t *testing.T) {
+func runPeopleSummaryVenue(t *testing.T, goldenName string) {
+	golden, root := openVenueGolden(t, goldenName)
 	ctx := context.Background()
-	root := repoRoot(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   root,
+		Golden: golden,
 		JWTKey: "venue-oracle-test-secret-key-for-people-summary-32b!",
 		Seed: func(*testing.T, context.Context, *pgxpool.Pool, *venueoracle.Venue) map[string]map[string]any {
 			return nil
@@ -65,7 +64,7 @@ func runPeopleSummaryVenue(t *testing.T) {
 	seedClickHouse(t, ctx, venue)
 
 	personID := fmt.Sprintf("%x", md5.Sum([]byte(venueIdentity)))
-	pythonBody := runPythonSummary(t, root, venue, personID)
+	pythonBody := runPythonSummary(t, root, golden, venue, personID)
 
 	zero := uint64(0)
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{
@@ -117,7 +116,9 @@ func runPeopleSummaryVenue(t *testing.T) {
 	if got, want := timestampFragments(string(goBody)), timestampFragments(pythonBody); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("timestamp text differs\n python: %s\n go:     %s", strings.Join(want, "\n"), strings.Join(got, "\n"))
 	}
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	venueoracle.WriteGoOnlyProof(t, "Go's person summary timestamps against the frozen answer of Python's build_person_summary_response")
+	golden.Finish(t)
 }
 
 var timestampFragment = regexp.MustCompile(`"last_ingested_at":[^,}]*|"spark":\[[^\]]*\]`)
@@ -127,7 +128,7 @@ func timestampFragments(body string) []string { return timestampFragment.FindAll
 // seedClickHouse writes the same rows into BOTH planes' databases.
 func seedClickHouse(t *testing.T, ctx context.Context, venue *venueoracle.Venue) {
 	t.Helper()
-	repo := uuid.NewString()
+	repo := venueoracle.StableUUID("people summary: repository")
 	var statements []string
 	for _, day := range []string{"2026-09-05", "2026-09-20", "2026-09-21", "2026-09-23"} {
 		statements = append(statements, fmt.Sprintf(`INSERT INTO user_metrics_daily
@@ -151,50 +152,38 @@ VALUES ('%s', '2026-09-23', '2026-09-24 12:00:00', '%s')`, repo, venueOrg))
 	}
 }
 
-// runPythonSummary runs the producer script with the venue's Python
-// interpreter and the Python plane's ClickHouse database.
-func runPythonSummary(t *testing.T, root string, venue *venueoracle.Venue, personID string) string {
+// pythonSummaryEnv names the variable that hands the producer the ClickHouse
+// address of the Python plane's database of this run. The address is new in
+// every run, so it is not part of a request.
+const pythonSummaryEnv = "ORACLE_CLICKHOUSE_URL"
+
+// runPythonSummary runs the producer script, with the Python plane's ClickHouse
+// database when the golden is recorded, and returns the body it printed.
+func runPythonSummary(t *testing.T, root string, golden *venueoracle.Golden, venue *venueoracle.Venue, personID string) string {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	script := filepath.Join(filepath.Dir(file), "testdata", "summary_producer.py")
-	args := fmt.Sprintf(`{"db_url":%q,"person_id":%q,"org_id":%q,"range_days":14,"compare_days":14,"today":%q}`,
-		venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB), personID, venueOrg, venueToday)
-	command := exec.Command("python3", script, args)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_SDK_DISABLED=true",
-		"ENVIRONMENT=test", "IDENTITY_MAPPING_PATH="+filepath.Join(t.TempDir(), "missing.yaml"))
-	output, err := command.Output()
+	script, err := os.ReadFile(filepath.Join("testdata", "summary_producer.py"))
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			t.Fatalf("python producer: %v: %s", err, exitErr.Stderr)
-		}
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(string(output), "\n") {
+	program := programoracle.Script("people summary producer", "internal/queryapi/people/summaryvenue/testdata/summary_producer.py", string(script), nil)
+	// The producer takes one JSON argument; the database address in it is the
+	// run's, read from the environment, and every other field is the request.
+	arguments := fmt.Sprintf(`{"person_id":%q,"org_id":%q,"range_days":14,"compare_days":14,"today":%q}`, personID, venueOrg, venueToday)
+	program.Text = "import json, os, sys\nargs = json.loads(" + strconv.Quote(arguments) + ")\nargs[\"db_url\"] = os.environ[\"" + pythonSummaryEnv + "\"]\n" +
+		"sys.argv = [sys.argv[0], json.dumps(args)]\n" + program.Text
+	program.Env = map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test", "IDENTITY_MAPPING_PATH": "/nonexistent/identity-mapping.yaml"}
+	program.PerRun = func() map[string]string {
+		return map[string]string{pythonSummaryEnv: venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB)}
+	}
+	answer := programoracle.Produce(t, golden, root, []programoracle.Program{program})[0]
+	if answer.ExitCode != 0 {
+		t.Fatalf("the python producer exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)
+	}
+	for _, line := range strings.Split(answer.Stdout, "\n") {
 		if body, ok := strings.CutPrefix(line, "BODY "); ok {
 			return body
 		}
 	}
-	t.Fatalf("python producer printed no BODY line: %s", output)
+	t.Fatalf("python producer printed no BODY line: %s", answer.Stdout)
 	return ""
-}
-
-// repoRoot walks up from this file to the directory holding src/dev_health_ops.
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's source file")
-	}
-	directory := filepath.Dir(file)
-	for {
-		if info, err := os.Stat(filepath.Join(directory, "src", "dev_health_ops")); err == nil && info.IsDir() {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatalf("no src/dev_health_ops above %s", file)
-		}
-		directory = parent
-	}
 }

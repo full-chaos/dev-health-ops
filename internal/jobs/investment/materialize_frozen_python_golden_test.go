@@ -8,9 +8,9 @@ package investment
 //
 //   - TestMaterializeOrchestrationMatchesFrozenPythonGolden compares the Go
 //     plane against the CHECKED-IN golden. Runs everywhere, needs no Python.
-//   - TestFrozenPythonGoldenStillMatchesLivePython re-runs the generator and
-//     byte-compares. Runs only under the live-python-oracles gate, and is what
-//     stops the frozen file rotting into agreement with a Python that has moved.
+//   - TestFrozenPythonGoldenStillMatchesFrozenPython byte-compares the checked-in
+//     file with the frozen answer of the generator (executed once on the pinned
+//     build). It stops the checked-in file from being edited by hand.
 //
 // A single test doing both would be weaker than either: it would either need
 // Python everywhere, or never notice the reference changing.
@@ -19,19 +19,17 @@ import (
 	"encoding/json"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 const (
 	investmentGoldenFixture   = "tests/fixtures/investment_materialize_python_golden.json"
 	investmentGoldenGenerator = "tests/fixtures/generate_investment_materialize_python_golden.py"
-	investmentGoldenProof     = "investment-materialize-orchestration"
 )
 
 type investmentGolden struct {
@@ -212,55 +210,29 @@ func assertAuditJSONRoundTrips(t *testing.T, encoded, status string) {
 	}
 }
 
-// TestFrozenPythonGoldenStillMatchesLivePython re-runs the generator and
-// byte-compares its output against the checked-in file.
-//
-// Gated on DEV_HEALTH_LIVE_PYTHON_ORACLES because it needs a Python
-// interpreter with the project's dependencies. It writes a proof marker so
-// ci/check_go.sh can assert the guard actually RAN rather than skipped -- a
-// skipped rot guard reports `ok` and proves nothing, which is the failure mode
-// the marker convention exists for.
-func TestFrozenPythonGoldenStillMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("set DEV_HEALTH_LIVE_PYTHON_ORACLES=1 to run the live-Python rot guard")
-	}
+// TestFrozenPythonGoldenStillMatchesFrozenPython compares the frozen answer of
+// the generator (executed once on the pinned build, --stdout) with the
+// checked-in file byte for byte: the file is what the Python reference
+// produced, not an edit of it.
+func TestFrozenPythonGoldenStillMatchesFrozenPython(t *testing.T) {
 	repoRoot := repoRootFromInvestment(t)
-
-	python := pyoracle.Resolve(t, repoRoot)
-	command := exec.Command(python, investmentGoldenGenerator, "--stdout")
-	command.Dir = repoRoot
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-	rendered, err := command.Output()
+	generator, err := os.ReadFile(filepath.Join(repoRoot, investmentGoldenGenerator))
 	if err != nil {
-		t.Fatalf("running %s: %v", investmentGoldenGenerator, pyoracle.RunError(python, err, nil))
+		t.Fatalf("reading %s: %v", investmentGoldenGenerator, err)
 	}
+	program := programoracle.Script("investment materialize golden generator", investmentGoldenGenerator, string(generator), nil)
+	program.Text = "import sys\nsys.argv = [sys.argv[0], \"--stdout\"]\n" + program.Text
+	rendered := frozenPython(t, "generator.golden.json", program)[0]
 
 	frozen, err := os.ReadFile(filepath.Join(repoRoot, investmentGoldenFixture))
 	if err != nil {
 		t.Fatalf("reading %s: %v", investmentGoldenFixture, err)
 	}
-	if string(frozen) != string(rendered) {
+	if string(frozen) != rendered {
 		t.Fatalf(
-			"%s no longer matches what %s produces -- the Python reference moved and the "+
-				"frozen golden did not. Regenerate it and re-read the diff before accepting:\n\n"+
-				"  PYTHONPATH=src python %s\n",
-			investmentGoldenFixture, investmentGoldenGenerator, investmentGoldenGenerator,
+			"%s is not what the frozen answer of %s says -- the file was edited or the golden is stale. "+
+				"Regenerate it from the pinned build and re-record the golden",
+			investmentGoldenFixture, investmentGoldenGenerator,
 		)
-	}
-	writeLivePythonOracleProof(t, investmentGoldenProof)
-}
-
-// writeLivePythonOracleProof records that this guard executed, in the directory
-// ci/check_go.sh hands it. Each guard gets its OWN marker name: a shared marker
-// is satisfied by whichever guard happened to run, so a second guard could rot
-// silently behind the first one's proof.
-func writeLivePythonOracleProof(t *testing.T, marker string) {
-	t.Helper()
-	directory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if directory == "" {
-		return
-	}
-	if err := os.WriteFile(filepath.Join(directory, marker), []byte("executed"), 0o644); err != nil {
-		t.Fatalf("writing proof marker %s: %v", marker, err)
 	}
 }

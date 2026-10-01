@@ -968,3 +968,35 @@ func TestAKeyGeneratedForTheRunIsKeyedByNameWhateverItsValue(t *testing.T) {
 		t.Fatalf("the call key of a variable the test set to a generated key depends on the key (%q then %q)", first, call())
 	}
 }
+
+// TestThePerRunNamesAreExactlyTheClosedListWithTheirSide pins perRunPythonEnv
+// both ways: every name the list holds is named here with who supplies it, and
+// every name here is in the list. Adding a name to the list (or taking one out,
+// or moving it between the harness/host side and the test side) fails here until
+// this table says so too, in the same change as the oracle that needs it.
+func TestThePerRunNamesAreExactlyTheClosedListWithTheirSide(t *testing.T) {
+	want := map[string]bool{ // name -> supplied by the test
+		"CLICKHOUSE_URI": false, "HOME": false, "PATH": false, "POSTGRES_URI": false, "PYTHONPATH": false, "REDIS_URL": false, "TMPDIR": false,
+		"GITHUB_APP_PRIVATE_KEY": true, "REQUESTS_CA_BUNDLE": true, "TELEMETRY_ENDPOINT": true,
+		"VENUE_PAGERDUTY_API_BASE_OVERRIDE": true, "VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": true, "VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE": true,
+		"VENUE_PROVIDER_STUB_PORT": true, "VENUE_STRIPE_API_BASE": true,
+	}
+	for name, listed := range perRunPythonEnv {
+		byTest, ok := want[name]
+		if !ok {
+			t.Errorf("perRunPythonEnv lists %s, which this table does not: a per-run name needs the oracle that uses it named here", name)
+			continue
+		}
+		if listed.byTest != byTest {
+			t.Errorf("%s: the list says byTest=%v, this table says %v", name, listed.byTest, byTest)
+		}
+		if strings.TrimSpace(listed.reason) == "" {
+			t.Errorf("%s has no reason", name)
+		}
+	}
+	for name := range want {
+		if _, ok := perRunPythonEnv[name]; !ok {
+			t.Errorf("%s is in this table and not in perRunPythonEnv: the oracle that needs it would key a per-run value by value", name)
+		}
+	}
+}

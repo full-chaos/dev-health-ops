@@ -47,45 +47,22 @@ const operationalOrderingContractEnv = "OPERATIONAL_ORDERING_CONTRACT"
 
 // ErrOrderingContractUnparseable reports a value that names no contract.
 var ErrOrderingContractUnparseable = errors.New(
-	"OPERATIONAL_ORDERING_CONTRACT must be unset, \"1\" or \"2\"")
+	"OPERATIONAL_ORDERING_CONTRACT must be unset or \"2\"")
 
-// parseOperationalOrderingContract mirrors
-// parse_operational_ordering_contract (operational_ordering_guard.py:62), and
-// mirrors its STRICTNESS, which is the part that matters:
-//
-//	if raw is None: return LEGACY
-//	if raw not in {"1", "2"}: raise OperationalOrderingConfigurationError(raw)
-//
-// Two details are deliberate because an earlier version got both wrong:
-//
-//  1. UNSET and EMPTY are different. Python sees None for an unset variable and
-//     returns LEGACY, but sees "" for one exported as empty and RAISES. So this
-//     takes the value through LookupEnv rather than Getenv, which flattens the
-//     two into "".
-//
-//  2. NO TRIMMING. Python compares the raw string, so "2 " raises. Trimming
-//     first looks harmless and is the opposite of harmless: it silently ACCEPTS
-//     a value the Python runtime refuses to start on, so the two runtimes would
-//     disagree about whether the same deployment is even configured -- and the
-//     Go side would be the one quietly proceeding.
-//
-// Anything else falling back to legacy would be worse still: a typo would not
-// merely be ignored, it would select the branch that counts one incident as
-// several, and nothing would say so.
+// parseOperationalOrderingContract is operationalordering.ResolveValue with
+// this package's error: unset or exactly "2" is contract 2, anything else is
+// refused. Contract 1 is unsupported, so "1" is refused like a typo, and unset
+// never selects the legacy FINAL read. Two details stay deliberate: UNSET and
+// EMPTY are different (an exported-but-empty value is refused; read through
+// LookupEnv, not Getenv), and there is NO TRIMMING ("2 " is refused, so the Go
+// runtime never proceeds on a value another runtime would refuse).
 func parseOperationalOrderingContract(
 	raw string, present bool,
 ) (OperationalOrderingContract, error) {
-	if !present {
-		return OperationalOrderingLegacy, nil
+	if _, err := operationalordering.ResolveValue(raw, present); err != nil {
+		return 0, fmt.Errorf("%w: %w", ErrOrderingContractUnparseable, err)
 	}
-	switch raw {
-	case "1":
-		return OperationalOrderingLegacy, nil
-	case "2":
-		return OperationalOrderingRevision, nil
-	default:
-		return 0, fmt.Errorf("%w: got %q", ErrOrderingContractUnparseable, raw)
-	}
+	return OperationalOrderingRevision, nil
 }
 
 // configuredOperationalOrderingContract reads the contract from the

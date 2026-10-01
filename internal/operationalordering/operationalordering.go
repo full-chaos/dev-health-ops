@@ -63,6 +63,13 @@ func RevisionActiveRows(columns, table, where, active string) string {
 		" ORDER BY org_id, id, " + RevisionOrder + " LIMIT 1 BY org_id, id) WHERE " + active
 }
 
+// Contract is the ordering contract a reader reads under. Only contract 2
+// exists for readers: the migrator builds only it (contract 1 is unsupported).
+type Contract int
+
+// Revision is contract 2: the current row of a key is selected by revision.
+const Revision Contract = 2
+
 // UnsupportedError is the refusal for an OPERATIONAL_ORDERING_CONTRACT value
 // other than 2. Contract 1 is unsupported (the migrator builds only contract
 // 2), and any other value is a typo.
@@ -72,17 +79,29 @@ func (e UnsupportedError) Error() string {
 	return fmt.Sprintf("%s=%q is refused: only contract 2 is supported (leave it unset or set it to 2)", Env, e.Value)
 }
 
-// CheckForRead returns nil when a process may read operational tables as
-// contract 2: the variable is unset (the production default, which the query
-// API relies on because the chart exports the variable to the workers only) or
-// exactly "2". Any other value, blank included, is refused.
-func CheckForRead(lookup func(string) (string, bool)) error {
+// ResolveValue is the one decision every reader of the operational tables takes
+// from the process variable: unset or exactly "2" is contract 2 (production's,
+// and the default), anything else (1, blank, a padded or misspelled value) is
+// refused with an UnsupportedError. No value selects the legacy FINAL read.
+func ResolveValue(value string, set bool) (Contract, error) {
+	if !set || value == "2" {
+		return Revision, nil
+	}
+	return 0, UnsupportedError{Value: value}
+}
+
+// Resolve is ResolveValue over a lookup (os.LookupEnv when lookup is nil).
+func Resolve(lookup func(string) (string, bool)) (Contract, error) {
 	if lookup == nil {
 		lookup = os.LookupEnv
 	}
 	value, set := lookup(Env)
-	if !set || value == "2" {
-		return nil
-	}
-	return UnsupportedError{Value: value}
+	return ResolveValue(value, set)
+}
+
+// CheckForRead returns nil when a process may read the operational tables: see
+// ResolveValue.
+func CheckForRead(lookup func(string) (string, bool)) error {
+	_, err := Resolve(lookup)
+	return err
 }

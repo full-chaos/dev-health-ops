@@ -4,6 +4,7 @@ package daily
 
 import (
 	"context"
+	"os"
 	"sort"
 	"testing"
 	"time"
@@ -21,7 +22,6 @@ import (
 //	I3  one live version                                -> returned
 //	I4  live, behind a mapping whose newest version is inactive -> not returned
 func TestLoadIncidentsStartedReadsTheCurrentRowOnContract2(t *testing.T) {
-	t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "2")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	_, conn := opfixture.Start(ctx, t)
@@ -47,21 +47,41 @@ func TestLoadIncidentsStartedReadsTheCurrentRowOnContract2(t *testing.T) {
 	inc("I3", "svc-live", "open", 1, false)
 	inc("I4", "svc-gone", "open", 1, false)
 
-	got, err := LoadIncidentsStarted(ctx, conn, org, []uuid.UUID{repo}, day, day.Add(24*time.Hour), day.Add(24*time.Hour), nil)
-	if err != nil {
-		t.Fatal(err)
+	load := func() ([]IncidentRow, error) {
+		return LoadIncidentsStarted(ctx, conn, org, []uuid.UUID{repo}, day, day.Add(24*time.Hour), day.Add(24*time.Hour), nil)
 	}
-	statuses := map[string]string{}
-	var ids []string
-	for _, row := range got {
-		ids = append(ids, row.IncidentID)
-		statuses[row.IncidentID] = row.Status
+	// "2" and unset are the same contract: the current row of each key.
+	for name, configure := range map[string]func(){
+		"two": func() { t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "2") },
+		"unset": func() {
+			t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "")
+			_ = os.Unsetenv("OPERATIONAL_ORDERING_CONTRACT")
+		},
+	} {
+		configure()
+		got, err := load()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		statuses := map[string]string{}
+		var ids []string
+		for _, row := range got {
+			ids = append(ids, row.IncidentID)
+			statuses[row.IncidentID] = row.Status
+		}
+		sort.Strings(ids)
+		if len(ids) != 2 || ids[0] != "I2" || ids[1] != "I3" {
+			t.Fatalf("%s: returned %v (statuses %v), want exactly [I2 I3]: a tombstoned incident (I1) or an incident behind a deactivated mapping (I4) came back", name, ids, statuses)
+		}
+		if statuses["I2"] != "resolved" {
+			t.Fatalf("%s: I2 status %q, want the newest version %q", name, statuses["I2"], "resolved")
+		}
 	}
-	sort.Strings(ids)
-	if len(ids) != 2 || ids[0] != "I2" || ids[1] != "I3" {
-		t.Fatalf("returned %v (statuses %v), want exactly [I2 I3]: a tombstoned incident (I1) or an incident behind a deactivated mapping (I4) came back", ids, statuses)
-	}
-	if statuses["I2"] != "resolved" {
-		t.Fatalf("I2 status %q, want the newest version %q", statuses["I2"], "resolved")
+	// Contract 1 is unsupported: refused, never read as legacy FINAL.
+	for _, value := range []string{"1", "", "3"} {
+		t.Setenv("OPERATIONAL_ORDERING_CONTRACT", value)
+		if got, err := load(); err == nil {
+			t.Fatalf("OPERATIONAL_ORDERING_CONTRACT=%q was accepted and returned %d rows", value, len(got))
+		}
 	}
 }

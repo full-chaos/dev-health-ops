@@ -274,11 +274,10 @@ func TestDateTime64ArgumentsAreLiteralsNotExpressions(t *testing.T) {
 }
 
 func TestOrderingContractParsingMirrorsPythonsStrictness(t *testing.T) {
-	// parse_operational_ordering_contract (operational_ordering_guard.py:62)
-	// returns LEGACY for None and RAISES for anything that is not exactly "1"
-	// or "2". Matching the strictness is the point: a value the Python runtime
-	// refuses to start on must not be one the Go runtime quietly accepts, or
-	// the two disagree about whether the same deployment is configured at all.
+	// Unset or exactly "2" is contract 2; anything else, "1" included, is
+	// refused. Unset must never select the legacy FINAL read, and strictness is
+	// the point: a typo must not resolve to a branch that counts one incident
+	// as several.
 	tests := []struct {
 		name    string
 		raw     string
@@ -286,8 +285,8 @@ func TestOrderingContractParsingMirrorsPythonsStrictness(t *testing.T) {
 		want    OperationalOrderingContract
 		wantErr bool
 	}{
-		{name: "unset is legacy, as None is", present: false, want: OperationalOrderingLegacy},
-		{name: "explicit 1", raw: "1", present: true, want: OperationalOrderingLegacy},
+		{name: "unset is contract 2", present: false, want: OperationalOrderingRevision},
+		{name: "explicit 1 is refused: contract 1 is unsupported", raw: "1", present: true, wantErr: true},
 		{name: "explicit 2", raw: "2", present: true, want: OperationalOrderingRevision},
 		{
 			// Exported-but-empty is NOT unset. Python sees "" rather than None

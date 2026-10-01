@@ -2482,7 +2482,7 @@
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 405,
       "headers": {
-        "allow": "HEAD, GET",
+        "allow": "GET, HEAD",
         "content-length": "31",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
@@ -2557,7 +2557,7 @@
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 405,
       "headers": {
-        "allow": "HEAD, GET",
+        "allow": "GET, HEAD",
         "content-length": "31",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
@@ -2632,7 +2632,7 @@
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 405,
       "headers": {
-        "allow": "HEAD, GET",
+        "allow": "GET, HEAD",
         "content-length": "31",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",

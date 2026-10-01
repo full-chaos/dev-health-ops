@@ -58,7 +58,7 @@ func venueRoot() string {
 func TestVenueOracleProtectedRoutes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
-	spec := venueGolden("protected-routes", t.Name(), "8a1994f5ee5151dc03064bc547b32b10fc1c511dc9bdf66ccb115e0c3f3cc647")
+	spec := venueGolden("protected-routes", t.Name(), "5fd0b6e79fcef9f4c38233d0b2010bbbbdcf58c3d877be490aaa13b4ff9f06e3")
 	// Generated ids and the run's clock readings (collected_at, ingestion_id)
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens

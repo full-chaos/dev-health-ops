@@ -971,7 +971,29 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 		if options.Inspect != nil {
 			options.Inspect(request, goResponse)
 		}
-		same, compared, pyShown, goShown := Compare(request, python[index], goResponse, options)
+		pythonResponse, compareOptions := python[index], options
+		if options.Golden != nil {
+			// A golden stores no token value: both planes are compared as
+			// projected, and a projected body has another length.
+			projectedPython, err := options.Golden.projectResponse(pythonResponse)
+			if err != nil {
+				t.Fatal(err)
+			}
+			projectedGo, err := options.Golden.projectResponse(goResponse)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if projectedPython.Body != pythonResponse.Body || projectedGo.Body != goResponse.Body {
+				compareOptions.SkipContentLength = func(r Request) bool { return true }
+			}
+			for _, projected := range []Response{projectedPython, projectedGo} {
+				if err := undecodableErr(request, projected); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pythonResponse, goResponse = projectedPython, projectedGo
+		}
+		same, compared, pyShown, goShown := Compare(request, pythonResponse, goResponse, compareOptions)
 		fmt.Fprintf(&receipt, "%-58s python=%d go=%d %s\n", request.Name, python[index].Status, goResponse.Status, Mark(same))
 		if !same {
 			t.Errorf("%s:\n python %d %s %v\n go     %d %s %v", request.Name, python[index].Status, pyShown.Body,

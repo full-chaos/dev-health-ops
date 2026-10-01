@@ -13,15 +13,18 @@
       "name": "sync now",
       "method": "PYTHON",
       "path": "program sha256 0e88b49f30583b3a52bd9be343c770461c06dbe4c2caedf1280b6433d963273c env sha256 e71f5c8f595123e07621cebc09aff3eed474b7d0d1abe6a983a9ca0ba428a2e9",
-      "body_sha256": "6acaf4d5e3799f104ded59300802a77d43ef1d347f361159a45cbfbc8387898b",
+      "body_sha256": "6c9849af528cdf87719b9190b2081b0bae9a30ba128f8f821c44b88f32eba9d9",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": {},
-      "body": "[\"ok\", \"ok\", \"ok\", \"ok\"]\n"
+      "body": "[\"ok\", \"ok\", \"ok\", \"ok\", \"ok\"]\n"
     }
   ],
   "rows": {
     "identity:python:child full resync": {
+      "rows": "occurrence_id is the identity of its scheduled_for"
+    },
+    "identity:python:child inactive scheduled": {
       "rows": "occurrence_id is the identity of its scheduled_for"
     },
     "identity:python:child scheduled": {
@@ -36,6 +39,9 @@
     "rows:job:child full resync": {
       "rows": "sync-config-5f03ee5d-d64a-5b26-972e-a566a544ee3esyncgithub0 * * * *UTC{\"provider\": \"github\", \"sync_config_id\": \"5f03ee5d-d64a-5b26-972e-a566a544ee3e\"}1 false 0 0"
     },
+    "rows:job:child inactive scheduled": {
+      "rows": "sync-config-b5cc2f9b-e651-541b-9771-aa97d78afffbsyncgithub0 */6 * * *UTC{\"provider\": \"github\", \"sync_config_id\": \"b5cc2f9b-e651-541b-9771-aa97d78afffb\"}1 false 0 0"
+    },
     "rows:job:child scheduled": {
       "rows": "sync-config-8a83c9b7-8e39-568b-92b3-4e6b293f94c8syncgithub0 */6 * * *Europe/Paris{\"provider\": \"github\", \"sync_config_id\": \"8a83c9b7-8e39-568b-92b3-4e6b293f94c8\"}0 false 0 0"
     },
@@ -48,6 +54,9 @@
     "rows:occurrence:child full resync": {
       "rows": "sync_scheduler_occurrence_v100000000-0000-4000-8000-0000000c6695pending0sync-config-5f03ee5d-d64a-5b26-972e-a566a544ee3e"
     },
+    "rows:occurrence:child inactive scheduled": {
+      "rows": "sync_scheduler_occurrence_v100000000-0000-4000-8000-0000000c6695pending0sync-config-b5cc2f9b-e651-541b-9771-aa97d78afffb"
+    },
     "rows:occurrence:child scheduled": {
       "rows": "sync_scheduler_occurrence_v100000000-0000-4000-8000-0000000c6695pending0sync-config-8a83c9b7-8e39-568b-92b3-4e6b293f94c8"
     },
@@ -59,6 +68,9 @@
     },
     "rows:trigger:child full resync": {
       "rows": "full_resync\u003cnil\u003e \u003cnil\u003e [a8fdf3c2-7100-5578-9443-b221e016cf26] [repo-metadata commits commit-stats files]manual"
+    },
+    "rows:trigger:child inactive scheduled": {
+      "rows": "incremental\u003cnil\u003e \u003cnil\u003e [9984eafd-7092-5e96-b7cf-b5605e95f6cd] [work-items work-item-labels work-item-projects work-item-history work-item-comments]manual"
     },
     "rows:trigger:child scheduled": {
       "rows": "incremental\u003cnil\u003e \u003cnil\u003e [22d70c44-83f3-5b84-b798-1e8d610d9050] [work-items work-item-labels work-item-projects work-item-history work-item-comments]manual"

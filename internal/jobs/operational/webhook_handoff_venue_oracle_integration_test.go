@@ -47,6 +47,7 @@ print(json.dumps(out))
 
 type handoffOracleCase struct {
 	name, configID, installation, repoID, fullName string
+	inactive                                       bool
 }
 
 // TestWebhookHandoffVenueOracleMatchesFrozenPython is the CHAOS-6695
@@ -109,9 +110,22 @@ func TestWebhookHandoffVenueOracleMatchesFrozenPython(t *testing.T) {
 	deliveredAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	for index, c := range cases {
 		payload := fmt.Sprintf(`{"installation":{"id":%s},"repository":{"id":%s,"full_name":%q}}`, c.installation, c.repoID, c.fullName)
+		// The webhook router only selects active configurations, so an inactive one is switched on for the
+		// delivery and off again before the request is minted: the mint then sees the inactive configuration
+		// that Python's Sync Now (by id) saw from the start.
+		if c.inactive {
+			if _, err := pool.Exec(ctx, `UPDATE public.sync_configurations SET is_active = true WHERE id = $1::uuid`, c.configID); err != nil {
+				t.Fatal(err)
+			}
+		}
 		result, err := store.TriggerScopedSync(ctx, uuid.NewString(), "github", "push", []byte(payload), deliveredAt.Add(time.Duration(index)*time.Second))
 		if err != nil || !result.Processed || result.SyncConfigID != c.configID {
 			t.Fatalf("%s: go webhook = %+v, %v; want routed to %s", c.name, result, err, c.configID)
+		}
+		if c.inactive {
+			if _, err := pool.Exec(ctx, `UPDATE public.sync_configurations SET is_active = false WHERE id = $1::uuid`, c.configID); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if err := schedsync.MintWebhookSyncRequests(ctx, pool, time.Now().UTC(), 50); err != nil {
@@ -206,12 +220,18 @@ VALUES ($1, $2, 'github', 'ho', '{}', true, $3, $3)`, integrationID, org, at)
 	parentID := venueoracle.StableUUID("webhook handoff: parent configuration")
 	exec(`INSERT INTO sync_configurations (id, org_id, name, provider, integration_id, sync_targets, sync_options, is_active, planner_managed, created_at, updated_at)
 VALUES ($1, $2, 'ho parent', 'github', $3, '["git","prs"]', '{}', true, true, $4, $4)`, parentID, org, integrationID, at)
-	type repo struct{ name, targets, options string }
+	type repo struct {
+		name, targets, options string
+		inactive               bool
+	}
 	repos := []repo{
-		{"child targets", `["git","prs"]`, `{}`},
-		{"child full resync", `["git"]`, `{"full_resync": true}`},
-		{"child scheduled", `["work-items"]`, `{"schedule_cron": "0 */6 * * *", "timezone": "Europe/Paris"}`},
-		{"parent route", "", ""},
+		{"child targets", `["git","prs"]`, `{}`, false},
+		{"child full resync", `["git"]`, `{"full_resync": true}`, false},
+		{"child scheduled", `["work-items"]`, `{"schedule_cron": "0 */6 * * *", "timezone": "Europe/Paris"}`, false},
+		// An inactive configuration with an explicit cron: Python creates its job PAUSED (execution_trigger.py:203-206,
+		// `bool(config.is_active) and explicit_cron`); a Go handoff that ignored is_active would create it ACTIVE.
+		{"child inactive scheduled", `["work-items"]`, `{"schedule_cron": "0 */6 * * *"}`, true},
+		{"parent route", "", "", false},
 	}
 	var cases []handoffOracleCase
 	for index, r := range repos {
@@ -230,9 +250,9 @@ VALUES ($1, $2, $3, 'github', 'repository', $4, $5, $5, $6::json, true, $7, $7)`
 			configID = venueoracle.StableUUID("webhook handoff: configuration " + r.name)
 			exec(`INSERT INTO sync_configurations (id, org_id, name, provider, integration_id, source_id, sync_targets, sync_options, is_active,
 	planner_managed, created_at, updated_at)
-VALUES ($1, $2, $3, 'github', $4, $5, $6::json, $7::json, true, false, $8, $8)`, configID, org, "ho "+r.name, integrationID, sourceID, r.targets, r.options, at)
+VALUES ($1, $2, $3, 'github', $4, $5, $6::json, $7::json, $9, false, $8, $8)`, configID, org, "ho "+r.name, integrationID, sourceID, r.targets, r.options, at, !r.inactive)
 		}
-		cases = append(cases, handoffOracleCase{name: r.name, configID: configID, installation: "6695", repoID: repoID, fullName: fullName})
+		cases = append(cases, handoffOracleCase{name: r.name, configID: configID, installation: "6695", repoID: repoID, fullName: fullName, inactive: r.inactive})
 	}
 	return cases
 }

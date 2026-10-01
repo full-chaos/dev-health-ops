@@ -261,7 +261,7 @@ func scenarios() []scenario {
 // Go api, and requires the same status and the same response text.
 func TestAdminSetupStatusVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, setupGolden(t.Name(), "307acfceeaa80186ebad02cead4385fe32430594c853f9c717139f48d4c12111"))
+	golden := venueoracle.OpenGolden(t, setupGolden(t.Name(), "c9b09f0ca98fa6a2bf4c4f8b7f2774a48c021a42d0c1f5cee02576294139c614"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := stableIDs("setup")
 	const jwtKey = "venue-oracle-test-secret-key-for-setup-status-32-by"

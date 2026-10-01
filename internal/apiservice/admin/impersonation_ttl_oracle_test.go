@@ -40,8 +40,8 @@ func TestImpersonationTTLConfigMatchesThePythonAPI(t *testing.T) {
 // impersonationTTLDigests pin each subtest's golden ("PIN:<file>" until its
 // first recording).
 var impersonationTTLDigests = map[string]string{
-	"unicode_digit":   "cdeaffbc316d65f03afa43227fd7eb0c73da02b941680f07c85b08fc36ae31ec",
-	"beyond_duration": "81231d41e878f6d2e26dfecf67f208e01838873c7bd24807805dbe7f61efedfc",
+	"unicode_digit":   "79b18e050d0584da5a635747495193c3d48f6ab90c8e8152c66483d63f662f89",
+	"beyond_duration": "988576a7bc5a5df94cb5688df09139eebbcef3489c2dfc742caed37e9d683932",
 }
 
 func runImpersonationTTLCase(t *testing.T, name, ttlMinutes string) {

@@ -6,6 +6,7 @@
     "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestImpersonationTTLConfigMatchesThePythonAPI/TTL_beyond_Go_Duration_range$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
     "python_env": "97f4bf61fe9794dca7946c379cd8fdf2ff7023b2a658978878919a83de063cd7",
     "python_env_version": 2,
+    "recorded_by": "goldenrecord",
     "blanked": {
       "body $.expires_at": 4,
       "header date": 3,

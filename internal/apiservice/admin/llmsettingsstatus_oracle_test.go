@@ -42,7 +42,7 @@ import (
 // documented, narrower contract instead.
 func TestLLMSettingsStatusRouteVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunTimeShapesGolden("llmsettingsstatus", t.Name(), "26821b1b04929455ffc86e2f756f19ddb5615c1878003ba3e2140d582511501e"))
+	golden := venueoracle.OpenGolden(t, adminRunTimeShapesGolden("llmsettingsstatus", t.Name(), "b9db72a45e062346e28e03fb6d519577aaf08a7fe5a43f349111896955247f43"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("llmst")
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-status-32-bytes!"

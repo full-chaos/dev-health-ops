@@ -65,7 +65,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, id)
 // times in a row gets five 200s then a 429, on both planes, byte-for-byte.
 func TestSetUserPasswordRateLimitMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminGolden("setpassword_ratelimit", t.Name(), "8d35d2a2d56dc602b8650602970d83fd49a8a3e8b5925f9b37451243d0b1dc9e"))
+	golden := venueoracle.OpenGolden(t, adminGolden("setpassword_ratelimit", t.Name(), "6badef88e31e233e752e6f9de81c5aa77050d26ae4a6aff5479b454067fef0ca"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("spr")
 	const jwtKey = "venue-oracle-test-secret-key-for-password-rate-limit-32-byt"
@@ -126,7 +126,7 @@ func TestSetUserPasswordRateLimitMatchesThePythonAPI(t *testing.T) {
 // proves the Go KeyedLimiter now agrees, not just that Python does.
 func TestSetUserPasswordRateLimitIsIndependentPerTargetAndAdmin(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminGolden("setpassword_ratelimit_independent", t.Name(), "f14931e29607aeb642e9698b0d22e6485bdd5d33514a4ea2cf022ce20c7b36aa"))
+	golden := venueoracle.OpenGolden(t, adminGolden("setpassword_ratelimit_independent", t.Name(), "d70ef40e30ca4dde6da16621a3a0f7d41472e085b943f26fc3e2ba9ceb410748"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("spri")
 	const jwtKey = "venue-oracle-test-secret-key-for-password-rl-independence-32"
@@ -266,7 +266,7 @@ func TestSetUserPasswordRateLimitWindowDoesNotRollOverEarly(t *testing.T) {
 // limited, on both planes.
 func TestSetUserPasswordValidationBeforeLimitVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminGolden("setpassword_validation_before_limit", t.Name(), "40a9bd9885be6dfdbc457523824c52c95c446721ab7f458fb7fd53f1b07dc456"))
+	golden := venueoracle.OpenGolden(t, adminGolden("setpassword_validation_before_limit", t.Name(), "11963c9d37d0b99550415145684d932096cea4b28c066a5f5e0d92ab84dc621b"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("spv")
 	const jwtKey = "venue-oracle-test-secret-key-for-password-validate-limit-32"

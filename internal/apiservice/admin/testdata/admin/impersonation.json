@@ -6,6 +6,7 @@
     "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestImpersonationStartStopMatchesThePythonAPI$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
     "python_env": "96bd22c045ea4c15f8c43ccf4ac2aeb7bd87435bfc33c40b3c8c772f7f1f9f64",
     "python_env_version": 2,
+    "recorded_by": "goldenrecord",
     "blanked": {
       "body $.expires_at": 4,
       "header date": 7,

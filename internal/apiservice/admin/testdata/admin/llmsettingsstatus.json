@@ -6,6 +6,7 @@
     "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestLLMSettingsStatusRouteVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
     "python_env": "ca112422885b41c26b692b4a17c4ba4e2612e8a1b558e3bbe3185efb69f8860b",
     "python_env_version": 2,
+    "recorded_by": "goldenrecord",
     "blanked": {
       "body $.last_fallback_at": 2,
       "header date": 18,

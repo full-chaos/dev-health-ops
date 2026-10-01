@@ -22,7 +22,7 @@ import (
 // audit_logs rows either plane's writes produced compare equal.
 func TestImpersonationStartStopMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("impersonation", t.Name(), "d5600a1ba5f253a2e01ab42a583a30aa277311fc4a52843ee155fa29f516aa76"))
+	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("impersonation", t.Name(), "90767e17d432634ac745dc30284b8a102cd47c8269d1cab6e68593854850b872"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("imp")
 	const jwtKey = "venue-oracle-test-secret-key-for-impersonation-flow-32bytes!"

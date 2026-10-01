@@ -27,7 +27,7 @@ import (
 // answer is a 403/404 from the endpoint, not a 429 from the limiter.
 func TestRateLimitPathCardinalityVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, adminGolden("ratelimit_path_cardinality", t.Name(), "fc535e39759ac0fb69c7d437d7ff13ed0ac8d1a9d125a1dea52bffafb0139843"))
+	golden := venueoracle.OpenGolden(t, adminGolden("ratelimit_path_cardinality", t.Name(), "2448fe8a75a7360e1cf80bebc2f0170488ae8c9cff2b96c1deac66d8b7073d2c"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("rlpc")
 	const jwtKey = "venue-oracle-test-secret-key-for-path-cardinality-32-by"

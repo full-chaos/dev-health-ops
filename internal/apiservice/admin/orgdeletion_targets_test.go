@@ -68,7 +68,7 @@ func TestOrgDeletionTargetsMatchThePythonList(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/admin/org_deletion_targets.json",
 		PythonBuild: orgDeletionTargetsPythonBuild,
-		SHA256:      "7ad766bd8227a0fd3937308745d4346c02aea044efbca546fac2e1cd9865c57a",
+		SHA256:      "f98db083aff5545c6c00857c406bd08df051e02815f802854a5ebf03618c1733",
 		Recipe: "git worktree add --detach $DIR " + orgDeletionTargetsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestOrgDeletionTargetsMatchThePythonList$' -python-root $DIR",
 	})

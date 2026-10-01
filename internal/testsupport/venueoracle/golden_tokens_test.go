@@ -512,3 +512,41 @@ func TestATokenPackedInsideAPackedBodyIsFoundAndAGoldenOutsideTestdataIsWalked(t
 		t.Fatalf("a nested-packed token in a golden outside testdata was not reported: %d %v", checked, violations)
 	}
 }
+
+func TestVolatileHeadersAreStoredAsAPlaceholderAndOtherHeadersStillCompare(t *testing.T) {
+	golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	python := Response{Status: 200, Body: "{}", Headers: map[string]string{"x-request-id": "req-aaaa", "date": "Mon", "x-frame-options": "DENY"}}
+	got, err := golden.projectResponse(python)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"x-request-id", "date"} {
+		if got.Headers[name] != volatileHeaderValue {
+			t.Errorf("%s = %q, want the placeholder", name, got.Headers[name])
+		}
+	}
+	if got.Headers["x-frame-options"] != "DENY" {
+		t.Fatalf("a non-volatile header was rewritten: %v", got.Headers)
+	}
+	request := Request{Name: "r", Method: "GET", Path: "/x"}
+	same := func(goHeaders map[string]string) bool {
+		projected, err := golden.projectResponse(Response{Status: 200, Body: "{}", Headers: goHeaders})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ok, _, _, _ := Compare(request, got, projected, DiffOptions{})
+		return ok
+	}
+	if !same(map[string]string{"x-request-id": "req-bbbb", "date": "Tue", "x-frame-options": "DENY"}) {
+		t.Fatal("another request id and date made the responses differ")
+	}
+	if same(map[string]string{"x-request-id": "req-bbbb", "date": "Tue", "x-frame-options": "SAMEORIGIN"}) {
+		t.Fatal("a changed non-volatile header no longer fails")
+	}
+	if same(map[string]string{"x-request-id": "req-bbbb", "date": "Tue"}) {
+		t.Fatal("a missing non-volatile header no longer fails")
+	}
+}

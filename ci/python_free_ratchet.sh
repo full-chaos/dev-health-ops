@@ -74,6 +74,10 @@ classify() {
       printf '%s\t%s\ttripwire\n' "${pkg}" "${test}" >>"${hits_out}"
     else
       printf 'NON-TRIPWIRE FAILURE: %s %s\n' "${pkg}" "${test}" >&2
+      # The failing test's own output (the first 30 lines), so a real failure is diagnosable from the log.
+      jq -rs --arg p "${pkg}" --arg t "${test}" '
+        map(select(.Package == $p and .Test != null and (.Test | split("/")[0]) == $t and .Action == "output") | .Output) | join("")
+      ' "${json}" 2>/dev/null | head -30 | sed 's/^/    | /' >&2 || true
       rc=1
     fi
   done <"${tmp}/failed.tsv"

@@ -318,3 +318,18 @@ func TestPyoracleNamesTheRecordingVariableOfThisPackage(t *testing.T) {
 		t.Fatalf("pyoracle names %q as the recording variable, venueoracle %q", pyoracle.RecordingEnv, goldenUpdateEnv)
 	}
 }
+
+// The launcher gets the real interpreter in a recording: it is the one place
+// that starts Python there.
+func TestTheLauncherIsGivenTheRealInterpreterInARecording(t *testing.T) {
+	root := checkoutWithInterpreter(t)
+	t.Setenv(pyoracle.RecordingEnv, "1")
+	producer := &Producer{Root: root, t: t}
+	dir, err := producer.PythonDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(root, ".venv", "bin"); dir != want {
+		t.Fatalf("the launcher's interpreter is in %s, want %s", dir, want)
+	}
+}

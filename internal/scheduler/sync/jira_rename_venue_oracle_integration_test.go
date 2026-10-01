@@ -5,32 +5,28 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
-	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // pythonJiraRenameProgram runs the api's own
 // discover_sources_for_integration for each case's integration, with the
 // Jira client's project listing returning the case's projects, the stored
-// credential resolved to fixed fields, and the discovery clock pinned.
+// credential resolved to fixed fields, and the discovery clock pinned. The
+// database is the Python plane's, named by the environment of the run.
 const pythonJiraRenameProgram = `
-import json, sys, uuid
+import json, os, sys, uuid
 from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -41,7 +37,7 @@ payload = json.loads(sys.stdin.read())
 pinned = datetime.fromisoformat(payload["now"])
 discovery._now_utc = lambda: pinned
 discovery._resolve_credentials = lambda integration: {"base_url": "https://example.atlassian.net", "email": "e@example.com", "api_token": "t"}
-engine = create_engine(payload["uri"], poolclass=NullPool)
+engine = create_engine(os.environ["ORACLE_DATABASE_URI"], poolclass=NullPool)
 out = []
 for case in payload["cases"]:
     jira_client.JiraClient.get_all_projects = lambda self, projects=case["projects"]: projects
@@ -76,49 +72,45 @@ func (fixedJiraCredentials) Decrypt(secrets.Value) ([]byte, error) {
 	return []byte(`{"base_url": "https://example.atlassian.net", "email": "e@example.com", "api_token": "t"}`), nil
 }
 
-// TestJiraRenameVenueOracleMatchesLivePython holds the Go discovery's Jira
+// TestJiraRenameVenueOracleMatchesFrozenPython holds the Go discovery's Jira
 // upsert -- rename by jira_project_id, the case-variant duplicate fold, and
 // the sync watermark moves both make -- to the api's own
 // discover_sources_for_integration over two copies of one seeded database,
 // case by case: the same outcome, then the same integration_sources and
-// sync_watermarks rows (watermark updated_at compared as seed or moved).
-func TestJiraRenameVenueOracleMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the Jira rename oracle needs the full project Python environment; ci/check_go.sh venue-oracles runs it")
-	}
+// sync_watermarks rows (watermark updated_at compared as seed or moved). The
+// Python outcomes and the Python plane's rows are frozen: they were executed
+// and read once, on a venue of the pinned build.
+func TestJiraRenameVenueOracleMatchesFrozenPython(t *testing.T) {
+	golden, root := openVenueGolden(t, "venue-jira-rename.golden.json")
 	ctx := context.Background()
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	const org = "00000000-0000-4000-8000-00000000fa11"
 	const seedAt = "2026-01-01 00:00:00+00"
 	pinned := time.Date(2026, 9, 25, 9, 30, 0, 123456000, time.UTC)
 	var cases []jiraRenameCase
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root,
+		Root:   root,
+		Golden: golden,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			cases = seedJiraRenameCases(t, ctx, admin, org, seedAt)
 			return nil
 		},
 	})
 
-	python := pyoracle.Resolve(t, root)
-	parsed, err := url.Parse(venue.AdminURI(t, venue.SourceDB))
+	input, err := json.Marshal(map[string]any{"now": pinned.Format(time.RFC3339Nano), "cases": cases})
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed.Scheme = "postgresql+psycopg2"
-	input, _ := json.Marshal(map[string]any{"uri": parsed.String(), "now": pinned.Format(time.RFC3339Nano), "cases": cases})
-	command := exec.Command(python, "-c", pythonJiraRenameProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_SDK_DISABLED=true", "ENVIRONMENT=test")
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+	answer := programoracle.Produce(t, golden, root, []programoracle.Program{{
+		Name: "jira rename discovery", Text: pythonJiraRenameProgram, Stdin: input,
+		Env:    map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test"},
+		PerRun: oracleDatabase(t, venue),
+	}})[0]
+	if answer.ExitCode != 0 {
+		t.Fatalf("the Jira rename program exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var pythonOutcomes []string
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &pythonOutcomes); err != nil || len(pythonOutcomes) != len(cases) {
-		t.Fatalf("decode python outcomes: %v\n%s", err, output)
+	if err := json.Unmarshal([]byte(answer.Stdout), &pythonOutcomes); err != nil || len(pythonOutcomes) != len(cases) {
+		t.Fatalf("decode python outcomes: %v\n%s", err, answer.Stdout)
 	}
 	// Every case is built to complete: a Python failure here is a harness
 	// or fixture fault, never agreement to be matched.
@@ -148,7 +140,7 @@ func TestJiraRenameVenueOracleMatchesLivePython(t *testing.T) {
 			telemetry:   newSourceDiscoveryTelemetry(),
 			now:         func() time.Time { return pinned },
 		}
-		credential := uuid.NewString()
+		credential := venueoracle.StableUUID(fmt.Sprintf("jira rename: go credential %d", index))
 		outcome := "ok"
 		_, err := service.Discover(ctx, SourceDiscoveryArgs{
 			OrgID: org, IntegrationID: c.IntegrationID, CredentialID: &credential, Provider: "jira",
@@ -181,10 +173,8 @@ func TestJiraRenameVenueOracleMatchesLivePython(t *testing.T) {
 	}
 	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)
 	for _, table := range []string{"integration_sources", "sync_watermarks"} {
-		pythonRows, goRows := venueoracle.TableRows(t, ctx, source, queries[table]), venueoracle.TableRows(t, ctx, goDB, queries[table])
-		if pythonRows != goRows {
-			t.Errorf("%s rows differ:\n python %s\n go     %s", table, pythonRows, goRows)
-		}
+		goRows := venueoracle.TableRows(t, ctx, goDB, queries[table])
+		golden.CompareRows(t, "rows:"+table, func() string { return venueoracle.TableRows(t, ctx, source, queries[table]) }, goRows)
 		t.Logf("%s: %d rows identical", table, strings.Count(goRows, "\n")+map[bool]int{true: 0, false: 1}[goRows == ""])
 	}
 	// The writes happened: a renamed row, moved watermarks, a deleted
@@ -198,13 +188,17 @@ func TestJiraRenameVenueOracleMatchesLivePython(t *testing.T) {
 		t.Errorf("writes not observed (renamed row, moved watermarks, touched watermarks, remaining) = %s", state)
 	}
 	t.Logf("%d cases; write state: %s", len(cases), state)
-	venueoracle.WriteProof(t)
+	golden.SkipDiff(t)
+	venueoracle.WriteGoOnlyProof(t, "Go's Jira rename discovery against the frozen outcomes and rows of Python's discover_sources_for_integration")
+	golden.Finish(t)
 }
 
 // seedJiraRenameCases writes one Jira integration per case, with its
 // planner-managed config, the sources a previous discovery left and their
 // sync watermarks, and returns the cases with the project list each
-// discovery run sees.
+// discovery run sees. Every id is stable: the integration ids are in the
+// program's input, and the seeded source and watermark ids are in the
+// compared rows.
 func seedJiraRenameCases(t *testing.T, ctx context.Context, admin *pgxpool.Pool, org, at string) []jiraRenameCase {
 	t.Helper()
 	exec := func(sql string, args ...any) {
@@ -214,32 +208,33 @@ func seedJiraRenameCases(t *testing.T, ctx context.Context, admin *pgxpool.Pool,
 		}
 	}
 	exec(`INSERT INTO organizations (id, slug, name, settings, tier, is_active, created_at, updated_at) VALUES ($1, 'rename', 'rename', '{}', 'enterprise', true, $2, $2)`, org, at)
-	credential := uuid.New()
+	credential := venueoracle.StableUUID("jira rename: credential")
 	exec(`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, config, created_at, updated_at) VALUES ($1, $2, 'jira', 'jira', true, '{}', $3, $3)`,
 		credential, org, at)
 	var cases []jiraRenameCase
 	add := func(name string, projects []any, sources [][4]string, watermarks [][4]string) {
-		integrationID, configID := uuid.New(), uuid.New()
+		integrationID := venueoracle.StableUUID("jira rename: integration " + name)
+		configID := venueoracle.StableUUID("jira rename: configuration " + name)
 		exec(`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at) VALUES ($1, $2, 'jira', $3, $4, '{}', true, $5, $5)`,
 			integrationID, org, credential, name, at)
 		exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed, integration_id, created_at, updated_at)
 VALUES ($1, $2, $3, 'jira', '["work-items"]', '{}', true, true, $4, $5, $5)`, configID, org, name, integrationID, at)
-		for _, source := range sources {
+		for index, source := range sources {
 			// external_id, enabled, metadata, discovered_at offset (minutes)
 			exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
 VALUES ($1, $2, $3, 'jira', 'project', $4, $4, $4, $5::json, $6, $7::timestamptz, $7::timestamptz)`,
-				uuid.New(), org, integrationID, source[0], source[2], source[1] == "true", at)
+				venueoracle.StableUUID(fmt.Sprintf("jira rename: source %s %d", name, index)), org, integrationID, source[0], source[2], source[1] == "true", at)
 		}
-		for _, watermark := range watermarks {
+		for index, watermark := range watermarks {
 			// source_id, dataset_key, last_synced_at, repo_id
 			var synced any
 			if watermark[2] != "" {
 				synced = watermark[2]
 			}
 			exec(`INSERT INTO sync_watermarks (id, org_id, repo_id, source_id, target, dataset_key, last_synced_at, updated_at) VALUES ($1, $2, $3, $4, 'work-items', $5, $6, $7)`,
-				uuid.New(), org, watermark[3], watermark[0], watermark[1], synced, at)
+				venueoracle.StableUUID(fmt.Sprintf("jira rename: watermark %s %d", name, index)), org, watermark[3], watermark[0], watermark[1], synced, at)
 		}
-		cases = append(cases, jiraRenameCase{IntegrationID: integrationID.String(), ConfigID: configID.String(), Projects: projects})
+		cases = append(cases, jiraRenameCase{IntegrationID: integrationID, ConfigID: configID, Projects: projects})
 	}
 	project := func(id, key string) any {
 		return map[string]any{"id": id, "key": key, "name": key + " project", "projectTypeKey": "software"}

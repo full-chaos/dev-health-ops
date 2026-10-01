@@ -5,14 +5,16 @@ package operationalbackfill
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -92,9 +94,21 @@ func (ch clickHouse) do(t *testing.T, statement string) string {
 // second version of a row (FINAL keeps the latest), another organization's rows.
 func seedLegacy(t *testing.T, ch clickHouse) {
 	t.Helper()
+	seedLegacyWith(func(statement string) { ch.do(t, statement) })
+}
+
+// legacySeedDigest is a digest of every statement seedLegacy runs: the seeded legacy rows are the input of
+// every scenario, so they are part of the golden's request key.
+func legacySeedDigest() string {
+	hash := sha256.New()
+	seedLegacyWith(func(statement string) { fmt.Fprintf(hash, "%d:%s\n", len(statement), statement) })
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func seedLegacyWith(do func(statement string)) {
 	ts := func(value string) string { return "toDateTime64('" + value + "', 6, 'UTC')" }
 	incident := func(org, id, url, summary, description, status, severity, created, providerID, lastSynced string) {
-		ch.do(t, fmt.Sprintf("INSERT INTO atlassian_ops_incidents (org_id, id, url, summary, description, status, severity, created_at, provider_id, last_synced) VALUES ('%s', '%s', %s, '%s', %s, '%s', '%s', %s, %s, %s)",
+		do(fmt.Sprintf("INSERT INTO atlassian_ops_incidents (org_id, id, url, summary, description, status, severity, created_at, provider_id, last_synced) VALUES ('%s', '%s', %s, '%s', %s, '%s', '%s', %s, %s, %s)",
 			org, id, url, summary, description, status, severity, ts(created), providerID, ts(lastSynced)))
 	}
 	const null = "NULL"
@@ -117,7 +131,7 @@ func seedLegacy(t *testing.T, ch clickHouse) {
 	incident(orgOther, "inc-other", null, "Not this org", null, "open", "low", "2026-03-14 00:00:00", null, "2026-03-14 00:00:01")
 
 	alert := func(org, id, status, priority, created, acknowledged, snoozed, closed, lastSynced string) {
-		ch.do(t, fmt.Sprintf("INSERT INTO atlassian_ops_alerts (org_id, id, status, priority, created_at, acknowledged_at, snoozed_at, closed_at, last_synced) VALUES ('%s', '%s', '%s', '%s', %s, %s, %s, %s, %s)",
+		do(fmt.Sprintf("INSERT INTO atlassian_ops_alerts (org_id, id, status, priority, created_at, acknowledged_at, snoozed_at, closed_at, last_synced) VALUES ('%s', '%s', '%s', '%s', %s, %s, %s, %s, %s)",
 			org, id, status, priority, ts(created), acknowledged, snoozed, closed, ts(lastSynced)))
 	}
 	alert(orgMain, "al-1", "open", "P1", "2026-03-01 10:00:00.5", ts("2026-03-01 10:01:00.25"), null, null, "2026-03-01 10:02:00")
@@ -131,7 +145,7 @@ func seedLegacy(t *testing.T, ch clickHouse) {
 	alert(orgOther, "al-other", "open", "P1", "2026-03-09 10:00:00", null, null, null, "2026-03-09 10:00:01")
 
 	schedule := func(org, id, name, timezone, lastSynced string) {
-		ch.do(t, fmt.Sprintf("INSERT INTO atlassian_ops_schedules (org_id, id, name, timezone, last_synced) VALUES ('%s', '%s', '%s', %s, %s)",
+		do(fmt.Sprintf("INSERT INTO atlassian_ops_schedules (org_id, id, name, timezone, last_synced) VALUES ('%s', '%s', '%s', %s, %s)",
 			org, id, name, timezone, ts(lastSynced)))
 	}
 	schedule(orgMain, "sch-1", "Primary on-call", "'Europe/Berlin'", "2026-03-01 09:00:00.5")
@@ -285,11 +299,22 @@ func goRun(t *testing.T, ch clickHouse, s scenario) (int, string, string, [2]tim
 	return code, stdout.String(), stderr.String(), [2]time.Time{start, time.Now()}
 }
 
-func pythonRun(t *testing.T, ch clickHouse, s scenario) (int, string, string, [2]time.Time) {
+// operationalPythonBuild is the build whose Python `dev-hops backfill operational` answered the scenarios: a
+// build that still carried the Python CLI.
+const operationalPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// operationalPythonProgram is the entry point the producer runs: the real dev-hops CLI.
+const operationalPythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
+
+// operationalPythonSettings are the variables of pyoracle.ClosedEnv that shape the answers, as constants:
+// the producer's environment AND part of the golden's request key (a changed value fails the frozen replay).
+// The scenario's own contract variable is in its input; the ClickHouse address is a per-run value.
+var operationalPythonSettings = map[string]string{"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TZ": "UTC", "PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
+
+func pythonRun(t *testing.T, root string, ch clickHouse, s scenario) (int, string, string, [2]time.Time) {
 	t.Helper()
-	root := pyoracle.Root(t)
 	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, append([]string{"-c", "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n", "backfill", "operational"}, s.args()...)...)
+	command := exec.Command(python, append([]string{"-c", operationalPythonProgram, "backfill", "operational"}, s.args()...)...)
 	// A closed environment (CHAOS-7471): the DSN and the contract the scenario sets (none when it is unset),
 	// nothing inherited: SERVICE_NAME and SERVICE_VERSION stay unset, as the golden's writer-rejection text
 	// ("service=dev-health-ops version=unknown") assumes.
@@ -305,16 +330,6 @@ func pythonRun(t *testing.T, ch clickHouse, s scenario) (int, string, string, [2
 		t.Fatalf("run python: %v", err)
 	}
 	return code, stdout.String(), stderr.String(), [2]time.Time{start, time.Now()}
-}
-
-func removeEnv(environ []string, key string) []string {
-	kept := environ[:0:0]
-	for _, entry := range environ {
-		if !strings.HasPrefix(entry, key+"=") {
-			kept = append(kept, entry)
-		}
-	}
-	return kept
 }
 
 // result is what one implementation did for a scenario: the exit code, the
@@ -341,7 +356,7 @@ func checkMessage(t *testing.T, who string, s scenario, code int, stderr string)
 	}
 }
 
-func run(t *testing.T, ch clickHouse, s scenario, python bool) result {
+func run(t *testing.T, root string, ch clickHouse, s scenario, python bool) result {
 	t.Helper()
 	ch.truncate(t)
 	var code int
@@ -350,7 +365,7 @@ func run(t *testing.T, ch clickHouse, s scenario, python bool) result {
 	who := "go"
 	if python {
 		who = "python"
-		code, stdout, stderr, window = pythonRun(t, ch, s)
+		code, stdout, stderr, window = pythonRun(t, root, ch, s)
 	} else {
 		code, stdout, stderr, window = goRun(t, ch, s)
 	}
@@ -358,27 +373,9 @@ func run(t *testing.T, ch clickHouse, s scenario, python bool) result {
 	return result{Exit: code, Stdout: stdout, Rows: ch.dump(t, window)}
 }
 
-const (
-	goldenPath   = "testdata/backfill_operational_golden.json"
-	goldenUpdate = "DHO_BACKFILL_OPERATIONAL_GOLDEN_UPDATE"
-)
-
 type golden struct {
 	Name   string `json:"name"`
 	Result result `json:"result"`
-}
-
-func loadGolden(t *testing.T) []golden {
-	t.Helper()
-	raw, err := os.ReadFile(goldenPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []golden
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatal(err)
-	}
-	return out
 }
 
 func canonical(t *testing.T, value any) string {
@@ -435,12 +432,75 @@ func forEachShape(t *testing.T, body func(t *testing.T, ch clickHouse, shape str
 	}
 }
 
-// TestBackfillOperationalWritesTheFrozenPythonRows runs the verb on a real
-// ClickHouse migrated to each table shape and compares the rows it leaves and
-// the line it prints with what the real Python producer left for the same legacy
-// rows (testdata, R24). It runs without Python.
+// TestBackfillOperationalWritesTheFrozenPythonRows runs the verb on a real ClickHouse migrated to each table
+// shape and compares the rows it leaves and the line it prints with what the REAL `dev-hops backfill
+// operational` left for the same legacy rows. The answers were executed once on operationalPythonBuild and
+// are frozen in testdata/golden/backfill_operational.json (the recipe regenerates them by execution); the
+// scenarios and the seeded legacy rows are part of the golden's key. The stamps Python takes from the wall
+// clock are checked to lie inside the run's window and stored as a placeholder.
 func TestBackfillOperationalWritesTheFrozenPythonRows(t *testing.T) {
-	frozen := loadGolden(t)
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	goldenFile := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/backfill_operational.json",
+		PythonBuild: operationalPythonBuild,
+		SHA256:      "0c51bbaf645f96fc403cc9023fbad93313b23c905180095ba0e394d81aa6ac1a",
+		Recipe: "git worktree add --detach $DIR " + operationalPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/operationalbackfill/ -test '^TestBackfillOperationalWritesTheFrozenPythonRows$' -python-root $DIR",
+	})
+	root := goldenFile.PythonRoot(t, repoRoot)
+
+	type keyed struct {
+		Name     string   `json:"name"`
+		Shape    string   `json:"shape"`
+		Args     []string `json:"args"`
+		Environ  []string `json:"environ"`
+		Message  string   `json:"message"`
+		ExitOnly bool     `json:"exitOnly"`
+	}
+	var keys []keyed
+	for _, shape := range shapes() {
+		for _, s := range scenarios {
+			if s.shape == shape && !s.goOnly {
+				keys = append(keys, keyed{Name: s.name, Shape: s.shape, Args: s.args(), Environ: s.environ(), Message: s.message, ExitOnly: s.exitOnly})
+			}
+		}
+	}
+	input, err := json.Marshal(map[string]any{"scenarios": keys, "seededLegacyRows": legacySeedDigest()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := venueoracle.ProgramRequest("backfill operational scenarios", operationalPythonProgram, input, operationalPythonSettings)
+	answers := goldenFile.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		var produced []golden
+		forEachShape(t, func(t *testing.T, ch clickHouse, _ string, group []scenario) {
+			for _, s := range comparable(group) {
+				py := run(t, root, ch, s, true)
+				if s.message == "" {
+					total := 0
+					for _, rows := range py.Rows {
+						total += len(rows)
+					}
+					if total == 0 && !strings.Contains(s.name, "empty") {
+						t.Fatalf("%s: the producer wrote no rows: the comparison would measure nothing", s.name)
+					}
+				}
+				produced = append(produced, golden{Name: s.name, Result: py})
+			}
+		})
+		body, err := json.Marshal(produced)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(body)}}
+	})
+	goldenFile.Consumed(t, answers...)
+	var frozen []golden
+	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {
+		t.Fatal(err)
+	}
 	byName := map[string]golden{}
 	for _, item := range frozen {
 		byName[item.Name] = item
@@ -454,7 +514,7 @@ func TestBackfillOperationalWritesTheFrozenPythonRows(t *testing.T) {
 			if !ok {
 				t.Fatalf("no frozen scenario %q", s.name)
 			}
-			got := run(t, ch, s, false)
+			got := run(t, root, ch, s, false)
 			if got.Exit != want.Result.Exit {
 				t.Fatalf("%s: exit %d, frozen Python %d", s.name, got.Exit, want.Result.Exit)
 			}
@@ -466,66 +526,17 @@ func TestBackfillOperationalWritesTheFrozenPythonRows(t *testing.T) {
 			}
 		}
 	})
-}
-
-// TestBackfillOperationalActuallyMigrates guards the comparison above against
-// measuring nothing: the frozen scenarios that must succeed carry rows.
-func TestBackfillOperationalActuallyMigrates(t *testing.T) {
-	for _, item := range loadGolden(t) {
+	// A comparison that froze nothing passes for any implementation: the frozen scenarios that must succeed
+	// carry rows.
+	for _, item := range frozen {
 		if strings.HasSuffix(item.Name, "main") {
 			if len(item.Result.Rows["operational_incidents"]) == 0 || len(item.Result.Rows["operational_alerts"]) == 0 || len(item.Result.Rows["operational_on_call_schedules"]) == 0 {
 				t.Fatalf("%s froze no rows: %v", item.Name, item.Result.Stdout)
 			}
 		}
 	}
-}
-
-// TestBackfillOperationalVenueOracleMatchesThePythonProducer runs the same
-// scenarios through the real `dev-hops backfill operational` and through dho
-// and compares the rows, the summary line and the exit code. With
-// DHO_BACKFILL_OPERATIONAL_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestBackfillOperationalVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	var frozen []golden
-	forEachShape(t, func(t *testing.T, ch clickHouse, _ string, group []scenario) {
-		for _, s := range comparable(group) {
-			py := run(t, ch, s, true)
-			goResult := run(t, ch, s, false)
-			if py.Exit != goResult.Exit || py.Stdout != goResult.Stdout {
-				t.Fatalf("%s: python exit %d %q, go exit %d %q", s.name, py.Exit, py.Stdout, goResult.Exit, goResult.Stdout)
-			}
-			if a, b := canonical(t, py.Rows), canonical(t, goResult.Rows); a != b {
-				t.Fatalf("%s: rows differ\npython: %s\ngo:     %s", s.name, a, b)
-			}
-			if s.message == "" {
-				total := 0
-				for _, rows := range py.Rows {
-					total += len(rows)
-				}
-				if total == 0 && !strings.Contains(s.name, "empty") {
-					t.Fatalf("%s: the producer wrote no rows: the comparison would measure nothing", s.name)
-				}
-			}
-			frozen = append(frozen, golden{Name: s.name, Result: py})
-		}
-	})
-	if os.Getenv(goldenUpdate) == "1" {
-		raw, err := json.MarshalIndent(frozen, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(goldenPath, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
+	goldenFile.SkipDiff(t)
+	goldenFile.Finish(t)
 }
 
 // TestBackfillOperationalRefusesATableShapeThatIsNotTheContract is the part of
@@ -538,7 +549,7 @@ func TestBackfillOperationalRefusesATableShapeThatIsNotTheContract(t *testing.T)
 		if !s.goOnly {
 			continue
 		}
-		result := run(t, ch, s, false)
+		result := run(t, "", ch, s, false)
 		for table, rows := range result.Rows {
 			if len(rows) != 0 {
 				t.Fatalf("%s: the refused run left %d rows in %s", s.name, len(rows), table)

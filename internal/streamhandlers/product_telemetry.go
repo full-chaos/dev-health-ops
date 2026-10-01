@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -29,13 +30,75 @@ var blockedProductPayloadKeys = map[string]struct{}{
 	"email": {}, "name": {}, "userId": {}, "orgId": {}, "url": {}, "query": {}, "search": {}, "stack": {}, "message": {}, "title": {}, "body": {},
 }
 
+// A timestamp is stored only inside the range the ClickHouse Go driver encodes correctly: it converts a
+// time to int64 nanoseconds, so a time before 1677-09-21 or after 2262-04-11 overflows and is stored as a
+// different, wrong time (a year-2500 timestamp came back as 1915; the zero time as 1970). The Python
+// consumer stored every year ClickHouse's DateTime64 holds, so these are the entries that cannot be
+// stored as sent: they are refused, as before the intake shapes were accepted, and stay replayable from
+// their dead-letter row.
+var (
+	minStorableTimestamp = time.Unix(0, math.MinInt64).UTC()
+	maxStorableTimestamp = time.Unix(0, math.MaxInt64).UTC()
+)
+
+func timestampStorable(t time.Time) bool {
+	return !t.Before(minStorableTimestamp) && !t.After(maxStorableTimestamp)
+}
+
+// presentString is a required JSON string that may be empty: pydantic's `str` field accepts "" and
+// refuses a missing or null value, and so does this type (Set is false for both).
+type presentString struct {
+	Value string
+	Set   bool
+}
+
+func (p *presentString) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	if err := json.Unmarshal(data, &p.Value); err != nil {
+		return err
+	}
+	p.Set = true
+	return nil
+}
+
+// eventTime is the `ts` the intake writes: pydantic's JSON form of a datetime, which carries a zone
+// ("Z" or an offset) when the client sent one and none when it did not. A value with no zone was
+// stored as the UTC time it names by the Python consumer (its persist step kept a naive datetime
+// as it was), so it is read as UTC here.
+type eventTime struct {
+	Time time.Time
+	Set  bool
+}
+
+func (e *eventTime) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return err
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, text)
+	if err != nil {
+		var zoneErr error
+		parsed, zoneErr = time.ParseInLocation("2006-01-02T15:04:05.999999999", text, time.UTC)
+		if zoneErr != nil {
+			return err
+		}
+	}
+	e.Time, e.Set = parsed, true
+	return nil
+}
+
 type productEvent struct {
 	Name            string         `json:"name"`
-	SchemaVersion   string         `json:"schemaVersion"`
-	EventID         string         `json:"eventId"`
-	Timestamp       time.Time      `json:"ts"`
-	SessionID       string         `json:"sessionId"`
-	AnonymousUserID string         `json:"anonymousUserId"`
+	SchemaVersion   presentString  `json:"schemaVersion"`
+	EventID         presentString  `json:"eventId"`
+	Timestamp       eventTime      `json:"ts"`
+	SessionID       presentString  `json:"sessionId"`
+	AnonymousUserID presentString  `json:"anonymousUserId"`
 	OrgIDHash       string         `json:"orgIdHash"`
 	RoutePattern    *string        `json:"routePattern"`
 	Payload         map[string]any `json:"payload"`
@@ -107,7 +170,7 @@ func (h *ProductTelemetryHandler) Handle(ctx context.Context, message streamrunn
 		}
 	}()
 	for index, event := range events {
-		if err := batch.Append(event.OrgIDHash, event.EventID, event.Name, event.SchemaVersion, event.SessionID, event.AnonymousUserID, event.RoutePattern, payloads[index], event.Timestamp.UTC(), time.Now().UTC(), source); err != nil {
+		if err := batch.Append(event.OrgIDHash, event.EventID.Value, event.Name, event.SchemaVersion.Value, event.SessionID.Value, event.AnonymousUserID.Value, event.RoutePattern, payloads[index], event.Timestamp.Time.UTC(), time.Now().UTC(), source); err != nil {
 			return fmt.Errorf("append product telemetry: %w", err)
 		}
 	}
@@ -122,7 +185,7 @@ func (h *ProductTelemetryHandler) Handle(ctx context.Context, message streamrunn
 }
 
 func validateProductEvent(event productEvent) (string, error) {
-	if _, ok := productTelemetryNames[event.Name]; !ok || event.SchemaVersion == "" || event.EventID == "" || event.Timestamp.IsZero() || event.SessionID == "" || event.AnonymousUserID == "" || event.Payload == nil {
+	if _, ok := productTelemetryNames[event.Name]; !ok || !event.SchemaVersion.Set || !event.EventID.Set || !event.Timestamp.Set || !timestampStorable(event.Timestamp.Time) || !event.SessionID.Set || !event.AnonymousUserID.Set || event.Payload == nil {
 		return "", &streamrunner.PermanentError{Reason: "invalid_telemetry_event"}
 	}
 	for key, value := range event.Payload {

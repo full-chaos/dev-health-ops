@@ -1,11 +1,13 @@
 # Every file under internal/scheduler/sync/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: 20f037646e31d1e9bebe6eeb172911740fd1450138eb7170a87bd353073fa6ec (1 files)
-# header-before-stamp set: 104a13abe0be273ee26a704f12fdf2c43435ad00fe4e95e4e3e09c93f6cf4d21 (5 files)
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: 18cfcd8822c54d5392640004e32003d0b23423a768043b52b4419227a76d84d0 (8 files)
 55b285f7c70f2b7c7be3dbb571d1321ca8d8b2d0d310c8ca9ac4365c44e0f6c5	header-before-stamp	golden/feature-decision-reason.golden.json
 6d7e4b998503b7d49a3b8583a4fe423aaae7fc49817566c9a9e1e2d5da155480	header-before-stamp	golden/jira-discovery-rows.golden.json
 8732bb6691425b097b90d53b9d0b59037b0fa144f7ccd0e6d7ab47a908aa78e0	header-before-stamp	golden/operator-datasets.golden.json
 597ddd354db215266932cc973ea60529b21f94bbff3043125727b95cb0204012	header-before-stamp	golden/planner-backfill.golden.json
 83a742a625d0b3d18db8900e67c3ceb73618fc201df0a51a15f1d12c98c0f95f	header-before-stamp	golden/planner-scheduled.golden.json
-8210d5c6419796e2092e375518052d419653dc778f41c7a5312233a4de9d13c6	python-recorded	operator_datasets_golden.json
+67963ce17c50b5eb1fbb39eb27f0d2ce49fcb4a891fcd7584acbf83133563b86	header-before-stamp	golden/venue-credential-fingerprint.golden.json
+22b43a994e50a89dd84cea75cbf0e455d7e4ebd78c4c156af09e188fc31410d0	header-before-stamp	golden/venue-jira-rename.golden.json
+b0f1bad3d0c7c695ef6362ef05a66ee754703194388c1de1227fca8c3f7abdea	header-before-stamp	golden/venue-zero-unit-stamp.golden.json
 b42409196680c9828ef295e9d5e2fd6f9cd9829783466197b06af2cd5f093d01	unclassified	python_feature_decision_reason_oracle.py
 e745e5334bc96a906b4794858c2e13b1e04e1d7c3607a45f5a01a6866dc50715	unclassified	python_planner_oracle.py

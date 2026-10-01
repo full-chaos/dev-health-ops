@@ -127,7 +127,7 @@ func TestNativeMaterializerReplaysWithoutDuplicateGraphRows(t *testing.T) {
 	// Environment auth is stamped through Materialize and persisted even with
 	// no decryptor installed: the fingerprint of the provider's environment
 	// credentials, as planner.py stamps it (the value itself is held to
-	// Python by TestCredentialFingerprintVenueOracleMatchesLivePython).
+	// Python by TestCredentialFingerprintVenueOracleMatchesFrozenPython).
 	var fingerprint *string
 	var authSource, integrationID, provider string
 	if err := fixture.pool.QueryRow(context.Background(), `

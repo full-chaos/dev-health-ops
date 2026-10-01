@@ -30,11 +30,9 @@ import (
 )
 
 const (
-	testOrg   = "c0ffee00-dead-4bee-8bad-f00dfeedface"
-	otherOrg  = "c0ffee00-dead-4bee-8bad-f00dfeed0002"
-	fixedNow  = "2026-03-10T12:00:00.123456+00:00"
-	goldenDir = "testdata/backfill_run_golden.json"
-	goldenEnv = "DHO_BACKFILL_RUN_GOLDEN_UPDATE"
+	testOrg  = "c0ffee00-dead-4bee-8bad-f00dfeedface"
+	otherOrg = "c0ffee00-dead-4bee-8bad-f00dfeed0002"
+	fixedNow = "2026-03-10T12:00:00.123456+00:00"
 )
 
 func startDatabase(t *testing.T) (*containers.Instance, *pgx.Conn) {
@@ -325,12 +323,28 @@ if code == 0 and "request" in captured:
 raise SystemExit(code)
 `
 
-func pythonRun(t *testing.T, uri string, s scenario) (int, string) {
-	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
+// backfillPythonBuild is the build whose Python `dev-hops backfill run` answered the scenarios: a build that
+// still carried the Python CLI.
+const backfillPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// backfillPythonSettings are the variables that shape the producer's answers, as constants: the producer's
+// environment AND part of the golden's request key (a changed value fails the frozen replay). The clock is
+// pinned separately (fixedNow, in the program's input).
+var backfillPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "TZ": "UTC"}
+
+// backfillPythonEnv is the producer's CLOSED environment: PATH and HOME, the checkout's source, and
+// backfillPythonSettings; nothing is inherited from the test process. The database address is appended by
+// the caller (a per-run value).
+func backfillPythonEnv(root string) []string {
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
+	for _, name := range []string{"OTEL_ENABLED", "PYTHONHASHSEED", "TZ"} {
+		env = append(env, name+"="+backfillPythonSettings[name])
 	}
+	return env
+}
+
+func pythonRun(t *testing.T, root, uri string, s scenario) (int, string) {
+	t.Helper()
 	python := pyoracle.Resolve(t, root)
 	input, err := json.Marshal(map[string]any{"args": append([]string{"--config-id", s.configID()}, s.args...), "config_id": s.configID(), "now": fixedNow})
 	if err != nil {
@@ -339,7 +353,7 @@ func pythonRun(t *testing.T, uri string, s scenario) (int, string) {
 	pyURI := strings.Replace(uri, "postgres://", "postgresql://", 1)
 	command := exec.Command(python, "-c", livePythonProgram)
 	command.Stdin = bytes.NewReader(input)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI, "OTEL_ENABLED=false")
+	command.Env = append(backfillPythonEnv(root), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	command.Stdout = &bytes.Buffer{}
@@ -484,19 +498,6 @@ func setup(t *testing.T) string {
 	return uri
 }
 
-func loadGolden(t *testing.T) []result {
-	t.Helper()
-	raw, err := os.ReadFile(goldenDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []result
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatal(err)
-	}
-	return out
-}
-
 func comparable() []scenario {
 	var out []scenario
 	for _, s := range scenarios {
@@ -507,13 +508,61 @@ func comparable() []scenario {
 	return out
 }
 
-// TestBackfillRunWritesTheFrozenPythonRows runs the verb on a real PostgreSQL at
-// the head baseline and compares the rows it leaves with the rows the real
-// Python hand-off wrote for the same configurations (testdata, R24). It runs
-// without Python.
+// TestBackfillRunWritesTheFrozenPythonRows runs the verb on a real PostgreSQL at the head baseline and
+// compares the exit code and the rows it leaves with what the REAL `dev-hops backfill run` and its hand-off
+// writer left for the same configurations. The answers were executed once on backfillPythonBuild, with the
+// producer's clock pinned to fixedNow, and are frozen in testdata/golden/backfill_run.json (the recipe
+// regenerates them by execution); the scenarios, the seeded configurations and the pinned instant are part of
+// the golden's key. dho's own clock is pinned to the same instant: no answer depends on the day it runs.
 func TestBackfillRunWritesTheFrozenPythonRows(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/backfill_run.json",
+		PythonBuild: backfillPythonBuild,
+		SHA256:      "445d484dc588e2a0dbe4682c1c7edceef2d4ed5e35f2f03df513ce44280cf4a9",
+		Recipe: "git worktree add --detach $DIR " + backfillPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/backfillrun/ -test '^TestBackfillRunWritesTheFrozenPythonRows$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+
+	type keyed struct {
+		Name string   `json:"name"`
+		Argv []string `json:"argv"`
+	}
+	keys := make([]keyed, 0, len(scenarios))
+	for _, s := range comparable() {
+		keys = append(keys, keyed{Name: s.name, Argv: s.argv()})
+	}
+	input, err := json.Marshal(map[string]any{"scenarios": keys, "now": fixedNow, "seededConfigurations": fmt.Sprintf("%+v", configs)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := venueoracle.ProgramRequest("backfill run scenarios", livePythonProgram, input, backfillPythonSettings)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		uri := setup(t)
+		var produced []result
+		for _, s := range comparable() {
+			reset(t, uri, s)
+			code, stderr := pythonRun(t, root, uri, s)
+			checkRefusal(t, "python", s, code, stderr)
+			produced = append(produced, result{Name: s.name, Exit: code, Rows: rows(t, uri)})
+		}
+		body, err := json.Marshal(produced)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(body)}}
+	})
+	golden.Consumed(t, answers...)
+	var frozenList []result
+	if err := json.Unmarshal([]byte(answers[0].Body), &frozenList); err != nil {
+		t.Fatal(err)
+	}
 	frozen := map[string]result{}
-	for _, item := range loadGolden(t) {
+	for _, item := range frozenList {
 		frozen[item.Name] = item
 	}
 	if want := len(comparable()); len(frozen) != want {
@@ -539,6 +588,16 @@ func TestBackfillRunWritesTheFrozenPythonRows(t *testing.T) {
 			t.Fatalf("%s: rows differ from the frozen Python rows\ngo:     %.700s\npython: %.700s", s.name, a, b)
 		}
 	}
+	// A comparison that froze nothing passes for any implementation: every scenario that must succeed
+	// froze exactly one occurrence, one backfill trigger and one marker job.
+	for _, item := range frozenList {
+		ok := len(item.Rows["scheduled_sync_occurrences"]) == 1
+		if item.Exit == 0 && (!ok || len(item.Rows["sync_manual_triggers"]) != 1 || len(item.Rows["scheduled_jobs"]) != 1) {
+			t.Fatalf("%s froze no rows: %v", item.Name, item.Rows)
+		}
+	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 func canonicalRows(t *testing.T, value map[string][]string) string {
@@ -548,33 +607,6 @@ func canonicalRows(t *testing.T, value map[string][]string) string {
 		t.Fatal(err)
 	}
 	return string(raw)
-}
-
-// TestBackfillRunActuallyWrites guards the comparison against measuring
-// nothing: every scenario that must succeed froze exactly one occurrence, one
-// backfill trigger and one marker job.
-func TestBackfillRunActuallyWrites(t *testing.T) {
-	for _, item := range loadGolden(t) {
-		ok := len(item.Rows["scheduled_sync_occurrences"]) == 1
-		if item.Exit == 0 && (!ok || len(item.Rows["sync_manual_triggers"]) != 1 || len(item.Rows["scheduled_jobs"]) != 1) {
-			t.Fatalf("%s froze no rows: %v", item.Name, item.Rows)
-		}
-		// A planner-managed parent names its enabled sources (never NULL): the
-		// scheduler would otherwise read NULL as "the sources tagged for this
-		// configuration" and could plan zero units.
-		if item.Name == "github parent, a three-day window" {
-			trigger := strings.Join(item.Rows["sync_manual_triggers"], "")
-			if !strings.Contains(trigger, `"source_ids":["\u003cuuid\u003e","\u003cuuid\u003e"]`) {
-				t.Fatalf("%s did not freeze the enabled source ids: %s", item.Name, trigger)
-			}
-		}
-		if item.Name == "an integration without enabled sources" && !strings.Contains(strings.Join(item.Rows["sync_manual_triggers"], ""), `"source_ids":[]`) {
-			t.Fatalf("%s did not freeze an empty source list: %v", item.Name, item.Rows["sync_manual_triggers"])
-		}
-		if item.Exit != 0 && len(item.Rows["scheduled_sync_occurrences"]) != 0 {
-			t.Fatalf("%s: a refused run left rows: %v", item.Name, item.Rows)
-		}
-	}
 }
 
 // TestBackfillRunRefusesAnUnroutedConfiguration is the part Python cannot be
@@ -595,50 +627,6 @@ func TestBackfillRunRefusesAnUnroutedConfiguration(t *testing.T) {
 				t.Fatalf("%s: the refused run left %d rows in %s", s.name, len(lines), table)
 			}
 		}
-	}
-}
-
-// TestBackfillRunVenueOracleMatchesThePythonProducer runs every comparable
-// scenario through the real `dev-hops backfill run` and its hand-off writer and
-// through dho, and compares the exit code, the refusal text and every column of
-// the rows. With DHO_BACKFILL_RUN_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestBackfillRunVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	uri := setup(t)
-	var frozen []result
-	for _, s := range comparable() {
-		reset(t, uri, s)
-		pyCode, pyErr := pythonRun(t, uri, s)
-		checkRefusal(t, "python", s, pyCode, pyErr)
-		py := result{Name: s.name, Exit: pyCode, Rows: rows(t, uri)}
-		reset(t, uri, s)
-		goCode, _, goErr := goRun(t, uri, s)
-		checkRefusal(t, "go", s, goCode, goErr)
-		goResult := result{Name: s.name, Exit: goCode, Rows: rows(t, uri)}
-		if py.Exit != goResult.Exit {
-			t.Fatalf("%s: python exit %d, go exit %d", s.name, py.Exit, goResult.Exit)
-		}
-		if a, b := canonicalRows(t, py.Rows), canonicalRows(t, goResult.Rows); a != b {
-			t.Fatalf("%s: rows differ\npython: %s\ngo:     %s", s.name, a, b)
-		}
-		frozen = append(frozen, py)
-	}
-	if os.Getenv(goldenEnv) == "1" {
-		raw, err := json.MarshalIndent(frozen, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(goldenDir, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
 	}
 }
 

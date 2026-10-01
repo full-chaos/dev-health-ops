@@ -125,6 +125,11 @@ type Golden struct {
 	rowsUsed    map[string]bool
 	rowsFetched map[string]bool
 	state       goldenState
+	// What a recording replaced by a placeholder (see golden_blanked.go): the
+	// count per pattern, and the digests of the raw values a Scrub blanked.
+	blankCounts   map[string]int
+	blankOrdinals map[string]int
+	scrubEntries  []scrubEntry
 }
 
 // The environment variables that switch a test to recording.
@@ -197,6 +202,12 @@ type goldenHeader struct {
 	// (recordedfiles). The stamp stops an accident: a hand-made golden has
 	// none. It does not stop a hand edit that also writes the stamp.
 	RecordedBy string `json:"recorded_by,omitempty"`
+	// Blanked lists, by pattern, the leaves the recording replaced by a
+	// placeholder, with how many: the paths the golden does not hold by value
+	// (a token projected to its claims, a Volatile header, a generated id or a
+	// run time). A recording always writes it (an empty list is "{}"); a golden
+	// recorded before it has none, and is then not checked against it.
+	Blanked map[string]int `json:"blanked"`
 }
 
 // recordVerbName is what the record verb's stamp holds.
@@ -870,7 +881,7 @@ func (g *Golden) answer(t *testing.T, call, callEnv string, requests []Request, 
 		}
 		answers = live()
 		for index := range answers {
-			projected, err := g.projectResponse(answers[index])
+			projected, err := g.projectResponseAt(requests[index].Name, answers[index])
 			if err != nil {
 				t.Fatalf("golden %s: %v", g.spec.Path, err)
 			}
@@ -959,7 +970,7 @@ func (g *Golden) CompareRows(t *testing.T, name string, source func() string, go
 	value := g.snapshot(t, "CompareRows", name, source)
 	// Both planes' rows are compared as projected: the golden stores no token
 	// and a per-run value is a typed placeholder (GoldenSpec.Scrub).
-	projectedGo, err := g.project(goRows)
+	projectedGo, err := g.project("", "rows "+name, goRows)
 	if err != nil {
 		t.Fatalf("golden %s: row comparison %q: %v", g.spec.Path, name, err)
 	}
@@ -996,7 +1007,7 @@ func (g *Golden) snapshot(t *testing.T, call, name string, source func() string)
 		if g.rowsUsed[name] {
 			t.Fatalf("golden row comparison %q is recorded twice", name)
 		}
-		value, err := g.project(source())
+		value, err := g.project("", "rows "+name, source())
 		if err != nil {
 			t.Fatalf("golden %s: row comparison %q: %v", g.spec.Path, name, err)
 		}
@@ -1167,6 +1178,7 @@ func (g *Golden) writeCandidate(failed bool) (string, error) {
 	if g.recorded.Header.RecordedBy != recordVerbName {
 		return "", fmt.Errorf("recording %s: this run was not started by the record verb, so no candidate was written: a golden is recorded under the verb's fixed environment, twice, and replayed before it is promoted (%s)", g.spec.Path, g.spec.Recipe)
 	}
+	g.recorded.Header.Blanked = g.blankedHeader()
 	raw, err := json.MarshalIndent(g.recorded, "", "  ")
 	if err != nil {
 		return "", err
@@ -1180,6 +1192,9 @@ func (g *Golden) writeCandidate(failed bool) (string, error) {
 		return "", err
 	}
 	if err := os.WriteFile(candidate, raw, 0o644); err != nil {
+		return "", err
+	}
+	if err := g.writeScrubSidecar(candidate); err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(raw)

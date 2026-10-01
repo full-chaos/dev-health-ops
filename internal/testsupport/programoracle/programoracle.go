@@ -22,8 +22,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -48,6 +50,14 @@ type Program struct {
 	// program gets besides the defaults (DefaultEnv) and the interpreter's own
 	// (PATH, HOME, the pinned sources on PYTHONPATH, no bytecode).
 	Env map[string]string
+	// PerRun gives the entries of one run only, such as the address of a
+	// database that exists for this run. It is called at a recording, the
+	// entries are set for the program by name, and they are not part of the
+	// request: a value that differs from run to run cannot be in a key. A
+	// recording fails when the program's answer holds such a value or a part
+	// of an address in it (perRunParts), and what the program wrote to
+	// stderr is logged with those parts replaced.
+	PerRun func() map[string]string
 }
 
 // Answer is what one program gave: its exit code and its stdout. A program
@@ -144,11 +154,23 @@ func IdentityErr(answer Answer, want string) error {
 // (venueoracle.Golden.PythonRoot).
 func Run(t *testing.T, spec venueoracle.GoldenSpec, root string, programs []Program) []Answer {
 	t.Helper()
+	golden := venueoracle.OpenGolden(t, spec)
+	answers := Produce(t, golden, golden.PythonRoot(t, root), programs)
+	golden.SkipDiff(t)
+	golden.Finish(t)
+	return answers
+}
+
+// Produce returns the answer of each program, in order, from a golden the
+// caller opened and will finish: a test whose golden also belongs to a venue
+// (venueoracle.Options.Golden) runs its programs through it. pythonRoot is
+// what golden.PythonRoot returned. Every answer is marked as consumed: the
+// caller compares it.
+func Produce(t *testing.T, golden *venueoracle.Golden, pythonRoot string, programs []Program) []Answer {
+	t.Helper()
 	if err := programsErr(programs); err != nil {
 		t.Fatal(err)
 	}
-	golden := venueoracle.OpenGolden(t, spec)
-	pythonRoot := golden.PythonRoot(t, root)
 	requests := make([]venueoracle.Request, len(programs))
 	for index, program := range programs {
 		requests[index] = venueoracle.ProgramRequest(program.Name, program.Text, program.Stdin, keyedEnv(program))
@@ -176,8 +198,6 @@ func Run(t *testing.T, spec venueoracle.GoldenSpec, root string, programs []Prog
 		}
 		answers[index] = Answer{ExitCode: response.Status, Stdout: stdout}
 	}
-	golden.SkipDiff(t)
-	golden.Finish(t)
 	return answers
 }
 
@@ -214,24 +234,85 @@ func keyedEnv(program Program) map[string]string {
 }
 
 // interpreterEnv is the whole environment a recording gives the interpreter:
-// PATH and HOME of the recording process, the pinned sources first on the
-// module path, no bytecode written, and the keyed entries. Nothing else of
-// the recording process's environment reaches the program.
-func interpreterEnv(pinnedRoot string, program Program) []string {
-	environment := []string{
-		"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"),
-		"PYTHONPATH=" + filepath.Join(pinnedRoot, "src"), "PYTHONDONTWRITEBYTECODE=1",
-	}
+// the closed environment every recording of the repository uses
+// (pyoracle.ClosedEnv), then the keyed entries, then the program's entries of
+// this run. Nothing of the recording process's environment reaches the
+// program.
+func interpreterEnv(pinnedRoot string, program Program, perRun map[string]string) []string {
 	keyed := keyedEnv(program)
-	names := make([]string, 0, len(keyed))
-	for name := range keyed {
+	extra := make([]string, 0, len(keyed)+len(perRun))
+	for _, name := range sortedNames(keyed) {
+		extra = append(extra, name+"="+keyed[name])
+	}
+	for _, name := range sortedNames(perRun) {
+		extra = append(extra, name+"="+perRun[name])
+	}
+	return pyoracle.ClosedEnv(pinnedRoot, extra...)
+}
+
+func sortedNames(entries map[string]string) []string {
+	names := make([]string, 0, len(entries))
+	for name := range entries {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		environment = append(environment, name+"="+keyed[name])
+	return names
+}
+
+// perRunPart is one text of a per-run entry that a recording must keep out of
+// a golden and out of a log.
+type perRunPart struct{ name, what, text string }
+
+// perRunMinimum is the shortest part that is searched for: a shorter text
+// (a one-letter user name) occurs in an answer by chance.
+const perRunMinimum = 6
+
+// perRunParts is the value of each per-run entry and, when the value is an
+// address, its host with the port, its password and its last path element (a
+// database name): an answer or an error message usually holds a part of an
+// address, not the whole of it.
+func perRunParts(perRun map[string]string) []perRunPart {
+	var parts []perRunPart
+	add := func(name, what, text string) {
+		if len(text) >= perRunMinimum {
+			parts = append(parts, perRunPart{name: name, what: what, text: text})
+		}
 	}
-	return environment
+	for _, name := range sortedNames(perRun) {
+		value := perRun[name]
+		add(name, "value", value)
+		parsed, err := url.Parse(value)
+		if err != nil || parsed.Host == "" {
+			continue
+		}
+		add(name, "host and port", parsed.Host)
+		if password, ok := parsed.User.Password(); ok {
+			add(name, "password", password)
+		}
+		add(name, "last path element", path.Base(parsed.Path))
+	}
+	return parts
+}
+
+// perRunErr is an error when text holds a part of a per-run entry. The message
+// names the entry and the part and does not print it.
+func perRunErr(program, text string, perRun map[string]string) error {
+	for _, part := range perRunParts(perRun) {
+		if strings.Contains(text, part.text) {
+			return fmt.Errorf("programoracle: the answer of program %q holds the %s of the per-run entry %s: a golden cannot hold a value of one run, and such a value is not to be stored; print in the program only what is the same in every run",
+				program, part.what, part.name)
+		}
+	}
+	return nil
+}
+
+// withoutPerRun is text with every part of a per-run entry replaced by its
+// name, for a log line. A whole value is replaced before its parts.
+func withoutPerRun(text string, perRun map[string]string) string {
+	for _, part := range perRunParts(perRun) {
+		text = strings.ReplaceAll(text, part.text, "<"+part.name+" "+part.what+">")
+	}
+	return text
 }
 
 // activateInterpreter puts the directory of the pinned checkout's interpreter
@@ -280,33 +361,69 @@ func interpreterDir(path string) (string, error) {
 
 // interpreterCommand is the command a recording runs for program: python3 (the
 // activated interpreter) with the program as its -c text, in the pinned
-// checkout, with the program's input and the interpreter environment.
-func interpreterCommand(pinnedRoot string, program Program) *exec.Cmd {
+// checkout, with the program's input and the interpreter environment. The
+// interpreter gets its own full path as its name: it looks for its
+// environment (the installed distributions) beside the file it was started
+// as, and with only the name it would look the name up on the closed PATH of
+// its environment and find another interpreter.
+func interpreterCommand(pinnedRoot string, program Program, perRun map[string]string) *exec.Cmd {
 	command := exec.Command("python3", "-c", program.Text)
+	if command.Err == nil {
+		command.Args[0] = command.Path
+	}
 	command.Dir = pinnedRoot
 	command.Stdin = bytes.NewReader(program.Stdin)
-	command.Env = interpreterEnv(pinnedRoot, program)
+	command.Env = interpreterEnv(pinnedRoot, program, perRun)
 	return command
 }
 
-// execute runs program with the activated interpreter and returns its exit
-// code and stdout. An interpreter that cannot be started fails the test.
-func execute(t *testing.T, pinnedRoot string, program Program) (int, []byte) {
-	t.Helper()
-	command := interpreterCommand(pinnedRoot, program)
+// executed is what one run of a program gave. stderr holds no part of a
+// per-run entry.
+type executed struct {
+	exitCode int
+	stdout   []byte
+	stderr   string
+}
+
+// executeErr runs program with the activated interpreter. It is an error when
+// the interpreter cannot be started and when the answer holds a part of a
+// per-run entry.
+func executeErr(pinnedRoot string, program Program) (executed, error) {
+	var perRun map[string]string
+	if program.PerRun != nil {
+		perRun = program.PerRun()
+	}
+	command := interpreterCommand(pinnedRoot, program, perRun)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	stdout, err := command.Output()
-	if err == nil {
-		return 0, stdout
+	result := executed{stdout: stdout, stderr: withoutPerRun(stderr.String(), perRun)}
+	if leak := perRunErr(program.Name, string(stdout), perRun); leak != nil {
+		return executed{}, leak
 	}
 	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		t.Logf("programoracle: program %q exited %d; stderr: %s", program.Name, exit.ExitCode(), stderr.String())
-		return exit.ExitCode(), stdout
+	switch {
+	case err == nil:
+	case errors.As(err, &exit):
+		result.exitCode = exit.ExitCode()
+	default:
+		return executed{}, fmt.Errorf("programoracle: program %q: %w", program.Name, pyoracle.RunError("python3", err, []byte(result.stderr)))
 	}
-	t.Fatalf("programoracle: program %q: %v", program.Name, pyoracle.RunError("python3", err, stderr.Bytes()))
-	return 0, nil
+	return result, nil
+}
+
+// execute is executeErr for a recording: an error fails the test, and the
+// stderr of a program that exited non-zero is logged.
+func execute(t *testing.T, pinnedRoot string, program Program) (int, []byte) {
+	t.Helper()
+	result, err := executeErr(pinnedRoot, program)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.exitCode != 0 {
+		t.Logf("programoracle: program %q exited %d; stderr: %s", program.Name, result.exitCode, result.stderr)
+	}
+	return result.exitCode, result.stdout
 }
 
 // Set is the goldens of one package's program oracles: where they live, the

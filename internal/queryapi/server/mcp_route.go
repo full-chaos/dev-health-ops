@@ -312,6 +312,7 @@ func newMCPGraphQLServer(es graphql.ExecutableSchema, limits mcpLimits) *gqlhand
 	gql.Use(mcpOperationGuard{})
 	gql.AroundFields(graph.RefuseNullForNonNullArguments)
 	gql.Use(graph.OperationOrgGuard{})
+	gql.AroundResponses(recordErrorCount)
 	gql.SetErrorPresenter(func(ctx context.Context, err error) *gqlerror.Error {
 		if obs := mcpObservationFrom(ctx); obs != nil {
 			obs.fieldError()

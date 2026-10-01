@@ -1,0 +1,3 @@
+# Every file under internal/queryapi/internalidentity/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: cd88ade3640c9ee8e84fbb1fe7f64c4c2d309b354af6824c90297e4f9097570b (1 files)
+1934527564a948680ad31e3946898d96d4176013c8d7011594ecbac74917a5a6	python-recorded	python_edge_identity_headers.json

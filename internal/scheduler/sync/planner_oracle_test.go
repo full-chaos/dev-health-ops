@@ -1,46 +1,22 @@
 package sync
 
 import (
-	"bytes"
+	_ "embed"
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const (
-	livePythonOraclesEnv      = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
-	livePythonOracleProofDir  = "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"
-	livePythonOracleProofFile = "scheduler-sync"
-)
-
-func requireLivePythonOracles(t *testing.T) {
-	t.Helper()
-	if os.Getenv(livePythonOraclesEnv) != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	if os.Getenv(livePythonOracleProofDir) == "" {
-		t.Fatal("live Python oracle opt-in requires a proof directory from ci/check_go.sh")
-	}
-}
-
-func livePythonExecutable(t *testing.T) string {
-	t.Helper()
-	requireLivePythonOracles(t)
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the scheduler sync package path")
-	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
-	return pyoracle.Resolve(t, root)
-}
+// plannerOracleScript runs the planner of the build it is executed on over the
+// cases on its input: planner._build_planned_units, loaded from the sources of
+// the checkout the script runs in.
+//
+//go:embed testdata/python_planner_oracle.py
+var plannerOracleScript string
 
 type plannerOracleSource struct {
 	ID         string `json:"id"`
@@ -85,7 +61,7 @@ type plannerOracleCase struct {
 	Route                   *plannerOracleRoute      `json:"route,omitempty"`
 }
 
-func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
+func TestBuildScheduledPlanMatchesFrozenPythonPlanner(t *testing.T) {
 	depth120, depth60, cap30 := 120, 60, 30
 	before := "2026-07-30T11:30:00Z"
 	cases := []plannerOracleCase{
@@ -344,7 +320,7 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 		})
 	}
 
-	want := runPythonPlannerOracle(t, cases)
+	want := frozenPlannerOracle(t, "planner-scheduled.golden.json", cases)
 	for _, test := range cases {
 		now, err := time.Parse(time.RFC3339, test.Now)
 		if err != nil {
@@ -399,9 +375,7 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 			t.Fatal(err)
 		}
 		var normalized []map[string]any
-		if err := json.Unmarshal(gotJSON, &normalized); err != nil {
-			t.Fatal(err)
-		}
+		decodeKeepingNumbers(t, gotJSON, &normalized)
 		if !reflect.DeepEqual(normalized, want[test.ID]) {
 			prettyGot, _ := json.MarshalIndent(normalized, "", "  ")
 			prettyWant, _ := json.MarshalIndent(want[test.ID], "", "  ")
@@ -413,16 +387,16 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 	}
 }
 
-// TestBuildBackfillPlanMatchesLivePythonPlanner is CHAOS-4602's backfill/
-// manual-mode sibling to TestBuildScheduledPlanMatchesLivePythonPlanner:
-// the SAME live-Python differential oracle (planner._build_planned_units,
-// mode-agnostic on the Python side), driven with mode="backfill" and both
+// TestBuildBackfillPlanMatchesFrozenPythonPlanner is the backfill/manual-mode
+// sibling of TestBuildScheduledPlanMatchesFrozenPythonPlanner: the SAME
+// differential oracle (planner._build_planned_units, mode-agnostic on the
+// Python side), driven with mode="backfill" and both
 // since/before set, compared against Go's BuildBackfillPlan. Covers the
 // shapes backfill introduces that scheduled mode never exercises: chunked
 // multi-window fan-out, the work-item family collapsing PER chunk (not
 // once total), the Linear family's wider 14-day chunk, and the exact
 // requested-instant chunk-boundary mapping (chunkToWindow/_chunk_to_window).
-func TestBuildBackfillPlanMatchesLivePythonPlanner(t *testing.T) {
+func TestBuildBackfillPlanMatchesFrozenPythonPlanner(t *testing.T) {
 	cap30 := 30
 	since := "2026-08-01T00:00:00Z"
 	before20d := "2026-08-20T00:00:00Z"
@@ -498,7 +472,7 @@ func TestBuildBackfillPlanMatchesLivePythonPlanner(t *testing.T) {
 		},
 	}
 
-	want := runPythonPlannerOracle(t, cases)
+	want := frozenPlannerOracle(t, "planner-backfill.golden.json", cases)
 	for _, test := range cases {
 		now, err := time.Parse(time.RFC3339, test.Now)
 		if err != nil {
@@ -535,9 +509,7 @@ func TestBuildBackfillPlanMatchesLivePythonPlanner(t *testing.T) {
 			t.Fatal(err)
 		}
 		var normalized []map[string]any
-		if err := json.Unmarshal(gotJSON, &normalized); err != nil {
-			t.Fatal(err)
-		}
+		decodeKeepingNumbers(t, gotJSON, &normalized)
 		if !reflect.DeepEqual(normalized, want[test.ID]) {
 			prettyGot, _ := json.MarshalIndent(normalized, "", "  ")
 			prettyWant, _ := json.MarshalIndent(want[test.ID], "", "  ")
@@ -551,42 +523,19 @@ func TestBuildBackfillPlanMatchesLivePythonPlanner(t *testing.T) {
 
 func ptr[T any](value T) *T { return &value }
 
-func runPythonPlannerOracle(t *testing.T, cases []plannerOracleCase) map[string][]map[string]any {
+// frozenPlannerOracle returns the Python planner's units for each case, by case
+// id, from the golden of the running test. The planner's log lines (its clamp
+// warnings fire for cases these tables drive) went to stderr when the answer
+// was recorded and are not part of it.
+func frozenPlannerOracle(t *testing.T, golden string, cases []plannerOracleCase) map[string][]map[string]any {
 	t.Helper()
-	python := livePythonExecutable(t)
 	encoded, err := json.Marshal(cases)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate Python planner oracle")
-	}
-	command := exec.Command(python, filepath.Join(filepath.Dir(currentFile), "testdata", "python_planner_oracle.py"))
-	command.Stdin = bytes.NewReader(encoded)
-	// stdout and stderr are captured SEPARATELY, not combined: the real
-	// planner logs (CHAOS-3412's future-watermark clamp and heavy-cap clamp
-	// warnings both fire for cases this table drives) go to stderr, and
-	// folding them into stdout corrupts the JSON document the comparison
-	// reads. Keeping stderr means those log lines still reach the failure
-	// message, which is where they are useful.
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	err = command.Run()
-	output := stdout.Bytes()
-	if err != nil {
-		t.Fatalf("execute live Python planner oracle: %v\nstdout:\n%s",
-			pyoracle.RunError(python, err, stderr.Bytes()), output)
-	}
-	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), livePythonOracleProofFile)
-	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {
-		t.Fatalf("write live Python planner oracle proof: %v", err)
-	}
+	output := frozenPython(t, golden, programoracle.Script("planner", "internal/scheduler/sync/testdata/python_planner_oracle.py", plannerOracleScript, encoded))[0]
 	var result map[string][]map[string]any
-	if err := json.Unmarshal(output, &result); err != nil {
-		t.Fatalf("decode live Python planner oracle: %v\n%s", err, output)
-	}
+	decodeKeepingNumbers(t, []byte(output), &result)
 	if len(result) != len(cases) {
 		t.Fatalf("Python planner oracle returned %d cases for %d inputs", len(result), len(cases))
 	}

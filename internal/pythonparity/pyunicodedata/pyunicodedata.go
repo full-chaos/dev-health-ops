@@ -7,8 +7,8 @@
 // and still unassigned (Cn) to Python, and email-validator rejects an
 // unassigned code point where Go would accept it. So the answers here come
 // from frozen tables generated from the pinned interpreter (tables.go), and
-// TestUnicodeDataTablesMatchLivePython regenerates them from the live interpreter and
-// fails on any difference.
+// TestUnicodeDataTablesMatchFrozenPython renders them from the frozen dump of
+// that interpreter and fails on any difference.
 //
 // Every function takes a code point, including a lone surrogate (Python's
 // str can hold one; see pyjson.Runes).

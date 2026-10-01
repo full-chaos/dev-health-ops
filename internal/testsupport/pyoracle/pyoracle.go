@@ -121,3 +121,41 @@ func RequireDeployed(t *testing.T, python string, versionOutput []byte, runErr e
 		t.Fatalf("pyoracle: %v", err)
 	}
 }
+
+// RootEnv names the variable that points a recording at a clean checkout of the pinned
+// Python build; unset, the Python side runs from the repository the test runs in.
+const RootEnv = "DHO_PYTHON_ROOT"
+
+// Root is the repository root the Python side of a live oracle runs from: the checkout RootEnv
+// names (a clean worktree at the commit a golden is pinned to), else the repository the test
+// runs in (two directories above the package of the calling test).
+func Root(t *testing.T) string {
+	t.Helper()
+	if override := os.Getenv(RootEnv); override != "" {
+		root, err := filepath.Abs(override)
+		if err != nil {
+			t.Fatalf("pyoracle: %s=%q: %v", RootEnv, override, err)
+		}
+		return root
+	}
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// ClosedEnv is the environment a recording runs Python in: a fixed, named set and nothing
+// inherited, so no variable of the day (AUTO_RUN_MIGRATIONS, SERVICE_NAME, OPERATIONAL_ORDERING_CONTRACT,
+// LOG_LEVEL...) can shape a recorded answer under the same header. extra entries (NAME=value) are the
+// ones the scenario sets on purpose: the DSN, the ordering contract.
+func ClosedEnv(root string, extra ...string) []string {
+	env := []string{
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+		"LANG=C.UTF-8", "LC_ALL=C.UTF-8", "TZ=UTC",
+		"PYTHONHASHSEED=0", "PYTHONDONTWRITEBYTECODE=1",
+		"PYTHONPATH=" + filepath.Join(root, "src"),
+		"OTEL_ENABLED=false",
+	}
+	return append(env, extra...)
+}

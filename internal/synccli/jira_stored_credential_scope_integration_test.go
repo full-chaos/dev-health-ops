@@ -142,3 +142,26 @@ func TestResolveJiraStoredSettingsRefusesAnIntegrationWithoutAStoredCredentialBe
 		t.Errorf("the refusal must name the count and carry no secret: %q", text)
 	}
 }
+
+// CHAOS-7132 follow-up: the stored-credential path with the dependencies production really passes. It builds
+// the deps with the REAL defaultDeps() (nothing injected) and resolves a stored credential whose base URL
+// is the only network endpoint (and which carries the organization and cloud ids, so no live call is made).
+// With defaultDeps() leaving doer nil, providerfoundation.NewJiraClient answered a bare "provider credential
+// is invalid" and this failed.
+func TestResolveJiraStoredSettingsWorksWithTheProductionDeps(t *testing.T) {
+	ctx, pool := scopeTestPool(t)
+	const orgID = "org-production-deps"
+	used := seedNamedJiraCredential(t, ctx, pool, orgID, "JIRA",
+		map[string]string{"base_url": "https://jira.example.test", "atlassian_organization_id": "org-123", "atlassian_cloud_id": "cloud-123"},
+		map[string]string{"email": "sync@example.test", "api_token": "s3cr3t-token"})
+	seedJiraIntegration(t, ctx, pool, orgID, "production deps", used)
+
+	d := defaultDeps()
+	settings, err := resolveJiraStoredSettings(ctx, pool, testDecryptor(), d.doer, d.newOrganizationResolver, orgID, envOverrides{})
+	if err != nil {
+		t.Fatalf("the stored-credential path failed with the production deps: %v", err)
+	}
+	if settings.email != "sync@example.test" || settings.organizationID != "org-123" {
+		t.Errorf("resolved the wrong settings: email=%q organization=%q", settings.email, settings.organizationID)
+	}
+}

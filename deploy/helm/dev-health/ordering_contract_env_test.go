@@ -46,8 +46,20 @@ func TestEveryGoWorkerAndTheMigrateJobCarryOrderingContract2(t *testing.T) {
 			if workers < 4 {
 				t.Fatalf("found %d go-worker Deployments with the variable, want at least the four queue groups", workers)
 			}
-			if jobs := orderingContractValue.FindAllStringSubmatch(string(output), -1); len(jobs) <= workers {
-				t.Fatalf("the migrate Job does not carry the variable (%d matches for %d workers)", len(jobs), workers)
+			// The migrate Job: its OWN value must be "2" (the Job's template falls back to "2"
+			// too, so an empty chart value cannot leave it refused by dho).
+			job := ""
+			for _, document := range strings.Split(string(output), "\n---") {
+				if strings.Contains(document, "\nkind: Job\n") && strings.Contains(document, "OPERATIONAL_ORDERING_CONTRACT") && strings.Contains(document, "migrate") {
+					job = document
+				}
+			}
+			if job == "" {
+				t.Fatal("no migrate Job carrying the variable in the render")
+			}
+			matches := orderingContractValue.FindAllStringSubmatch(job, -1)
+			if len(matches) != 1 || matches[0][1] != "2" {
+				t.Fatalf("the migrate Job renders %v, want exactly one value \"2\"", matches)
 			}
 		})
 	}

@@ -71,11 +71,30 @@ func TestEveryReaderOfTheOrderingContractVariableUsesTheOneResolver(t *testing.T
 			return nil
 		}
 		checked++
+		// The file must CALL the resolver (ResolveValue, Resolve or CheckForRead through
+		// the package's import name), not merely import the package for something else.
 		uses := false
+		importName := ""
 		for _, spec := range file.Imports {
 			if imported, _ := strconv.Unquote(spec.Path.Value); imported == "github.com/full-chaos/dev-health-ops/internal/operationalordering" {
-				uses = true
+				importName = "operationalordering"
+				if spec.Name != nil {
+					importName = spec.Name.Name
+				}
 			}
+		}
+		if importName != "" {
+			ast.Inspect(file, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+						if owner, ok := sel.X.(*ast.Ident); ok && owner.Name == importName &&
+							(sel.Sel.Name == "ResolveValue" || sel.Sel.Name == "Resolve" || sel.Sel.Name == "CheckForRead") {
+							uses = true
+						}
+					}
+				}
+				return true
+			})
 		}
 		rel := strings.TrimPrefix(slash, "../../")
 		_, declares := declaresOnly[rel]

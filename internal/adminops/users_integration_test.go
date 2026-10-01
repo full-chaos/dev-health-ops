@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -363,33 +362,18 @@ func pythonVerbEnv(t *testing.T, db *database, extra map[string]string, args []s
 // flags Python takes before the subcommand (--org).
 func pythonVerbFull(t *testing.T, db *database, extra map[string]string, global []string, args []string) (int, string) {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := pythonPlaneRoot(t)
 	python := pyoracle.Resolve(t, root)
-	// Test-runner-only monkeypatch (the venue oracle's rule): when set, every
-	// StripeClient the verb builds talks to this base instead of Stripe.
-	program := "import os, sys\n" +
-		"_base = os.environ.get('VENUE_STRIPE_API_BASE')\n" +
-		"if _base:\n" +
-		"    import stripe as _stripe\n" +
-		"    _init = _stripe.StripeClient.__init__\n" +
-		"    def _patched(self, *args, **kwargs):\n" +
-		"        kwargs['base_addresses'] = {'api': _base}\n" +
-		"        _init(self, *args, **kwargs)\n" +
-		"    _stripe.StripeClient.__init__ = _patched\n" +
-		"from dev_health_ops import cli\n" +
-		"raise SystemExit(cli.main(sys.argv[1:]))\n"
+	program := adminPythonProgram
 	command := exec.Command(python, append(append([]string{"-c", program}, global...), append([]string{"admin"}, args...)...)...)
 	pyURI := strings.Replace(db.uri, "postgres://", "postgresql://", 1)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI, "OTEL_ENABLED=false")
+	command.Env = append(adminPythonEnv(root), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
 	for key, value := range extra {
 		command.Env = append(command.Env, key+"="+value)
 	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err = command.Run()
+	err := command.Run()
 	code := 0
 	if exit, ok := err.(*exec.ExitError); ok {
 		code = exit.ExitCode()
@@ -402,6 +386,99 @@ func pythonVerbFull(t *testing.T, db *database, extra map[string]string, global 
 		return 70, "<python traceback>\n"
 	}
 	return code, stdout.String()
+}
+
+// adminPythonProgram is the entry point the producer runs: the real dev-hops CLI. Test-runner-only
+// monkeypatch (the venue oracle's rule): when VENUE_STRIPE_API_BASE is set, every StripeClient the verb
+// builds talks to this base instead of Stripe.
+const adminPythonProgram = "import os, sys\n" +
+	"_base = os.environ.get('VENUE_STRIPE_API_BASE')\n" +
+	"if _base:\n" +
+	"    import stripe as _stripe\n" +
+	"    _init = _stripe.StripeClient.__init__\n" +
+	"    def _patched(self, *args, **kwargs):\n" +
+	"        kwargs['base_addresses'] = {'api': _base}\n" +
+	"        _init(self, *args, **kwargs)\n" +
+	"    _stripe.StripeClient.__init__ = _patched\n" +
+	"from dev_health_ops import cli\n" +
+	"raise SystemExit(cli.main(sys.argv[1:]))\n"
+
+// adminPythonSettings are the variables that shape the Python verbs' answers, as constants: they are
+// the producer's environment AND part of every golden's key (a changed value fails the frozen replay).
+var adminPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "DISABLE_DOTENV": "1"}
+
+// adminPythonEnv is the producer's CLOSED environment: PATH and HOME, the checkout's source, and
+// adminPythonSettings; nothing is inherited from the test process. A per-run value (a database address)
+// or a step's own variable is appended by name by the caller.
+func adminPythonEnv(root string) []string {
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1"}
+	for _, name := range []string{"PYTHONHASHSEED", "OTEL_ENABLED", "DISABLE_DOTENV"} {
+		env = append(env, name+"="+adminPythonSettings[name])
+	}
+	return env
+}
+
+// adminPythonBuild is the build whose Python `dev-hops admin` verbs answered the frozen sessions: a build
+// that still carried the Python CLI.
+const adminPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// pythonRootPin is the pinned checkout a recording runs the Python verbs from ("" outside a recording).
+var pythonRootPin string
+
+// pythonPlaneRoot is the checkout the Python verbs run from: the pinned one while a golden records, the
+// repository itself for the oracles that still run live Python (billing, until they are frozen).
+func pythonPlaneRoot(t *testing.T) string {
+	t.Helper()
+	if pythonRootPin != "" {
+		return pythonRootPin
+	}
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// pinPythonRoot makes pythonPlaneRoot answer root until the test ends.
+func pinPythonRoot(t *testing.T, root string) {
+	t.Helper()
+	pythonRootPin = root
+	t.Cleanup(func() { pythonRootPin = "" })
+}
+
+// adminGolden opens a golden of one admin session and the pinned Python root. pin is the literal
+// "PIN:<name>" (the recorder looks for it in the test source until the golden exists).
+func adminGolden(t *testing.T, name, pin, test string) (*venueoracle.Golden, string) {
+	t.Helper()
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/" + name + ".json",
+		PythonBuild: adminPythonBuild,
+		SHA256:      pin,
+		Recipe: "git worktree add --detach $DIR " + adminPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/adminops/ -test '^" + test + "$' -python-root $DIR",
+	})
+	return golden, golden.PythonRoot(t, repoRoot)
+}
+
+// adminProduce runs one recorded session: produce is called only while recording, with the Python root
+// pinned, and returns the session's answers as JSON; the frozen run gets them from the golden.
+func adminProduce(t *testing.T, golden *venueoracle.Golden, root, label string, input []byte, produce func() any) []byte {
+	t.Helper()
+	request := venueoracle.ProgramRequest(label, adminPythonProgram, input, adminPythonSettings)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		pinPythonRoot(t, root)
+		body, err := json.Marshal(produce())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(body)}}
+	})
+	golden.Consumed(t, answers...)
+	return []byte(answers[0].Body)
 }
 
 func (db *database) session(t *testing.T, run func(*testing.T, *database, []string) (int, string)) []stepResult {
@@ -423,26 +500,6 @@ func (db *database) session(t *testing.T, run func(*testing.T, *database, []stri
 	return out
 }
 
-const usersGolden = "testdata/users_golden.json"
-
-// usersGoldenSHA256 pins testdata/users_golden.json (R24): what the real
-// `dev-hops admin users|orgs` verbs printed and left for every step of the
-// script. The producer is deleted with the Python CLI, so this is a rot guard:
-// the file is only rewritten by TestUsersVenueOracleMatchesThePythonProducer
-// with DHO_USERS_GOLDEN_UPDATE=1, then this digest is updated.
-const usersGoldenSHA256 = "dd5788fcebf8d2edb4007392625b3a27ed7d54b1d220dad2810c561a0f98bfbb"
-
-func TestUsersGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile(usersGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != usersGoldenSHA256 {
-		t.Fatalf("%s digest = %s, want %s: the golden changed without its digest", usersGolden, got, usersGoldenSHA256)
-	}
-}
-
 func compare(t *testing.T, got, want []stepResult, wantName string) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -462,14 +519,23 @@ func compare(t *testing.T, got, want []stepResult, wantName string) {
 	}
 }
 
-// TestUsersMatchTheFrozenPythonOutput runs the script on a real PostgreSQL and
-// compares every step with what the real Python verbs did (frozen; no Python
-// needed).
+// TestUsersMatchTheFrozenPythonOutput runs the script on a real PostgreSQL and compares every step (exit,
+// stdout, the rows left) with what the REAL `dev-hops admin users|orgs` verbs did. The answers were executed
+// once on adminPythonBuild and are frozen in testdata/golden/users.json (the recipe regenerates them by
+// execution); the script is part of the golden's key.
 func TestUsersMatchTheFrozenPythonOutput(t *testing.T) {
-	raw, err := os.ReadFile(usersGolden)
+	golden, root := adminGolden(t, "users", "3e8bad8fd8e602826042b00f4e69eca20a7fce5cb57a86fd7871a1fc3663fbe5", "TestUsersMatchTheFrozenPythonOutput")
+	script := make([]map[string]any, len(usersScript))
+	for index, s := range usersScript {
+		script[index] = map[string]any{"args": s.args, "seedTokenFor": s.seedTokenFor}
+	}
+	input, err := json.Marshal(script)
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := adminProduce(t, golden, root, "users script", input, func() any {
+		return startDatabase(t).session(t, pythonVerb)
+	})
 	var frozen []stepResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
@@ -490,32 +556,6 @@ func TestUsersMatchTheFrozenPythonOutput(t *testing.T) {
 	if refused < 10 || changed < 10 {
 		t.Fatalf("the golden has %d refusals and %d writes: it measures too little", refused, changed)
 	}
-}
-
-// TestUsersVenueOracleMatchesThePythonProducer runs the script through the real
-// Python verbs and through dho and compares every step. With
-// DHO_USERS_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestUsersVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	db := startDatabase(t)
-	py := db.session(t, pythonVerb)
-	got := db.session(t, goVerb)
-	compare(t, got, py, "python")
-	if os.Getenv("DHO_USERS_GOLDEN_UPDATE") == "1" {
-		raw, err := json.MarshalIndent(py, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(usersGolden, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }

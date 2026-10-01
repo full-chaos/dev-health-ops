@@ -13,7 +13,7 @@
       "body_sha256": "5093fdabce67b5dbf5c5fce6dcf4ba13a8005a84525904f9afe481a7f1ca21a5",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"complete_status_history\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"gh:acme/api#7\"}, \"provider\": {\"t\": \"str\", \"v\": \"github\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T08:00:00Z\"}, \"from_status_raw\": {\"t\": \"str\", \"v\": \"Doing\"}, \"to_status_raw\": {\"t\": \"str\", \"v\": \"Done\"}, \"from_status\": {\"t\": \"str\", \"v\": \"in_progress\"}, \"to_status\": {\"t\": \"str\", \"v\": \"done\"}, \"actor\": {\"t\": \"str\", \"v\": \"github:maintainer\"}, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}], \"excluded_fields\": {}}\n"
     }
   ]

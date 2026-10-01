@@ -13,7 +13,7 @@
       "body_sha256": "947d9f6e3faa3e8d2e62330f7fcf4875e52d20476f942cfc1320657acc59102d",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"exact_login_alias\", \"row\": {\"resolved\": {\"t\": \"str\", \"v\": \"lead@example.com\"}, \"facets\": [{\"t\": \"str\", \"v\": \"lead@example.com\"}, {\"t\": \"str\", \"v\": \"github:octocat\"}]}}, {\"id\": \"case_different_login_alias\", \"row\": {\"resolved\": {\"t\": \"str\", \"v\": \"lead@example.com\"}, \"facets\": [{\"t\": \"str\", \"v\": \"lead@example.com\"}, {\"t\": \"str\", \"v\": \"github:OctoCat\"}]}}, {\"id\": \"email_alias\", \"row\": {\"resolved\": {\"t\": \"str\", \"v\": \"new.email@example.com\"}, \"facets\": [{\"t\": \"str\", \"v\": \"new.email@example.com\"}, {\"t\": \"str\", \"v\": \"old.email@example.com\"}]}}, {\"id\": \"unmapped_identity\", \"row\": {\"resolved\": {\"t\": \"str\", \"v\": \"gitlab:monalisa\"}, \"facets\": [{\"t\": \"str\", \"v\": \"gitlab:monalisa\"}]}}, {\"id\": \"provider_id_alias_to_different_person\", \"row\": {\"resolved\": {\"t\": \"str\", \"v\": \"person-b@example.com\"}, \"facets\": [{\"t\": \"str\", \"v\": \"person-b@example.com\"}, {\"t\": \"str\", \"v\": \"jira:accountid:acct-999\"}]}}], \"excluded_fields\": {}}\n"
     }
   ]

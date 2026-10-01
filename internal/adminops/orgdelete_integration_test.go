@@ -5,11 +5,8 @@ package adminops
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -22,7 +19,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // `admin orgs delete` is compared with the real Python verb on real PostgreSQL
@@ -390,26 +386,6 @@ func pythonDelete(t *testing.T, db *database, fixture *chFixture, scenario delet
 	return deleteResult{Name: scenario.name, Exit: code, Stdout: normalize(t, stdout, scenario.clickhouse), State: snapshot(t, db, fixture, scenario)}
 }
 
-const deleteGolden = "testdata/orgdelete_golden.json"
-
-// deleteGoldenSHA256 pins testdata/orgdelete_golden.json (R24): what the real
-// `dev-hops admin orgs delete` printed and left for every scenario. The producer
-// is deleted with the Python CLI, so this is a rot guard: the file is only
-// rewritten by TestOrgsDeleteVenueOracleMatchesThePythonProducer with
-// DHO_ORGDELETE_GOLDEN_UPDATE=1, then this digest is updated.
-const deleteGoldenSHA256 = "655a5c9baea3b0eacc5237672755d9e850bedfe4a8b9d68fc036cae6e8664f59"
-
-func TestOrgsDeleteGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile(deleteGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != deleteGoldenSHA256 {
-		t.Fatalf("%s digest = %s, want %s: the golden changed without its digest", deleteGolden, got, deleteGoldenSHA256)
-	}
-}
-
 func compareDeletes(t *testing.T, got, want []deleteResult, wantName string) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -429,13 +405,22 @@ func compareDeletes(t *testing.T, got, want []deleteResult, wantName string) {
 	}
 }
 
-// TestOrgsDeleteMatchesTheFrozenPythonOutput runs every scenario and compares it
-// with what the real Python verb did (frozen; no Python needed).
+// TestOrgsDeleteMatchesTheFrozenPythonOutput runs every scenario and compares it (exit, the printed plan,
+// the rows each organization has left in every PostgreSQL and ClickHouse table) with what the REAL
+// `dev-hops admin orgs delete` did. The answers were executed once on adminPythonBuild and are frozen in
+// testdata/golden/orgdelete.json (the recipe regenerates them by execution); the scenarios are part of the
+// golden's key.
 func TestOrgsDeleteMatchesTheFrozenPythonOutput(t *testing.T) {
-	raw, err := os.ReadFile(deleteGolden)
+	golden, root := adminGolden(t, "orgdelete", "5eb3d3e548001aaae68d3902649700cf126e9c82ebce7cf01b813e63d1fd6d4c", "TestOrgsDeleteMatchesTheFrozenPythonOutput")
+	script := make([]map[string]any, len(deleteScenarios))
+	for index, s := range deleteScenarios {
+		script[index] = map[string]any{"name": s.name, "args": s.args, "clickhouse": s.clickhouse, "pagerduty": s.pagerduty}
+	}
+	input, err := json.Marshal(script)
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := adminProduce(t, golden, root, "orgs delete scenarios", input, func() any { return runDeleteScenarios(t, pythonDelete) })
 	var frozen []deleteResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
@@ -452,30 +437,8 @@ func TestOrgsDeleteMatchesTheFrozenPythonOutput(t *testing.T) {
 	if deleted < 2 {
 		t.Fatalf("the golden has %d real deletions that removed rows: it measures too little", deleted)
 	}
-}
-
-// TestOrgsDeleteVenueOracleMatchesThePythonProducer runs every scenario through
-// the real Python verb and through dho. With DHO_ORGDELETE_GOLDEN_UPDATE=1 it
-// rewrites the frozen file.
-func TestOrgsDeleteVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	py := runDeleteScenarios(t, pythonDelete)
-	got := runDeleteScenarios(t, goDelete)
-	compareDeletes(t, got, py, "python")
-	if os.Getenv("DHO_ORGDELETE_GOLDEN_UPDATE") == "1" {
-		raw, err := json.MarshalIndent(py, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(deleteGolden, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 func quote(text string) string { return "'" + strings.ReplaceAll(text, "'", "''") + "'" }

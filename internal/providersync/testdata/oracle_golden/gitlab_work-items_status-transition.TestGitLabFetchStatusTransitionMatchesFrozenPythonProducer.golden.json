@@ -13,7 +13,7 @@
       "body_sha256": "ace3db201dd40fbf848623e06302ca7e04f99e7238866ecdd499fcd77211e71c",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"label_driven_transition\", \"row\": {\"work_item_id\": {\"t\": \"str\", \"v\": \"gitlab:acme/api#42\"}, \"provider\": {\"t\": \"str\", \"v\": \"gitlab\"}, \"occurred_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T09:00:00Z\"}, \"from_status_raw\": null, \"to_status_raw\": {\"t\": \"str\", \"v\": \"done\"}, \"from_status\": {\"t\": \"str\", \"v\": \"in_progress\"}, \"to_status\": {\"t\": \"str\", \"v\": \"done\"}, \"actor\": null, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}], \"excluded_fields\": {}}\n"
     }
   ]

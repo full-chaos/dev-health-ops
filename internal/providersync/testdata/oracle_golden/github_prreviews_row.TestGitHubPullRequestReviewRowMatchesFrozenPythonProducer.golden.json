@@ -13,7 +13,7 @@
       "body_sha256": "1bfa6e924de9ddd1d6ae762bb464001fc78080e9ac6d9edd21bc4051668e0f19",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"approved\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"number\": {\"t\": \"int\", \"v\": \"42\"}, \"review_id\": {\"t\": \"str\", \"v\": \"9007199254740993\"}, \"reviewer\": {\"t\": \"str\", \"v\": \"octocat\"}, \"state\": {\"t\": \"str\", \"v\": \"APPROVED\"}, \"submitted_at\": {\"t\": \"datetime\", \"v\": \"2026-07-11T10:30:00Z\"}}}, {\"id\": \"fallback_time_and_reviewer\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"number\": {\"t\": \"int\", \"v\": \"7\"}, \"review_id\": {\"t\": \"str\", \"v\": \"R_kwDO\"}, \"reviewer\": {\"t\": \"str\", \"v\": \"Unknown\"}, \"state\": {\"t\": \"str\", \"v\": \"CHANGES_REQUESTED\"}, \"submitted_at\": {\"t\": \"datetime\", \"v\": \"2026-07-12T09:00:00Z\"}}}], \"excluded_fields\": {\"last_synced\": \"SQLAlchemy default is materialized by the sink, not the producer\"}}\n"
     }
   ]

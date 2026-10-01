@@ -1,4 +1,4 @@
-package pyidna
+package pyidna_test
 
 import (
 	"bytes"
@@ -9,10 +9,10 @@ import (
 	"testing"
 )
 
-// behaviourGoldenPath holds a slice of the live idna package's answers,
-// cut from TestBehaviourMatchesLivePython (which checks it is still
-// exactly what the package says), so the ordinary test run pins the port
-// without Python.
+// behaviourGoldenPath holds a slice of the idna package's answers as text,
+// cut from TestBehaviourMatchesFrozenPython (which checks it is still that
+// slice of the frozen answers), so a difference can be read here, answer by
+// answer.
 const behaviourGoldenPath = "testdata/behaviour_golden.jsonl"
 
 type behaviourGolden struct {
@@ -88,6 +88,6 @@ func checkGoldenLines(t *testing.T, values []behaviourGolden, regenerate bool) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(committed, rendered) {
-		t.Fatalf("%s differs from the live answers; regenerate with DEV_HEALTH_REGENERATE_TABLES=1", behaviourGoldenPath)
+		t.Fatalf("%s differs from the frozen answers; regenerate with DEV_HEALTH_REGENERATE_TABLES=1", behaviourGoldenPath)
 	}
 }

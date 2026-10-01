@@ -13,7 +13,7 @@
       "body_sha256": "e81463352c5ebcc5f43b830a192d81664f833d085d38f00790e1a1703263e524",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"included_in_window\", \"row\": {\"excluded\": {\"t\": \"bool\", \"v\": \"false\"}, \"stop\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"after_until_skip_only\", \"row\": {\"excluded\": {\"t\": \"bool\", \"v\": \"true\"}, \"stop\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"before_since_stop\", \"row\": {\"excluded\": {\"t\": \"bool\", \"v\": \"true\"}, \"stop\": {\"t\": \"bool\", \"v\": \"true\"}}}, {\"id\": \"null_updated_at_included\", \"row\": {\"excluded\": {\"t\": \"bool\", \"v\": \"false\"}, \"stop\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"no_window_bounds\", \"row\": {\"excluded\": {\"t\": \"bool\", \"v\": \"false\"}, \"stop\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"since_only_excludes_and_stops\", \"row\": {\"excluded\": {\"t\": \"bool\", \"v\": \"true\"}, \"stop\": {\"t\": \"bool\", \"v\": \"true\"}}}, {\"id\": \"until_only_excludes_without_stop\", \"row\": {\"excluded\": {\"t\": \"bool\", \"v\": \"true\"}, \"stop\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"at_since_boundary_included\", \"row\": {\"excluded\": {\"t\": \"bool\", \"v\": \"false\"}, \"stop\": {\"t\": \"bool\", \"v\": \"false\"}}}, {\"id\": \"at_until_boundary_included\", \"row\": {\"excluded\": {\"t\": \"bool\", \"v\": \"false\"}, \"stop\": {\"t\": \"bool\", \"v\": \"false\"}}}], \"excluded_fields\": {}}\n"
     }
   ]

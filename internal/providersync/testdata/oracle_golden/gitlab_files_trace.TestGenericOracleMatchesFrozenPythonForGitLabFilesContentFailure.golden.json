@@ -13,7 +13,7 @@
       "body_sha256": "d9e669452c00dac8138b242db608d9392223d48435662c41fe179ce084692da2",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"ordinary_content_failure\", \"row\": {\"producer_requests\": [{\"t\": \"str\", \"v\": \"/api/v4/projects/{project}/repository/tree?page=1\u0026per_page=100\u0026recursive=true\u0026ref=main\"}, {\"t\": \"str\", \"v\": \"/api/graphql\"}, {\"t\": \"str\", \"v\": \"/api/graphql\"}], \"requested_content_paths\": [{\"t\": \"str\", \"v\": \"src/main.go\"}, {\"t\": \"str\", \"v\": \"src/main.go\"}], \"usage_request_count\": {\"t\": \"int\", \"v\": \"3\"}, \"tree_paths\": [{\"t\": \"str\", \"v\": \"README.md\"}, {\"t\": \"str\", \"v\": \"src/main.go\"}], \"rows\": [{\"path\": {\"t\": \"str\", \"v\": \"README.md\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": null}, {\"path\": {\"t\": \"str\", \"v\": \"src/main.go\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": null}], \"incomplete\": [{\"cause\": {\"t\": \"str\", \"v\": \"content_fetch\"}, \"subject\": {\"t\": \"str\", \"v\": \"gitlab/files\"}, \"limit\": {\"t\": \"int\", \"v\": \"0\"}, \"observed\": {\"t\": \"int\", \"v\": \"1\"}}]}}], \"excluded_fields\": {}}\n"
     }
   ]

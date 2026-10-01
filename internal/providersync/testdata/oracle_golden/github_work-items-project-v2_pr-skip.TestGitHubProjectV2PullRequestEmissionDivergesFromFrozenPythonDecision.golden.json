@@ -13,7 +13,7 @@
       "body_sha256": "0a97a3f49bf4bc2672d7e5eccca920056f96519edb4df02b2396e3ba299b4604",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"pull_request\", \"row\": {\"emitted\": {\"t\": \"bool\", \"v\": \"false\"}, \"transition_count\": {\"t\": \"int\", \"v\": \"0\"}}}], \"excluded_fields\": {\"emitted\": \"documented divergence, not a gap: Go emits a project_membership_transition row for a PullRequest board item where Python drops it (normalize.py:514). chris ruling 2026-08-23 ('if there's a project mapping it should be in the graph ... especially PRs'); shape ruled by Context Fabric 2026-08-24; built under CHAOS-4194. Python is not wrong here, it is superseded -- prod is Go workers only.\"}}\n"
     }
   ]

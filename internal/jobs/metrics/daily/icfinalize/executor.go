@@ -2,12 +2,48 @@ package icfinalize
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 )
+
+// ErrOrganizationRequired is returned when ic_finalize is asked to compute a day
+// without an organization id. Every reader of user_metrics_daily and
+// ic_landscape_rolling_30d filters by org_id, so a row written under an empty
+// org is invisible to them and can never be corrected by a later run for the
+// real org (CHAOS-7241: the native repo_user_commit writer once did exactly
+// this, and the same three tables still hold those rows).
+var ErrOrganizationRequired = errors.New("icfinalize: organization id is required to write user_metrics_daily/ic_landscape_rolling_30d")
+
+var refusedEmptyOrgCounter = mustRefusedEmptyOrgCounter()
+
+func mustRefusedEmptyOrgCounter() metric.Int64Counter {
+	const name = "dev_health_ic_finalize_refused_empty_org_total"
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/icfinalize").Int64Counter(
+		name, metric.WithDescription("ic_finalize runs refused because the organization id was empty"))
+	if err != nil {
+		// otel's no-op fallback: Add is always safe to call.
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(name)
+	}
+	return counter
+}
+
+// requireOrganization refuses an empty organization id before any read or write.
+func requireOrganization(ctx context.Context, orgID string, day time.Time) error {
+	if orgID != "" {
+		return nil
+	}
+	refusedEmptyOrgCounter.Add(ctx, 1)
+	slog.ErrorContext(ctx, "ic_finalize refused: empty organization id",
+		"family", FamilyName, "target_day", day.UTC().Format("2006-01-02"))
+	return ErrOrganizationRequired
+}
 
 // FamilyName is the families.json family this package computes, and it is the
 // SINGLE source of truth for the string on the Go side.
@@ -275,6 +311,9 @@ var landscapeRepoID = uuid.UUID{}
 func (executor *Executor) computeForDay(
 	ctx context.Context, orgID string, day time.Time, resolveTeam TeamResolver,
 ) (int, error) {
+	if err := requireOrganization(ctx, orgID, day); err != nil {
+		return 0, err
+	}
 	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day)
 	if err != nil {
 		return 0, err
@@ -446,6 +485,9 @@ func (executor *Executor) SetTeamMapper(mapper TeamMapper) { executor.teamMapper
 // place removes any chance of computing a day for the wrong org. computeForDay
 // keeps the explicit form for tests.
 func (executor *Executor) ComputeFinalizeFamily(ctx context.Context, run RunScope) (int, error) {
+	if err := requireOrganization(ctx, run.OrganizationID, run.TargetDay); err != nil {
+		return 0, err
+	}
 	var resolveTeam TeamResolver
 	if executor.teamMapper != nil {
 		resolved, err := executor.teamMapper(ctx, run.OrganizationID)

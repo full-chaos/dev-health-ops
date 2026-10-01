@@ -100,30 +100,47 @@ func TestEnableRefusesClassRequestsThatBreakTheClassRules(t *testing.T) {
 }
 
 func TestClassifyMCPOutcome(t *testing.T) {
-	refused := func(candidate, baseline int) Outcome {
-		return Outcome{RefusalReason: RefusalNonSuccessStatus, Candidate: &Observation{StatusCode: candidate}, Baseline: &Observation{StatusCode: baseline}}
+	refusedWith := func(candidate int, reason string, baseline int) Outcome {
+		return Outcome{RefusalReason: RefusalNonSuccessStatus, Candidate: &Observation{StatusCode: candidate, Body: mcpRefusalBody(reason)}, Baseline: &Observation{StatusCode: baseline}}
 	}
+	refused := func(candidate, baseline int) Outcome { return refusedWith(candidate, "person_scope", baseline) }
 	for name, tc := range map[string]struct {
 		outcome Outcome
 		state   string
 	}{
-		"executed":                 {Outcome{Executed: true}, "executed"},
-		"listener policy 403":      {refused(http.StatusForbidden, 200), "excluded"},
-		"listener limit 400":       {refused(http.StatusBadRequest, 200), "excluded"},
-		"listener budget 422":      {refused(http.StatusUnprocessableEntity, 200), "excluded"},
-		"root not enabled 404":     {refused(http.StatusNotFound, 200), "failed"},
-		"server error 500":         {refused(http.StatusInternalServerError, 200), "failed"},
-		"python also refused":      {refused(http.StatusForbidden, 403), "failed"},
-		"python server error":      {refused(http.StatusForbidden, 500), "failed"},
-		"python redirected":        {refused(http.StatusForbidden, 302), "failed"},
-		"python informational":     {refused(http.StatusForbidden, 199), "failed"},
-		"known refusal":            {Outcome{KnownRefusal: &KnownRefusal{}}, "excluded"},
-		"needs an instance id":     {Outcome{RefusalReason: RefusalNeedsInstanceID}, "excluded"},
-		"admission refusal":        {Outcome{RefusalReason: RefusalWrongPlane}, "failed"},
-		"non-success without legs": {Outcome{RefusalReason: RefusalNonSuccessStatus}, "failed"},
+		"executed":                  {Outcome{Executed: true}, "executed"},
+		"listener policy 403":       {refused(http.StatusForbidden, 200), "excluded"},
+		"listener limit 400":        {refusedWith(http.StatusBadRequest, "input_limit", 200), "excluded"},
+		"listener budget 422":       {refusedWith(http.StatusUnprocessableEntity, "rows_ceiling", 200), "excluded"},
+		"cost cap 400":              {refusedWith(http.StatusBadRequest, "complexity_limit", 200), "excluded"},
+		"identity: org mismatch":    {refusedWith(http.StatusForbidden, "org_mismatch", 200), "failed"},
+		"identity: invalid org arg": {refusedWith(http.StatusForbidden, "invalid_org_argument", 200), "failed"},
+		"identity: elevated claim":  {refusedWith(http.StatusForbidden, "elevated_claim", 200), "failed"},
+		"identity: no carrier":      {refusedWith(http.StatusUnauthorized, "no_carrier", 200), "failed"},
+		"document invalid":          {refusedWith(http.StatusBadRequest, "invalid_document", 200), "failed"},
+		"root not allowed":          {refusedWith(http.StatusForbidden, "root_field_not_allowed", 200), "failed"},
+		"unknown reason":            {refusedWith(http.StatusForbidden, "something_new", 200), "failed"},
+		"no reason in the body":     {Outcome{RefusalReason: RefusalNonSuccessStatus, Candidate: &Observation{StatusCode: 403, Body: []byte("forbidden")}, Baseline: &Observation{StatusCode: 200}}, "failed"},
+		"empty body":                {Outcome{RefusalReason: RefusalNonSuccessStatus, Candidate: &Observation{StatusCode: 403}, Baseline: &Observation{StatusCode: 200}}, "failed"},
+		"two errors":                {Outcome{RefusalReason: RefusalNonSuccessStatus, Candidate: &Observation{StatusCode: 403, Body: []byte(`{"errors":[{"extensions":{"reason":"person_scope"}},{"extensions":{"reason":"person_scope"}}]}`)}, Baseline: &Observation{StatusCode: 200}}, "failed"},
+		"root not enabled 404":      {refused(http.StatusNotFound, 200), "failed"},
+		"server error 500":          {refused(http.StatusInternalServerError, 200), "failed"},
+		"python also refused":       {refused(http.StatusForbidden, 403), "failed"},
+		"python server error":       {refused(http.StatusForbidden, 500), "failed"},
+		"python redirected":         {refused(http.StatusForbidden, 302), "failed"},
+		"python informational":      {refused(http.StatusForbidden, 199), "failed"},
+		"known refusal":             {Outcome{KnownRefusal: &KnownRefusal{}}, "excluded"},
+		"needs an instance id":      {Outcome{RefusalReason: RefusalNeedsInstanceID}, "excluded"},
+		"admission refusal":         {Outcome{RefusalReason: RefusalWrongPlane}, "failed"},
+		"non-success without legs":  {Outcome{RefusalReason: RefusalNonSuccessStatus}, "failed"},
 	} {
-		if state, _ := classifyMCPOutcome(tc.outcome); state != tc.state {
+		state, reason := classifyMCPOutcome(tc.outcome)
+		if state != tc.state {
 			t.Errorf("%s: state = %s, want %s", name, state, tc.state)
+		}
+		// An exclusion names the listener's own reason, so the receipt says WHY.
+		if state == "excluded" && tc.outcome.Candidate != nil && !strings.HasPrefix(reason, "listener_policy:") {
+			t.Errorf("%s: exclusion reason %q does not carry the listener's reason", name, reason)
 		}
 	}
 }
@@ -145,12 +162,14 @@ func executedOutcome(operation, variant string) Outcome {
 func TestMCPClassReceiptsRule(t *testing.T) {
 	sources := map[string][]string{mcpclass.Operation("hotspots"): {"hotspots", "hotspotsAll"}}
 	refused403 := Outcome{Operation: "hotspotsAll", RefusalReason: RefusalNonSuccessStatus,
-		Candidate: &Observation{StatusCode: 403}, Baseline: &Observation{StatusCode: 200}}
+		Candidate: &Observation{StatusCode: 403, Body: mcpRefusalBody("person_scope")}, Baseline: &Observation{StatusCode: 200}}
 	notFound := Outcome{Operation: "hotspotsAll", RefusalReason: RefusalNonSuccessStatus,
 		Candidate: &Observation{StatusCode: 404}, Baseline: &Observation{StatusCode: 200}}
 	mismatch := sealedMatch("hotspotsAll", "")
 	mismatch.terminalState = TerminalStateMismatch
 	mismatch.differencesOutsideBaselineDefect = 1
+	identity403 := Outcome{Operation: "hotspotsAll", RefusalReason: RefusalNonSuccessStatus,
+		Candidate: &Observation{StatusCode: 403, Body: mcpRefusalBody("org_mismatch")}, Baseline: &Observation{StatusCode: 200}}
 	unbound := sealedMatch("hotspots", "")
 	unbound.edgeBinding = EdgeBuildAbsent
 	edgeRoute := sealedMatch("hotspots", "")
@@ -177,6 +196,8 @@ func TestMCPClassReceiptsRule(t *testing.T) {
 			[]sealedOutcome{sealedMatch("hotspots", ""), sealedMatch("hotspotsAll", "")}, want{TerminalStateMatch, 1}},
 		"one shape the listener refuses by policy is excluded and named": {[]Outcome{executedOutcome("hotspots", ""), refused403},
 			[]sealedOutcome{sealedMatch("hotspots", ""), {}}, want{TerminalStateMatch, 1}},
+		"an identity refusal (403 org_mismatch) while the reference served blocks the root": {[]Outcome{executedOutcome("hotspots", ""), identity403},
+			[]sealedOutcome{sealedMatch("hotspots", ""), {}}, want{"proof_failed", 1}},
 		"a root-not-enabled shape blocks the match": {[]Outcome{executedOutcome("hotspots", ""), notFound},
 			[]sealedOutcome{sealedMatch("hotspots", ""), {}}, want{"proof_failed", 1}},
 		"a mismatching shape blocks the match": {[]Outcome{executedOutcome("hotspots", ""), executedOutcome("hotspotsAll", "")},
@@ -197,7 +218,7 @@ func TestMCPClassReceiptsRule(t *testing.T) {
 			[]sealedOutcome{edgeRoute}, want{"proof_failed", 1}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			receipts, verdicts, err := classRunner(tc.sealed).MCPClassReceipts(tc.outcomes, sources, time.Now().UTC())
+			receipts, verdicts, err := classRunner(tc.sealed).MCPClassReceipts(tc.outcomes, sources, nil, time.Now().UTC())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -216,10 +237,10 @@ func TestMCPClassReceiptsRule(t *testing.T) {
 
 func TestMCPClassReceiptsRefusesOutcomesTheRunDidNotSeal(t *testing.T) {
 	sources := map[string][]string{mcpclass.Operation("hotspots"): {"hotspots"}}
-	if _, _, err := classRunner(nil).MCPClassReceipts([]Outcome{executedOutcome("hotspots", "")}, sources, time.Now()); err == nil {
+	if _, _, err := classRunner(nil).MCPClassReceipts([]Outcome{executedOutcome("hotspots", "")}, sources, nil, time.Now()); err == nil {
 		t.Fatal("outcomes without matching sealed measurements were accepted")
 	}
-	if _, _, err := classRunner([]sealedOutcome{sealedMatch("featureFlags", "")}).MCPClassReceipts([]Outcome{executedOutcome("featureFlags", "")}, sources, time.Now()); err == nil {
+	if _, _, err := classRunner([]sealedOutcome{sealedMatch("featureFlags", "")}).MCPClassReceipts([]Outcome{executedOutcome("featureFlags", "")}, sources, nil, time.Now()); err == nil {
 		t.Fatal("an outcome of an operation outside every requested root was accepted")
 	}
 }
@@ -236,4 +257,9 @@ func TestEnableNamesAClassKindOnADocumentOperation(t *testing.T) {
 	if err := r.validate(); err == nil || !strings.Contains(err.Error(), "is not an MCP class operation") {
 		t.Fatalf("err = %v, want the class-kind-on-a-document refusal", err)
 	}
+}
+
+// mcpRefusalBody is the listener's typed refusal body (errors[0].extensions.reason).
+func mcpRefusalBody(reason string) []byte {
+	return []byte(`{"errors":[{"message":"refused","extensions":{"code":"MCP_REFUSED","reason":"` + reason + `"}}]}`)
 }

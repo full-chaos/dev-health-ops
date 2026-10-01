@@ -100,7 +100,7 @@ func gitLabTestsGoRows(t *testing.T, input map[string]any) (githubTestsPipelineR
 	return pipeline, job, acceptance, suites[0], cases[0], coverage
 }
 
-func TestGenericOracleMatchesActivePythonGitLabTestsRows(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonGitLabTestsRows(t *testing.T) {
 	testCase := gitLabTestsOracleCase()
 	compareRowsAgainstPythonOracle(t, "gitlab/tests/pipeline", []oracleCase{testCase}, func(t *testing.T, input map[string]any) githubTestsPipelineRow {
 		a, _, _, _, _, _ := gitLabTestsGoRows(t, input)
@@ -151,7 +151,7 @@ func (do gitLabTestsSelectionDoerFunc) Do(request *http.Request) (*http.Response
 	return do(request)
 }
 
-func TestGenericOracleMatchesActivePythonGitLabTestsSelection(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonGitLabTestsSelection(t *testing.T) {
 	jobs := make([]any, 0, gitLabTestsMaxArtifacts+2)
 	jobs = append(jobs, map[string]any{"id": "empty", "artifacts_file": map[string]any{}, "artifacts": []any{}})
 	for id := 1; id <= gitLabTestsMaxArtifacts+1; id++ {

@@ -2,10 +2,6 @@ package providersync
 
 import (
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,8 +12,7 @@ import (
 // provider value distinct. That prevents a future provider-specific shortcut
 // from silently changing a shared projection while the GitHub fixture stays
 // green.
-func TestJiraDirectAdapterProjectionsMatchLivePythonSink(t *testing.T) {
-	python := pythonExecutable(t)
+func TestJiraDirectAdapterProjectionsMatchFrozenPythonSink(t *testing.T) {
 	normalizedAt := time.Date(2026, 8, 31, 23, 30, 0, 123000000, time.UTC)
 	orgID := "org-acme"
 	points := 3.5
@@ -91,19 +86,14 @@ func TestJiraDirectAdapterProjectionsMatchLivePythonSink(t *testing.T) {
 		}
 		payload = append(payload, map[string]any{"id": testCase.id, "destination": testCase.destination, "org_id": orgID, "rows": rows})
 	}
-	_, currentFile, _, _ := runtime.Caller(0)
-	casesFile := filepath.Join(t.TempDir(), "jira-sink-cases.json")
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(casesFile, encoded, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	output, err := exec.Command(python, filepath.Join(filepath.Dir(currentFile), "testdata", "python_work_item_sink_oracle.py"), casesFile).CombinedOutput()
-	if err != nil {
-		t.Fatalf("execute live Python sink oracle: %v: %s", err, output)
-	}
+	output := frozenScriptAnswer(t, scriptOracle{
+		name: "work-item-sink", script: "testdata/python_work_item_sink_oracle.py",
+		input: encoded, inputFile: true,
+	})
 	var decoded struct {
 		Cases []struct {
 			ID          string              `json:"id"`

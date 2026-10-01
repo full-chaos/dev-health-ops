@@ -31,7 +31,7 @@ func buildGitLabCommitStatsRowForOracle(t *testing.T, input map[string]any) comm
 	return row
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabCommitStatsRowConstruction(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabCommitStatsRowConstruction(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "gitlab/commit-stats/row",
 		[]oracleCase{

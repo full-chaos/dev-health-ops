@@ -6,7 +6,7 @@ type gitHubBlameSelectionOracleRow struct {
 	Paths []string `json:"paths"`
 }
 
-func TestGitHubBlameSelectionMatchesLivePython(t *testing.T) {
+func TestGitHubBlameSelectionMatchesFrozenPython(t *testing.T) {
 	cases := []oracleCase{
 		{ID: "empty", Input: map[string]any{
 			"file_paths": []string{}, "blamed_paths": []string{}, "max_files": 3,

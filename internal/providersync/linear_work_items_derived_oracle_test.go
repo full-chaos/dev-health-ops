@@ -39,7 +39,7 @@ func linearizeOracleProviders(value any) {
 	}
 }
 
-func TestLinearWorkItemDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
+func TestLinearWorkItemDerivedSurfacesMatchFrozenPythonProduction(t *testing.T) {
 	cases := linearizeWorkItemOracleCases(githubDerivedOracleCases())
 	// CHAOS-5323/CHAOS-3092: no "linear/work-items/estimate-coverage" oracle
 	// pair here anymore -- compute_estimate_coverage_metrics_daily is
@@ -60,7 +60,7 @@ func TestLinearWorkItemDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
 		}, nil)
 }
 
-func TestLinearWorkItemMetricTripletMatchesLivePythonProduction(t *testing.T) {
+func TestLinearWorkItemMetricTripletMatchesFrozenPythonProduction(t *testing.T) {
 	cases := linearizeWorkItemOracleCases(githubWorkItemMetricTripletOracleCases())
 	// CHAOS-5310/CHAOS-3092 (R6): compute_work_item_metrics_daily is deleted
 	// (native Go executor + providersync own work_item_metrics_daily now) --

@@ -61,7 +61,7 @@ func buildReviewRowForOracle(t *testing.T, input map[string]any) pullRequestRevi
 	return row
 }
 
-func TestGitHubPullRequestReviewRowMatchesLivePythonProducer(t *testing.T) {
+func TestGitHubPullRequestReviewRowMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "github/prreviews/row", oracleReviewCases(), buildReviewRowForOracle,
 		map[string]string{

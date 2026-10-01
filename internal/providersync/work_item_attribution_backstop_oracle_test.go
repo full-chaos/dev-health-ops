@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestWorkItemAttributionBackstopMatchesLivePythonProduction is CHAOS-3092
+// TestWorkItemAttributionBackstopMatchesFrozenPythonProduction is CHAOS-3092
 // PR-B's differential proof (team-lead's second approval condition): the Go
 // backstop's ClickHouse effect-write path must produce the SAME
 // work_item_team_attributions row shape as the sync-time writer, proven
@@ -32,7 +32,7 @@ import (
 // seeded fixture exercising repo_ownership, assignee_membership and the
 // unassigned fallback is enough to prove that mapping; broader resolver
 // coverage would only be retesting teamattribution a second time.
-func TestWorkItemAttributionBackstopMatchesLivePythonProduction(t *testing.T) {
+func TestWorkItemAttributionBackstopMatchesFrozenPythonProduction(t *testing.T) {
 	// CHAOS-5321/CHAOS-3092 (R6): compute_work_item_team_attributions is
 	// deleted (native Go executor + providersync own work_item_team_
 	// attributions now) -- frozen under its own snapshot name, since this

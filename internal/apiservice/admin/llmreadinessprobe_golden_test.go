@@ -112,12 +112,7 @@ func TestReadinessProbeMatchesTheFrozenPythonProbe(t *testing.T) {
 	scriptPath := filepath.Join(repoRoot, "internal", "apiservice", "admin", "testdata", "llmreadinessoracle", "certify_oracle.py")
 	answers := golden.Produce(t, root, requests, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		ctx := context.Background()
-		version, err := producer.Command(ctx, nil, nil, pyoracle.VersionProbeArgs...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		probe, probeErr := version.Output()
-		pyoracle.RequireDeployed(t, version.Path, probe, probeErr)
+		producer.RequireDeployed()
 		out := make([]venueoracle.Response, len(readinessScenarios))
 		for index, scenario := range readinessScenarios {
 			// The "transient" scenario is stateful (round 1 fails once, then

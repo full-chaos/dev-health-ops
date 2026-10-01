@@ -294,19 +294,20 @@ func TestASinkAnswerAndThePerRunColumnsAreHeldToEachOther(t *testing.T) {
 		output []byte
 		names  string
 	}{
-		"a clock value in the per-run column":                 {"work-item-sink", answer("work_items_single", `"id", "last_synced"`, `[`+id+`, `+leaf+`], [`+id+`, {"t": "datetime", "v": "2026-10-01T04:11:02Z"}]`), "row 1"},
-		"a null in the per-run column":                        {"work-item-sink", answer("work_item_transitions", `"id", "last_synced"`, `[`+id+`, null]`), "row 0"},
-		"a row too short for the per-run column":              {"work-item-sink", answer("work_items_single", `"id", "last_synced"`, `[`+id+`]`), "no value"},
-		"a placeholder in another column":                     {"work-item-sink", answer("work_items_single", `"id", "last_synced"`, `[`+leaf+`, `+leaf+`]`), "cases.0.rows.0.0.v"},
-		"a placeholder in another destination":                {"work-item-sink", answer("sprints", `"id", "last_synced"`, `[`+id+`, `+leaf+`]`), "cases.0.rows.0.1.v"},
-		"a placeholder outside the rows":                      {"work-item-sink", answer("work_items_single", `"id", "`+oraclePerRunValue+`"`, `[`+id+`, `+id+`]`), "cases.0.column_names.1"},
-		"a placeholder beside the rows":                       {"work-item-sink", []byte(`{"cases": [{"id": "work_items_single", "column_names": ["id", "last_synced"], "rows": [[` + id + `, ` + leaf + `]], "shadow": [[` + id + `, ` + leaf + `]]}]}`), "cases.0.shadow.0.1.v"},
-		"a placeholder outside the cases":                     {"work-item-sink", []byte(`{"cases": [{"id": "work_items_single", "column_names": ["id", "last_synced"], "rows": [[` + id + `, ` + leaf + `]]}], "other": {"0": {"rows": [[` + id + `, ` + leaf + `]]}}}`), "other.0.rows.0.1.v"},
-		"a placeholder as the type tag of the per-run column": {"work-item-sink", answer("work_items_single", `"id", "last_synced"`, `[`+id+`, {"t": "`+oraclePerRunValue+`", "v": "`+oraclePerRunValue+`"}]`), "cases.0.rows.0.1.t"},
-		"a bare placeholder in the per-run column":            {"work-item-sink", answer("work_items_single", `"id", "last_synced"`, `[`+id+`, "`+oraclePerRunValue+`"]`), "at cases.0.rows.0.1, and"},
-		"a sink answer that is not JSON":                      {"work-item-sink", []byte("Traceback"), "decode the answer"},
-		"a placeholder in an oracle that declares none":       {"repo-listing", []byte(`[{"name": "` + oraclePerRunValue + `"}]`), "declares no per-run value"},
-		"a placeholder in a text answer":                      {"json-dumps-evidence", []byte("text with " + oraclePerRunValue), "declares no per-run value"},
+		"a clock value in the per-run column":                    {"work-item-sink", answer("work_items_single", `"id", "last_synced"`, `[`+id+`, `+leaf+`], [`+id+`, {"t": "datetime", "v": "2026-10-01T04:11:02Z"}]`), "row 1"},
+		"a null in the per-run column":                           {"work-item-sink", answer("work_item_transitions", `"id", "last_synced"`, `[`+id+`, null]`), "row 0"},
+		"a row too short for the per-run column":                 {"work-item-sink", answer("work_items_single", `"id", "last_synced"`, `[`+id+`]`), "no value"},
+		"a placeholder in another column":                        {"work-item-sink", answer("work_items_single", `"id", "last_synced"`, `[`+leaf+`, `+leaf+`]`), "cases.0.rows.0.0.v"},
+		"a placeholder in another destination":                   {"work-item-sink", answer("sprints", `"id", "last_synced"`, `[`+id+`, `+leaf+`]`), "cases.0.rows.0.1.v"},
+		"a placeholder outside the rows":                         {"work-item-sink", answer("work_items_single", `"id", "`+oraclePerRunValue+`"`, `[`+id+`, `+id+`]`), "cases.0.column_names.1"},
+		"a placeholder beside the rows":                          {"work-item-sink", []byte(`{"cases": [{"id": "work_items_single", "column_names": ["id", "last_synced"], "rows": [[` + id + `, ` + leaf + `]], "shadow": [[` + id + `, ` + leaf + `]]}]}`), "cases.0.shadow.0.1.v"},
+		"a placeholder outside the cases":                        {"work-item-sink", []byte(`{"cases": [{"id": "work_items_single", "column_names": ["id", "last_synced"], "rows": [[` + id + `, ` + leaf + `]]}], "other": {"0": {"rows": [[` + id + `, ` + leaf + `]]}}}`), "other.0.rows.0.1.v"},
+		"a placeholder as the type tag of the per-run column":    {"work-item-sink", answer("work_items_single", `"id", "last_synced"`, `[`+id+`, {"t": "`+oraclePerRunValue+`", "v": "`+oraclePerRunValue+`"}]`), "cases.0.rows.0.1.t"},
+		"a bare placeholder in the per-run column":               {"work-item-sink", answer("work_items_single", `"id", "last_synced"`, `[`+id+`, "`+oraclePerRunValue+`"]`), "at cases.0.rows.0.1, and"},
+		"a placeholder deeper than the leaf value of the column": {"work-item-sink", answer("work_items_single", `"id", "last_synced"`, `[`+id+`, {"t": "list", "v": ["`+oraclePerRunValue+`"]}]`), "cases.0.rows.0.1.v.0"},
+		"a sink answer that is not JSON":                         {"work-item-sink", []byte("Traceback"), "decode the answer"},
+		"a placeholder in an oracle that declares none":          {"repo-listing", []byte(`[{"name": "` + oraclePerRunValue + `"}]`), "declares no per-run value"},
+		"a placeholder in a text answer":                         {"json-dumps-evidence", []byte("text with " + oraclePerRunValue), "declares no per-run value"},
 	}
 	for name, c := range refused {
 		err := scriptPerRunErr(c.oracle, c.output)

@@ -1,0 +1,522 @@
+{
+ "all_empty_strings": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "",
+   "eventId": "",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "",
+   "sessionId": "",
+   "ts": "2026-09-23T02:00:00Z"
+  },
+  "row": {
+   "anonymous_user_id": "",
+   "event_id": "",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "",
+   "session_id": ""
+  }
+ },
+ "empty_anonymous_user_id": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23T02:00:00Z"
+  },
+  "row": {
+   "anonymous_user_id": "",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "empty_event_id": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23T02:00:00Z"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "empty_schema_version": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "",
+   "sessionId": "s",
+   "ts": "2026-09-23T02:00:00Z"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "",
+   "session_id": "s"
+  }
+ },
+ "empty_session_id": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "",
+   "ts": "2026-09-23T02:00:00Z"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": ""
+  }
+ },
+ "org_hash_and_route": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "orgIdHash": "h1",
+   "payload": {},
+   "routePattern": "/a/[id]",
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23T02:00:00Z"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "h1",
+   "payload_json": "{}",
+   "route_pattern": "/a/[id]",
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "payload_big_int": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {
+    "i": 9007199254740993
+   },
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23T02:00:00Z"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{\"i\":9007199254740993}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "payload_float_integral": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {
+    "f": 100.0
+   },
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23T02:00:00Z"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{\"f\":100.0}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "payload_scalars": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {
+    "b": true,
+    "f": 1.5,
+    "i": 3,
+    "n": null,
+    "s": "x"
+   },
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23T02:00:00Z"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{\"b\":true,\"f\":1.5,\"i\":3,\"n\":null,\"s\":\"x\"}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "payload_unicode": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {
+    "s": "h\u00e9llo \u2603 <&>"
+   },
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23T02:00:00Z"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{\"s\":\"h\\u00e9llo \\u2603 <&>\"}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "ts_date_only": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T00:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "ts_epoch_float": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": 1790000000.5
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-21T14:13:20.500000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "ts_epoch_int": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": 1790000000
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-21T14:13:20.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "ts_epoch_ms": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": 1790000000123
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-21T14:13:20.123000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "ts_epoch_str": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "1790000000"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-21T14:13:20.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "ts_naive": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23T02:00:00"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "ts_naive_micro": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23T02:00:00.123456"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.123456",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "ts_offset": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23T02:00:00+05:30"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-22T20:30:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "ts_offset_neg": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-22T22:00:00-04:00"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "ts_space_sep": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23 02:00:00"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "ts_year1": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "0001-01-01T00:00:00"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "0001-01-01T00:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ },
+ "ts_z": {
+  "python": "stored",
+  "raw": {
+   "anonymousUserId": "a",
+   "eventId": "e1",
+   "name": "page_viewed",
+   "payload": {},
+   "schemaVersion": "1",
+   "sessionId": "s",
+   "ts": "2026-09-23T02:00:00Z"
+  },
+  "row": {
+   "anonymous_user_id": "a",
+   "event_id": "e1",
+   "name": "page_viewed",
+   "occurred_at": "2026-09-23T02:00:00.000000",
+   "org_id_hash": "",
+   "payload_json": "{}",
+   "route_pattern": null,
+   "schema_version": "1",
+   "session_id": "s"
+  }
+ }
+}

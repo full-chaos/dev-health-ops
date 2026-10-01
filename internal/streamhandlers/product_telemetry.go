@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -29,11 +30,20 @@ var blockedProductPayloadKeys = map[string]struct{}{
 	"email": {}, "name": {}, "userId": {}, "orgId": {}, "url": {}, "query": {}, "search": {}, "stack": {}, "message": {}, "title": {}, "body": {},
 }
 
-// clickHouseMinYear is the first year ClickHouse's DateTime64 holds. An earlier timestamp cannot be
-// stored as sent (the driver writes the zero time as 1970), so the entry is refused. The Python
-// consumer refused it too: its ClickHouse writer raised ValueError for a year-0001 datetime and the
-// entry was dead-lettered (CHAOS-7467 body).
-const clickHouseMinYear = 1900
+// A timestamp is stored only inside the range the ClickHouse Go driver encodes correctly: it converts a
+// time to int64 nanoseconds, so a time before 1677-09-21 or after 2262-04-11 overflows and is stored as a
+// different, wrong time (a year-2500 timestamp came back as 1915; the zero time as 1970). The Python
+// consumer stored every year ClickHouse's DateTime64 holds, so these are the entries that cannot be
+// stored as sent: they are refused, as before the intake shapes were accepted, and stay replayable from
+// their dead-letter row.
+var (
+	minStorableTimestamp = time.Unix(0, math.MinInt64).UTC()
+	maxStorableTimestamp = time.Unix(0, math.MaxInt64).UTC()
+)
+
+func timestampStorable(t time.Time) bool {
+	return !t.Before(minStorableTimestamp) && !t.After(maxStorableTimestamp)
+}
 
 // presentString is a required JSON string that may be empty: pydantic's `str` field accepts "" and
 // refuses a missing or null value, and so does this type (Set is false for both).
@@ -175,7 +185,7 @@ func (h *ProductTelemetryHandler) Handle(ctx context.Context, message streamrunn
 }
 
 func validateProductEvent(event productEvent) (string, error) {
-	if _, ok := productTelemetryNames[event.Name]; !ok || !event.SchemaVersion.Set || !event.EventID.Set || !event.Timestamp.Set || event.Timestamp.Time.Year() < clickHouseMinYear || !event.SessionID.Set || !event.AnonymousUserID.Set || event.Payload == nil {
+	if _, ok := productTelemetryNames[event.Name]; !ok || !event.SchemaVersion.Set || !event.EventID.Set || !event.Timestamp.Set || !timestampStorable(event.Timestamp.Time) || !event.SessionID.Set || !event.AnonymousUserID.Set || event.Payload == nil {
 		return "", &streamrunner.PermanentError{Reason: "invalid_telemetry_event"}
 	}
 	for key, value := range event.Payload {

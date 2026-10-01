@@ -2,6 +2,7 @@ package venueoracle
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -31,9 +32,23 @@ var timestampLayouts = []string{
 // written, so a seeded or requested time is still compared by value. A
 // timestamp that does not parse stays as written. The scrub is idempotent
 // and runs on both planes.
-func ScrubRunValues(floor, ceiling time.Time) func(string) string {
+//
+// keep lists ids that have the shape of a random UUID and are deterministic
+// (a test that seeds "10000000-0000-4000-8000-000000000001"): they are never
+// blanked, so they stay compared by value. A test names its seeded ids here;
+// StableUUID ids need no entry.
+func ScrubRunValues(floor, ceiling time.Time, keep ...string) func(string) string {
+	kept := map[string]bool{}
+	for _, id := range keep {
+		kept[strings.ToLower(id)] = true
+	}
 	return func(text string) string {
-		text = generatedUUID.ReplaceAllString(text, "<id>")
+		text = generatedUUID.ReplaceAllStringFunc(text, func(match string) string {
+			if kept[strings.ToLower(match)] {
+				return match
+			}
+			return "<id>"
+		})
 		return isoTimestamp.ReplaceAllStringFunc(text, func(match string) string {
 			for _, layout := range timestampLayouts {
 				if at, err := time.Parse(layout, match); err == nil {

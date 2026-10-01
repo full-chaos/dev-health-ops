@@ -9,16 +9,17 @@ import (
 func TestScrubRunValuesBlanksGeneratedIDsAndRunTimesOnly(t *testing.T) {
 	floor := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	ceiling := time.Date(2030, 12, 1, 0, 0, 0, 0, time.UTC)
-	scrub := ScrubRunValues(floor, ceiling)
+	seededV4 := "10000000-0000-4000-8000-000000000001"
+	scrub := ScrubRunValues(floor, ceiling, seededV4)
 	seeded := StableUUID("seed-1")
 	random := "3f2a9c10-7b1e-4c55-9d02-1a2b3c4d5e6f"
 	in := strings.Join([]string{
-		"id=" + seeded, "id=" + random,
+		"id=" + seeded, "id=" + random, "id=" + seededV4, "id=" + strings.ToUpper(seededV4),
 		"run=2026-10-01T12:00:00.123456Z", "run=2026-10-01 12:00:00.5+00", "run=2026-10-01 12:00:00+00:00", "run=2026-10-01T12:00:00",
 		"seeded=2026-08-01T00:00:00Z", "request=2031-01-01T00:00:00.5+05:30", "notatime=2026-13-45T99:99:99",
 	}, "\n")
 	want := strings.Join([]string{
-		"id=" + seeded, "id=<id>",
+		"id=" + seeded, "id=<id>", "id=" + seededV4, "id=" + strings.ToUpper(seededV4),
 		"run=<now>", "run=<now>", "run=<now>", "run=<now>",
 		"seeded=2026-08-01T00:00:00Z", "request=2031-01-01T00:00:00.5+05:30", "notatime=2026-13-45T99:99:99",
 	}, "\n")

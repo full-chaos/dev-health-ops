@@ -45,7 +45,7 @@ func TestTheGoHalfOfTheBlockDigestsIsThePythonHalf(t *testing.T) {
 	spec := venueoracle.GoldenSpec{
 		Path:        "testdata/golden/blocks.golden.json",
 		PythonBuild: runGoldenPythonBuild,
-		SHA256:      "924f5d6ac7d4474abcb1cefc9cdcea80e20f52cbf6a31b39c99e7d56384b6ec4",
+		SHA256:      "222ea6b4f17e7a0676502feb6a851084e9ef21a933cc63db87c24669ddb8721a",
 		Recipe: "git worktree add --detach $DIR " + runGoldenPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/testsupport/programoracle/ -test '^TestTheGoHalfOfTheBlockDigestsIsThePythonHalf$' -python-root $DIR",
 	}

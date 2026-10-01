@@ -22,7 +22,7 @@ var emailGoldens = programoracle.Set{
 	// The goldenrecord verb writes each digest when it promotes a recording; a
 	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
-		"validate-email.golden.json": "c89010e1cde5a318a0defbf604fd5399a211d1458524ac8896f59b82ac667053",
+		"validate-email.golden.json": "d687712e2b612ebc2cbc9cad9b834ec92fbeb51be49fedc040eaacb74031f4aa",
 	},
 }
 

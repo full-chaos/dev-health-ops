@@ -21,8 +21,8 @@ var unicodeGoldens = programoracle.Set{
 	// The goldenrecord verb writes each digest when it promotes a recording; a
 	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
-		"nfc.golden.json":    "c11cc2ed8526bea7e854e46c7563248a3d1e544df303a23cda01fb111ef1f5ad",
-		"tables.golden.json": "c668b934ada00952fe52ebc1e4a9b48a236660a645eac80a8417986136e2ce23",
+		"nfc.golden.json":    "b11baee9ba2ec856fec6e2f87298dd58598091877561b093531f23b91d370b72",
+		"tables.golden.json": "e7188e845e07b6c4c2a4cd07fbc857e501194fd9f10efa0594f3720dc4d28030",
 	},
 }
 

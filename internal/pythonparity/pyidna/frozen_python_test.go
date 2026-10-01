@@ -22,9 +22,9 @@ var idnaGoldens = programoracle.Set{
 	// The goldenrecord verb writes each digest when it promotes a recording; a
 	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
-		"behaviour.golden.json": "f55828ecda4e72e4d69babb0ad76fc481d25b89ada4c33c833472aa473df1c87",
-		"codec.golden.json":     "26a367590e4eaeeb36b4d1d799d208855357df424c00de0fec6e2743d4827538",
-		"tables.golden.json":    "82013d242e81a773a05cb0817a8c9da3dc338adc7ed546f5a61bcadfcd974d8f",
+		"behaviour.golden.json": "93b5c472ff5a24f78361316db00d137b81fae0c58f9227f816d92650f9fc4c7c",
+		"codec.golden.json":     "7b8d4babc5d978a05857218669e702c036a65b9671190577fefb308e5e296b79",
+		"tables.golden.json":    "bbcae66d509029c29e39c60f1491b1f5f3de915208509cfdc8f94d0398c6ea8d",
 	},
 }
 

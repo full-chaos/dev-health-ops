@@ -13,7 +13,7 @@
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"block_lines\": 1024, \"lines\": 2500, \"block_count\": 3, \"blocks\": [{\"first\": 0, \"lines\": 1024, \"sha256\": \"7e8c2181b2b0dd699c424846566e3c1abfa1b520bba145fab9b0dcb65944592f\"}, {\"first\": 1024, \"lines\": 1024, \"sha256\": \"5cefc36b6fbf25fb80462fdf90ac56ad7d453e2821704c120acf12067bbcbb01\"}, {\"first\": 2048, \"lines\": 452, \"sha256\": \"e42aef9900ec5065c531df48bbf7fef72b0f5abebdc26a32185754c30269821e\"}]}\n"
     }
   ]

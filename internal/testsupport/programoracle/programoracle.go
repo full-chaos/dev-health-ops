@@ -37,7 +37,7 @@ import (
 type Program struct {
 	// Name identifies the run in the golden. Names are unique within one call.
 	Name string
-	// Text is the program, run as `python -c Text` with the pinned checkout
+	// Text is the program, run as `python3 -c Text` with the pinned checkout
 	// as its working directory. Its digest is part of the request, so a
 	// changed program is another request.
 	Text string
@@ -154,6 +154,7 @@ func Run(t *testing.T, spec venueoracle.GoldenSpec, root string, programs []Prog
 		requests[index] = venueoracle.ProgramRequest(program.Name, program.Text, program.Stdin, keyedEnv(program))
 	}
 	responses := golden.Produce(t, pythonRoot, requests, func(pinnedRoot string, _ []venueoracle.Request) []venueoracle.Response {
+		activateInterpreter(t, pinnedRoot)
 		recorded := make([]venueoracle.Response, len(programs))
 		for index, program := range programs {
 			exitCode, stdout := execute(t, pinnedRoot, program)
@@ -232,26 +233,66 @@ func interpreterEnv(pinnedRoot string, program Program) []string {
 	return environment
 }
 
-// interpreterCommand is the command a recording runs for program: the
-// interpreter with the program as its -c text, in the pinned checkout, with
-// the program's input and the interpreter environment.
-func interpreterCommand(python, pinnedRoot string, program Program) *exec.Cmd {
-	command := exec.Command(python, "-c", program.Text)
+// activateInterpreter puts the directory of the pinned checkout's interpreter
+// first on PATH for the rest of the test, as `source bin/activate` does, and
+// checks that the python3 a command would start is the one in that directory.
+// A recording starts the program as "python3", never by a path.
+func activateInterpreter(t *testing.T, pinnedRoot string) {
+	t.Helper()
+	bin, err := interpreterDir(pyoracle.Resolve(t, pinnedRoot))
+	if err != nil {
+		t.Fatalf("programoracle: %v", err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
+		t.Fatalf("programoracle: python3 on PATH is %q (%v), want the one in %s", found, err, bin)
+	}
+	probe, probeErr := exec.Command("python3", pyoracle.VersionProbeArgs...).Output()
+	pyoracle.RequireDeployed(t, filepath.Join(bin, "python3"), probe, probeErr)
+}
+
+// interpreterDir returns, as an absolute path, the directory of the
+// interpreter at path. It must also hold an executable python3: every
+// virtualenv and every Python 3 install directory does.
+func interpreterDir(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		found, err := exec.LookPath(path)
+		if err != nil {
+			return "", fmt.Errorf("interpreter %q: %w", path, err)
+		}
+		path = found
+	}
+	dir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	python3 := filepath.Join(dir, "python3")
+	info, err := os.Stat(python3)
+	if err != nil {
+		return "", fmt.Errorf("interpreter %q: no python3 beside it: %w", path, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("interpreter %q: %s is not an executable file", path, python3)
+	}
+	return dir, nil
+}
+
+// interpreterCommand is the command a recording runs for program: python3 (the
+// activated interpreter) with the program as its -c text, in the pinned
+// checkout, with the program's input and the interpreter environment.
+func interpreterCommand(pinnedRoot string, program Program) *exec.Cmd {
+	command := exec.Command("python3", "-c", program.Text)
 	command.Dir = pinnedRoot
 	command.Stdin = bytes.NewReader(program.Stdin)
 	command.Env = interpreterEnv(pinnedRoot, program)
 	return command
 }
 
-// execute runs program with the interpreter of the pinned checkout and returns
-// its exit code and stdout. An interpreter that cannot be started, or that is
-// older than the deployed release, fails the test.
+// execute runs program with the activated interpreter and returns its exit
+// code and stdout. An interpreter that cannot be started fails the test.
 func execute(t *testing.T, pinnedRoot string, program Program) (int, []byte) {
 	t.Helper()
-	python := pyoracle.Resolve(t, pinnedRoot)
-	probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
-	pyoracle.RequireDeployed(t, python, probe, probeErr)
-	command := interpreterCommand(python, pinnedRoot, program)
+	command := interpreterCommand(pinnedRoot, program)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	stdout, err := command.Output()
@@ -263,7 +304,7 @@ func execute(t *testing.T, pinnedRoot string, program Program) (int, []byte) {
 		t.Logf("programoracle: program %q exited %d; stderr: %s", program.Name, exit.ExitCode(), stderr.String())
 		return exit.ExitCode(), stdout
 	}
-	t.Fatalf("programoracle: program %q: %v", program.Name, pyoracle.RunError(python, err, stderr.Bytes()))
+	t.Fatalf("programoracle: program %q: %v", program.Name, pyoracle.RunError("python3", err, stderr.Bytes()))
 	return 0, nil
 }
 

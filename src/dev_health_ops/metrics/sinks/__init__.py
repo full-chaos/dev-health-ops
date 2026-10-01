@@ -9,7 +9,7 @@ Usage:
 
     sink = create_sink("clickhouse://localhost:8123/default")
     sink.ensure_schema()
-    sink.write_repo_metrics(rows)
+    sink.write_team_metrics(rows)
     sink.close()
 """
 

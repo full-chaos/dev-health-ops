@@ -501,7 +501,7 @@ func TestPushMatchesTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("push corpus", pythonPushProgram, input, pushPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		dir := t.TempDir()
 		command := exec.Command(python, "-c", pythonPushProgram)

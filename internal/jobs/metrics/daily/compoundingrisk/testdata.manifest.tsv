@@ -1,0 +1,4 @@
+# Every file under internal/jobs/metrics/daily/compoundingrisk/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: 419bb68a2392f929103ffe24049d109fd03cb555e67de02895c7fa8b36c93c40 (1 files)
+7b1603598242c659433434668462c80b33e7ca3db75ec427a32d12f22e49afeb	header-before-stamp	golden/compounding_risk_rot_guard.json

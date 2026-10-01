@@ -1,19 +1,20 @@
 # Every file under internal/pythonparity/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: c9772c22900bac1d3a82ced8b8fc56c40a0766bbee8df1aef7ca0b838561836b (24 files)
+# header-before-stamp set: 600ae05118d85ef0f5c56214371a33324ba0a392b8435276d5fbe660bfb9e765 (10 files)
 ab525f0193314e087252f94db9893deb3b817b3a3e5dff87fe57f2002439308f	python-recorded	float_text_golden.json
 d2f76eb64bac0c3b86f2e87f5334106699fcf7c72e5ff8c1e333e32323cd13ba	unclassified	generate_float_text_golden.py
 8eec881abea957f546fd0317ef7dd23a28e6e5ee817eaab0f374dbd4f22b5807	unclassified	generate_json_indent_sorted_golden.py
 99fa5579ed32d7821908707bdd14a8fa4f877bf95d877ca7a4a8ad798703a542	unclassified	generate_json_sorted_golden.py
--	header	golden/casing-multi-rune.golden.json
--	header	golden/casing-sigma-distance.golden.json
--	header	golden/casing-sigma-properties.golden.json
--	header	golden/errorsanitize.golden.json
--	header	golden/fnmatch.golden.json
--	header	golden/isoformat.golden.json
--	header	golden/seqratio.golden.json
--	header	golden/strrepr.golden.json
--	header	golden/urlsplit.golden.json
--	header	golden/utf8replace.golden.json
+4310cc31a85d42ca93e8bb6ef4d614d4a4c02deb5ecd63d376984dfda7fa80f5	header-before-stamp	golden/casing-multi-rune.golden.json
+3de72ac51892b9a287693cb70ac04d504413ee7accf19095ee060e7e63998190	header-before-stamp	golden/casing-sigma-distance.golden.json
+fbd0ed22057ecb8c49bbc024a8d6a30bfc2cf939ad22028764569e8e32e0495d	header-before-stamp	golden/casing-sigma-properties.golden.json
+f24ba04f425c388fdd33ff5714a14dff0fd19cfec58e915ef8efe509c6d7356b	header-before-stamp	golden/errorsanitize.golden.json
+5a8b106fb0f27f55610af0eff8089d09b625081f8c901a66802ddc78d102330a	header-before-stamp	golden/fnmatch.golden.json
+e1fd71f57ff802c5413412c2d81e3c4bc188744d9c103dc4f5a31ba02e49e540	header-before-stamp	golden/isoformat.golden.json
+a98a13c5da8408a4a5345e6780a80b03ceb0b4f41e4d8b4bc7df61cfe98effe3	header-before-stamp	golden/seqratio.golden.json
+a6b29a5054fa01c07ba9164c51e6c22cc3e1dd82dec5d52c31224a9e19500fde	header-before-stamp	golden/strrepr.golden.json
+26e28e8e05502b3d86b539701e7ca77d921853f32c483405ff52290435db3629	header-before-stamp	golden/urlsplit.golden.json
+88be96ac3a79b38cea4d49c28a385206688bf4de196fa669aeb6ff5f413bf448	header-before-stamp	golden/utf8replace.golden.json
 96e2cd6386bb829be33e61818f9d6471a4e8cc6a544af20db87109c7129f9511	python-recorded	json_indent_sorted__big_and_small_floats.json
 f87b100d4955180029aa79b61ecadb40d61e7c13c1d3a0d12e564e4cbda58c32	python-recorded	json_indent_sorted__empty_list.json
 758d2727d4b06747ea413d2b3adaf565a9a8624a4886a01af6182f3087348371	python-recorded	json_indent_sorted__empty_map.json

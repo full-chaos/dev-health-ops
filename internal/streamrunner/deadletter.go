@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -58,9 +59,22 @@ func boundedField(value string) string {
 	return value[:cut] + marker
 }
 
-// retainedFields lists the product-telemetry entry fields, besides the durable
-// identities, that a dead-letter row keeps so the entry can be replayed.
-var retainedFields = []string{"source", "org_id_hash"}
+// The field tables below are the ONE place that names which fields a dead-letter row carries and
+// which of them the replay path reads. The writer (DeadLetterFields, replayFieldsFit), the replayer
+// (MessageFromDeadLetter) and the every-field test all take their field sets from here, so a field
+// added to the replay path joins the writer's bound and the test by being added to one table.
+
+// identityFields are the Message.Fields keys every non-external dead-letter row copies, so a row can
+// be reconciled against the Python contract (binding_id and event_id for PagerDuty).
+var identityFields = []string{"ingestion_id", "org_id", "binding_id", "event_id"}
+
+// replayFields are the Message.Fields keys (besides `events`) that MessageFromDeadLetter rebuilds. A
+// row is `kept` only when every one of them fits MaxDeadLetterFieldBytes whole.
+var replayFields = []string{"ingestion_id", "source", "org_id_hash"}
+
+// replayRowFields are the row fields MessageFromDeadLetter is allowed to read. A test hands the
+// replayer a reader that records every key it asks for and fails on one that is not listed here.
+var replayRowFields = append([]string{"original_stream", "entry_id", eventsField, "events_retention", "events_sha256"}, replayFields...)
 
 // payloadRetention describes what a dead-letter row keeps of a message. It is
 // pure so the Valkey writer, the runner's log line and the tests agree.
@@ -104,7 +118,7 @@ func replayFieldsFit(message Message) bool {
 	if len(message.Stream) > MaxDeadLetterFieldBytes || len(message.ID) > MaxDeadLetterFieldBytes {
 		return false
 	}
-	for _, key := range append([]string{"ingestion_id"}, retainedFields...) {
+	for _, key := range replayFields {
 		if len(message.Fields[key]) > MaxDeadLetterFieldBytes {
 			return false
 		}
@@ -122,7 +136,7 @@ func DeadLetterFields(message Message, reason, movedAt string) map[string]string
 		// Durable identities only. binding_id/event_id make a PagerDuty DLQ row
 		// reconcilable against the Python contract; the raw payload of every
 		// other family stays out of the quarantine record.
-		if key == "ingestion_id" || key == "org_id" || key == "binding_id" || key == "event_id" {
+		if slices.Contains(identityFields, key) {
 			fields[key] = value
 		}
 	}
@@ -141,7 +155,7 @@ func DeadLetterFields(message Message, reason, movedAt string) map[string]string
 	if retention.Mode != RetentionKept {
 		return boundedFields(fields)
 	}
-	for _, key := range retainedFields {
+	for _, key := range replayFields {
 		if value, ok := message.Fields[key]; ok {
 			fields[key] = value
 		}
@@ -166,19 +180,29 @@ func boundedFields(fields map[string]string) map[string]string {
 // or a family that never keeps it) or when the kept text no longer matches the
 // recorded digest.
 func MessageFromDeadLetter(row map[string]string) (Message, bool) {
-	text, ok := row[eventsField]
-	if !ok || row["events_retention"] != RetentionKept {
+	return replayFromRow(func(key string) (string, bool) {
+		value, ok := row[key]
+		return value, ok
+	})
+}
+
+// replayFromRow is MessageFromDeadLetter over a reader, so a test can see every row field it reads.
+func replayFromRow(read func(key string) (string, bool)) (Message, bool) {
+	text, ok := read(eventsField)
+	if retention, _ := read("events_retention"); !ok || retention != RetentionKept {
 		return Message{}, false
 	}
 	sum := sha256.Sum256([]byte(text))
-	if hex.EncodeToString(sum[:]) != row["events_sha256"] {
+	if recorded, _ := read("events_sha256"); hex.EncodeToString(sum[:]) != recorded {
 		return Message{}, false
 	}
 	fields := map[string]string{eventsField: text}
-	for _, key := range append([]string{"ingestion_id"}, retainedFields...) {
-		if value, ok := row[key]; ok {
+	for _, key := range replayFields {
+		if value, ok := read(key); ok {
 			fields[key] = value
 		}
 	}
-	return Message{Stream: row["original_stream"], ID: row["entry_id"], Fields: fields}, true
+	stream, _ := read("original_stream")
+	id, _ := read("entry_id")
+	return Message{Stream: stream, ID: id, Fields: fields}, true
 }

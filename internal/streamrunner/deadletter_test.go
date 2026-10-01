@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -262,5 +264,133 @@ func TestRowBytesCoversTheWrittenRow(t *testing.T) {
 	actual := rowBytes(DeadLetterFields(message, "invalid_telemetry_event", time.Now().UTC().Format(time.RFC3339Nano)))
 	if got := deadLetterRowBytes(message, "invalid_telemetry_event"); got < actual {
 		t.Fatalf("row_bytes %d is below the %d bytes written", got, actual)
+	}
+}
+
+// derivedRowFields are the row fields the writer computes itself rather than copies from the message.
+var derivedRowFields = []string{"original_stream", "entry_id", "reason", "moved_at", "events_retention", "events_bytes", "events_sha256", eventsField}
+
+func maximalMessage() Message {
+	fields := map[string]string{eventsField: `[{"name":"page_viewed"}]`}
+	for _, key := range append(append([]string{}, identityFields...), replayFields...) {
+		fields[key] = "v-" + key
+	}
+	return Message{Stream: telemetryStream, ID: "1-0", Fields: fields}
+}
+
+// The row's field set is closed: every field is either computed by the writer or named in the
+// identity/replay tables. A field added to the row without joining a table fails here, because the
+// bound and the replay claim below are driven by those tables.
+func TestEveryDeadLetterRowFieldIsAccountedFor(t *testing.T) {
+	row := DeadLetterFields(maximalMessage(), "invalid_telemetry_event", "2026-10-01T00:00:00.123456789Z")
+	for key := range row {
+		if !slices.Contains(derivedRowFields, key) && !slices.Contains(identityFields, key) && !slices.Contains(replayFields, key) {
+			t.Fatalf("row field %q is in no field table: add it to identityFields/replayFields so it is bounded and tested", key)
+		}
+	}
+	for _, key := range replayFields {
+		if _, ok := row[key]; !ok {
+			t.Fatalf("replay field %q is missing from a row built from a maximal message", key)
+		}
+	}
+}
+
+// For EVERY input that becomes part of a row (the stream key, the entry id, the reason, every message
+// field the tables name, the events text) an oversized value must leave the stored row bounded, make the
+// row's replay claim true, and still be counted and logged when the ACK fails after the row was written.
+func TestEveryOversizedDeadLetterInputKeepsTheRowBoundedTruthfulAndCounted(t *testing.T) {
+	inputs := []string{"stream", "id", "reason", eventsField}
+	for _, key := range append(append([]string{}, identityFields...), replayFields...) {
+		if !slices.Contains(inputs, key) {
+			inputs = append(inputs, key)
+		}
+	}
+	for _, input := range inputs {
+		for _, size := range []int{MaxDeadLetterFieldBytes + 1, MaxRetainedPayloadBytes + 1} {
+			t.Run(input+"/"+strconv.Itoa(size), func(t *testing.T) {
+				message, reason := maximalMessage(), "invalid_telemetry_event"
+				huge := strings.Repeat("x", size)
+				switch input {
+				case "stream":
+					message.Stream = productTelemetryPrefix + huge + ":events"
+				case "id":
+					message.ID = huge
+				case "reason":
+					reason = huge
+				case eventsField:
+					message.Fields[eventsField] = "[" + strings.Repeat(" ", size) + "]"
+				default:
+					message.Fields[input] = huge
+				}
+				row := DeadLetterFields(message, reason, "2026-10-01T00:00:00.123456789Z")
+				// 1. bounded
+				for key, value := range row {
+					limit := MaxDeadLetterFieldBytes
+					if key == eventsField {
+						limit = MaxRetainedPayloadBytes
+					}
+					if len(value) > limit {
+						t.Fatalf("row field %s is %d bytes, over %d", key, len(value), limit)
+					}
+				}
+				if total := rowBytes(row); total > MaxRetainedPayloadBytes+len(row)*(MaxDeadLetterFieldBytes+32) {
+					t.Fatalf("row is %d bytes", total)
+				}
+				// 2. the claim is true
+				replay, ok := MessageFromDeadLetter(row)
+				if row["events_retention"] == RetentionKept && !ok {
+					t.Fatal("a row that says kept could not be replayed")
+				}
+				if ok {
+					if replay.Stream != message.Stream || replay.ID != message.ID || replay.Fields[eventsField] != message.Fields[eventsField] {
+						t.Fatalf("replay differs from the original entry in stream, id or events")
+					}
+					for _, key := range replayFields {
+						if replay.Fields[key] != message.Fields[key] {
+							t.Fatalf("replay field %s differs from the original (%d vs %d bytes)", key, len(replay.Fields[key]), len(message.Fields[key]))
+						}
+					}
+				}
+				// 3. counted and logged, also when the ACK fails after the row was written
+				transport := &fakeTransport{new: []Message{message}}
+				var logs bytes.Buffer
+				config := testConfig()
+				config.Streams = []string{message.Stream}
+				config.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+				runner, err := New(transport, handlerFunc(func(context.Context, Message) error {
+					return &PermanentError{Reason: reason}
+				}), config, health.NewRegistry(time.Second))
+				if err != nil {
+					t.Fatal(err)
+				}
+				transport.ackErr = errors.New("injected ACK failure")
+				_ = runner.window(context.Background())
+				var metrics bytes.Buffer
+				if err := runner.WritePrometheus(&metrics); err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(metrics.String(), "worker_stream_quarantined_by_reason_total{") || !strings.Contains(logs.String(), "stream message quarantined") {
+					t.Fatalf("no per-reason count or log line after the row was written (ACK failed)")
+				}
+			})
+		}
+	}
+}
+
+// The replayer reads only the row fields replayRowFields names.
+func TestReplayReadsOnlyTheFieldsTheReplayTableNames(t *testing.T) {
+	row := DeadLetterFields(maximalMessage(), "invalid_telemetry_event", "t")
+	var read []string
+	if _, ok := replayFromRow(func(key string) (string, bool) {
+		read = append(read, key)
+		value, ok := row[key]
+		return value, ok
+	}); !ok || len(read) == 0 {
+		t.Fatalf("replay of a kept row: ok=%v reads=%v", ok, read)
+	}
+	for _, key := range read {
+		if !slices.Contains(replayRowFields, key) {
+			t.Fatalf("the replayer reads row field %q that replayRowFields does not name", key)
+		}
 	}
 }

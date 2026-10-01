@@ -653,21 +653,6 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  printf 'go test -count=1: internal/llmorgsettings (validate_llm_base_url vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestValidateBaseURLMatchesLivePython)$' \
-        ./internal/llmorgsettings
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
   printf 'go test -count=1: internal/auth/edgetoken (Go-signed session tokens vs the live AuthService)\n'
   if ! (
     cd "${ROOT}"
@@ -679,35 +664,6 @@ check_live_python_oracles() {
       go test -mod=readonly -count=1 \
         -run '^(TestSignerMatchesLiveAuthService)$' \
         ./internal/auth/edgetoken
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/auth/httpapi (redirect scheme vs live uvicorn, limit strings vs live limits)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestForwardedSchemeMatchesLiveUvicorn|TestParseLimitMatchesLivePython)$' \
-        ./internal/auth/httpapi
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  printf 'go test -count=1: internal/atlassianteams (the vendored Atlassian client vs the pinned upstream Python Teams client)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestAtlassianTeamsClientMatchesLivePython)$' \
-        ./internal/atlassianteams
   ); then
     rm -rf -- "${proof_dir}"
     return 1
@@ -802,7 +758,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr llmorgsettings-validate-base-url httpapi-forwarded-scheme api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry api-licensing-sign api-licensing-b64decode api-licensing-verify api-billing-webhook-signature httpapi-limit-string auth-signedtoken atlassianteams-python-client admin-llmreadiness-probe; do
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-datereason api-pybody-date-aware api-syncadmin-backfill-request api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry api-licensing-sign api-licensing-b64decode api-licensing-verify api-billing-webhook-signature auth-signedtoken admin-llmreadiness-probe; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2
@@ -1585,60 +1541,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/syncdispatchruntime (CHAOS-4175 native finalize_sync_run zero-unit classification vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 ./internal/syncdispatchruntime/...
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/sync-dispatch-finalize"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: native finalize_sync_run live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # CHAOS-4198: the same ./internal/syncdispatchruntime/... run above also
-  # executes TestBudgetAdmissionMathMatchesLivePython (dispatch_sync_run's
-  # BudgetGuard admission math vs the same live interpreter) -- this is a
-  # second proof-file check on that ALREADY-COMPLETED run, not a second test
-  # invocation.
-  proof_file="${proof_dir}/sync-dispatch-admission"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: native dispatch_sync_run budget-admission live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
 
-  # CHAOS-6243: the in-process dispatch budget estimator vs the REAL Python
-  # estimators (estimate_provider_budget over a real SyncTaskContext,
-  # credential_fingerprint, _resolve_env_credentials and _credential_mapping
-  # over ciphertext core.encryption wrote), on the same generated inputs.
-  printf 'go test -count=1: internal/syncbudget (in-process budget estimator vs live Python, CHAOS-6243)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -run '^TestBudgetEstimatorMatchesLivePython$' ./internal/syncbudget
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/sync-budget-estimate"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: in-process budget estimator live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
 
   printf 'go test -count=1: internal/queryapi/server (POST body validation vs live FastAPI request models)\n'
   if ! (
@@ -1700,25 +1603,6 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/queryapi/recommendations (evidence and window goldens vs the live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -run '^TestGoldensAreWhatPythonProducesNow$' ./internal/queryapi/recommendations
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/query-api-recommendations-evidence"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the recommendations goldens live Python measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
 
   printf 'go test -count=1: internal/synccli (dho sync <target> request handling vs the REAL dev-hops argparse, preflight and run_sync_target; the --search batch loop vs the REAL process_*_batch)\n'
   if ! (

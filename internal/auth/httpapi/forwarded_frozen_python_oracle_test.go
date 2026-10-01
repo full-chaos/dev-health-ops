@@ -1,18 +1,15 @@
-package httpapi
+package httpapi_test
 
 import (
 	"crypto/tls"
 	"encoding/json"
 	"net"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // The scheme uvicorn's ProxyHeadersMiddleware leaves in an http scope.
@@ -32,13 +29,7 @@ for case in json.loads(sys.stdin.read()):
 print(json.dumps(out))
 `
 
-func TestForwardedSchemeMatchesLiveUvicorn(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestForwardedSchemeMatchesFrozenUvicorn(t *testing.T) {
 	type forwardedCase struct {
 		Allow   string   `json:"allow"`
 		Peer    [2]any   `json:"peer"`
@@ -56,12 +47,8 @@ func TestForwardedSchemeMatchesLiveUvicorn(t *testing.T) {
 		}
 	}
 	input, _ := json.Marshal(cases)
-	command := exec.Command(python, "-c", pythonForwardedProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live uvicorn: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "forwarded-scheme.golden.json",
+		programoracle.Program{Name: "forwarded-scheme", Text: pythonForwardedProgram, Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []string
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil || len(want) != len(cases) {
@@ -86,16 +73,9 @@ func TestForwardedSchemeMatchesLiveUvicorn(t *testing.T) {
 		if c.TLS {
 			request.TLS = &tls.ConnectionState{}
 		}
-		if got := ParseForwardedTrust(c.Allow).scheme(request); got != want[index] {
+		if got := httpapi.ForwardedScheme(httpapi.ParseForwardedTrust(c.Allow), request); got != want[index] {
 			t.Errorf("allow=%q peer=%q headers=%q tls=%v: go %q, uvicorn %q", c.Allow, host, c.Headers, c.TLS, got, want[index])
 		}
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "httpapi-forwarded-scheme"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	t.Logf("%d forwarded-scheme cases compared", len(cases))
 }

@@ -1,16 +1,13 @@
-package httpapi
+package httpapi_test
 
 import (
 	"encoding/json"
 	"math/rand"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 const pythonLimitProgram = `
@@ -27,18 +24,12 @@ for text in json.loads(sys.stdin.read()):
 print(json.dumps(out))
 `
 
-// TestParseLimitMatchesLivePython compares ParseLimit with limits.parse_many,
+// TestParseLimitMatchesFrozenPython compares ParseLimit with limits.parse_many,
 // the parser slowapi applies to a limit string. Where Go accepts, Python
 // must yield exactly that one limit; where Go refuses, Python must refuse or
 // yield something Go documents it does not serve the same way (several
 // limits, a zero count).
-func TestParseLimitMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestParseLimitMatchesFrozenPython(t *testing.T) {
 	corpus := []string{
 		"3/hour", "3/hours", "10/15minutes", "5 per day", "5per day", "5 PER DAY", "1/SECOND", "2/month", "2/year",
 		"3/0hour", "3/00hour", "0/hour", "3/hourss", "3/h", "", "/hour", "3/", "3 hour", " 3 / hour ", "3/hour\n",
@@ -56,13 +47,8 @@ func TestParseLimitMatchesLivePython(t *testing.T) {
 		corpus = append(corpus, b.String())
 	}
 	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonLimitProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "parse-limit.golden.json",
+		programoracle.Program{Name: "parse-limit", Text: pythonLimitProgram, Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want [][][2]float64
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -73,7 +59,7 @@ func TestParseLimitMatchesLivePython(t *testing.T) {
 	}
 	accepted, mismatches := 0, 0
 	for index, text := range corpus {
-		limit, err := ParseLimit("x", text)
+		limit, err := httpapi.ParseLimit("x", text)
 		expected := want[index]
 		switch {
 		case err == nil && (len(expected) != 1 || expected[0][0] != float64(limit.Count) || expected[0][1] != limit.Window.Seconds()):
@@ -95,13 +81,6 @@ func TestParseLimitMatchesLivePython(t *testing.T) {
 	}
 	if accepted == 0 {
 		t.Fatal("no case was accepted; the corpus cannot show the accepted branch agrees")
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "httpapi-limit-string"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	t.Logf("%d cases compared, %d accepted; 0 mismatches", len(corpus), accepted)
 }

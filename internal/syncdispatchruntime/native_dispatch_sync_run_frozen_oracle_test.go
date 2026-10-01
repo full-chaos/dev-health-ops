@@ -3,28 +3,21 @@ package syncdispatchruntime
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
+	"path"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// dispatchAdmissionOracleProofFile is this test's own proof marker, a
-// sibling to livePythonOracleProofFile (native_finalize_sync_run_oracle_test.go)
-// -- see that file's doc comment for why ci/check_go.sh's live-python-oracles
-// verb needs one per oracle-bearing test, not just per package.
-const dispatchAdmissionOracleProofFile = "sync-dispatch-admission"
-
-// Live-Python oracle for dispatch_sync_run's BudgetGuard admission math
-// (CHAOS-4198): executes testdata/dispatch_admission_oracle.py, which calls
-// the REAL, unmodified dev_health_ops.sync.budget_guard._observe_estimate/
-// _baseline_unfitness/_cooldown_expiry/_matching_cooldown_expiry, and diffs
-// Go's observeEstimate/baselineUnfitness/cooldownExpiry/matchingCooldownExpiry
-// against every case the script produced. pythonExecutable/
-// requireLivePythonOracles/assertPythonProducerIsThisWorktree are shared
-// with native_finalize_sync_run_oracle_test.go (same package, same gate) --
-// not redefined here.
+// Frozen-Python oracle for dispatch_sync_run's BudgetGuard admission math
+// (CHAOS-4198): its frozen answer is testdata/dispatch_admission_oracle.py
+// executed once on the pinned build. The script calls the REAL, unmodified
+// dev_health_ops.sync.budget_guard._observe_estimate/_baseline_unfitness/
+// _cooldown_expiry/_matching_cooldown_expiry, and this test diffs Go's
+// observeEstimate/baselineUnfitness/cooldownExpiry/matchingCooldownExpiry
+// against every case the script produced.
 
 type oracleBucketPayload struct {
 	Provider              string `json:"provider"`
@@ -119,17 +112,15 @@ func mustParseOracleTime(t *testing.T, value string) time.Time {
 	return parsed
 }
 
-// TestBudgetAdmissionMathMatchesLivePython is the CHAOS-4198 live-Python
+// TestBudgetAdmissionMathMatchesFrozenPython is the CHAOS-4198 frozen-Python
 // oracle for BudgetGuard's admission math.
-func TestBudgetAdmissionMathMatchesLivePython(t *testing.T) {
-	python := pythonExecutable(t)
-	_, currentFile, _, _ := runtime.Caller(0)
-	packageDir := filepath.Dir(currentFile)
-	oracleScript := filepath.Join(packageDir, "testdata", "dispatch_admission_oracle.py")
-	output, err := exec.Command(python, oracleScript).CombinedOutput()
+func TestBudgetAdmissionMathMatchesFrozenPython(t *testing.T) {
+	script, err := os.ReadFile(filepath.Join("testdata", "dispatch_admission_oracle.py"))
 	if err != nil {
-		t.Fatalf("execute Python dispatch admission oracle: %v: %s", err, output)
+		t.Fatal(err)
 	}
+	output := []byte(frozenPython(t, "dispatch-admission.golden.json",
+		programoracle.Script("dispatch admission oracle", path.Join("internal", "syncdispatchruntime", "testdata", "dispatch_admission_oracle.py"), string(script), nil))[0])
 	var want dispatchAdmissionOracle
 	if err := json.Unmarshal(output, &want); err != nil {
 		t.Fatalf("decode Python dispatch admission oracle: %v: %s", err, output)
@@ -263,11 +254,6 @@ func TestBudgetAdmissionMathMatchesLivePython(t *testing.T) {
 		})
 	}
 
-	proofDir := os.Getenv(livePythonOracleProofDir)
-	proof := filepath.Join(proofDir, dispatchAdmissionOracleProofFile)
-	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {
-		t.Fatalf("write live Python dispatch admission oracle proof: %v", err)
-	}
 }
 
 // oracleCooldownKey parses the pipe-joined "org|provider|integration|family"

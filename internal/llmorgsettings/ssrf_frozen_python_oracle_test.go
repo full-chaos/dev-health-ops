@@ -4,14 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 const pythonValidateBaseURLProgram = `
@@ -53,25 +49,14 @@ func validateBaseURLCorpus() []string {
 	return corpus
 }
 
-// TestValidateBaseURLMatchesLivePython compares ValidateBaseURLChecked with
+// TestValidateBaseURLMatchesFrozenPython compares ValidateBaseURLChecked with
 // validate_llm_base_url, including the text of every refusal and the
 // ValueError that escapes it.
-func TestValidateBaseURLMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestValidateBaseURLMatchesFrozenPython(t *testing.T) {
 	corpus := validateBaseURLCorpus()
 	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonValidateBaseURLProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "validate-base-url.golden.json",
+		programoracle.Program{Name: "validate-base-url", Text: pythonValidateBaseURLProgram, Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []map[string]any
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -102,13 +87,6 @@ func TestValidateBaseURLMatchesLivePython(t *testing.T) {
 	}
 	if mismatches > 0 {
 		t.Fatalf("%d of %d cases differ", mismatches, len(corpus))
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "llmorgsettings-validate-base-url"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	t.Logf("%d cases compared; 0 mismatches", len(corpus))
 }

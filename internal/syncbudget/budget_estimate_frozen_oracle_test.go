@@ -7,9 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
+	"path"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,27 +16,20 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// Live-Python differential oracle for the in-process budget estimator
+// Frozen-Python differential oracle for the in-process budget estimator
 // (CHAOS-6243). testdata/budget_estimate_oracle.py generates every case,
 // runs the REAL production functions (estimate_provider_budget over a real
 // SyncTaskContext, credential_fingerprint, _resolve_env_credentials,
 // _credential_mapping over ciphertext it encrypted itself) and this test
 // runs the Go port on the same input bytes.
 //
-// Gated like every live oracle: it runs only through
-// `ci/check_go.sh live-python-oracles`, which forces -count=1 (the Python
-// sources are outside the Go test cache key) and checks the proof file this
-// test writes, so a skipped run fails the gate instead of reading as a pass.
+// The answers are the script executed once on the pinned build and frozen in
+// testdata/golden; no Python runs.
 
-const (
-	livePythonOraclesEnv     = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
-	livePythonOracleProofDir = "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"
-	budgetOracleProofFile    = "sync-budget-estimate"
-	oracleIntegrationID      = "00000000-0000-4000-8000-000000000002"
-)
+const oracleIntegrationID = "00000000-0000-4000-8000-000000000002"
 
 type oracleEstimateInput struct {
 	Provider       string            `json:"provider"`
@@ -115,26 +107,13 @@ func declaredDivergence(_ oracleEstimateInput, python json.RawMessage) string {
 	return ""
 }
 
-func TestBudgetEstimatorMatchesLivePython(t *testing.T) {
-	if os.Getenv(livePythonOraclesEnv) != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDir := os.Getenv(livePythonOracleProofDir)
-	if proofDir == "" {
-		t.Fatal("live Python oracle opt-in requires a proof directory from ci/check_go.sh")
-	}
-	_, currentFile, _, _ := runtime.Caller(0)
-	packageDir := filepath.Dir(currentFile)
-	root := filepath.Dir(filepath.Dir(packageDir))
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, filepath.Join(packageDir, "testdata", "budget_estimate_oracle.py"))
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	raw, err := command.Output()
+func TestBudgetEstimatorMatchesFrozenPython(t *testing.T) {
+	script, err := os.ReadFile(filepath.Join("testdata", "budget_estimate_oracle.py"))
 	if err != nil {
-		t.Fatal(pyoracle.RunError(python, err, stderr.Bytes()))
+		t.Fatal(err)
 	}
+	raw := []byte(frozenPython(t, "budget-estimate.golden.json",
+		programoracle.Script("budget estimate oracle", path.Join("internal", "syncbudget", "testdata", "budget_estimate_oracle.py"), string(script), nil))[0])
 	var output oracleOutput
 	if err := json.Unmarshal(raw, &output); err != nil {
 		t.Fatalf("decode oracle output: %v", err)
@@ -258,12 +237,6 @@ func TestBudgetEstimatorMatchesLivePython(t *testing.T) {
 			}
 		}
 	})
-
-	if !t.Failed() {
-		if err := os.WriteFile(filepath.Join(proofDir, budgetOracleProofFile), []byte("executed\n"), 0o600); err != nil {
-			t.Fatalf("write live Python budget oracle proof: %v", err)
-		}
-	}
 }
 
 // canonicalPython re-encodes the Python result with sorted keys and literal

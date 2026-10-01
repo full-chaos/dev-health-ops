@@ -1,7 +1,6 @@
 package atlassianteams
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -10,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	osexec "os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -26,7 +24,7 @@ import (
 	"atlassian/atlassian/graph"
 	"atlassian/atlassian/graph/gen"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // The reference is the full-chaos/atlassian Python Teams client at the sha
@@ -475,7 +473,10 @@ func goReads(ctx context.Context, base string, scenarios []scenario) map[string]
 }
 
 const pythonClientProgram = `
-import json, sys
+import json, os, sys
+# The pinned client first, so "atlassian" is the reference, not the venv's older
+# package. The zip is part of the pinned checkout the program runs in.
+sys.path.insert(0, os.path.join(os.getcwd(), "internal", "atlassianteams", "testdata", "atlassian_python_cb7c3665.zip"))
 from atlassian.auth import BasicApiTokenAuth
 from atlassian.graph.client import GraphQLClient
 from atlassian.graph.api.teams import iter_teams
@@ -490,12 +491,15 @@ def read(fn, to_record):
         return {"status": "ok", "records": [to_record(x) for x in fn()]}
     except Exception as exc:
         # The text is language-specific: kept for the failure message only.
-        return {"status": "error", "records": None, "detail": type(exc).__name__ + ": " + str(exc)[:300]}
+        return {"status": "error", "records": None, "detail": (type(exc).__name__ + ": " + str(exc)).replace(BASE, "<gateway>")[:300]}
 
+# The gateway address is of one run: it reaches the program by name, and nothing
+# the program prints holds it.
+BASE = os.environ["ATLASSIAN_ORACLE_GATEWAY"]
 req = json.loads(sys.stdin.read())
 out = {}
 for sc in req["scenarios"]:
-    client = GraphQLClient(req["base"], BasicApiTokenAuth("oracle@example.test", "t"), strict=sc["strict"], max_retries_429=0)
+    client = GraphQLClient(BASE, BasicApiTokenAuth("oracle@example.test", "t"), strict=sc["strict"], max_retries_429=0)
     name = sc["name"]
     out[name + " teams"] = read(lambda: iter_teams(client, "org-" + name, "site-" + name, first=2),
         lambda t: [["id", s(t.id)], ["display_name", s(t.display_name)], ["state", s(t.state)],
@@ -512,7 +516,6 @@ print(json.dumps(out))
 
 func pythonReads(t *testing.T, root, base string, scenarios []scenario) map[string]outcome {
 	t.Helper()
-	python := pyoracle.Resolve(t, root)
 	zipPath := filepath.Join(root, "internal", "atlassianteams", pythonClientZip)
 	content, err := os.ReadFile(zipPath)
 	if err != nil {
@@ -527,24 +530,16 @@ func pythonReads(t *testing.T, root, base string, scenarios []scenario) map[stri
 		Teams  []string `json:"teams"`
 	}
 	var request struct {
-		Base      string `json:"base"`
-		Scenarios []sc   `json:"scenarios"`
+		Scenarios []sc `json:"scenarios"`
 	}
-	request.Base = base
 	for _, s := range scenarios {
 		request.Scenarios = append(request.Scenarios, sc{Name: s.name, Strict: s.strict, Teams: s.teamIDs})
 	}
 	input, _ := json.Marshal(request)
-	command := osexec.Command(python, "-c", pythonClientProgram)
-	// The pinned client first, so `atlassian` is the reference, not the
-	// venv's older package.
-	command.Env = append(os.Environ(), "PYTHONPATH="+zipPath)
-	command.Dir = t.TempDir()
-	command.Stdin = bytes.NewReader(input)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "teams-client.golden.json", programoracle.Program{
+		Name: "teams client", Text: pythonClientProgram, Stdin: input,
+		PerRun: func() map[string]string { return map[string]string{"ATLASSIAN_ORACLE_GATEWAY": base} },
+	})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var decoded map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &decoded); err != nil {
@@ -662,7 +657,7 @@ func compare(python, goSide map[string]outcome) []string {
 	return mismatches
 }
 
-// TestAtlassianTeamsClientMatchesLivePython compares the vendored Go
+// TestAtlassianTeamsClientMatchesFrozenPython compares the vendored Go
 // atlassian client the sync reads through (SearchTeams, IterTeamUsers,
 // IterTeamActiveProjects) with the full-chaos/atlassian Python Teams client
 // at the same sha (iter_teams, iter_team_users, iter_team_active_projects):
@@ -673,10 +668,7 @@ func compare(python, goSide map[string]outcome) []string {
 // The known-defect gate plants one divergence in each compared family (a
 // team field, a user relation, a project link, an outcome) and requires the
 // comparison to report it.
-func TestAtlassianTeamsClientMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
+func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	scenarios := corpus()
@@ -768,12 +760,5 @@ func TestAtlassianTeamsClientMatchesLivePython(t *testing.T) {
 		}
 		return false
 	})
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "atlassianteams-python-client"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	t.Logf("%d scenarios, %d reads compared (%v), %d records; 0 mismatches; 8 planted divergences found", len(scenarios), len(goSide), statuses, records)
 }

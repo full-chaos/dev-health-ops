@@ -3,7 +3,8 @@
     "test": "TestSyncConfigRepositoriesVenueOracle",
     "python_build": "758a8d9fbb1f7548bef84df452597f9e7ddf145a",
     "producer_digest": "53028fde43de410ecb5704202be163d92617d6794f5d2108513c8868e2607e80",
-    "recipe": "git worktree add --detach \u003cdir\u003e 758a8d9fbb1f7548bef84df452597f9e7ddf145a; from internal/api/syncadmin: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestSyncConfigRepositoriesVenueOracle$' ."
+    "recipe": "git worktree add --detach \u003cdir\u003e 758a8d9fbb1f7548bef84df452597f9e7ddf145a; from internal/api/syncadmin: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestSyncConfigRepositoriesVenueOracle$' .",
+    "python_env": "dd1edb53a493ffb93bf440320cbad6e35e332817a312b125432fc1e12836663f"
   },
   "requests": [
     {

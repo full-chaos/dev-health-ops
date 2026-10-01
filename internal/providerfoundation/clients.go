@@ -75,8 +75,8 @@ func NewJiraClient(credential Credential, doer HTTPDoer, retry RetryPolicy, leas
 	if fields := jiraMappingFields(credential); !mappingComplete(fields) {
 		RecordCredentialMappingRejected(context.Background(), "jira", fields...)
 	}
-	if ValidateCredentialShape(credential) != nil {
-		return nil, ErrCredentialInvalid
+	if err := ValidateCredentialShape(credential); err != nil {
+		return nil, err
 	}
 	email, _ := credential.Secret("email")
 	token := firstConfiguredSecret(credential, jiraAPITokenAliases)

@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 )
@@ -116,7 +116,7 @@ func InlineExecutor(deps InlineDeps) Executor {
 		}
 		conn, err := deps.OpenStore(ctx, plan.SinkURI)
 		if err != nil {
-			return fmt.Errorf("open ClickHouse: %w", errors.New(redactDSN(err.Error(), plan.SinkURI)))
+			return fmt.Errorf("open ClickHouse: %w", errors.New(secrets.NewBoundary(plan.SinkURI).RedactText(err.Error())))
 		}
 		if closer, ok := conn.(interface{ Close() error }); ok {
 			defer func() { _ = closer.Close() }()
@@ -133,13 +133,6 @@ func InlineExecutor(deps InlineDeps) Executor {
 		}
 		return nil
 	}
-}
-
-func redactDSN(text, dsn string) string {
-	if dsn == "" {
-		return text
-	}
-	return strings.ReplaceAll(text, dsn, "<clickhouse dsn>")
 }
 
 func notYet(plan Plan, what, ticket string) *Refusal {

@@ -36,6 +36,7 @@ func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)
 type fakeStore struct {
 	users          map[uuid.UUID]UserState
 	members        map[[2]uuid.UUID]bool
+	roles          map[[2]uuid.UUID]string
 	sessions       map[uuid.UUID]*Impersonation
 	errUser        error
 	errMember      error
@@ -54,12 +55,13 @@ func (f *fakeStore) UserState(_ context.Context, id uuid.UUID) (UserState, bool,
 	return state, found, nil
 }
 
-func (f *fakeStore) IsMember(_ context.Context, user, org uuid.UUID) (bool, error) {
+func (f *fakeStore) Membership(_ context.Context, user, org uuid.UUID) (string, bool, error) {
 	f.membershipSeen = append(f.membershipSeen, [2]uuid.UUID{user, org})
 	if f.errMember != nil {
-		return false, f.errMember
+		return "", false, f.errMember
 	}
-	return f.members[[2]uuid.UUID{user, org}], nil
+	key := [2]uuid.UUID{user, org}
+	return f.roles[key], f.members[key], nil
 }
 
 func (f *fakeStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*Impersonation, error) {
@@ -533,8 +535,8 @@ func TestStoreUnavailableWhenTheDatabaseCannotBeReached(t *testing.T) {
 	if !isUnavailable(err) {
 		t.Fatalf("UserState: %v, want ErrUnavailable", err)
 	}
-	if _, err := store.IsMember(context.Background(), userID, targetOrgID); !isUnavailable(err) {
-		t.Fatalf("IsMember: %v, want ErrUnavailable", err)
+	if _, _, err := store.Membership(context.Background(), userID, targetOrgID); !isUnavailable(err) {
+		t.Fatalf("Membership: %v, want ErrUnavailable", err)
 	}
 	if _, err := store.ActiveImpersonation(context.Background(), userID); !isUnavailable(err) {
 		t.Fatalf("ActiveImpersonation: %v, want ErrUnavailable", err)

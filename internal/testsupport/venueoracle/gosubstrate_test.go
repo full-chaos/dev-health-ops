@@ -1,11 +1,13 @@
 package venueoracle
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -200,28 +202,176 @@ func TestAFrozenGoldenRefusesAVenueBuiltWithPython(t *testing.T) {
 	if err := golden.frozenVenueErr(t, nil); err != nil {
 		t.Fatalf("no venue was refused: %v", err)
 	}
-	// No venue named, but the test started a live one: refused.
-	liveVenues.Store(t, struct{}{})
-	t.Cleanup(func() { liveVenues.Delete(t) })
+	// No venue named, but the test's tree started a live one: refused, in the
+	// test itself and in its subtests (the reviewer's bypass: a subtest is
+	// another *testing.T).
+	liveVenues.Store(rootTestName(t), struct{}{})
+	t.Cleanup(func() { liveVenues.Delete(rootTestName(t)) })
 	if err := golden.frozenVenueErr(t, nil); err == nil || !strings.Contains(err.Error(), "built with Python") {
 		t.Fatalf("frozen answers in a test with a live venue were accepted: %v", err)
 	}
+	t.Run("child", func(child *testing.T) {
+		if err := golden.frozenVenueErr(child, nil); err == nil || !strings.Contains(err.Error(), "built with Python") {
+			child.Fatalf("frozen answers in a subtest of a test with a live venue were accepted: %v", err)
+		}
+		child.Run("grandchild", func(grandchild *testing.T) {
+			if err := liveVenueErr(grandchild, "x"); err == nil {
+				grandchild.Fatal("a nested subtest is outside the guard")
+			}
+		})
+	})
 }
 
-// A Go-only proof in a test that started a live venue (Python-built, no
-// GoOnly, no golden) fails the test before the proof is written.
+// A live venue started by a subtest marks the whole tree: its parent and its
+// sibling subtests are refused too.
+func TestALiveVenueInASubtestMarksTheWholeTestTree(t *testing.T) {
+	t.Cleanup(func() { liveVenues.Delete(rootTestName(t)) })
+	if err := liveVenueErr(t, "x"); err != nil {
+		t.Fatalf("refused before any live venue: %v", err)
+	}
+	t.Run("starts a live venue", func(child *testing.T) {
+		liveVenues.Store(rootTestName(child), struct{}{}) // what Start does
+	})
+	if err := liveVenueErr(t, "x"); err == nil {
+		t.Fatal("the parent of a subtest with a live venue is outside the guard")
+	}
+	t.Run("sibling", func(sibling *testing.T) {
+		if err := liveVenueErr(sibling, "x"); err == nil {
+			sibling.Fatal("a sibling of a subtest with a live venue is outside the guard")
+		}
+	})
+}
+
+// liveTreeChild runs body in a child process, as a subtest of a test whose
+// tree started a live venue, and returns the child's output and error.
+func liveTreeChild(t *testing.T, env string, body func(child *testing.T)) (string, error, bool) {
+	t.Helper()
+	if os.Getenv(env) == "1" {
+		liveVenues.Store(rootTestName(t), struct{}{})
+		t.Run("child", body)
+		return "", nil, true
+	}
+	command := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
+	command.Env = append(os.Environ(), env+"=1")
+	output, err := command.CombinedOutput()
+	return string(output), err, false
+}
+
+// A Go-only proof in the tree of a test that started a live venue
+// (Python-built, no GoOnly, no golden) fails the test before the proof is
+// written, also from a subtest.
 func TestAGoOnlyProofIsRefusedInATestWithALiveVenue(t *testing.T) {
-	if os.Getenv("VENUEORACLE_GO_ONLY_LIVE_CHILD") == "1" {
-		liveVenues.Store(t, struct{}{})
-		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
-		WriteGoOnlyProof(t, "measures nothing")
-		t.Log("PROOF WRITTEN")
+	output, err, inChild := liveTreeChild(t, "VENUEORACLE_GO_ONLY_LIVE_CHILD", func(child *testing.T) {
+		child.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", child.TempDir())
+		WriteGoOnlyProof(child, "measures nothing")
+		child.Log("PROOF WRITTEN")
+	})
+	if inChild {
 		return
 	}
-	child := exec.Command(os.Args[0], "-test.run=^TestAGoOnlyProofIsRefusedInATestWithALiveVenue$", "-test.v")
-	child.Env = append(os.Environ(), "VENUEORACLE_GO_ONLY_LIVE_CHILD=1")
-	output, err := child.CombinedOutput()
-	if err == nil || !strings.Contains(string(output), "built with Python") || strings.Contains(string(output), "PROOF WRITTEN") {
+	if err == nil || !strings.Contains(output, "built with Python") || strings.Contains(output, "PROOF WRITTEN") {
 		t.Fatalf("a Go-only proof was written in a test with a live venue (err %v):\n%s", err, output)
+	}
+}
+
+// A frozen Produce in the tree of a test that started a live venue is refused
+// before an answer is read, also from a subtest; so no golden proof follows.
+func TestFrozenProduceIsRefusedInATestWithALiveVenue(t *testing.T) {
+	output, err, inChild := liveTreeChild(t, "VENUEORACLE_PRODUCE_LIVE_CHILD", func(child *testing.T) {
+		child.Setenv(goldenUpdateEnv, "")
+		child.Setenv(goldenCandidateEnv, "")
+		child.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", child.TempDir())
+		request := ProgramRequest("corpus", sampleProgram, []byte("abc"), nil)
+		path, digest := programGolden(child, []Request{request}, "ABC\n")
+		golden := OpenGolden(child, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+		answers := golden.Produce(child, "/no/python/here", []Request{request}, func(string, []Request) []Response { return nil })
+		// Reached only if Produce served the answer: the proof guard in
+		// Finish would still fail the test, so the answer is the marker.
+		child.Logf("ANSWER SERVED %q", answers[0].Body)
+	})
+	if inChild {
+		return
+	}
+	if err == nil || !strings.Contains(output, "built with Python") || strings.Contains(output, "ANSWER SERVED") {
+		t.Fatalf("a frozen answer was served in a test with a live venue (err %v):\n%s", err, output)
+	}
+}
+
+// The mark works in both orders: a live venue started after a Python-free
+// claim in the same tree (a frozen answer served, a Go-only proof written) is
+// refused, from the parent, a sibling or a nested subtest.
+func TestALiveVenueIsRefusedAfterAPythonFreeClaimInItsTree(t *testing.T) {
+	t.Cleanup(func() { frozenTrees.Delete(rootTestName(t)) })
+	if err := frozenTreeErr(t); err != nil {
+		t.Fatalf("refused before any claim: %v", err)
+	}
+	t.Run("claims", func(child *testing.T) { markFrozenTree(child, "a Go-only proof") })
+	if err := frozenTreeErr(t); err == nil || !strings.Contains(err.Error(), "already has a Go-only proof") {
+		t.Fatalf("the parent of a subtest that made a claim may start a live venue: %v", err)
+	}
+	t.Run("sibling", func(sibling *testing.T) {
+		if err := frozenTreeErr(sibling); err == nil {
+			sibling.Fatal("a sibling of a subtest that made a claim may start a live venue")
+		}
+		sibling.Run("nested", func(nested *testing.T) {
+			if err := frozenTreeErr(nested); err == nil {
+				nested.Fatal("a nested subtest is outside the guard")
+			}
+		})
+	})
+}
+
+// laterLiveStart runs first (a Python-free claim) and then the real Start with
+// no GoOnly and no golden, as two sibling subtests in a child process, and
+// returns the child's output. Start must refuse before it builds anything.
+func laterLiveStart(t *testing.T, env string, first func(child *testing.T)) (string, error, bool) {
+	t.Helper()
+	if os.Getenv(env) == "1" {
+		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLES", "1")
+		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
+		t.Run("first", first)
+		t.Run("later", func(later *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			Start(later, ctx, Options{Root: later.TempDir(), JWTKey: "k"})
+			later.Log("LIVE VENUE STARTED")
+		})
+		return "", nil, true
+	}
+	command := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
+	command.Env = append(os.Environ(), env+"=1")
+	output, err := command.CombinedOutput()
+	return string(output), err, false
+}
+
+func TestStartRefusesALiveVenueAfterAFrozenAnswerInItsTree(t *testing.T) {
+	output, err, inChild := laterLiveStart(t, "VENUEORACLE_LATER_LIVE_ANSWER_CHILD", func(child *testing.T) {
+		child.Setenv(goldenUpdateEnv, "")
+		child.Setenv(goldenCandidateEnv, "")
+		request := ProgramRequest("corpus", sampleProgram, []byte("abc"), nil)
+		path, digest := programGolden(child, []Request{request}, "ABC\n")
+		golden := OpenGolden(child, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+		answers := golden.Produce(child, "/no/python/here", []Request{request}, func(string, []Request) []Response { return nil })
+		golden.Consumed(child, answers...)
+		golden.SkipDiff(child)
+		golden.Finish(child)
+	})
+	if inChild {
+		return
+	}
+	if err == nil || !strings.Contains(output, "already has the frozen answers of golden") || strings.Contains(output, "LIVE VENUE STARTED") {
+		t.Fatalf("a live venue started after a frozen answer in its tree (err %v):\n%s", err, output)
+	}
+}
+
+func TestStartRefusesALiveVenueAfterAGoOnlyProofInItsTree(t *testing.T) {
+	output, err, inChild := laterLiveStart(t, "VENUEORACLE_LATER_LIVE_PROOF_CHILD", func(child *testing.T) {
+		WriteGoOnlyProof(child, "measures something without Python")
+	})
+	if inChild {
+		return
+	}
+	if err == nil || !strings.Contains(output, "already has a Go-only proof") || strings.Contains(output, "LIVE VENUE STARTED") {
+		t.Fatalf("a live venue started after a Go-only proof in its tree (err %v):\n%s", err, output)
 	}
 }

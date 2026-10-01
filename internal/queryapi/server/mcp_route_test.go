@@ -11,10 +11,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -97,7 +100,7 @@ func newMCPTestListeners(t *testing.T, ch *countingMCPClient, sw routeswitch.Swi
 		Registry:  stub,
 		BuildInfo: stub,
 		MCP:       newMCPHandlerWithLimits(ch, nil, sw, getenv, limits),
-	})
+	}, graphQLEdgeDeps{auth: ecEdgeAuth(t, &fakeEdgeStore{}), maxBytes: defaultGraphQLMaxQueryBytes})
 	// Build's tail: the public set is wrapped, the internal set falls through to it.
 	handler := markResponseModelRoutes(mux)
 	internalMux.Handle("/", handler)
@@ -472,13 +475,21 @@ func TestMCPRefusesOtherTransportShapes(t *testing.T) {
 
 func TestMCPListenerServesNothingButQuery(t *testing.T) {
 	l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
-	for _, path := range []string{"/registry", "/buildinfo", "/metrics", "/healthz", "/api/v1/meta", "/query/proof", "/query/proof-write"} {
+	for _, path := range []string{"/registry", "/buildinfo", "/metrics", "/healthz", "/api/v1/meta", "/query/proof", "/query/proof-write", "/graphql"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		l.mcp.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("%s on the MCP listener: status %d, want 404", path, rec.Code)
 		}
+	}
+	// /graphql IS mounted on the public set of the same route sets (its 401
+	// for a request with no credential), so the 404 above is the MCP
+	// listener not reaching it, not a route nobody mounted.
+	rec := httptest.NewRecorder()
+	l.public.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ x }"}`)))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/graphql on the public listener: status %d, want its 401", rec.Code)
 	}
 }
 
@@ -523,6 +534,24 @@ func TestMCPBudgetExceptionIsATypedRefusal(t *testing.T) {
 	}
 }
 
+// A net timeout BEFORE the read ceiling is a store fault, not the ceiling: it
+// is served as the resolver's field error (never the typed budget 422), and it
+// is not counted as a budget refusal. (After the ceiling it is time_ceiling:
+// the unit rows of TestMCPBudgetReasonIgnoresOtherErrors and the real-engine
+// integration test.)
+func TestMCPNetTimeoutBeforeTheCeilingIsAStoreFaultNotABudgetRefusal(t *testing.T) {
+	for name, err := range map[string]error{
+		"read": fmt.Errorf("ClickHouse query failed: %w", &net.OpError{Op: "read", Err: os.ErrDeadlineExceeded}),
+		"dial": fmt.Errorf("ClickHouse query failed: %w", &net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded}),
+	} {
+		l := newMCPTestListeners(t, &countingMCPClient{err: err}, allMCPRootsEnabled(), mcpDefaultLimits())
+		rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, mcpHotspotsQuery, mcpHotspotsVariables(mcpTestOrg)))
+		if rec.Code == http.StatusUnprocessableEntity || strings.Contains(rec.Body.String(), "MCP_READ_BUDGET_EXCEEDED") {
+			t.Errorf("%s: an early net timeout was reported as the typed budget refusal: %s", name, rec.Body.String())
+		}
+	}
+}
+
 // A resolver that swallows the budget error (flowMatrix's shape: execution
 // error -> empty result) still cannot hide it: the observed client records
 // it where it surfaces.
@@ -548,8 +577,29 @@ func TestMCPObservedClientRecordsASwallowedBudgetError(t *testing.T) {
 
 // A non-budget ClickHouse error is NOT a budget refusal.
 func TestMCPBudgetReasonIgnoresOtherErrors(t *testing.T) {
-	if got := mcpBudgetReason(fmt.Errorf("x: %w", &clickhousedriver.Exception{Code: 60})); got != "" {
+	const ceiling = 10 * time.Second
+	for name, tc := range map[string]struct {
+		err     error
+		elapsed time.Duration
+		want    string
+	}{
+		"server code 159 at any time":        {fmt.Errorf("x: %w", &clickhousedriver.Exception{Code: 159}), time.Second, mcpReasonTimeCeiling},
+		"context deadline":                   {fmt.Errorf("x: %w", context.DeadlineExceeded), ceiling, mcpReasonTimeCeiling},
+		"read timeout at the ceiling":        {fmt.Errorf("row iteration: %w", &net.OpError{Op: "read", Err: os.ErrDeadlineExceeded}), ceiling, mcpReasonTimeCeiling},
+		"read timeout just inside the slack": {&net.OpError{Op: "read", Err: os.ErrDeadlineExceeded}, ceiling - mcpCeilingSlack, mcpReasonTimeCeiling},
+		"read timeout before the ceiling":    {&net.OpError{Op: "read", Err: os.ErrDeadlineExceeded}, time.Second, ""},
+		"dial timeout before the ceiling":    {fmt.Errorf("query: %w", &net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded}), 5 * time.Second, ""},
+		"dial timeout after the ceiling":     {&net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded}, ceiling + time.Second, ""},
+	} {
+		if got := mcpBudgetReason(tc.err, tc.elapsed, ceiling); got != tc.want {
+			t.Errorf("%s: mcpBudgetReason = %q, want %q", name, got, tc.want)
+		}
+	}
+	if got := mcpBudgetReason(fmt.Errorf("x: %w", &clickhousedriver.Exception{Code: 60}), ceiling, ceiling); got != "" {
 		t.Fatalf("code 60 classified as %q, want \"\"", got)
+	}
+	if got := mcpBudgetReason(&net.OpError{Op: "read", Err: errors.New("connection reset by peer")}, ceiling, ceiling); got != "" {
+		t.Fatalf("a non-timeout network error classified as %q, want \"\"", got)
 	}
 }
 
@@ -1134,7 +1184,11 @@ func TestMCPRefusesPersonSelectorsForeignOrgsAndOversizedSimulationsEverywhere(t
 		{"person: who.developers literal", cat(", filters: {who: {developers: [\"a\"]}}"), nil, 403, mcpReasonPersonScope},
 		{"person: who.roles only", cat(", filters: {who: {roles: [\"r\"]}}"), nil, 403, mcpReasonPersonScope},
 		{"person: DEVELOPER through a variable", "query($f: FilterInput) { catalog(orgId: \"" + org + "\", filters: $f) { values { value } } }", map[string]any{"f": map[string]any{"scope": map[string]any{"level": "DEVELOPER", "ids": []any{"a"}}}}, 403, mcpReasonPersonScope},
-		{"person: undeclared extra variable who", hot, withExtra(map[string]any{"extra": map[string]any{"who": map[string]any{"developers": []any{"a"}}}}), 403, mcpReasonPersonScope},
+		// A value no field reads selects nobody: typed-position matching ignores it
+		// (org ids are different: they fail closed anywhere).
+		{"control: undeclared extra variable `who` is never read", hot, withExtra(map[string]any{"extra": map[string]any{"who": map[string]any{"developers": []any{"a"}}}}), 200, ""},
+		{"control: free text AUTHOR is not an enum position", fmt.Sprintf("query { securityAlerts(orgId: %q, filters: {search: \"AUTHOR\"}) { totalCount } }", org), nil, 200, ""},
+		{"person: an empty who object is still a person filter", cat(", filters: {who: {}}"), nil, 403, mcpReasonPersonScope},
 		{"person: analytics batch scope DEVELOPER", "query { analytics(orgId: \"" + org + "\", batch: {filters: {scope: {level: DEVELOPER, ids: [\"a\"]}}}) { timeseries { dimension } } }", nil, 403, mcpReasonPersonScope},
 		{"control: dimension REPO served", cat(", dimension: REPO"), nil, 200, ""},
 		// foreign org, every location

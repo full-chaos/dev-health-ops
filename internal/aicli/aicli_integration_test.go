@@ -7,11 +7,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -97,12 +99,24 @@ func goVerb(t *testing.T, ch clickHouse, verb func(context.Context, cli.Env) int
 	return code, stdout.String(), stderr.String()
 }
 
-// pythonVerb runs the real `dev-hops ai allowlist ...` against ch.
+// producerEnv is the environment of every producer run that shapes its
+// answers and is the same in every run: it is part of each request's key
+// (cliRequest), with the run's ORG_ID.
+var producerEnv = map[string]string{"OTEL_ENABLED": "false", "PYTHONHASHSEED": "0", "PYTHONUTF8": "1"}
+
+// pythonVerb runs the real `dev-hops ai allowlist ...` against ch. Its
+// environment is exactly what is written here: the interpreter's PATH and
+// HOME, the checkout, the run's ClickHouse and org, and producerEnv. Nothing
+// else of the ambient environment reaches the producer.
 func pythonVerb(t *testing.T, ch clickHouse, root, org string, args ...string) (int, string, string) {
 	t.Helper()
 	python := pyoracle.Resolve(t, root)
 	command := exec.Command(python, append([]string{"-m", "dev_health_ops.cli", "ai", "allowlist"}, args...)...)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "CLICKHOUSE_URI="+ch.httpDSN, "ORG_ID="+org, "OTEL_ENABLED=false")
+	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"),
+		"PYTHONDONTWRITEBYTECODE=1", "CLICKHOUSE_URI=" + ch.httpDSN, "ORG_ID=" + org}
+	for _, name := range slices.Sorted(maps.Keys(producerEnv)) {
+		command.Env = append(command.Env, name+"="+producerEnv[name])
+	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err := command.Run()
@@ -206,10 +220,15 @@ type cliStep struct {
 	args []string
 }
 
-// cliRequest is a cliStep as a golden request. Its path holds the org's
-// environment variable and the argv, so both are compared exactly.
+// cliRequest is a cliStep as a golden request. Its path holds the producer's
+// environment (ORG_ID and producerEnv, names as written) and the argv, so all
+// of them are compared exactly.
 func cliRequest(name string, step cliStep) venueoracle.Request {
-	return venueoracle.Request{Name: name, Method: "CLI", Path: "ORG_ID=" + step.org + " dev-hops ai allowlist " + fmt.Sprintf("%q", step.args)}
+	path := "ORG_ID=" + step.org
+	for _, key := range slices.Sorted(maps.Keys(producerEnv)) {
+		path += " " + key + "=" + producerEnv[key]
+	}
+	return venueoracle.Request{Name: name, Method: "CLI", Path: path + " dev-hops ai allowlist " + fmt.Sprintf("%q", step.args)}
 }
 
 // TestAllowlistMatchesTheFrozenPythonProducer is the differential oracle of
@@ -229,7 +248,7 @@ func TestAllowlistMatchesTheFrozenPythonProducer(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/allowlist.json",
 		PythonBuild: allowlistPythonBuild,
-		SHA256:      "7ce5949ded9073e4207f5f4fd93984db2be5991cd555116d8b788735d188cdc0",
+		SHA256:      "2dafa998aefaca5d73d2bce10af8b549577d4cdadb937bb0eadf9e85edef36ee",
 		Recipe: "git worktree add --detach $DIR " + allowlistPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/aicli/ -test '^TestAllowlistMatchesTheFrozenPythonProducer$' -python-root $DIR",
 	})

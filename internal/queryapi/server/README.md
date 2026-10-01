@@ -86,7 +86,7 @@ own route set; a route mounted on one is unreachable from another.
 | -- | -- | -- | -- |
 | public (`query-http`) | `QUERY_API_ADDR` | `Plane.Handler`: `/query`, `/query/proof`, `/registry`, `/buildinfo`, `/api/v1/*` | deletes the `X-DH-Internal-*` headers; envelope or edge bearer only |
 | internal (`query-internal-http`) | `QUERY_API_INTERNAL_ADDR` | `Plane.InternalHandler`: the public set plus `/query/proof-write` and `/metrics` | honours the four headers (`internalidentity.Internal`) |
-| MCP caller class (`query-mcp-http`) | `QUERY_API_MCP_ADDR`, `QUERY_API_MCP_ALLOWED_CIDRS` | `Plane.MCPHandler`: POST `/query` of the MCP class ONLY, no fallthrough | the four headers only (`internalidentity.MCP`); any `Authorization` header is refused |
+| MCP caller class (`query-mcp-http`) | `QUERY_API_MCP_ADDR` (refuses boot without `QUERY_API_MCP_BOUNDARY`: `networkpolicy`, set by the chart beside the MCP NetworkPolicy, or `allowed-cidrs` with `QUERY_API_MCP_ALLOWED_CIDRS`), `QUERY_API_MCP_ALLOWED_CIDRS` | `Plane.MCPHandler`: POST `/query` of the MCP class ONLY, no fallthrough | the four headers only (`internalidentity.MCP`); any `Authorization` header is refused |
 | operator | `DEV_HEALTH_HTTP_ADDR` | `/healthz`, `/readyz`, `/metrics` | none |
 
 **The MCP caller class (CHAOS-7085, with CHAOS-7091)** is the validated

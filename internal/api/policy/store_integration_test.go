@@ -236,11 +236,11 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 	if _, found, err := store.UserState(ctx, uuid.New()); err != nil || found {
 		t.Fatalf("unknown user: %v %v", found, err)
 	}
-	if ok, err := store.IsMember(ctx, targetUser, member); err != nil || !ok {
-		t.Fatalf("member: %v %v", ok, err)
+	if role, ok, err := store.Membership(ctx, targetUser, member); err != nil || !ok || role != "admin" {
+		t.Fatalf("member: role %q %v %v, want admin", role, ok, err)
 	}
-	if ok, err := store.IsMember(ctx, targetUser, stranger); err != nil || ok {
-		t.Fatalf("stranger: %v %v", ok, err)
+	if role, ok, err := store.Membership(ctx, targetUser, stranger); err != nil || ok || role != "" {
+		t.Fatalf("stranger: role %q %v %v", role, ok, err)
 	}
 	// Only an ended and an expired session exist: none is active.
 	if session, err := store.ActiveImpersonation(ctx, admUser); err != nil || session != nil {

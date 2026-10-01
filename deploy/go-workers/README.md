@@ -180,13 +180,13 @@ worker to contract 2 together. Concretely:
    table — either direction fails a canonical-table read/write with
    `operational_old_writer_rejected` or an ordering-contract stale-state
    error, and there is no automatic recovery.
-2. An environment whose ClickHouse is still contract 1 (067 not applied)
-   must not take this default: bring it to the head with the Python chain
-   (`dev-hops migrate clickhouse` with `OPERATIONAL_ORDERING_CONTRACT=2`,
-   after quiescing ingress and draining queued work, see the doc above), or
-   re-create it from the head, before deploying. `dho migrate clickhouse
-   status` reports where a database stands without changing it. Where the
-   contract is set by hand:
+2. **Ordering contract 1 is unsupported (D3635).** An environment whose
+   ClickHouse is still contract 1 (067 not applied) is below the head: `dho
+   migrate clickhouse upgrade` refuses it with the `below_head` error and
+   there is no upgrade path (the 067 rebuild exists only in the Python chain,
+   which is being deleted). Re-create the database from the head before
+   deploying. `dho migrate clickhouse status` reports where a database stands
+   without changing it. Where the contract is set by hand:
    - **Compose**: every `migrate`/worker service in `compose.yml` references
      `${OPERATIONAL_ORDERING_CONTRACT:-2}`.
    - **Helm**: `goWorkers.operationalOrderingContract` (default `"2"`) feeds

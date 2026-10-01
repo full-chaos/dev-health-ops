@@ -1412,8 +1412,8 @@ func doraRefusalRemedy(reason string) string {
 		return "OPERATIONAL_ORDERING_CONTRACT and the ClickHouse operational tables disagree. " +
 			"Every topology now defaults to contract 2, production's: run the migrate Job " +
 			"(`dho migrate upgrade`) to bring ClickHouse to the head. A contract-1 database is " +
-			"below the head and `dho migrate upgrade` refuses it by name: apply migration 067 " +
-			"with the Python chain first, or re-create it from the head (deploy/go-workers/README.md). " +
+			"below the head and unsupported: `dho migrate upgrade` refuses it by name and has no " +
+			"upgrade path for it, so re-create it from the head (deploy/go-workers/README.md). " +
 			"`dho migrate clickhouse status` reports where the database stands."
 	case jobruntime.DORARefusedContractUnparseable:
 		return "unset OPERATIONAL_ORDERING_CONTRACT or set it to 2 (contract 1 is unsupported)"

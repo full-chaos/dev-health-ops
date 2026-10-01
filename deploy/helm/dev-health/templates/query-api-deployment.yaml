@@ -156,6 +156,8 @@ spec:
             */}}
             - name: QUERY_API_MCP_ADDR
               value: {{ printf ":%v" .Values.queryApi.mcp.port | quote }}
+            - name: QUERY_API_MCP_BOUNDARY
+              value: "networkpolicy"
             {{- end }}
             {{- /*
             Native ClickHouse wire protocol (9000), not the HTTP 8123 port the

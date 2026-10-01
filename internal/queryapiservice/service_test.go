@@ -303,7 +303,7 @@ func TestOpensTheInternalListenerWhenItsAddressIsSet(t *testing.T) {
 func TestOpensTheMCPListenerWhenItsAddressIsSet(t *testing.T) {
 	addrs := freeAddrs(t, 4)
 	query, internal, mcp, operator := addrs[0], addrs[1], addrs[2], addrs[3]
-	r := start(t, []string{"--query-addr", query, "--internal-addr", internal, "--mcp-addr", mcp, "--http-addr", operator}, nil)
+	r := start(t, []string{"--query-addr", query, "--internal-addr", internal, "--mcp-addr", mcp, "--mcp-boundary", "networkpolicy", "--http-addr", operator}, nil)
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	waitFor(t, r, "http://"+internal+"/metrics", http.StatusOK)
 	for _, path := range []string{"/metrics", "/healthz", "/readyz", "/registry", "/buildinfo", "/query"} {
@@ -316,11 +316,68 @@ func TestOpensTheMCPListenerWhenItsAddressIsSet(t *testing.T) {
 	}
 }
 
+// The MCP listener trusts the internal identity headers from whoever can
+// connect, so its address alone never starts it: the boundary marker the
+// deployment sets next to the network boundary must come with it. An address
+// that arrives any other way (extraEnv, envFrom, a hand-edited manifest) has
+// no marker and refuses boot, loudly, naming the cause.
+func TestTheMCPListenerStartsOnlyWithItsBoundaryMarker(t *testing.T) {
+	for name, tc := range map[string]struct {
+		extra       func(mcp string) []string
+		refuse      bool
+		wantMessage string
+	}{
+		"address and marker": {func(a string) []string { return []string{"--mcp-addr", a, "--mcp-boundary", "networkpolicy"} }, false, ""},
+		"address and cidr marker with cidrs": {func(a string) []string {
+			return []string{"--mcp-addr", a, "--mcp-boundary", "allowed-cidrs", "--mcp-allowed-cidrs", "127.0.0.1/32"}
+		}, false, ""},
+		"address only":                      {func(a string) []string { return []string{"--mcp-addr", a} }, true, "QUERY_API_MCP_BOUNDARY"},
+		"address and a wrong marker":        {func(a string) []string { return []string{"--mcp-addr", a, "--mcp-boundary", "yes"} }, true, "QUERY_API_MCP_BOUNDARY"},
+		"address and cidr marker, no cidrs": {func(a string) []string { return []string{"--mcp-addr", a, "--mcp-boundary", "allowed-cidrs"} }, true, "requires"},
+		"marker only":                       {func(string) []string { return []string{"--mcp-boundary", "networkpolicy"} }, false, ""},
+		"neither":                           {func(string) []string { return nil }, false, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			addrs := freeAddrs(t, 2)
+			mcp, operator := addrs[0], addrs[1]
+			r := start(t, append([]string{"--http-addr", operator}, tc.extra(mcp)...), nil)
+			if tc.refuse {
+				select {
+				case code := <-r.done:
+					if code == 0 || !strings.Contains(r.stderr.String(), tc.wantMessage) {
+						t.Fatalf("exit %d stderr %q, want non-zero naming %q", code, r.stderr.String(), tc.wantMessage)
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatal("an MCP address without its boundary marker did not refuse boot")
+				}
+				return
+			}
+			waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
+			listening := false
+			if connection, err := net.DialTimeout("tcp", mcp, time.Second); err == nil {
+				_ = connection.Close()
+				listening = true
+			}
+			wantListening := strings.Contains(strings.Join(tc.extra(mcp), " "), "--mcp-addr")
+			if listening != wantListening {
+				t.Fatalf("MCP listener listening=%v, want %v", listening, wantListening)
+			}
+			stop(t, r)
+		})
+	}
+}
+
 func TestTheMCPListenerMustNotShareAnAddress(t *testing.T) {
 	for name, args := range map[string]func(string) []string{
-		"query":    func(a string) []string { return []string{"--query-addr", a, "--mcp-addr", a} },
-		"internal": func(a string) []string { return []string{"--internal-addr", a, "--mcp-addr", a} },
-		"operator": func(a string) []string { return []string{"--http-addr", a, "--mcp-addr", a} },
+		"query": func(a string) []string {
+			return []string{"--query-addr", a, "--mcp-addr", a, "--mcp-boundary", "networkpolicy"}
+		},
+		"internal": func(a string) []string {
+			return []string{"--internal-addr", a, "--mcp-addr", a, "--mcp-boundary", "networkpolicy"}
+		},
+		"operator": func(a string) []string {
+			return []string{"--http-addr", a, "--mcp-addr", a, "--mcp-boundary", "networkpolicy"}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			addr := freeAddr(t)

@@ -1212,6 +1212,12 @@ func mcpBudgetReason(err error) string {
 	// error. CI saw exactly that at the 1 s ceiling: "ClickHouse row
 	// iteration failed: *fmt.wrapError", served as field_errors instead of
 	// the typed 422. This client's only read deadline is the ceiling's.
+	// A DIAL timeout (the client's own 5 s DialTimeout) is a connectivity
+	// failure, not the read ceiling: it stays a store error.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return ""
+	}
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		return mcpReasonTimeCeiling
 	}

@@ -558,6 +558,9 @@ func TestMCPBudgetReasonIgnoresOtherErrors(t *testing.T) {
 	if got := mcpBudgetReason(fmt.Errorf("x: %w", &clickhousedriver.Exception{Code: 60})); got != "" {
 		t.Fatalf("code 60 classified as %q, want \"\"", got)
 	}
+	if got := mcpBudgetReason(fmt.Errorf("ClickHouse query failed: %w", &net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded})); got != "" {
+		t.Fatalf("a dial timeout classified as %q, want \"\" (connectivity, not the read ceiling)", got)
+	}
 	if got := mcpBudgetReason(&net.OpError{Op: "read", Err: errors.New("connection reset by peer")}); got != "" {
 		t.Fatalf("a non-timeout network error classified as %q, want \"\"", got)
 	}

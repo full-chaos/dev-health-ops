@@ -1,5 +1,6 @@
 # Every file under internal/jobs/operational/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 de250abf45ad5c57cdd8c98db77cd9718281933dcc0fae157f0f77cdad4af8c6	unclassified	billing_email/invoice_receipt__ascii.json
 e100e4563a93ca769ef1429c2fd15c9be18fc932d0a0b3bcb2b7396f5bb65961	unclassified	billing_email/invoice_receipt__unicode.json
 6a49bf4a503807f157401f95ecb1fb28b8c91369748af5604feed19bc46bb232	unclassified	billing_email/payment_failed__ascii.json

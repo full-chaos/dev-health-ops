@@ -1,4 +1,5 @@
 # Every file under internal/platform/config/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: d7dd6edeec20becd3f46a6e4708509cc27de74c2d2f50ac0cc1d122ab811cd55 (1 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 fa11ec24a0bd1633aa0d97412d1a597f035a1ff6f8a379ad77d38f0194b033af	python-recorded	route_dsn_golden.json
 bc2a579d87b6da09c7c76d70f7cec8b03671333686f3c85a4af0717425962e31	unclassified	route_dsn_init.sh

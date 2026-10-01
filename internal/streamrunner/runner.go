@@ -38,17 +38,18 @@ type Runner struct {
 	cancel   context.CancelFunc
 	done     chan struct{}
 
-	processed   uint64
-	quarantined uint64
-	reclaimed   uint64
-	retries     uint64
-	failures    uint64
-	lastSuccess time.Time
-	up          bool
-	lastStats   map[string]StreamStats
-	streams     []string
-	readCursor  int
-	waitIdle    func(context.Context, time.Duration) bool
+	processed     uint64
+	quarantined   uint64
+	quarantinedBy map[quarantineKey]uint64
+	reclaimed     uint64
+	retries       uint64
+	failures      uint64
+	lastSuccess   time.Time
+	up            bool
+	lastStats     map[string]StreamStats
+	streams       []string
+	readCursor    int
+	waitIdle      func(context.Context, time.Duration) bool
 }
 
 func New(transport Transport, handler Handler, config Config, registry *health.Registry) (*Runner, error) {
@@ -381,8 +382,42 @@ func (r *Runner) quarantine(ctx context.Context, message Message, reason string)
 	}
 	r.mu.Lock()
 	r.quarantined++
+	if r.quarantinedBy == nil {
+		r.quarantinedBy = make(map[quarantineKey]uint64)
+	}
+	r.quarantinedBy[newQuarantineKey(message.Stream, reason)]++
 	r.mu.Unlock()
+	retention := retentionFor(message, reason)
+	// Sizes and counts only: a payload never reaches a log line.
+	r.logger().WarnContext(ctx, "stream message quarantined",
+		"reason", reason, "stream", message.Stream, "entry_id", message.ID,
+		"fields", len(message.Fields), "events_retention", retention.Mode,
+		"events_bytes", retention.Bytes, "events_count", retention.EventsCount)
 	return nil
+}
+
+// quarantineKey is the bounded label set of the per-reason counter: the stream
+// family (the first segment of the stream key, never a per-org key) and the
+// reason when it is a plain lower-case token.
+type quarantineKey struct{ stream, reason string }
+
+func newQuarantineKey(stream, reason string) quarantineKey {
+	family, _, _ := strings.Cut(stream, ":")
+	switch family {
+	case "product-telemetry", "external-ingest", "ingest", "pagerduty-webhooks":
+	default:
+		family = "other"
+	}
+	valid := reason != "" && len(reason) <= 64
+	for _, c := range reason {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+			valid = false
+		}
+	}
+	if !valid {
+		reason = "other"
+	}
+	return quarantineKey{stream: family, reason: reason}
 }
 
 func (r *Runner) recordFailure() {
@@ -447,6 +482,10 @@ func (r *Runner) WritePrometheus(out io.Writer) error {
 	r.mu.Lock()
 	processed, quarantined, reclaimed, retries, failures := r.processed, r.quarantined, r.reclaimed, r.retries, r.failures
 	lastSuccess, up := r.lastSuccess, r.up
+	quarantinedBy := make(map[quarantineKey]uint64, len(r.quarantinedBy))
+	for key, count := range r.quarantinedBy {
+		quarantinedBy[key] = count
+	}
 	stats := make(map[string]StreamStats, len(r.lastStats))
 	for stream, snapshot := range r.lastStats {
 		stats[stream] = snapshot
@@ -455,6 +494,17 @@ func (r *Runner) WritePrometheus(out io.Writer) error {
 	var text strings.Builder
 	writeCounter(&text, "worker_stream_processed_total", "Durably processed stream messages.", processed)
 	writeCounter(&text, "worker_stream_quarantined_total", "Quarantined poison stream messages.", quarantined)
+	text.WriteString("# HELP worker_stream_quarantined_by_reason_total Quarantined poison stream messages by stream family and reason.\n# TYPE worker_stream_quarantined_by_reason_total counter\n")
+	keys := make([]quarantineKey, 0, len(quarantinedBy))
+	for key := range quarantinedBy {
+		keys = append(keys, key)
+	}
+	slices.SortFunc(keys, func(a, b quarantineKey) int {
+		return strings.Compare(a.stream+"\x00"+a.reason, b.stream+"\x00"+b.reason)
+	})
+	for _, key := range keys {
+		fmt.Fprintf(&text, "worker_stream_quarantined_by_reason_total{stream=%q,reason=%q} %d\n", key.stream, key.reason, quarantinedBy[key])
+	}
 	writeCounter(&text, "worker_stream_reclaimed_total", "Pending stream messages reclaimed for retry.", reclaimed)
 	writeCounter(&text, "worker_stream_retries_total", "Transient durable-write failures left pending.", retries)
 	writeCounter(&text, "worker_stream_failures_total", "Failed stream windows.", failures)

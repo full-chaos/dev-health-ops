@@ -33,6 +33,8 @@ type fakeOracle struct {
 	perRun            func(run int) string
 	records           int
 	dropSecond        bool
+	extraSecond       bool
+	recordEnvs        [][]string
 	failSecond        bool
 	bytecodeAtRecord  bool
 	dontWriteBytecode bool
@@ -50,6 +52,7 @@ func (f *fakeOracle) run(cfg Config, env []string) error {
 	switch {
 	case has("DHO_VENUE_GOLDEN_UPDATE"):
 		f.calls = append(f.calls, "record")
+		f.recordEnvs = append(f.recordEnvs, append([]string{}, env...))
 		f.records++
 		if f.perRun != nil {
 			f.candidateBody = f.perRun(f.records)
@@ -57,6 +60,11 @@ func (f *fakeOracle) run(cfg Config, env []string) error {
 		_, err := os.Stat(filepath.Join(f.pythonRoot, "src", "app", "__pycache__"))
 		f.bytecodeAtRecord = err == nil
 		f.dontWriteBytecode = has("PYTHONDONTWRITEBYTECODE")
+		if f.extraSecond && f.records == 2 {
+			if err := os.WriteFile(filepath.Join(f.dir, "testdata", "extra.json.recording"), []byte(f.candidateBody), 0o644); err != nil {
+				return err
+			}
+		}
 		if f.recordWrites && !(f.dropSecond && f.records == 2) {
 			if err := os.MkdirAll(filepath.Join(f.dir, "testdata"), 0o755); err != nil {
 				return err
@@ -497,5 +505,26 @@ func TestASecondRunThatWritesNoCandidateIsRefused(t *testing.T) {
 	fake.dropSecond = true
 	if _, err := Record(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "wrote no candidate") {
 		t.Fatalf("a repeat that wrote nothing was accepted: %v", err)
+	}
+}
+
+func TestASecondRunThatWritesAnExtraCandidateIsRefused(t *testing.T) {
+	cfg, fake, dir := fixture(t, "")
+	fake.extraSecond = true
+	if _, err := Record(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "the first did not") {
+		t.Fatalf("an extra candidate of the repeat was accepted: %v", err)
+	}
+	if exists(filepath.Join(dir, "testdata", "g.json")) || exists(filepath.Join(dir, "testdata", "extra.json.recording")) {
+		t.Fatal("a golden or candidate is left after the refusal")
+	}
+}
+
+func TestBothRecordingRunsGetTheSameEnvironment(t *testing.T) {
+	cfg, fake, _ := fixture(t, "")
+	if _, err := Record(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.recordEnvs) != 2 || strings.Join(fake.recordEnvs[0], "\n") != strings.Join(fake.recordEnvs[1], "\n") {
+		t.Fatalf("the two recording runs got different environments: %v", fake.recordEnvs)
 	}
 }

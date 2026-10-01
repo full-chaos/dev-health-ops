@@ -147,13 +147,15 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 	sort.Strings(passed)
 	base := []string{"DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=" + proofDir, passedEnvName + "=" + strings.Join(passed, ",")}
 	discard := func() { removeAll(packageDir) }
+	// Both recording runs get this one list: they may differ in time only.
+	recordEnv := append(append([]string{}, base...), "DHO_VENUE_GOLDEN_UPDATE=1", "DHO_VENUE_GOLDEN_PYTHON_ROOT="+cfg.PythonRoot, "PYTHONDONTWRITEBYTECODE=1")
 
 	// A bytecode cache in the pinned checkout can run code older than its source:
 	// clear it, and stop the recording writing a new one.
 	if err := clearBytecode(filepath.Join(cfg.PythonRoot, "src")); err != nil {
 		return Result{}, fmt.Errorf("clearing the bytecode cache of %s: %w", cfg.PythonRoot, err)
 	}
-	if err := cfg.Run(cfg, append(append([]string{}, base...), "DHO_VENUE_GOLDEN_UPDATE=1", "DHO_VENUE_GOLDEN_PYTHON_ROOT="+cfg.PythonRoot, "PYTHONDONTWRITEBYTECODE=1")); err != nil {
+	if err := cfg.Run(cfg, recordEnv); err != nil {
 		discard()
 		return Result{}, fmt.Errorf("the recording run failed (a golden is only recorded from a run that passed every check, cleanups included): %w", err)
 	}
@@ -186,7 +188,7 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 			return Result{}, err
 		}
 	}
-	if err := cfg.Run(cfg, append(append([]string{}, base...), "DHO_VENUE_GOLDEN_UPDATE=1", "DHO_VENUE_GOLDEN_PYTHON_ROOT="+cfg.PythonRoot, "PYTHONDONTWRITEBYTECODE=1")); err != nil {
+	if err := cfg.Run(cfg, recordEnv); err != nil {
 		discard()
 		return Result{}, fmt.Errorf("the second recording run failed: %w", err)
 	}
@@ -581,7 +583,7 @@ func firstDifference(a, b []byte) string {
 		}
 	}
 	if len(left.Requests) != len(right.Requests) {
-		add("requests count", fmt.Sprint(len(left.Requests)), fmt.Sprint(len(right.Requests)))
+		found = append(found, fmt.Sprintf("requests count (first run: %d, second run: %d)", len(left.Requests), len(right.Requests)))
 	}
 	for i := 0; i < len(left.Requests) && i < len(right.Requests); i++ {
 		x, y := left.Requests[i], right.Requests[i]
@@ -591,7 +593,7 @@ func firstDifference(a, b []byte) string {
 			continue
 		}
 		if x.Status.String() != y.Status.String() {
-			add(where+" status", x.Status.String(), y.Status.String())
+			found = append(found, fmt.Sprintf("%s status (first run: %s, second run: %s)", where, x.Status, y.Status))
 		}
 		hn := map[string]bool{}
 		for k := range x.Headers {

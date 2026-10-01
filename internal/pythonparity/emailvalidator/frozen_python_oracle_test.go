@@ -1,4 +1,4 @@
-package emailvalidator
+package emailvalidator_test
 
 import (
 	"bytes"
@@ -6,36 +6,38 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/emailvalidator"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // oracleProgram runs pydantic's own validate_email (the function EmailStr
-// calls) over every input. Inputs and outputs travel as code point lists,
-// so a lone surrogate survives the trip.
-const oracleProgram = `
-import json, sys
+// calls) over every input. Inputs travel as code point lists, so a lone
+// surrogate survives the trip. Its 2.6 million answers are frozen as block
+// digests, one canonical line per answer: verdict|address|reason, "1" or
+// "0", the normalized address as a code point list, and the reason as a text
+// field.
+const oracleProgram = programoracle.BlocksPython + `
+import sys
 from pydantic_core import PydanticCustomError
 from pydantic.networks import validate_email
 
-out = []
+lines = []
 for cps in json.load(sys.stdin):
     cps = cps or []
     value = "".join(map(chr, cps))
     try:
         _, email = validate_email(value)
-        out.append({"ok": True, "email": [ord(c) for c in email]})
+        lines.append("1|" + code_points(map(ord, email)) + "|")
     except PydanticCustomError as exc:
         if exc.type != "value_error" or exc.message_template != "value is not a valid email address: {reason}":
             raise
-        out.append({"ok": False, "reason": exc.context["reason"]})
-json.dump(out, sys.stdout)
+        lines.append("0||" + text(exc.context["reason"]))
+print(json.dumps(block_digests(lines)))
 `
 
 type verdict struct {
@@ -137,7 +139,7 @@ func fuzz(n int) [][]rune {
 				text = append(text, alphabet[random.Intn(len(alphabet))])
 			}
 		}
-		if random.Intn(2) == 0 && !containsRune(text, '@') {
+		if random.Intn(2) == 0 && !emailvalidator.ContainsRune(text, '@') {
 			at := random.Intn(len(text) + 1)
 			text = append(text[:at], append([]rune{'@'}, text[at:]...)...)
 		}
@@ -146,75 +148,61 @@ func fuzz(n int) [][]rune {
 	return out
 }
 
-// TestValidateEmailMatchesLivePydantic compares ValidateEmail with
+// TestValidateEmailMatchesFrozenPydantic compares ValidateEmail with
 // pydantic's validate_email, verdict, normalized address and reason text,
 // over hand-picked cases, every code point in three positions, and a
 // seeded fuzz corpus.
-func TestValidateEmailMatchesLivePydantic(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" && os.Getenv("DEV_HEALTH_REGENERATE_TABLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestValidateEmailMatchesFrozenPydantic(t *testing.T) {
 	corpus := append(append(append(toRunes(handPicked()), surrogateCases()...), sweeps()...), fuzz(200000)...)
-
 	payload, err := json.Marshal(corpus)
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, "-c", oracleProgram)
-	command.Stdin = bytes.NewReader(payload)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr.Bytes()))
+	calls, callsPayload := dotAtomCalls(t)
+	outputs := frozenPython(t, "validate-email.golden.json",
+		programoracle.Program{Name: "validate_email", Text: oracleProgram, Stdin: payload},
+		programoracle.Program{Name: "check_dot_atom", Text: dotAtomProgram, Stdin: callsPayload})
+	// The verdicts here. The block digests prove each is pydantic's, so the
+	// slice cut for the golden below is a slice of pydantic's verdicts.
+	want := make([]verdict, len(corpus))
+	line := func(dst []byte, index int) []byte {
+		email, reason, ok := emailvalidator.ValidateEmail(corpus[index])
+		want[index] = verdict{OK: ok, Email: email, Reason: reason}
+		if ok {
+			dst = append(dst, '1', '|')
+		} else {
+			dst = append(dst, '0', '|')
+		}
+		dst = append(programoracle.AppendCodePoints(dst, email), '|')
+		return programoracle.AppendText(dst, reason)
 	}
-	var want []verdict
-	if err := json.Unmarshal(output, &want); err != nil {
-		t.Fatalf("decode: %v", err)
+	programoracle.RequireBlocks(t, "validate_email", outputs[0], len(corpus), line, func(index int) string {
+		email, reason, ok := emailvalidator.ValidateEmail(corpus[index])
+		return fmt.Sprintf("%s: go %s", codepoints(corpus[index]), describe(verdict{OK: ok, Email: email, Reason: reason}))
+	})
+	// A port that refuses a tilde in a local part; it is an atext character.
+	tilde := slices.IndexFunc(corpus, func(input []rune) bool { return string(input) == "a~@x.com" })
+	if tilde < 0 {
+		t.Fatal("the corpus holds no a~@x.com")
 	}
-	if len(want) != len(corpus) {
-		t.Fatalf("python answered %d of %d", len(want), len(corpus))
-	}
-	accepted, differences := 0, 0
+	programoracle.RequireFindsDefect(t, "tilde refused in a local part", outputs[0], tilde, line, func(dst []byte) []byte {
+		return programoracle.AppendText(append(dst, "0||"...), "The email address contains invalid characters before the @-sign: '~'.")
+	})
+	accepted := 0
 	reasons := map[string]bool{}
-	for index, input := range corpus {
-		email, reason, ok := ValidateEmail(input)
-		got := verdict{OK: ok, Email: email, Reason: reason}
-		expected := want[index]
-		if expected.OK {
+	for _, v := range want {
+		if v.OK {
 			accepted++
 		} else {
-			reasons[reasonClass(expected.Reason)] = true
-		}
-		if got.OK != expected.OK || got.Reason != expected.Reason || !equalRunes(got.Email, expected.Email) {
-			differences++
-			if differences <= 25 {
-				t.Errorf("%s:\n  go     %s\n  python %s", codepoints(input), describe(got), describe(expected))
-			}
+			reasons[reasonClass(v.Reason)] = true
 		}
 	}
-	t.Logf("%d inputs (%d accepted, %d reason classes), %d differences", len(corpus), accepted, len(reasons), differences)
-	if differences > 0 {
-		t.Fatalf("%d differences", differences)
-	}
+	t.Logf("%d inputs compared in blocks (%d accepted, %d reason classes), 0 differences", len(corpus), accepted, len(reasons))
 	checkGolden(t, selectGolden(corpus, want))
-	checkDotAtomMatchesLivePython(t, python)
-	if os.Getenv("DEV_HEALTH_REGENERATE_TABLES") == "1" {
-		return
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "pythonparity-emailvalidator"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	checkDotAtomMatchesFrozenPython(t, calls, outputs[1])
 }
 
-// selectGolden keeps a small, deterministic slice of the live answers for
+// selectGolden keeps a small, deterministic slice of the answers for
 // golden_test.go: every hand-picked and surrogate case; for the code point
 // sweeps, every ASCII probe and the first two probes of every (sweep,
 // outcome class, category, bidirectional class) cell; the first 40 inputs
@@ -267,7 +255,7 @@ func sweepProbe(input []rune) (string, rune, bool) {
 	return "", 0, false
 }
 
-// checkGolden compares the committed golden with the live selection, or
+// checkGolden compares the committed golden with the selection, or
 // rewrites it under DEV_HEALTH_REGENERATE_TABLES=1.
 func checkGolden(t *testing.T, cases []goldenCase) {
 	t.Helper()
@@ -290,7 +278,7 @@ func checkGolden(t *testing.T, cases []goldenCase) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(committed, rendered) {
-		t.Fatalf("%s differs from the live answers; regenerate with DEV_HEALTH_REGENERATE_TABLES=1", goldenPath)
+		t.Fatalf("%s differs from the frozen answers; regenerate with DEV_HEALTH_REGENERATE_TABLES=1", goldenPath)
 	}
 }
 
@@ -332,36 +320,42 @@ for call in json.load(sys.stdin):
 json.dump(out, sys.stdout)
 `
 
-// checkDotAtomMatchesLivePython calls check_dot_atom directly, on labels
-// no full address can hand it (an empty one included).
-func checkDotAtomMatchesLivePython(t *testing.T, python string) {
+type dotAtomCall struct {
+	Label    []rune `json:"label"`
+	Hostname bool   `json:"hostname"`
+}
+
+// dotAtomCalls are labels no full address can hand check_dot_atom (an empty
+// one included), with their JSON for the program.
+func dotAtomCalls(t *testing.T) ([]dotAtomCall, []byte) {
 	t.Helper()
-	type call struct {
-		Label    []rune `json:"label"`
-		Hostname bool   `json:"hostname"`
-	}
-	var calls []call
+	var calls []dotAtomCall
 	for _, label := range []string{"", ".", "-", "a", "a.", ".a", "a..b", "a-", "-a", "a.-b", "a-.b", "a--b", "-.", ".-", "\u00e9-", "..", "--"} {
 		for _, hostname := range []bool{false, true} {
-			calls = append(calls, call{Label: []rune(label), Hostname: hostname})
+			calls = append(calls, dotAtomCall{Label: []rune(label), Hostname: hostname})
 		}
 	}
-	payload, _ := json.Marshal(calls)
-	command := exec.Command(python, "-c", dotAtomProgram)
-	command.Stdin = bytes.NewReader(payload)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
+	payload, err := json.Marshal(calls)
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr.Bytes()))
-	}
-	var want []string
-	if err := json.Unmarshal(output, &want); err != nil {
 		t.Fatal(err)
+	}
+	return calls, payload
+}
+
+// checkDotAtomMatchesFrozenPython compares checkDotAtom with check_dot_atom
+// called directly.
+func checkDotAtomMatchesFrozenPython(t *testing.T, calls []dotAtomCall, output string) {
+	t.Helper()
+	var want []string
+	if err := json.Unmarshal([]byte(output), &want); err != nil {
+		t.Fatal(err)
+	}
+	if len(want) != len(calls) {
+		t.Fatalf("python answered %d of %d check_dot_atom calls", len(want), len(calls))
 	}
 	for index, c := range calls {
 		got := ""
-		if err := checkDotAtom(c.Label, "start %s", "end %s", c.Hostname); err != nil {
+		if err := emailvalidator.CheckDotAtom(c.Label, "start %s", "end %s", c.Hostname); err != nil {
 			got = err.Reason
 		}
 		if got != want[index] {

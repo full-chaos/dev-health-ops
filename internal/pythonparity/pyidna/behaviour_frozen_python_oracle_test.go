@@ -1,22 +1,25 @@
-package pyidna
+package pyidna_test
 
 import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
-	"path/filepath"
-	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyidna"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// behaviourProgram answers each call with the live idna package: the
-// result (code points or ASCII) or type(exc).__name__ and str(exc).
-const behaviourProgram = `
-import json, sys, idna
+// behaviourProgram answers each call with the idna package: the result (code
+// points or ASCII) or type(exc).__name__ and str(exc). Its 5.6 million
+// answers are frozen as block digests, one canonical line per answer:
+// kind|result|message, a text field, a code point list and a text field.
+const behaviourProgram = programoracle.BlocksPython + `
+import sys, idna
 
 def run(fn, arg):
     try:
@@ -27,28 +30,31 @@ def run(fn, arg):
     except idna.IDNAError as exc:
         return {"kind": type(exc).__name__, "message": str(exc)}
 
-def direct(call, text):
+def direct(call, label):
     pos = call.get("pos", 0)
     try:
         if call["fn"] == "contextj":
-            return {"ok": [1 if idna.core.valid_contextj(text, pos) else 0]}
+            return {"ok": [1 if idna.core.valid_contextj(label, pos) else 0]}
         if call["fn"] == "contexto":
-            return {"ok": [1 if idna.core.valid_contexto(text, pos) else 0]}
-        idna.core.check_bidi(text)
+            return {"ok": [1 if idna.core.valid_contexto(label, pos) else 0]}
+        idna.core.check_bidi(label)
         return {"ok": [1]}
     except idna.IDNAError as exc:
         return {"kind": type(exc).__name__, "message": str(exc)}
     except ValueError as exc:
         return {"kind": "ValueError", "message": str(exc)}
 
-out = []
+def line(result):
+    return text(result.get("kind", "")) + "|" + code_points(result.get("ok", [])) + "|" + text(result.get("message", ""))
+
+lines = []
 for call in json.load(sys.stdin):
-    text = "".join(map(chr, call["text"] or []))
+    label = "".join(map(chr, call["text"] or []))
     if call["fn"] in ("contextj", "contexto", "bidi"):
-        out.append(direct(call, text))
+        lines.append(line(direct(call, label)))
         continue
     if call["fn"] == "decode":
-        text = text.encode("ascii")
+        label = label.encode("ascii")
     fn = {
         "remap": lambda s: idna.uts46_remap(s, std3_rules=False, transitional=False),
         "alabel": idna.alabel,
@@ -56,8 +62,8 @@ for call in json.load(sys.stdin):
         "encode": idna.encode,
         "decode": idna.decode,
     }[call["fn"]]
-    out.append(run(fn, text))
-json.dump(out, sys.stdout)
+    lines.append(line(run(fn, label)))
+print(json.dumps(block_digests(lines)))
 `
 
 type behaviourCall struct {
@@ -73,9 +79,9 @@ type behaviourResult struct {
 	Message string `json:"message"`
 }
 
-var kindNames = map[Kind]string{
-	KindIDNA: "IDNAError", KindBidi: "IDNABidiError",
-	KindInvalidCodepoint: "InvalidCodepoint", KindInvalidCodepointContext: "InvalidCodepointContext",
+var kindNames = map[pyidna.Kind]string{
+	pyidna.KindIDNA: "IDNAError", pyidna.KindBidi: "IDNABidiError",
+	pyidna.KindInvalidCodepoint: "InvalidCodepoint", pyidna.KindInvalidCodepointContext: "InvalidCodepointContext",
 }
 
 func behaviourCorpus() []behaviourCall {
@@ -188,24 +194,24 @@ func sweepProbe(call behaviourCall) (string, rune, bool) {
 
 func goBehaviour(call behaviourCall) behaviourResult {
 	var out []rune
-	var err *Error
+	var err *pyidna.Error
 	switch call.Fn {
 	case "remap":
-		out, err = UTS46Remap(call.Text)
+		out, err = pyidna.UTS46Remap(call.Text)
 	case "alabel":
 		var encoded []byte
-		encoded, err = Alabel(call.Text)
-		out = asciiToRunes(encoded)
+		encoded, err = pyidna.Alabel(call.Text)
+		out = pyidna.AsciiToRunes(encoded)
 	case "ulabel":
-		out, err = Ulabel(call.Text)
+		out, err = pyidna.Ulabel(call.Text)
 	case "encode":
 		var encoded []byte
-		encoded, err = Encode(call.Text)
-		out = asciiToRunes(encoded)
+		encoded, err = pyidna.Encode(call.Text)
+		out = pyidna.AsciiToRunes(encoded)
 	case "decode":
-		out, err = Decode(call.Text)
+		out, err = pyidna.Decode(call.Text)
 	case "contextj":
-		valid, ok := validContextJ(call.Text, call.Pos)
+		valid, ok := pyidna.ValidContextJ(call.Text, call.Pos)
 		if !ok {
 			// unicodedata.name raises this ValueError inside
 			// _combining_class; check_label turns it into an IDNAError.
@@ -213,9 +219,9 @@ func goBehaviour(call behaviourCall) behaviourResult {
 		}
 		return behaviourResult{OK: boolRunes(valid)}
 	case "contexto":
-		return behaviourResult{OK: boolRunes(validContextO(call.Text, call.Pos))}
+		return behaviourResult{OK: boolRunes(pyidna.ValidContextO(call.Text, call.Pos))}
 	case "bidi":
-		err = checkBidi(call.Text)
+		err = pyidna.CheckBidi(call.Text)
 		if err == nil {
 			out = []rune{1}
 		}
@@ -236,43 +242,43 @@ func boolRunes(value bool) []rune {
 	return []rune{0}
 }
 
-// TestBehaviourMatchesLivePython compares UTS46Remap, Alabel, Ulabel,
-// Encode and Decode with the live idna package, result or exception class
-// and text, over every code point in several positions, hand-picked
-// labels and a seeded fuzz corpus.
-func TestBehaviourMatchesLivePython(t *testing.T) {
+// TestBehaviourMatchesFrozenPython compares UTS46Remap, Alabel, Ulabel,
+// Encode and Decode with the idna package, result or exception class and
+// text, over every code point in several positions, hand-picked labels and a
+// seeded fuzz corpus.
+func TestBehaviourMatchesFrozenPython(t *testing.T) {
 	regenerate := os.Getenv("DEV_HEALTH_REGENERATE_TABLES") == "1"
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" && !regenerate {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	calls := behaviourCorpus()
-	var want []behaviourResult
-	if err := json.Unmarshal(runPython(t, root, behaviourProgram, calls), &want); err != nil {
+	payload, err := json.Marshal(calls)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(want) != len(calls) {
-		t.Fatalf("python answered %d of %d", len(want), len(calls))
+	output := frozenPython(t, "behaviour.golden.json", programoracle.Program{Name: "behaviour", Text: behaviourProgram, Stdin: payload})[0]
+	// The answers here. The block digests prove each is the Python answer, so
+	// the slice cut for the golden below is a slice of the Python answers.
+	want := make([]behaviourResult, len(calls))
+	line := func(dst []byte, index int) []byte {
+		got := goBehaviour(calls[index])
+		want[index] = got
+		dst = append(programoracle.AppendText(dst, got.Kind), '|')
+		dst = append(programoracle.AppendCodePoints(dst, got.OK), '|')
+		return programoracle.AppendText(dst, got.Message)
 	}
-	differences := 0
-	for index, call := range calls {
-		got := goBehaviour(call)
-		expected := want[index]
-		if expected.OK == nil && expected.Kind == "" {
-			expected.OK = []rune{}
-		}
-		if fmt.Sprint(got) != fmt.Sprint(expected) {
-			differences++
-			if differences <= 20 {
-				t.Errorf("%s(%U):\n  go     %+v\n  python %+v", call.Fn, call.Text, got, expected)
-			}
-		}
+	programoracle.RequireBlocks(t, "idna behaviour", output, len(calls), line, func(index int) string {
+		return fmt.Sprintf("%s(%U): go %+v", calls[index].Fn, calls[index].Text, goBehaviour(calls[index]))
+	})
+	// A port that accepts MIDDLE DOT between any two letters; the rule needs
+	// an l on both sides.
+	middleDot := slices.IndexFunc(calls, func(call behaviourCall) bool {
+		return call.Fn == "contexto" && slices.Equal(call.Text, []rune{'a', 0x00b7, 'a'})
+	})
+	if middleDot < 0 {
+		t.Fatal("the corpus holds no contexto call for a MIDDLE DOT between two a")
 	}
-	t.Logf("%d calls, %d differences", len(calls), differences)
-	if differences > 0 {
-		t.Fatalf("%d differences", differences)
-	}
+	programoracle.RequireFindsDefect(t, "MIDDLE DOT accepted between two a", output, middleDot, line, func(dst []byte) []byte {
+		return append(dst, "|1|"...)
+	})
+	t.Logf("%d calls compared in blocks, 0 differences", len(calls))
 	// The golden keeps, for the code point sweeps, every ASCII probe and the
 	// first two probes of every (function, shape, outcome class, category,
 	// bidirectional class, joining type) cell; the first 30 calls of every
@@ -292,7 +298,7 @@ func TestBehaviourMatchesLivePython(t *testing.T) {
 		perClass[class]++
 		keep := perClass[class] <= 30 || index%2000 == 0
 		if shape, probe, ok := sweepProbe(call); ok {
-			cell := class + "|" + shape + "|" + pyunicodedata.Category(probe) + "|" + pyunicodedata.Bidirectional(probe) + "|" + joiningType(probe)
+			cell := class + "|" + shape + "|" + pyunicodedata.Category(probe) + "|" + pyunicodedata.Bidirectional(probe) + "|" + pyidna.JoiningType(probe)
 			perCell[cell]++
 			keep = keep || probe < 0x80 || perCell[cell] <= 2
 		}
@@ -301,8 +307,4 @@ func TestBehaviourMatchesLivePython(t *testing.T) {
 		}
 	}
 	checkGoldenLines(t, golden, regenerate)
-	if regenerate {
-		return
-	}
-	writeProof(t, "pythonparity-pyidna-behaviour")
 }

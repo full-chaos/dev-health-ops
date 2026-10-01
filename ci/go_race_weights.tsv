@@ -16,6 +16,9 @@ internal/jobs	35
 internal/jobs/workgraph/units	172
 internal/providerfoundation	31
 internal/providersync	453
+internal/pythonparity/emailvalidator	99
+internal/pythonparity/pyidna	108
+internal/pythonparity/pyunicodedata	21
 internal/queryapi/investmentflow	33
 internal/storedversion	116
 internal/streamhandlers	136

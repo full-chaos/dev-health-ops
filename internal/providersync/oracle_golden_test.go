@@ -284,8 +284,7 @@ func assertPinnedHarness(t *testing.T, what, root, manifest string) {
 func pinnedInterpreter(t *testing.T, what, root string, passed []string) (string, []string) {
 	t.Helper()
 	python := pyoracle.Resolve(t, root)
-	probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
-	pyoracle.RequireDeployed(t, python, probe, probeErr)
+	pyoracle.RequireDeployed(t, python, root)
 	environment := append([]string{
 		"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"),
 		"PYTHONPATH=" + filepath.Join(root, "src"), "PYTHONDONTWRITEBYTECODE=1",

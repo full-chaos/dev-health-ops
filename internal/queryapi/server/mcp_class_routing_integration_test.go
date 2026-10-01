@@ -11,6 +11,7 @@ package server
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,11 +46,18 @@ func classSeed(t *testing.T, pool *pgxpool.Pool, operations ...string) {
 
 func classReceipt(t *testing.T, pool *pgxpool.Pool, operation, route, binding string) {
 	t.Helper()
+	// CHAOS-7512: `enable` reads the class receipt's provenance; a fully measured proof lists no excluded shape.
+	root, _ := mcpclass.Root(operation)
+	provenance, err := json.Marshal(goapiproof.ReceiptProvenance{MeasurementRoute: route, EdgeBuildBinding: binding,
+		MCPClass: &goapiproof.MCPClassProvenance{Root: root, Reference: "go_document_route", Executed: 1, Matched: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := goapiproof.WriteAtomic(t.Context(), pool, goapiproof.Receipt{
 		SchemaDigest: classTestSchema, DocumentDigest: mcpclass.DocumentDigest(), SelectedOperation: operation,
 		CandidateBuild: classTestBuild, RequestIdentity: "req-" + operation, Stage: goapiproof.EnablementProofStage,
 		TerminalState: goapiproof.EnablementProofTerminalState, OrgID: "org-proof", RecordedBy: "test",
-		ObservedAt: time.Now().UTC(), MeasurementRoute: route, BuildBinding: binding,
+		ObservedAt: time.Now().UTC(), MeasurementRoute: route, BuildBinding: binding, ReviewEvidence: string(provenance),
 	}); err != nil {
 		t.Fatalf("receipt %s: %v", operation, err)
 	}

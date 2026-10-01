@@ -86,3 +86,42 @@ func TestAZeroComponentStopsAsANoOp(t *testing.T) {
 		t.Errorf("zero component Shutdown = %v", err)
 	}
 }
+
+// TestACallerContextThatExpiredIsNotSwallowed: only the component's own bound
+// means "collector down". When the caller's own (shorter) budget runs out the
+// stop did not get the time it was promised, so the error is returned and the
+// "collector not reachable" line is not logged.
+func TestACallerContextThatExpiredIsNotSwallowed(t *testing.T) {
+	t.Setenv("OTEL_ENABLED", "true")
+	t.Setenv("OTEL_SAMPLE_RATE", "1")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", closedPort(t))
+	var logs bytes.Buffer
+	component := InitWithServiceName(slog.New(slog.NewTextHandler(&logs, nil)), "flush-test")
+	t.Cleanup(func() { otel.SetTracerProvider(sdktrace.NewTracerProvider()) })
+
+	_, span := otel.Tracer("flush-test").Start(context.Background(), "buffered")
+	span.End()
+
+	t.Run("deadline shorter than the bound", func(t *testing.T) {
+		logs.Reset()
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		if err := component.Shutdown(ctx); err == nil {
+			t.Fatal("a caller deadline that expired was swallowed as a down collector")
+		}
+		if strings.Contains(logs.String(), "collector is not reachable") {
+			t.Errorf("an expired caller deadline was reported as an unreachable collector:\n%s", logs.String())
+		}
+	})
+	t.Run("already cancelled", func(t *testing.T) {
+		logs.Reset()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		// The SDK may return nil or the context's error for a cancelled caller;
+		// either way it must not be reported as an unreachable collector.
+		_ = component.Shutdown(ctx)
+		if strings.Contains(logs.String(), "collector is not reachable") {
+			t.Errorf("a cancelled caller was reported as an unreachable collector:\n%s", logs.String())
+		}
+	})
+}

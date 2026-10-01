@@ -321,7 +321,7 @@ func withoutPerRun(text string, perRun map[string]string) string {
 // A recording starts the program as "python3", never by a path.
 func activateInterpreter(t *testing.T, pinnedRoot string) {
 	t.Helper()
-	bin, err := interpreterDir(pyoracle.Resolve(t, pinnedRoot))
+	bin, err := interpreterDir(pyoracle.ResolveLauncher(t, pinnedRoot))
 	if err != nil {
 		t.Fatalf("programoracle: %v", err)
 	}

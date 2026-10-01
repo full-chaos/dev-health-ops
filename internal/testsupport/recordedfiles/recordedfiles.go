@@ -84,6 +84,31 @@ const unclassifiedDayOne = 977
 // manifests were first written, one repository path per line.
 const DayOneList = "internal/testsupport/recordedfiles/unclassified_day_one.txt"
 
+// headerBeforeStampCeiling is how many goldens may hold the kind
+// header-before-stamp: the ones that were in the tree when the stamp became the
+// verb's (CHAOS-7707). It only goes down.
+const headerBeforeStampCeiling = 257
+
+// BeforeStampList is the closed list of those goldens, one repository path per
+// line. -day-one gives the kind header-before-stamp to a path on it and to no
+// other: a new golden with no stamp was not recorded by the verb.
+const BeforeStampList = "internal/testsupport/recordedfiles/header_before_stamp_ceiling.txt"
+
+// BeforeStamp is the closed list of the goldens that may have no stamp.
+func BeforeStamp(repo string) ([]string, error) {
+	raw, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(BeforeStampList)))
+	if err != nil {
+		return nil, err
+	}
+	var list []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line != "" && !strings.HasPrefix(line, "#") {
+			list = append(list, line)
+		}
+	}
+	return list, nil
+}
+
 // ManifestSuffix is what a manifest's name adds to its directory's.
 const ManifestSuffix = ".manifest.tsv"
 
@@ -375,7 +400,45 @@ func Problems(repo string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return problems(repo, roots, dayOne, unclassifiedDayOne)
+	found, err := problems(repo, roots, dayOne, unclassifiedDayOne)
+	if err != nil {
+		return nil, err
+	}
+	ceiling, err := ceilingProblems(repo, roots, headerBeforeStampCeiling)
+	if err != nil {
+		return nil, err
+	}
+	return append(found, ceiling...), nil
+}
+
+// ceilingProblems is what is wrong with the header-before-stamp rows against
+// the closed list: a row whose path is not on it, and a list whose length is not
+// the ceiling.
+func ceilingProblems(repo string, roots []string, ceiling int) ([]string, error) {
+	listed, err := BeforeStamp(repo)
+	if err != nil {
+		return nil, err
+	}
+	onList := map[string]bool{}
+	for _, file := range listed {
+		onList[file] = true
+	}
+	var out []string
+	for _, root := range roots {
+		manifest, err := Read(repo, root)
+		if err != nil {
+			continue // the other checks report an unreadable manifest
+		}
+		for _, row := range manifest.Rows {
+			if full := root + "/" + row.Path; row.Kind == HeaderBeforeStamp && !onList[full] {
+				out = append(out, fmt.Sprintf("%s has the kind %s and is not on the closed list (%s): a golden with no stamp that was not in the tree when the stamp became the verb's was not recorded by the verb; record it with the verb", full, HeaderBeforeStamp, BeforeStampList))
+			}
+		}
+	}
+	if len(listed) != ceiling {
+		out = append(out, fmt.Sprintf("the closed list (%s) holds %d files and headerBeforeStampCeiling says %d: the list only shrinks, and the number goes down with it", BeforeStampList, len(listed), ceiling))
+	}
+	return out, nil
 }
 
 func problems(repo string, roots, dayOne []string, dayOneCount int) ([]string, error) {
@@ -592,7 +655,11 @@ func Set(repo string, files []string, change Change) ([]string, error) {
 		case golden && stamped:
 			kind = Header
 		case golden && change.DayOne:
-			// The first manifests: a golden recorded before the stamp existed.
+			// A golden recorded before the stamp existed: only the ones on the
+			// closed list; any other golden with no stamp was made by hand.
+			if err := onBeforeStampList(repo, file); err != nil {
+				return nil, err
+			}
 			kind = HeaderBeforeStamp
 		case golden:
 			return nil, fmt.Errorf("%s holds a golden header and no stamp of the record verb (recorded_by): the verb did not make it. A golden is recorded by the verb, never by hand (its test's recipe names the command)", file)
@@ -659,6 +726,19 @@ func Set(repo string, files []string, change Change) ([]string, error) {
 		}
 	}
 	return notes, nil
+}
+
+func onBeforeStampList(repo, file string) error {
+	listed, err := BeforeStamp(repo)
+	if err != nil {
+		return fmt.Errorf("%s holds a golden header and no stamp of the record verb, and the closed list of the goldens that may have none cannot be read: %w", file, err)
+	}
+	for _, entry := range listed {
+		if entry == file {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s holds a golden header and no stamp of the record verb (recorded_by), and it is not on the closed list of the goldens recorded before the stamp (%s): -day-one does not admit it. A golden is recorded by the verb, never by hand (its test's recipe names the command)", file, BeforeStampList)
 }
 
 func writeDayOne(repo string, listed map[string]bool) error {

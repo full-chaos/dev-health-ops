@@ -507,7 +507,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		liveVenues.Store(rootTestName(t), struct{}{})
 	}
 	if !frozen {
-		python := pyoracle.Resolve(t, options.Root)
+		python := pyoracle.ResolveLauncher(t, options.Root)
 		bin, err := interpreterDir(python)
 		if err != nil {
 			t.Fatalf("venue: %v", err)

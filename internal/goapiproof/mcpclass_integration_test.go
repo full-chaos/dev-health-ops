@@ -200,3 +200,55 @@ func TestMCPClassStatusShowsWhatTheClassProofRestsOn(t *testing.T) {
 		t.Fatalf("status = %+v, want the reference, the counts and the excluded shape named", r)
 	}
 }
+
+// CHAOS-7499: a class receipt for a stochastic root is the CITED mismatch; `enable`'s reader admits it only with a named class citation and
+// nothing outside it, and still refuses a plain mismatch (no citation), a blank citation, and a difference outside the citation.
+func TestClassReceiptOfAStochasticRootIsAdmittedOnlyAsTheCitedMismatch(t *testing.T) {
+	op, digest := mcpclass.Operation("capacityForecast"), mcpclass.DocumentDigest()
+	for name, tc := range map[string]struct {
+		terminal string
+		defects  []string
+		outside  int
+		want     bool
+	}{
+		"cited mismatch, nothing outside":     {TerminalStateMismatch, []string{testStochasticCitation}, 0, true},
+		"plain mismatch, no citation":         {TerminalStateMismatch, nil, 0, false},
+		"a difference outside the citation":   {TerminalStateMismatch, []string{testStochasticCitation}, 1, false},
+		"a stochastic root never reads match": {"proof_failed", []string{testStochasticCitation}, 0, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := startRegistryPostgres(t)
+			if _, err := Write(ctx, pool, Receipt{
+				SchemaDigest: testSchemaDigest, DocumentDigest: digest, SelectedOperation: op,
+				CandidateBuild: testCandidateBuild, RequestIdentity: "identity-1", Stage: EnablementProofStage,
+				TerminalState: tc.terminal, BaselineDefects: tc.defects, DifferencesOutsideBaselineDefect: tc.outside,
+				MeasurementRoute: RouteProof, BuildBinding: EdgeBuildPresent,
+				OrgID: "70d529e0", RecordedBy: "test", ReviewEvidence: "stochastic class receipt", ObservedAt: time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			found, err := OperationsWithEnablementProofByKind(ctx, pool, testSchemaDigest, testCandidateBuild, TargetModeCanary,
+				map[string]string{op: digest}, map[string]string{op: OperationKindMCPClass})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if found[op] != tc.want {
+				t.Fatalf("admitted=%v, want %v", found[op], tc.want)
+			}
+		})
+	}
+}
+
+// A blank class citation never reaches the table: the writer refuses it, so `enable` can never read a stochastic receipt that cites nothing.
+func TestClassReceiptWithABlankCitationIsRefusedAtTheWriter(t *testing.T) {
+	_, err := Write(context.Background(), startRegistryPostgres(t), Receipt{
+		SchemaDigest: testSchemaDigest, DocumentDigest: mcpclass.DocumentDigest(), SelectedOperation: mcpclass.Operation("capacityForecast"),
+		CandidateBuild: testCandidateBuild, RequestIdentity: "identity-1", Stage: EnablementProofStage, TerminalState: TerminalStateMismatch,
+		BaselineDefects: []string{"  "}, MeasurementRoute: RouteProof, BuildBinding: EdgeBuildPresent,
+		OrgID: "70d529e0", RecordedBy: "test", ReviewEvidence: "blank citation", ObservedAt: time.Now().UTC(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "empty citation") {
+		t.Fatalf("a blank citation was not refused: %v", err)
+	}
+}

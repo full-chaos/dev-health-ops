@@ -60,14 +60,18 @@ func Routes(deps Deps) []httpapi.Route {
 	})
 	health := http.HandlerFunc(deps.health)
 	workers := http.HandlerFunc(deps.workers)
+	handlers := map[string]http.Handler{"/health": health, "/ready": ready, "/health/workers": workers}
 	var routes []httpapi.Route
-	for _, probe := range []struct {
-		pattern string
-		handler http.Handler
-	}{{"/health", health}, {"/ready", ready}, {"/health/workers", workers}} {
+	// httpapi.ProbePaths is the one table: these routes register from it and
+	// the tracing exclusion reads it, so the two cannot drift.
+	for _, pattern := range httpapi.ProbePaths {
+		handler, ok := handlers[pattern]
+		if !ok {
+			panic("health: probe path " + pattern + " has no handler")
+		}
 		routes = append(routes,
-			httpapi.Route{Method: http.MethodGet, Pattern: probe.pattern, Handler: probe.handler, Allow: "GET, HEAD"},
-			httpapi.Route{Method: http.MethodHead, Pattern: probe.pattern, Handler: probe.handler})
+			httpapi.Route{Method: http.MethodGet, Pattern: pattern, Handler: handler, Allow: "GET, HEAD"},
+			httpapi.Route{Method: http.MethodHead, Pattern: pattern, Handler: handler})
 	}
 	return routes
 }

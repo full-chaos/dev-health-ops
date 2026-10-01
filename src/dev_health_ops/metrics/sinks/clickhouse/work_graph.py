@@ -23,14 +23,11 @@ from typing import TYPE_CHECKING, Any
 
 from dev_health_ops.metrics.schemas import (
     CapacityForecastRecord,
-    CommitMetricsRecord,
     EstimateCoverageMetricsDailyRecord,
     FileComplexitySnapshot,
     FileHotspotDaily,
     FileMetricsRecord,
-    ICLandscapeRollingRecord,
     RepoComplexityDaily,
-    RepoMetricsDailyRecord,
     ReviewEdgeDailyRecord,
     TeamMetricsDailyRecord,
     WorkGraphEdgeRecord,
@@ -69,73 +66,6 @@ logger = logging.getLogger(__name__)
 class WorkGraphMixin(_ClickHouseSinkBase):
     """Mixin for work graph, work items, git metrics, and forecast write methods."""
 
-    def write_repo_metrics(self, rows: Sequence[RepoMetricsDailyRecord]) -> None:
-        if not rows:
-            return
-        self._insert_rows(
-            "repo_metrics_daily",
-            [
-                "repo_id",
-                "day",
-                "commits_count",
-                "total_loc_touched",
-                "avg_commit_size_loc",
-                "large_commit_ratio",
-                "prs_merged",
-                "median_pr_cycle_hours",
-                "pr_cycle_p75_hours",
-                "pr_cycle_p90_hours",
-                "prs_with_first_review",
-                "pr_first_review_p50_hours",
-                "pr_first_review_p90_hours",
-                "pr_review_time_p50_hours",
-                "pr_pickup_time_p50_hours",
-                "large_pr_ratio",
-                "pr_rework_ratio",
-                "pr_size_p50_loc",
-                "pr_size_p90_loc",
-                "pr_comments_per_100_loc",
-                "pr_reviews_per_100_loc",
-                "rework_churn_ratio_30d",
-                "single_owner_file_ratio_30d",
-                "review_load_top_reviewer_ratio",
-                "bus_factor",
-                "code_ownership_gini",
-                "mttr_hours",
-                "change_failure_rate",
-                "computed_at",
-                "org_id",
-            ],
-            rows,
-        )
-
-    def write_ic_landscape_rolling(
-        self, rows: Sequence[ICLandscapeRollingRecord]
-    ) -> None:
-        if not rows:
-            return
-        self._insert_rows(
-            "ic_landscape_rolling_30d",
-            [
-                "repo_id",
-                "as_of_day",
-                "identity_id",
-                "team_id",
-                "map_name",
-                "x_raw",
-                "y_raw",
-                "x_norm",
-                "y_norm",
-                "churn_loc_30d",
-                "delivery_units_30d",
-                "cycle_p50_30d_hours",
-                "wip_max_30d",
-                "computed_at",
-                "org_id",
-            ],
-            rows,
-        )
-
     def write_file_metrics(self, rows: Sequence[FileMetricsRecord]) -> None:
         if not rows:
             return
@@ -149,25 +79,6 @@ class WorkGraphMixin(_ClickHouseSinkBase):
                 "contributors",
                 "commits_count",
                 "hotspot_score",
-                "computed_at",
-                "org_id",
-            ],
-            rows,
-        )
-
-    def write_commit_metrics(self, rows: Sequence[CommitMetricsRecord]) -> None:
-        if not rows:
-            return
-        self._insert_rows(
-            "commit_metrics",
-            [
-                "repo_id",
-                "commit_hash",
-                "day",
-                "author_email",
-                "total_loc",
-                "files_changed",
-                "size_bucket",
                 "computed_at",
                 "org_id",
             ],

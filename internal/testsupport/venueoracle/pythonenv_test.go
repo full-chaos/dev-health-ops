@@ -496,7 +496,7 @@ func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	names := []string{"VENUE_AMBIENT_ONLY", "VENUE_AMBIENT_SAME", "VENUE_SET_BY_TEST", "TRUSTED_PROXIES", "PYTHONHASHSEED", "TZ", "LANG", "HOME", "PATH", "TMPDIR", "JWT_SECRET_KEY", "ENVIRONMENT", "EXTRA_FOR_ONE_CALL", "OTEL_SDK_DISABLED", mark}
 	// The stand-in prints what it sees, and keeps it in a file beside itself for the launch that reads no output.
-	script := "#!/bin/sh\nout=\"\"\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; out=\"$out $n=$v\"; done\necho \"$out\" > \"$(dirname \"$0\")/last.out\"\necho \"$out\"\n"
+	script := "#!/bin/sh\nout=\"\"\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; out=\"$out $n=$v\"; done\necho \"$out\" > \"${0%/*}/last.out\"\necho \"$out\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "python3"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +584,7 @@ func standInPython(t *testing.T, label string) (dir, program string) {
 	t.Helper()
 	dir = t.TempDir()
 	program = filepath.Join(dir, "python3")
-	if err := os.WriteFile(program, []byte("#!/bin/sh\ntouch \"$(dirname \"$0\")/ran\"\necho "+label+"\n"), 0o755); err != nil {
+	if err := os.WriteFile(program, []byte("#!/bin/sh\n: > \"${0%/*}/ran\"\necho "+label+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return dir, program
@@ -916,5 +916,87 @@ func TestTheKeyVersionRatchetNamesEachBreach(t *testing.T) {
 	files["a/testdata/future.json"] = golden(3, key)
 	if _, problems := keyVersionProblems(t, tree(files), []legacyRow{old}); len(problems) != 1 || !strings.Contains(problems[0], "holds key version 3") {
 		t.Errorf("a golden of an unknown key version: %q", problems)
+	}
+}
+
+// TestAKeyGeneratedForTheRunIsKeyedByNameWhateverItsValue pins the one name the
+// GitHub App venue sets to a new RSA key in every run (the key is generated in
+// the test, internal/api/githubapp/venue_oracle_integration_test.go, never read
+// from the host). Needed: two runs with two different generated keys are ONE
+// Python environment, in the venue's key and in a call's key (the venue sets it
+// with t.Setenv). Safe: nothing derived from the key's value reaches the key
+// (equal for two values, so no digest of key material is stored), and the
+// same name supplied by anyone but the test (the harness, the host) is keyed
+// by value as every other setting.
+func TestAKeyGeneratedForTheRunIsKeyedByNameWhateverItsValue(t *testing.T) {
+	key := func(entries ...envEntry) string {
+		t.Helper()
+		out, err := pythonEnvKey(entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if key(fromTest("GITHUB_APP_PRIVATE_KEY=generated-one", "GITHUB_APP_ID=12345")...) != key(fromTest("GITHUB_APP_PRIVATE_KEY=generated-two", "GITHUB_APP_ID=12345")...) {
+		t.Fatal("a private key generated for the run changes the Python environment key")
+	}
+	if key(fromTest("GITHUB_APP_PRIVATE_KEY=generated-one", "GITHUB_APP_ID=12345")...) == key(fromTest("GITHUB_APP_PRIVATE_KEY=generated-one", "GITHUB_APP_ID=99999")...) {
+		t.Fatal("a changed GITHUB_APP_ID no longer changes the key: the whole environment became per-run")
+	}
+	if key(tagged([]string{"GITHUB_APP_PRIVATE_KEY=host-one"}, false)...) == key(tagged([]string{"GITHUB_APP_PRIVATE_KEY=host-two"}, false)...) {
+		t.Fatal("a key supplied by the harness or the host is keyed by name only: its value must be in the key")
+	}
+	recording, err := openGolden(GoldenSpec{Path: t.TempDir() + "/g.json", PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recording.bindPythonEnv(Options{JWTKey: "k"}); err != nil {
+		t.Fatal(err)
+	}
+	call := func() string {
+		t.Helper()
+		got, err := recording.callEnvKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	t.Setenv("GITHUB_APP_PRIVATE_KEY", "generated-one")
+	first := call()
+	t.Setenv("GITHUB_APP_PRIVATE_KEY", "generated-two")
+	if first == "" || call() != first {
+		t.Fatalf("the call key of a variable the test set to a generated key depends on the key (%q then %q)", first, call())
+	}
+}
+
+// TestThePerRunNamesAreExactlyTheClosedListWithTheirSide pins perRunPythonEnv
+// both ways: every name the list holds is named here with who supplies it, and
+// every name here is in the list. Adding a name to the list (or taking one out,
+// or moving it between the harness/host side and the test side) fails here until
+// this table says so too, in the same change as the oracle that needs it.
+func TestThePerRunNamesAreExactlyTheClosedListWithTheirSide(t *testing.T) {
+	want := map[string]bool{ // name -> supplied by the test
+		"CLICKHOUSE_URI": false, "HOME": false, "PATH": false, "POSTGRES_URI": false, "PYTHONPATH": false, "REDIS_URL": false, "TMPDIR": false,
+		"GITHUB_APP_PRIVATE_KEY": true, "REQUESTS_CA_BUNDLE": true, "TELEMETRY_ENDPOINT": true,
+		"VENUE_PAGERDUTY_API_BASE_OVERRIDE": true, "VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": true, "VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE": true,
+		"VENUE_PROVIDER_STUB_PORT": true, "VENUE_STRIPE_API_BASE": true,
+	}
+	for name, listed := range perRunPythonEnv {
+		byTest, ok := want[name]
+		if !ok {
+			t.Errorf("perRunPythonEnv lists %s, which this table does not: a per-run name needs the oracle that uses it named here", name)
+			continue
+		}
+		if listed.byTest != byTest {
+			t.Errorf("%s: the list says byTest=%v, this table says %v", name, listed.byTest, byTest)
+		}
+		if strings.TrimSpace(listed.reason) == "" {
+			t.Errorf("%s has no reason", name)
+		}
+	}
+	for name := range want {
+		if _, ok := perRunPythonEnv[name]; !ok {
+			t.Errorf("%s is in this table and not in perRunPythonEnv: the oracle that needs it would key a per-run value by value", name)
+		}
 	}
 }

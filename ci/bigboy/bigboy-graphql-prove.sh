@@ -5,9 +5,10 @@
 #   (default)  the Python edge: api's own /graphql (localhost:8000 from venue-prove, which
 #              shares api's network namespace), the prover's Python-reference mode;
 #   --go-edge  the ROUTED /graphql: the plane-split router's internal hostname, which sends
-#              /graphql to query-api once the pinned deploy values list it in
-#              ingress.queryApiPaths (CHAOS-6263), the prover's Go-edge mode. The prover
-#              refuses, by name, if a Python plane still answers there.
+#              /graphql to query-api once the pinned deploy values route it there (the
+#              allow-list entry names `service: query-api`, or ingress.queryApiPaths lists the
+#              path), the prover's Go-edge mode. The prover refuses, by name, if a Python
+#              plane still answers there.
 #
 # `dho goapi routing enable` refuses an operation that has no deployed_executed proof
 # receipt for the RUNNING build (prod's receipts do not count on bigboy). This runs the

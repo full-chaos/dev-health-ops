@@ -1,4 +1,5 @@
 # Every file under internal/jobs/report/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: d301eae555ce63d91f3a990c87a1285bcc6de2328188565ea3ae862ab37d6e0d (1 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 990b8eca64608c34bbedfba0a671c7ac09b7f0321a594e303a472e9ce7e94468	unclassified	weekly_health.golden.md
 b694928dc323dfd9efefa832a93adac0ce745f1e59863d57f92c73eaf795be17	python-recorded	weekly_health.metadata.golden.json

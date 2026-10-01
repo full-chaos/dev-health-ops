@@ -469,7 +469,7 @@ func adminGolden(t *testing.T, name, pin, test string) (*venueoracle.Golden, str
 func adminProduce(t *testing.T, golden *venueoracle.Golden, root, label string, input []byte, produce func() any) []byte {
 	t.Helper()
 	request := venueoracle.ProgramRequest(label, adminPythonProgram, input, adminPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		pinPythonRoot(t, root)
 		body, err := json.Marshal(produce())
 		if err != nil {

@@ -1,3 +1,4 @@
 # Every file under internal/apiservice/adminllmvenue/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	budget.json
+# header-before-stamp set: 287548309e0d05f2251bfa6854ab43b17c67d730063f4fbd6221de8b0eb2b2bd (1 files)
+073350a010982939846f117ae3d37ea3d5dcf6546fcf462854ec1b52946cd45c	header-before-stamp	budget.json

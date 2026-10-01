@@ -468,3 +468,107 @@ func TestPatchRecordsMatchTheVendoredFiles(t *testing.T) {
 		}
 	}
 }
+
+// executeCall is one c.Execute(ctx, <document constant>, vars, "<operationName>", ...) call of the vendored
+// graph package.
+type executeCall struct{ where, document, operationName string }
+
+// vendoredExecuteCalls reads every Execute call of the vendored graph package from its source.
+func vendoredExecuteCalls(t *testing.T) []executeCall {
+	t.Helper()
+	_, file, _, _ := runtime.Caller(0)
+	dir := filepath.Join(filepath.Dir(file), "..", "..", "third_party", "vendor", "atlassian", "atlassian", "graph")
+	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []executeCall
+	fset := token.NewFileSet()
+	for _, path := range paths {
+		parsed, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok || len(call.Args) < 4 {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || selector.Sel.Name != "Execute" && selector.Sel.Name != "ExecuteWithExtraHeaders" {
+				return true
+			}
+			var document string
+			switch arg := call.Args[1].(type) {
+			case *ast.SelectorExpr:
+				document = arg.Sel.Name
+			case *ast.Ident:
+				document = arg.Name
+			default:
+				return true
+			}
+			literal, ok := call.Args[3].(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				return true
+			}
+			name, err := strconv.Unquote(literal.Value)
+			if err != nil {
+				return true
+			}
+			calls = append(calls, executeCall{fmt.Sprintf("%s:%d", filepath.Base(path), fset.Position(call.Pos()).Line), document, name})
+			return true
+		})
+	}
+	if len(calls) < 8 {
+		t.Fatalf("found %d Execute calls: the discovery measures too little", len(calls))
+	}
+	return calls
+}
+
+// CHAOS-7132: the live gateway answered `Unknown operation named 'TeamworkGraph_teamUsers'` because the client
+// sent operationName "TeamworkGraph_teamUsers" with a document that declares `query TeamworkGraphTeamUsers`.
+// The class: ANY Execute call whose operationName is not a query name declared in the document it sends.
+func TestEveryVendoredExecuteCallNamesAnOperationItsDocumentDeclares(t *testing.T) {
+	documents := map[string]string{}
+	for key, text := range vendoredDocuments(t) {
+		documents[key[strings.Index(key, ":")+1:]] = text
+	}
+	for _, call := range vendoredExecuteCalls(t) {
+		text, ok := documents[call.document]
+		if !ok {
+			// jira_projects.go sends a local variable built from a template constant
+			// (gen.BuildJiraProjectsPageQuery / gen.JiraProjectOpsgenieTeamsPageQuery): the weaker check is that SOME
+			// vendored document declares the operation, and only for that file and variable.
+			if !strings.HasPrefix(call.where, "jira_projects.go:") || call.document != "query" {
+				t.Errorf("%s: Execute sends %s, which is not a document constant the test can read", call.where, call.document)
+				continue
+			}
+			declaredAnywhere := false
+			for _, other := range documents {
+				if strings.Contains(other, "query "+call.operationName+"(") {
+					declaredAnywhere = true
+				}
+			}
+			if !declaredAnywhere {
+				t.Errorf("%s: operationName %q is declared by no vendored document", call.where, call.operationName)
+			}
+			continue
+		}
+		parsed, err := gqlparser.ParseQuery(&gqlast.Source{Input: text})
+		if err != nil {
+			t.Errorf("%s: %s does not parse: %v", call.where, call.document, err)
+			continue
+		}
+		var declared []string
+		for _, operation := range parsed.Operations {
+			declared = append(declared, operation.Name)
+		}
+		found := false
+		for _, name := range declared {
+			found = found || name == call.operationName
+		}
+		if !found {
+			t.Errorf("%s: operationName %q is not declared by %s (declares %v): the gateway answers Unknown operation", call.where, call.operationName, call.document, declared)
+		}
+	}
+}

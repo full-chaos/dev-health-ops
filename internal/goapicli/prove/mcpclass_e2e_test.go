@@ -119,6 +119,10 @@ func TestRunWritesAClassMatchReceiptWhenTheDocRouteAgreesAndTheOperationIsBacked
 	if !strings.Contains(stdout, "mcp-class mcp:hotspots state=match") {
 		t.Fatalf("stdout lacks the class verdict line:\n%s", stdout)
 	}
+	// CHAOS-7500: the verb's own mode line names the doc-route proof, never "undetermined" on a completed run.
+	if !strings.Contains(stdout, "go-api-prove: edge_mode=doc_route (") || strings.Contains(stdout, "edge_mode=undetermined") {
+		t.Fatalf("a completed doc-route run must say edge_mode=doc_route and never undetermined:\n%s", stdout)
+	}
 }
 
 // The MCP pipeline and the document route disagreeing is a mismatch receipt, never a match.

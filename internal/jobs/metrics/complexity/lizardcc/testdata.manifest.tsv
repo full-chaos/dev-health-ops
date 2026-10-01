@@ -1,5 +1,6 @@
 # Every file under internal/jobs/metrics/complexity/lizardcc/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: 81fd69b637a4cc37256c6e5c9314d5110db346d2a2ce61451e978f496ee43a0b (10 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 6c36e3abe4217b1ac455f847d212fa7423b5509c60f500ca2c3767c48ba5aed3	unclassified	corpus/allman_style_and_macro_leak.cpp.txt
 7f46ec027d89f0bd626b86ee958191b99fb27fcb51908bcac37c68c53b405721	unclassified	corpus/basic_control_flow.cpp.txt
 3c91b01301dd4ade36f966b7a3442f93fc8c629c34701bf73a6efd2ebdaebc0a	unclassified	corpus/classes_and_namespaces.cpp.txt

@@ -30,7 +30,7 @@ import (
 // subscription header: each answers the same non-429 from the endpoint after
 // its limit check, on both planes.
 func TestPagerDutyWebhookLimiterVenueOracle(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("pager-duty-webhook-limiter-venue-oracle", t.Name(), "2dc809c6c4dd92ff37d25026f8a379538af6a037a7ba100b318952211b90ee0d"))
+	golden := venueoracle.OpenGolden(t, venueGolden("pager-duty-webhook-limiter-venue-oracle", t.Name(), "29159fd65bc328c5e4bfbc6eb048c516e1c07a2560014e3aeabc2beffc170858"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{

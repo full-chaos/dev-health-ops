@@ -245,7 +245,7 @@ func seededListItemField(t *testing.T, body, ingestionID, field string) string {
 // the body is compared as raw text (key order, separators, no trailing
 // newline), so it fails on any byte the two planes render differently.
 func TestExternalIngestVenueOracle(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("external-ingest-venue-oracle", t.Name(), "46f606e8247118c1fe17d2aa6c3ee56a2f7e3572b4aebbfe6ca971924ef4fb1e"))
+	golden := venueoracle.OpenGolden(t, venueGolden("external-ingest-venue-oracle", t.Name(), "dd63b98c18167b8ca4647284b17a75e16cb0e0905a3096dc512f723436faf031"))
 	ctx := context.Background()
 	root := webhookintakeRepoRoot(t)
 

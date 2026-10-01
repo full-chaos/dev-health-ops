@@ -375,7 +375,7 @@ func repoRequests(tokens map[string]string, ids map[string]string, otherOrgID st
 // real Python api and this Go api answer every request the same and send the
 // same requests to the GitLab stub.
 func TestVenueOracleCredentialRepos(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-credential-repos", t.Name(), "8f223f7ed8e6a75e759a51a9caf34b1c853439d4a3127e3c7f5cfa011a3b4f38"))
+	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-credential-repos", t.Name(), "94938908eb57f33d409b33a42dc7520b775e94c846712dd374e33da0bf9ef393"))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	stub := newRepoStub(t)

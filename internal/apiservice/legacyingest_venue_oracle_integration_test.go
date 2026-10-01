@@ -78,7 +78,7 @@ func idempotencyKeys(t *testing.T, ctx context.Context, uri string) string {
 // (decode, credentials, idempotency key, validation) is measured here on
 // the live app: a request refused with 422 has already claimed its key.
 func TestLegacyIngestVenueOracle(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("legacy-ingest-venue-oracle", t.Name(), "6ff6b5aac0cf398e811407f60e8db30b01b5af772d17023adf50eafea5bede3c"))
+	golden := venueoracle.OpenGolden(t, venueGolden("legacy-ingest-venue-oracle", t.Name(), "2930d49992d63d52bd913bd1ab2e92e92273709b367225cb31227bbebf8a7cd6"))
 	ctx := context.Background()
 	root := webhookintakeRepoRoot(t)
 	const (
@@ -213,7 +213,7 @@ func TestLegacyIngestVenueOracle(t *testing.T) {
 // own). A value the column cannot hold is Python's unhandled 500 and stores
 // nothing, on both planes.
 func TestLegacyIngestTelemetryVenueOracle(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("legacy-ingest-telemetry-venue-oracle", t.Name(), "8818e2818430912520b35b9e6f8138c452165238c7a108a32ecef48c7bf8e60d"))
+	golden := venueoracle.OpenGolden(t, venueGolden("legacy-ingest-telemetry-venue-oracle", t.Name(), "fbc762005c5f59983c039e44cbf6735462a2feeeaa5d2b91c6f52144afd5a4e7"))
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 	const (

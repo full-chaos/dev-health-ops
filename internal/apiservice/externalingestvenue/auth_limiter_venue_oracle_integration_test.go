@@ -60,7 +60,7 @@ func roundRobinBackends(t *testing.T, backends ...string) string {
 // 127.0.0.1). No request carries a bearer, so each is an auth failure that
 // never reaches the database.
 func TestExternalIngestAuthLimiterVenueOracle(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("external-ingest-auth-limiter-venue-oracle", t.Name(), "be5c6856f7ad6ae8454ddd631c2f8b27de3cf3cd2e99a98648d5b2129d0c725e"))
+	golden := venueoracle.OpenGolden(t, venueGolden("external-ingest-auth-limiter-venue-oracle", t.Name(), "44f214d36d43f0e72ff5ffc7ca926f4dd82c8e62d5ba4dd304483dbdcbfc47eb"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{

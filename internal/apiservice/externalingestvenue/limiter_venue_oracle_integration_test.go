@@ -34,7 +34,7 @@ import (
 // is 127.0.0.1) so the per-IP auth-attempt throttle, a different limiter, never
 // interferes with the route limiter under test.
 func TestExternalIngestLimiterVenueOracle(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("external-ingest-limiter-venue-oracle", t.Name(), "369134b1d9421e28472b548a1515af517bcea3860174ed63153bfc0b2411743d"))
+	golden := venueoracle.OpenGolden(t, venueGolden("external-ingest-limiter-venue-oracle", t.Name(), "6c649c2f430612c0af99d26844e68095a0e8942ccd2223fe9d3817c0de22c735"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	seed := newSeed()

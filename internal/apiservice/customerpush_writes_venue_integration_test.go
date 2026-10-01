@@ -255,7 +255,7 @@ func customerPushNormalizer(seeded map[string]bool, start time.Time) func(string
 // values blanked, and on each plane every minted token hashes to its
 // stored hash and prefix.
 func TestVenueOracleCustomerPushWrites(t *testing.T) {
-	spec := venueGolden("venue-oracle-customer-push-writes", t.Name(), "c157fb41b79b696055102e5d601e1edba873f7814d8843f4697093ca927d3390")
+	spec := venueGolden("venue-oracle-customer-push-writes", t.Name(), "1be456e9a72af2b7445470286b75cd3f7c636882c34a449bfd36e673b6802f43")
 	// Recording, the Python plane's minted tokens are checked against its own
 	// database, so the scrub keeps each raw body it sees while the Python
 	// answers are fetched; the golden itself holds placeholders only.

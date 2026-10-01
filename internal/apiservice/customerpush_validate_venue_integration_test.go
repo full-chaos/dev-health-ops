@@ -93,7 +93,7 @@ func sixtyExtraKeys() string {
 // route's differential: status and body bytes and headers, on every
 // envelope, record and limit outcome.
 func TestVenueOracleCustomerPushValidate(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-customer-push-validate", t.Name(), "12278f65caa92670eb4cdaf530a724b128cf3d54d0a3d06c365b1218b557f7c7"))
+	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-customer-push-validate", t.Name(), "b78e0de2caae3e8f9201c8a89694dd8ac9ae7ca62e8406e70ecc76365befdf2e"))
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	t.Setenv("EXTERNAL_INGEST_MAX_RECORDS", "3")

@@ -349,7 +349,7 @@ func githubRepoRequests(tokens map[string]string, ids map[string]string) []venue
 // differential: the real Python api and this Go api answer every request the
 // same and send the same requests to the GitHub stub.
 func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-credential-git-hub-repos", t.Name(), "d037e4f9488702707e1b80dae5ac5f94063ae7241c88e4feb8178a42bed82e86"))
+	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-credential-git-hub-repos", t.Name(), "ee92b71ba4ed644d5b2b1cfc3ed05868fc954de5f9b2bcdaa6e866840b52884e"))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	stub := newGitHubRepoStub(t)

@@ -174,7 +174,7 @@ func crossPlaneIdempotencyKey(body, original, renamed string) string {
 //   - a non-ASCII string in a payload value
 func TestExternalIngestPayloadHashVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, venueGolden("external-ingest-payload-hash", t.Name(), "d7cafe916b85e527a3f37ee9852dc9e9712239917ff8fd503e93c93b2aea1b95"))
+	golden := venueoracle.OpenGolden(t, venueGolden("external-ingest-payload-hash", t.Name(), "f40780b89d4ab0e4e52e9b83aea83123428da02ad78349ba88e689d80a8220b5"))
 	root := golden.PythonRoot(t, webhookintakeRepoRoot(t))
 
 	seed := newPayloadHashVenueSeed()

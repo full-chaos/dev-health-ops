@@ -88,7 +88,7 @@ func blankVenueEventID(_ venueoracle.Request, body string) string {
 // PagerDuty's own venue oracle (the state machine, replay claim, and
 // per-binding decryption) is TestWebhookIntakeVenueOraclePagerDuty, below.
 func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("webhook-intake-venue-oracle-git-hub-git-lab-jira-health", t.Name(), "794a764d4fa2610a2f860b1bb5513eb8a8e365cd0fe78d33d841255b53dd742c"))
+	golden := venueoracle.OpenGolden(t, venueGolden("webhook-intake-venue-oracle-git-hub-git-lab-jira-health", t.Name(), "ec49c39a9229f9c9d905a1b33f62af600eb1cf2be774f90c90ca693f081dba99"))
 	ctx := context.Background()
 	root := webhookintakeRepoRoot(t)
 
@@ -454,7 +454,7 @@ func replayKeys(t *testing.T, ctx context.Context, uri, pattern string) string {
 // cross-language artifact, proving the Go DECRYPT path against Python's
 // real ENCRYPT path, not a Go-side round-trip.
 func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("webhook-intake-venue-oracle-pager-duty", t.Name(), "6b243f31f31d62fd661d23b0a758239c593ba062bf30a69959fc683e785b9bc9"))
+	golden := venueoracle.OpenGolden(t, venueGolden("webhook-intake-venue-oracle-pager-duty", t.Name(), "be8e78432c3e9caf70feed7b7075d6894d58af9974feb1ab275758508fbe2b92"))
 	ctx := context.Background()
 	root := webhookintakeRepoRoot(t)
 

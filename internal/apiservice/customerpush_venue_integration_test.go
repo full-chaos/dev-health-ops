@@ -197,7 +197,7 @@ func customerPushRequests(f customerPushFixture, tokens map[string]string) []ven
 // routes' differential: the real Python api and dho api answer every
 // request byte for byte, on two copies of one seeded database.
 func TestVenueOracleCustomerPushReads(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-customer-push-reads", t.Name(), "b516d1e350a9cd1f3e2853d8929c64fe13dd37a8ef351d7bba8adf67c5e7ebd7"))
+	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-customer-push-reads", t.Name(), "00df525e40311b58f00693f3eb6650875a966f8ef6173d629883f75b8460faff"))
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	t.Setenv("EXTERNAL_INGEST_MAX_RECORDS", " 2_500 ")

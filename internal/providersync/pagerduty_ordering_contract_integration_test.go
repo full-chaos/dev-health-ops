@@ -56,8 +56,10 @@ func TestEveryPagerDutySinkWritesAndReadsBackInBothTableShapes(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = conn.Close() })
 
-			// Contract 1 is unsupported (D3635, CHAOS-7421): the one resolver refuses
-			// "1" whichever table is found, and no sink writes under it.
+			// DIVERGENCE FROM THE PYTHON SINKS (D3635, CHAOS-7421): Python read unset and
+			// "1" as contract 1 and wrote the legacy shape; the Go sinks read unset as
+			// contract 2 and the one resolver refuses "1" whichever table is found, so
+			// no sink writes under it. The cases below still send the TABLE's shape.
 			setProbeEnv(t, "1")
 			for _, sinkCase := range pagerDutyContractSinkCases(t, "org-"+tableShape.name+"-env1") {
 				if _, err := (*operationalTableContracts)(nil).resolve(ctx, conn, sinkCase.table); !errors.Is(err, ErrInvalidConfiguration) {

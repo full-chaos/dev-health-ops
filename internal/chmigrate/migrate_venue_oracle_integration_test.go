@@ -42,9 +42,15 @@ import (
 //   - the output format: Python prints a text list and a log line, dho prints
 //     one JSON document; the applied and pending versions are read out of both;
 //   - dho refuses what Python would apply on top: a database below the head
-//     (some baseline versions unrecorded), a database holding objects the
-//     baseline does not create and no versions (foreign) and an ordering
-//     contract other than 2 -- all before writing anything;
+//     (some baseline versions unrecorded) and a database holding objects the
+//     baseline does not create and no versions (foreign) -- before writing
+//     anything;
+//   - the ordering contract (D3635, CHAOS-7421): Python reads unset and "1" as
+//     contract 1 and applies the chain without the 067 rebuild; dho reads unset
+//     as contract 2 and REFUSES "1" (and "", "3", "x") as unsupported. Every
+//     frozen scenario below passes "2" to BOTH planes, so none of the compared
+//     cases depends on this divergence; the divergence itself is pinned only in
+//     the dho-only block marked DIVERGENCE FROM PYTHON;
 //   - `status --check` on a database whose versions are all recorded but
 //     lacks a baseline object: dho reports schema_mismatch and exits 1
 //     (it reads the schema), Python reports nothing pending and exits 0.
@@ -553,9 +559,11 @@ func runMigrateScenarios(t *testing.T, live bool) *migrateEnv {
 		t.Errorf("python over a foreign database: %+v, want exit 0 with the unrelated table kept", pyForeign)
 	}
 
-	// ---- an ordering contract other than 2: dho refuses before connecting ----
-	// Contract 1 is unsupported (D3635) and unset means contract 2 (CHAOS-7421,
-	// the one resolver): "1", "3" and "x" are refused with the resolver's text.
+	// ---- DIVERGENCE FROM PYTHON (D3635, CHAOS-7421): the ordering contract ----
+	// Not compared with the frozen Python answer: Python reads unset and "1" as
+	// contract 1 and applies the chain; dho reads unset as contract 2 and refuses
+	// "1", "3" and "x" before connecting, with the one resolver's text. Contract 1
+	// is unsupported (D3635).
 	for _, contract := range []string{"1", "3", "x"} {
 		code, stdout, stderr := e.goVerb(t, e.newDatabase(t), "upgrade", contract)
 		if code != cli.ExitFailure || stdout != "" || !strings.Contains(stderr, `"code":"configuration_error"`) || !strings.Contains(stderr, "only contract 2 is supported") {

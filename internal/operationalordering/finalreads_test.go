@@ -53,8 +53,6 @@ var classifiedDynamicFinalReads = map[string]struct {
 		"OPTIMIZE TABLE ... FINAL, a merge request, not a read"},
 	"storedversion/storedversion.go": {1,
 		"Apply reads the tables of the stored-version spec set; the operational writers are explicitly out of that set (storedversion/writers_test.go outOfScopeWriters)"},
-	"providersync/operational_ordering_contract.go": {2,
-		"the legacy branches of latestQuery and activeQuery, chosen only when the table's own columns classify it as contract 1 (resolve reads the table); contract 2 delegates to operationalordering"},
 }
 
 // TestNoUnclassifiedFinalReadOfAnOperationalTable walks every non-test Go file

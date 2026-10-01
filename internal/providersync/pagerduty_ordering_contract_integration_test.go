@@ -4,6 +4,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -55,12 +56,41 @@ func TestEveryPagerDutySinkWritesAndReadsBackInBothTableShapes(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = conn.Close() })
 
-			for _, env := range []string{"<unset>", "1", "2"} {
+			// DIVERGENCE FROM THE PYTHON SINKS (D3635, CHAOS-7421): Python read unset and
+			// "1" as contract 1 and wrote the legacy shape; the Go sinks read unset as
+			// contract 2 and the one resolver refuses "1" whichever table is found, so
+			// no sink writes under it. The cases below still send the TABLE's shape.
+			setProbeEnv(t, "1")
+			for _, sinkCase := range pagerDutyContractSinkCases(t, "org-"+tableShape.name+"-env1") {
+				if _, err := (*operationalTableContracts)(nil).resolve(ctx, conn, sinkCase.table); !errors.Is(err, ErrInvalidConfiguration) {
+					t.Fatalf("env=1 sink=%s: err=%v, want invalid configuration", sinkCase.name, err)
+				}
+			}
+			for _, env := range []string{"<unset>", "2"} {
 				setProbeEnv(t, env)
 				orgID := "org-" + tableShape.name + "-env" + strings.Trim(env, "<>")
 				for _, sinkCase := range pagerDutyContractSinkCases(t, orgID) {
 					label := "env=" + env + " sink=" + sinkCase.name
 					contract, err := (*operationalTableContracts)(nil).resolve(ctx, conn, sinkCase.table)
+					if tableShape.contract == operationalLegacyContract {
+						// DIVERGENCE FROM THE PYTHON SINKS (D3635, CHAOS-7421): a contract-1 table is
+						// refused by name, for every sink, and nothing is written.
+						if !errors.Is(err, ErrOperationalTableContractLegacy) {
+							t.Fatalf("%s: table %s err=%v, want the legacy-table refusal", label, sinkCase.table, err)
+						}
+						sink := sinkCase.build(conn)
+						if err := sink.WriteEffect(ctx, sinkCase.claim, sinkCase.effect); !errors.Is(err, ErrOperationalTableContractLegacy) {
+							t.Fatalf("%s: write err=%v, want the legacy-table refusal", label, err)
+						}
+						if _, err := sink.InspectEffect(ctx, sinkCase.claim, sinkCase.effect); !errors.Is(err, ErrOperationalTableContractLegacy) {
+							t.Fatalf("%s: inspect err=%v, want the legacy-table refusal", label, err)
+						}
+						var stored uint64
+						if err := conn.QueryRow(ctx, "SELECT count() FROM "+sinkCase.table+" WHERE org_id = ?", orgID).Scan(&stored); err != nil || stored != 0 {
+							t.Fatalf("%s: the refused sink left %d rows (err=%v)", label, stored, err)
+						}
+						continue
+					}
 					if err != nil || contract != tableShape.contract {
 						t.Fatalf("%s: table %s contract=%d err=%v want %d", label, sinkCase.table, contract, err, tableShape.contract)
 					}
@@ -241,12 +271,13 @@ func TestPagerDutyRacedShapeIsRefusedAndTheNextCallSucceeds(t *testing.T) {
 				}
 				return rows
 			}
-			// The raced readback is refused by the executing server: a
-			// contract-2 SELECT on a contract-1 table names unknown columns, and
-			// a legacy SELECT on a contract-2 table trips the shape guard.
+			// The raced readback is refused: a contract-2 SELECT on a contract-1 table
+			// names unknown columns (refused by the server); a call that read the
+			// legacy shape is refused by name before any statement (the legacy SELECT
+			// and its server-side shape guard are gone, CHAOS-7421).
 			wantRefusal := "source_revision"
 			if direction.stale == probeTableLegacy {
-				wantRefusal = "legacy readback refused"
+				wantRefusal = "unsupported contract-1 shape"
 			}
 			racedReadback := func(when string) {
 				inspection, err := raced().InspectEffect(ctx, sinkCase.claim, sinkCase.effect)
@@ -264,6 +295,14 @@ func TestPagerDutyRacedShapeIsRefusedAndTheNextCallSucceeds(t *testing.T) {
 				t.Fatalf("%s: raced write stored %d rows (err=%v)", label, rows, err)
 			}
 			t.Logf("%s: raced write refused, 0 rows: %v", label, err)
+			if direction.table == probeTableLegacy {
+				// A contract-1 table is refused by name even when the call is honest
+				// (CHAOS-7421): nothing is written, and the racing is moot.
+				if err := honest.WriteEffect(ctx, sinkCase.claim, sinkCase.effect); !errors.Is(err, ErrOperationalTableContractLegacy) || stored() != 0 {
+					t.Fatalf("%s: honest write on a legacy table: err=%v rows=%d, want the refusal and 0 rows", label, err, stored())
+				}
+				continue
+			}
 			if err := honest.WriteEffect(ctx, sinkCase.claim, sinkCase.effect); err != nil {
 				t.Fatalf("%s: write after the raced one: %v", label, err)
 			}

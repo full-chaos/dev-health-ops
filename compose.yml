@@ -580,6 +580,10 @@ services:
         - *settings-encryption-key
       SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
       PYTHONPATH: /app/src
+      # CHAOS-7421: the Python api and metrics-api read the ordering contract
+      # through the same variable (unset is contract 1 THERE); contract 2 is the
+      # only supported one, so they carry it like every Go service.
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
       # GraphQL analytics endpoint available at /graphql
       GRAPHQL_QUERY_TIMEOUT: "30"
       # CHAOS-2065: runtime DB traffic flows through PgBouncer (transaction mode).

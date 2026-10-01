@@ -27,13 +27,16 @@
 // Upgrade decides from the database's own state:
 //   - no alembic_version table and no object (relation, function or type)
 //     in any non-system schema: apply the baseline,
-//     schema then data, in ONE transaction, so an interrupted run leaves
-//     nothing behind;
+//     schema then data, and then every .sql revision after it (sql/), all in ONE
+//     transaction with the alembic_version updates that record them, so an
+//     interrupted or failed run leaves nothing behind (as Python's Alembic walk:
+//     CHAOS-7291);
 //   - alembic_version holds every baseline head and no later revision, but
 //     tables the baseline creates are absent: schema_mismatch, refused;
 //   - alembic_version holds every baseline head (or a chain revision that
-//     continues it): apply the .sql revisions after the one it holds (sql/), each
-//     in its own transaction together with the alembic_version update;
+//     continues it): apply the .sql revisions after the one it holds (sql/), ALL in
+//     one transaction together with the alembic_version updates (a failing revision
+//     rolls the whole walk back to the revision the run started from);
 //   - alembic_version records a revision this build does not know (its embedded
 //     Alembic walk, its baseline heads and its chain are the ones it knows), however
 //     many baseline heads it also records: refused as ahead of the build, naming the

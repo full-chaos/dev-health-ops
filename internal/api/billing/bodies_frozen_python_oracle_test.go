@@ -128,6 +128,21 @@ func bodiesCorpus() [][2]string {
 			prices[random.Intn(3)] + `,` + prices[random.Intn(3)] + `],"bundle_ids":["b1"],"display_order":"2","is_active":"on"}`
 		corpus = append(corpus, [2]string{"create", body}, [2]string{"update", body})
 	}
+	// Valid bodies that leave optional fields out, so every default of the
+	// models is compared: the random bodies seldom make a valid plan.
+	for _, body := range []string{
+		`{"key":"team","name":"Team","tier":"team"}`,
+		`{"key":"team","name":"Team","tier":"team","is_active":false}`,
+		`{"key":"team","name":"Team","tier":"team","display_order":7}`,
+		`{"key":"team","name":"Team","tier":"team","metadata":{"a":1}}`,
+		`{"key":"team","name":"Team","tier":"team","prices":[{"interval":"monthly","amount":100}]}`,
+		`{"key":"team","name":"Team","tier":"team","bundle_ids":["b1"]}`,
+		`{"key":"team","name":"Team","tier":"team","description":"d","stripe_product_id":"prod_x"}`,
+	} {
+		corpus = append(corpus, [2]string{"create", body}, [2]string{"update", body})
+	}
+	corpus = append(corpus, [2]string{"checkout", `{"tier":"team"}`}, [2]string{"checkout", `{"tier":"team","success_url":"/ok","cancel_url":"/no"}`},
+		[2]string{"change", `{"price_id":"price_x"}`}, [2]string{"cancel", `{"immediately":true}`})
 	return corpus
 }
 

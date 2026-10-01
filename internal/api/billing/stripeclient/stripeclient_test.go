@@ -66,7 +66,7 @@ var stripeGoldens = programoracle.Set{
 	// The goldenrecord verb writes each digest when it promotes a recording; a
 	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
-		"stripe-api-version.golden.json": "972804d049ecfd6b933f6f49e7d577b03343ff3f2c592594e13c1d7bcb3a5d7b",
+		"stripe-api-version.golden.json": "8db487417fac896f5c18f195e1ee39772a47ad195ef4c267faf40e4047de4719",
 	},
 }
 

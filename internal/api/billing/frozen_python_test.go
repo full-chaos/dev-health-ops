@@ -22,9 +22,9 @@ var billingGoldens = programoracle.Set{
 	// The goldenrecord verb writes each digest when it promotes a recording; a
 	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
-		"billing-bodies.golden.json":   "c6a03d9448f06fdce285147bc26ec143fa81eb854420cddce136e740951f870b",
-		"billing-helpers.golden.json":  "ae573750cabe34d47e98268bc379b56854c106c72baabb509e7a548e1793c8c7",
-		"stripe-signature.golden.json": "8d3bfdd91583c3374e8a6a4e45272272427a789fe6cbd581f897e10aea68daf6",
+		"billing-bodies.golden.json":   "06792c4c527015100942788b97b8b158af574c2c373385269151c661f57b83d4",
+		"billing-helpers.golden.json":  "cfacd91e3e9112b20ed4e94d5fb58c9a1b0b11609831e52b00017d29d1a52ea6",
+		"stripe-signature.golden.json": "f541fcbfb12cae5491e5a7ef03bbad6dba15cb44c09b874a2e115389003df38e",
 	},
 }
 

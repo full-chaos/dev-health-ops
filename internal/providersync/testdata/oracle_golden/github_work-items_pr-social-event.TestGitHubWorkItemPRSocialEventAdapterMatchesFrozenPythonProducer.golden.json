@@ -13,7 +13,7 @@
       "body_sha256": "aff5d66440e46d1997cb8f11e6cdbc2023d3b27d4ce7b1bf66d83037856e11d4",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"merged\", \"row\": {\"created_at\": {\"t\": \"datetime\", \"v\": \"2026-08-01T09:00:00Z\"}, \"event\": {\"t\": \"str\", \"v\": \"merged\"}, \"actor\": {\"login\": {\"t\": \"str\", \"v\": \"merger\"}, \"email\": null, \"name\": null}, \"label\": null}}, {\"id\": \"closed\", \"row\": {\"created_at\": {\"t\": \"datetime\", \"v\": \"2026-08-02T08:00:00.654321Z\"}, \"event\": {\"t\": \"str\", \"v\": \"closed\"}, \"actor\": {\"login\": {\"t\": \"str\", \"v\": \"closer\"}, \"email\": null, \"name\": null}, \"label\": null}}, {\"id\": \"reopened\", \"row\": {\"created_at\": {\"t\": \"datetime\", \"v\": \"2026-08-03T08:00:00Z\"}, \"event\": {\"t\": \"str\", \"v\": \"reopened\"}, \"actor\": {\"login\": {\"t\": \"str\", \"v\": \"reopener\"}, \"email\": null, \"name\": null}, \"label\": null}}], \"excluded_fields\": {}}\n"
     }
   ]

@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -45,7 +46,8 @@ func TestMain(m *testing.M) {
 	if _, set := os.LookupEnv("ENVIRONMENT"); !set {
 		_ = os.Setenv("ENVIRONMENT", "test")
 	}
-	os.Exit(m.Run())
+	// RunTests is m.Run, and fails the run when a test that ran did not use its golden.
+	os.Exit(venueoracle.RunTests(m))
 }
 
 func TestWriteErrorRendersEveryCodeInThePythonShape(t *testing.T) {

@@ -18,6 +18,7 @@
 package externalingest
 
 import (
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
 	"net/http"
 	"os"
@@ -93,7 +94,7 @@ func (d Deps) getenv() func(string) (string, bool) {
 	if d.Getenv != nil {
 		return d.Getenv
 	}
-	return os.LookupEnv
+	return envsecrets.ProcessLookup
 }
 
 func (d Deps) now() time.Time {

@@ -60,7 +60,7 @@ func RunBillingReconcile(ctx context.Context, env cli.Env) int {
 	if code != 0 {
 		return code
 	}
-	key, _, err := secrets.Resolve("STRIPE_SECRET_KEY", env.Lookup)
+	key, _, err := secrets.ResolveSecret("STRIPE_SECRET_KEY", env.Lookup)
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "configuration error: %v\n", err)
 		return cli.ExitFailure

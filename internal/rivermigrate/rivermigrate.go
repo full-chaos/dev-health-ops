@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"log/slog"
 	"os"
@@ -71,7 +72,7 @@ func Command() cli.Command {
 
 // Main is cmd/dev-health-worker-migrate's whole main.
 func Main() {
-	os.Exit(Execute(context.Background(), "dev-health-worker-migrate", os.Args[1:], os.LookupEnv, os.Stdout, os.Stderr))
+	os.Exit(Execute(context.Background(), "dev-health-worker-migrate", os.Args[1:], envsecrets.ProcessLookup, os.Stdout, os.Stderr))
 }
 
 // noMigrationDatabaseMessage is the refusal the chart hook's shell wrapper

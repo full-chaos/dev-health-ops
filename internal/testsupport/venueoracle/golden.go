@@ -112,6 +112,9 @@ type Golden struct {
 	// venue was built for this golden.
 	pythonEnv      string
 	pythonEnvBound bool
+	// use is what RunTests reads after the package's tests: this golden was
+	// opened by a test, and whether it reached Finish.
+	use *goldenUse
 	// rowsUsed records which frozen row comparisons the test asked for: a
 	// snapshot nothing consumed is a comparison that no longer happens.
 	rowsUsed    map[string]bool
@@ -295,6 +298,9 @@ var buildPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 func OpenGolden(t *testing.T, spec GoldenSpec) *Golden {
 	t.Helper()
 	recording := os.Getenv(goldenUpdateEnv) == "1"
+	// Noted before anything can refuse the golden: RunTests asks, after the
+	// package's tests, which goldens their tests opened and finished.
+	use := noteOpened(t, spec.Path)
 	if !recording && os.Getenv(goldenCandidateEnv) == "1" {
 		// The record verb's replay of the candidate: the pinned digest does not
 		// exist yet, the candidate's own is the one to check.
@@ -310,6 +316,7 @@ func OpenGolden(t *testing.T, spec GoldenSpec) *Golden {
 	if err != nil {
 		t.Fatal(err)
 	}
+	g.use = use
 	return g
 }
 
@@ -1035,6 +1042,7 @@ func (g *Golden) Finish(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Logf("recorded candidate %s%s (sha256 %s): the record verb promotes it after a fresh-process replay passes (go run ./internal/testsupport/venueoracle/goldenrecord)", g.spec.Path, GoldenCandidateSuffix, digest)
+		g.use.finish()
 		return
 	}
 	if err := g.unusedAnswers(); err != nil {
@@ -1047,6 +1055,7 @@ func (g *Golden) Finish(t *testing.T) {
 		t.Fatal(err)
 	}
 	WriteGoOnlyProof(t, "Go against the Python plane's answers executed on build "+g.spec.PythonBuild+" (frozen golden "+filepath.Base(g.spec.Path)+")")
+	g.use.finish()
 }
 
 // WithPythonEnvKey is the golden file raw with key as the key of its venue's

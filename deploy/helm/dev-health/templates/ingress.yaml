@@ -103,6 +103,8 @@ spec:
                 name: {{ include "dev-health.fullname" $ }}-go-api
                 port:
                   number: {{ $.Values.goApi.port }}
+                {{- else if eq .service "query-api-mcp" }}
+                {{- fail (printf "ingress.hosts %q routes to query-api-mcp: the MCP caller-class listener trusts the internal identity headers and is never public (CHAOS-7085)" $host.host) }}
                 {{- else if eq .service "go-api-internal" }}
                 {{- fail (printf "ingress.hosts %q routes to go-api-internal: the internal listener is unauthenticated by design and never public (CHAOS-7181)" $host.host) }}
                 {{- else if eq .service "web" }}

@@ -49,6 +49,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -474,6 +475,10 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		t.Fatal("venue: a GoOnly venue has no golden: a golden holds the Python plane's answers, which a Go-only test never compares")
 	}
 	v := &Venue{Root: options.Root, Tokens: map[string]string{}, Roles: map[string]string{}, frozen: frozen}
+	if !options.GoOnly && options.Golden == nil {
+		liveVenues.Store(t, struct{}{})
+		t.Cleanup(func() { liveVenues.Delete(t) })
+	}
 	if !frozen {
 		python := pyoracle.Resolve(t, options.Root)
 		bin, err := interpreterDir(python)
@@ -665,6 +670,20 @@ func (v *Venue) AdminURI(t *testing.T, database string) string {
 // Go copy.
 func (v *Venue) GoAPIDatabaseURI(t *testing.T) string {
 	return withDatabase(t, v.postgresURI, v.GoDB, v.Roles["api"], APIPassword)
+}
+
+// liveVenues holds each test that started a live venue: one built with
+// Python, with no Options.GoOnly and no Options.Golden. A Go-only proof or a
+// frozen golden's answers in such a test would hide that the test still needs
+// Python. A venue a parent test started is not seen from its subtests.
+var liveVenues sync.Map // *testing.T -> struct{}
+
+// liveVenueErr is an error when t started a live venue.
+func liveVenueErr(t *testing.T, what string) error {
+	if _, live := liveVenues.Load(t); live {
+		return fmt.Errorf("%s in a test whose venue was built with Python (Start without Options.GoOnly or Options.Golden): the test still needs Python; pass Options.GoOnly for a Go-only test, or the golden for a frozen one", what)
+	}
+	return nil
 }
 
 // AdminClickHouseURI is the ClickHouse server's admin connection (native
@@ -1269,6 +1288,9 @@ func WriteGoOnlyProof(t *testing.T, reason string) {
 	t.Helper()
 	if strings.TrimSpace(reason) == "" || strings.ContainsAny(reason, "\n\r") {
 		t.Fatal("WriteGoOnlyProof needs a one-line reason naming what the test measures instead of a Python response")
+	}
+	if err := liveVenueErr(t, "a Go-only proof"); err != nil {
+		t.Fatal(err)
 	}
 	writeProofText(t, "go-only: "+reason)
 }

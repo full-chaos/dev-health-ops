@@ -2,6 +2,8 @@ package venueoracle
 
 import (
 	"encoding/json"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -189,13 +191,37 @@ func TestGoMintedTokensKeyTheCallerThePythonTokenKeyed(t *testing.T) {
 
 func TestAFrozenGoldenRefusesAVenueBuiltWithPython(t *testing.T) {
 	golden := &Golden{spec: GoldenSpec{Path: "g.json"}}
-	if err := golden.frozenVenueErr(&Venue{}); err == nil || !strings.Contains(err.Error(), "Options.Golden") {
+	if err := golden.frozenVenueErr(t, &Venue{}); err == nil || !strings.Contains(err.Error(), "Options.Golden") {
 		t.Fatalf("a Python-built venue was accepted: %v", err)
 	}
-	if err := golden.frozenVenueErr(frozenVenue()); err != nil {
+	if err := golden.frozenVenueErr(t, frozenVenue()); err != nil {
 		t.Fatalf("a frozen venue was refused: %v", err)
 	}
-	if err := golden.frozenVenueErr(nil); err != nil {
+	if err := golden.frozenVenueErr(t, nil); err != nil {
 		t.Fatalf("no venue was refused: %v", err)
+	}
+	// No venue named, but the test started a live one: refused.
+	liveVenues.Store(t, struct{}{})
+	t.Cleanup(func() { liveVenues.Delete(t) })
+	if err := golden.frozenVenueErr(t, nil); err == nil || !strings.Contains(err.Error(), "built with Python") {
+		t.Fatalf("frozen answers in a test with a live venue were accepted: %v", err)
+	}
+}
+
+// A Go-only proof in a test that started a live venue (Python-built, no
+// GoOnly, no golden) fails the test before the proof is written.
+func TestAGoOnlyProofIsRefusedInATestWithALiveVenue(t *testing.T) {
+	if os.Getenv("VENUEORACLE_GO_ONLY_LIVE_CHILD") == "1" {
+		liveVenues.Store(t, struct{}{})
+		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
+		WriteGoOnlyProof(t, "measures nothing")
+		t.Log("PROOF WRITTEN")
+		return
+	}
+	child := exec.Command(os.Args[0], "-test.run=^TestAGoOnlyProofIsRefusedInATestWithALiveVenue$", "-test.v")
+	child.Env = append(os.Environ(), "VENUEORACLE_GO_ONLY_LIVE_CHILD=1")
+	output, err := child.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "built with Python") || strings.Contains(string(output), "PROOF WRITTEN") {
+		t.Fatalf("a Go-only proof was written in a test with a live venue (err %v):\n%s", err, output)
 	}
 }

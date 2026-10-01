@@ -144,3 +144,17 @@ func TestNoSecretValueIsWrittenInTheFile(t *testing.T) {
 		t.Fatal("the override holds a secret-shaped value")
 	}
 }
+
+func TestTheListenerPortIsThePortTraefikRoutesTo(t *testing.T) {
+	goAPI := load(t).Services["go-api"]
+	var flagPort string
+	for _, argument := range goAPI.Command {
+		if value, ok := strings.CutPrefix(argument, "--api-billing-edge-addr=:"); ok {
+			flagPort = value
+		}
+	}
+	routed := goAPI.Labels["traefik.http.services.billing-go.loadbalancer.server.port"]
+	if flagPort == "" || flagPort != routed || flagPort != "8010" {
+		t.Fatalf("billing-edge listener port %q, traefik routes to %q: both must be 8010", flagPort, routed)
+	}
+}

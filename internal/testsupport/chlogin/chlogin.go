@@ -19,11 +19,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// The planted values: a verb's output must hold none of them.
+// The planted values: a verb's output must hold none of them. They are plain test
+// words, not key-shaped strings: none of them is a real credential, and a scanner
+// must have nothing to mistake for one.
 const (
 	Login       = "planted_login_c6644"
 	Password    = "planted-pw-c6644"
-	BadPassword = "planted-" + "badpw-" + "c6644"
+	BadPassword = "planted-wrong-words"
 )
 
 // Server is a ClickHouse with the planted login created without grants.

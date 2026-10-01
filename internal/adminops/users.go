@@ -1,6 +1,7 @@
 package adminops
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -167,15 +168,19 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 	flags := newFlags(env, "dho admin users create")
 	var email, password, username, fullName optString
 	flags.Var(&email, "email", "user email address (required)")
-	flags.Var(&password, "password", "user password, at least 8 characters (required)")
+	flags.Var(&password, "password", "user password, at least 8 characters (one of --password, --password-stdin is required; --password shows in the process list)")
 	flags.Var(&username, "username", "optional username")
 	flags.Var(&fullName, "full-name", "the user's full name")
 	superuser := flags.Bool("superuser", false, "grant superuser privileges")
+	passwordStdin := flags.Bool("password-stdin", false, "read the password from the first line of standard input (instead of --password, which shows in the process list)")
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
 	}
+	if code, ok := secretFromStdin(env, "password", &password, *passwordStdin); !ok {
+		return code
+	}
 	if !email.set || !password.set {
-		fmt.Fprintln(env.Stderr, "argument error: --email and --password are required")
+		fmt.Fprintln(env.Stderr, "argument error: --email and --password (or --password-stdin) are required")
 		return cli.ExitUsage
 	}
 	op, closePool, code := operator(ctx, env)
@@ -193,6 +198,50 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stdout, "  [superuser]")
 	}
 	return cli.ExitOK
+}
+
+// secretFromStdin settles one secret flag that also has a --<name>-stdin form.
+// With the stdin form it reads the first line of standard input into v (an
+// empty line is a refusal, and so is giving both forms). With only the argv
+// form it prints a WARN that names the flag and never its value: an argv value
+// shows in the process list and the shell history. ok false means the exit
+// code in code.
+func secretFromStdin(env cli.Env, name string, v *optString, useStdin bool) (code int, ok bool) {
+	if !useStdin {
+		if v.set {
+			fmt.Fprintf(env.Stderr, "WARN: --%s puts the secret in the process list and the shell history; use --%s-stdin\n", name, name)
+		}
+		return 0, true
+	}
+	if v.set {
+		fmt.Fprintf(env.Stderr, "argument error: --%s and --%s-stdin are mutually exclusive\n", name, name)
+		return cli.ExitUsage, false
+	}
+	line, err := readPasswordLine(env.Stdin)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "argument error: --%s-stdin needs a value on the first line of standard input\n", name)
+		return cli.ExitUsage, false
+	}
+	v.Set(line)
+	return 0, true
+}
+
+// readPasswordLine reads the first line of r without its line ending. An empty
+// or missing line is an error: a password that is not given must not turn into
+// the empty password.
+func readPasswordLine(r io.Reader) (string, error) {
+	if r == nil {
+		return "", io.EOF
+	}
+	line, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil && (err != io.EOF || line == "") {
+		return "", io.EOF
+	}
+	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+	if line == "" {
+		return "", io.EOF
+	}
+	return line, nil
 }
 
 // pad is Python's f"{text:<width}": left-aligned, padded to width code points.
@@ -259,7 +308,11 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 	flags.Var(&org, "org", "org slug or id: add the user to this org, or update their role")
 	flags.Var(&role, "role", "membership role to set with --org: owner, admin, member or viewer")
 	flags.Var(&removeFromOrg, "remove-from-org", "org slug or id: remove the user's membership from this org")
+	passwordStdin := flags.Bool("password-stdin", false, "read the new password from the first line of standard input (instead of --password)")
 	if code, ok := parseArgs(flags, env); !ok {
+		return code
+	}
+	if code, ok := secretFromStdin(env, "password", &password, *passwordStdin); !ok {
 		return code
 	}
 	if role.set {

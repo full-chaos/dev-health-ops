@@ -1,4 +1,14 @@
-arg Query.analytics.batch other
+package server
+
+// mcpInputClassesFile is the class table of mcp_person_policy.go: one line per
+// position a request value can land on -- an argument of an allow-listed root
+// field (or of a field reachable from one), a field of an input object, an enum
+// value -- as "<kind> <position> <person|other>". Reviewed by PR: a position
+// that is not listed is refused by the MCP listener as unclassified, and
+// TestMCPInputClassesCoverEveryReachablePositionExactly fails the build for it.
+// It is Go source (not an embedded data file) so that a change to it triggers
+// the Go workflow like any other code change.
+const mcpInputClassesFile = `arg Query.analytics.batch other
 arg Query.analytics.orgId other
 arg Query.capacityForecast.input other
 arg Query.capacityForecast.orgId other
@@ -216,3 +226,4 @@ input WorkGraphEdgeFilterInput.sourceType other
 input WorkGraphEdgeFilterInput.subcategory other
 input WorkGraphEdgeFilterInput.targetType other
 input WorkGraphEdgeFilterInput.theme other
+`

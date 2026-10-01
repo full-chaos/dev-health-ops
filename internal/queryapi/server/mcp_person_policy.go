@@ -1,7 +1,6 @@
 package server
 
 import (
-	_ "embed"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,15 +12,12 @@ import (
 // The MCP caller class is person-free (CHAOS-7087). What selects a person is
 // an explicit CLASS, person or other, for every position a request value can
 // land on: an argument of a reachable field, a field of an input object, an
-// enum value. The classes live in mcp_input_classes.txt (embedded, reviewed by
+// enum value. The classes live in mcp_input_classes.go (Go source, reviewed by
 // PR, no human gate at runtime). A position the table does not list is
 // UNCLASSIFIED and the listener refuses it (fail closed) until it is classified;
 // the test below fails the build for the same reason. The person words are only
 // a lint over the table: a position whose name carries one must be classed
 // person.
-
-//go:embed mcp_input_classes.txt
-var mcpInputClassesFile string
 
 // mcpInputClasses maps "<kind> <position>" (arg Query.catalog.dimension,
 // input FilterInput.who, enum ScopeLevelInput.DEVELOPER) to "person"/"other".
@@ -32,7 +28,7 @@ func mustParseMCPInputClasses(raw string) map[string]string {
 	for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 3 || (fields[2] != "person" && fields[2] != "other") {
-			panic(fmt.Sprintf("mcp_input_classes.txt: malformed line %q (want: kind position person|other)", line))
+			panic(fmt.Sprintf("mcp_input_classes.go: malformed line %q (want: kind position person|other)", line))
 		}
 		classes[fields[0]+" "+fields[1]] = fields[2]
 	}

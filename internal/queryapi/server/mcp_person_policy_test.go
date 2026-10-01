@@ -38,7 +38,7 @@ func lintMCPInputClasses(classes map[string]string) []string {
 }
 
 // Every position a request value can land on, reachable from an allow-listed
-// root field, has an explicit class in mcp_input_classes.txt. A schema change
+// root field, has an explicit class in mcp_input_classes.go. A schema change
 // that adds one -- under ANY name -- fails here, and at runtime the listener
 // refuses the position as unclassified until a PR classifies it. There is no
 // human gate outside the PR: the table is the source of truth, the build is

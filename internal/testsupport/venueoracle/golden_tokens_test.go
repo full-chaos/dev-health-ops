@@ -100,6 +100,7 @@ func TestProjectionDropsSignatureAndVolatileValuesAndKeepsTheRest(t *testing.T) 
 }
 
 func TestTheRecorderRefusesACandidateHoldingATokenShape(t *testing.T) {
+	underTheVerb(t)
 	final := filepath.Join(t.TempDir(), "g.json")
 	for name, sample := range tokenSamples() {
 		golden, err := openGolden(GoldenSpec{Path: final, PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
@@ -295,6 +296,7 @@ func TestAnUndecodableTokenIsRefusedByTheRecorderAndByDiff(t *testing.T) {
 }
 
 func TestATokenInsideAPackedBodyIsProjectedRefusedAndReported(t *testing.T) {
+	underTheVerb(t)
 	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":7}`, "sig")
 	golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
 	if err != nil {
@@ -361,6 +363,7 @@ func TestDiffRefusesAnUndecodableToken(t *testing.T) {
 // a credential is refused, and a per-golden Scrub that names it lets the
 // recording through.
 func TestScrubIsTheEscapeForAFalsePositive(t *testing.T) {
+	underTheVerb(t)
 	lookalike := "basic " + strings.Repeat("a", 30)
 	record := func(scrub func(string) string) error {
 		golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it", Scrub: scrub}, "TestSample", true)
@@ -447,6 +450,7 @@ func TestTrailingBytesAfterTheClaimsMakeATokenUndecodable(t *testing.T) {
 }
 
 func TestACredentialInAPackedHeaderValueIsRefused(t *testing.T) {
+	underTheVerb(t)
 	golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
 	if err != nil {
 		t.Fatal(err)

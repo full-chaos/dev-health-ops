@@ -6,12 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // CHAOS-6902: the route-activate hook Job no longer builds its three DSNs in a
@@ -24,9 +28,9 @@ import (
 // DSN (host, port, user, password, database), not the DSN's bytes: Python's
 // urllib.parse.quote(safe="") and Go's net/url escape a userinfo differently
 // (Go leaves sub-delimiters that Python encodes) and mean the same. This oracle
-// runs the REAL init-container script (testdata/route_dsn_init.sh, the text the
+// ran the REAL init-container script (testdata/route_dsn_init.sh, the text the
 // chart carried at RouteDSNScriptSource, sha256-pinned) under /bin/sh with python3
-// on an adversarial grid, parses each URI it wrote with pgx, resolves the same
+// on an adversarial grid, once, through the record verb, parses each URI it wrote with pgx, resolves the same
 // inputs through ResolveDSN, and compares the two parsed identities.
 //
 // Named divergences, each asserted by the golden rather than hidden:
@@ -40,9 +44,9 @@ const (
 	routeDSNScriptSource = "6d609ae3fddfd37566d31cb5e3bbe49ca46a64d6"
 	routeDSNScript       = "testdata/route_dsn_init.sh"
 	routeDSNScriptSHA256 = "bc2a579d87b6da09c7c76d70f7cec8b03671333686f3c85a4af0717425962e31"
-	routeDSNGolden       = "testdata/route_dsn_golden.json"
-	// routeDSNGoldenSHA256 pins the file: what the real script produced for each case.
-	routeDSNGoldenSHA256 = "fa11ec24a0bd1633aa0d97412d1a597f035a1ff6f8a379ad77d38f0194b033af"
+	// routeDSNPythonBuild is the build whose interpreter ran the script when
+	// the golden was recorded. The script uses the standard library only.
+	routeDSNPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 )
 
 // routeDSNCase is one set of inputs, the chart's own environment for the step.
@@ -243,34 +247,99 @@ func digestFile(t *testing.T, path string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func TestRouteDSNScriptAndGoldenArePinned(t *testing.T) {
+func TestRouteDSNScriptIsPinned(t *testing.T) {
 	if got := digestFile(t, routeDSNScript); got != routeDSNScriptSHA256 {
 		t.Fatalf("%s digest = %s, want %s: the script is the text the chart carried at %s and must not change", routeDSNScript, got, routeDSNScriptSHA256, routeDSNScriptSource)
 	}
-	if got := digestFile(t, routeDSNGolden); got != routeDSNGoldenSHA256 {
-		t.Fatalf("%s digest = %s, want %s: the file changed without its digest", routeDSNGolden, got, routeDSNGoldenSHA256)
-	}
 }
 
-// TestRouteDSNMatchesTheFrozenPythonOutput compares the component form with what
-// the real script produced (frozen; no shell or Python needed).
-func TestRouteDSNMatchesTheFrozenPythonOutput(t *testing.T) {
-	raw, err := os.ReadFile(routeDSNGolden)
+// scriptRouteDSN runs the real init-container script for one case, in the
+// producer's closed environment with its interpreter first on PATH and the
+// case's variables after it, and parses the three URIs it wrote.
+func scriptRouteDSN(t *testing.T, producer *venueoracle.Producer, script string, env map[string]string) routeDSNResult {
+	t.Helper()
+	pythonDir, err := producer.PythonDir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var frozen []routeDSNGoldenCase
-	if err := json.Unmarshal(raw, &frozen); err != nil {
+	out := t.TempDir()
+	names := make([]string, 0, len(env))
+	for name := range env {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	entries := []string{"PATH=" + pythonDir + string(os.PathListSeparator) + "/usr/local/bin:/usr/bin:/bin"}
+	for _, name := range names {
+		entries = append(entries, name+"="+env[name])
+	}
+	command := exec.Command("/bin/sh", "-ec", strings.ReplaceAll(script, "/run/route-dsn", out))
+	command.Env = producer.Env(nil, entries...)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("the route-dsn script failed: %v\n%s", err, output)
+	}
+	read := func(name string) routeDSNIdentity {
+		raw, err := os.ReadFile(filepath.Join(out, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return identityOf(t, string(raw))
+	}
+	return routeDSNResult{Domain: read("POSTGRES_URI"), Queue: read("WORKER_DATABASE_URI"), Coordinator: read("COORDINATOR_DATABASE_URI")}
+}
+
+// TestRouteDSNMatchesTheFrozenPythonOutput compares the component form with what
+// the real script produced for every case of the grid. The script's answers
+// were executed once by the record verb (the script under /bin/sh with the
+// pinned build's python3, in the closed environment) and are frozen in
+// testdata/golden/route_dsn.json; the script's text and the grid are the
+// golden's key, so a changed script or grid must be recorded again. A frozen
+// run needs no shell and no Python.
+func TestRouteDSNMatchesTheFrozenPythonOutput(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/route_dsn.json",
+		PythonBuild: routeDSNPythonBuild,
+		SHA256:      "91fa9f31450d55196bdcd0e915858c19116ea5a441e5e70b60c1ceb4004d10ad",
+		Recipe: "git worktree add --detach $DIR " + routeDSNPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/platform/config/ -test '^TestRouteDSNMatchesTheFrozenPythonOutput$' -python-root $DIR",
+	})
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := golden.PythonRoot(t, repoRoot)
+	script, err := os.ReadFile(routeDSNScript)
+	if err != nil {
 		t.Fatal(err)
 	}
 	cases := routeDSNCases()
+	input, err := json.Marshal(cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := venueoracle.ProgramRequest("route dsn grid", string(script), input, nil)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		recorded := make([]routeDSNGoldenCase, 0, len(cases))
+		for _, c := range cases {
+			recorded = append(recorded, routeDSNGoldenCase{Name: c.Name, Python: scriptRouteDSN(t, producer, string(script), c.Env)})
+		}
+		raw, err := json.MarshalIndent(recorded, "", " ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(raw) + "\n"}}
+	})
+	golden.Consumed(t, answers...)
+	var frozen []routeDSNGoldenCase
+	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {
+		t.Fatal(err)
+	}
 	if len(frozen) != len(cases) {
-		t.Fatalf("the golden holds %d cases, the grid has %d: re-record", len(frozen), len(cases))
+		t.Fatalf("the golden holds %d cases, the grid has %d: record it again", len(frozen), len(cases))
 	}
 	accepted, refused, named := 0, 0, 0
 	for index, c := range cases {
 		if frozen[index].Name != c.Name {
-			t.Fatalf("case %d is %q in the golden, %q in the grid: re-record", index, frozen[index].Name, c.Name)
+			t.Fatalf("case %d is %q in the golden, %q in the grid: record it again", index, frozen[index].Name, c.Name)
 		}
 		compareRouteDSN(t, c.Name, goRouteDSN(t, c.Env), frozen[index].Python, "frozen python")
 		switch {
@@ -285,4 +354,6 @@ func TestRouteDSNMatchesTheFrozenPythonOutput(t *testing.T) {
 	if accepted < 100 || named < 1 {
 		t.Fatalf("the golden has %d accepted cases (%d refused by the driver, %d named): it measures too little", accepted, refused, named)
 	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }

@@ -1,5 +1,6 @@
 # Every file under internal/queryapi/investment/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 6a9c99cbbe0f234b6e71b8e85f23c0bcd0886a775e1e50bf9c5a4eec074b7dc2	unclassified	investment_basic.json
 b574a34bcfd1e4c52bc7036153be304959878f91d7e231b0db6f9c98802051aa	unclassified	investment_missing_table.json
 5ae5949c9b52d3052f71733d41dd3c281ddefb9cccac3616ea369f2390978eb6	unclassified	sunburst_basic.json

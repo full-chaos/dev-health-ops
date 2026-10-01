@@ -421,7 +421,7 @@ func maintenanceGolden(t *testing.T, name, pin, test string) (*venueoracle.Golde
 func maintenanceProduce(t *testing.T, golden *venueoracle.Golden, root, label string, input []byte, produce func(root string) any) []byte {
 	t.Helper()
 	request := venueoracle.ProgramRequest(label, maintenancePythonProgram, input, maintenancePythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		body, err := json.Marshal(produce(root))
 		if err != nil {
 			t.Fatal(err)

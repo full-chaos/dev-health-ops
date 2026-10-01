@@ -1049,6 +1049,8 @@ func edgeModeLine(mode string) string {
 		return "edge_mode=go (Go-edge: the edge is query-api with no Python plane behind it; every proof is the candidate alone, NOT a two-plane comparison)"
 	case goapiproof.EdgeModePython:
 		return "edge_mode=python (Python-reference: the control document is answered by the Python plane)"
+	case goapiproof.EdgeModeDocRoute:
+		return "edge_mode=doc_route (MCP class proof: the reference is query-api's own /graphql for the registered document; both sides are Go)"
 	default:
 		return "edge_mode=undetermined (no mode was selected: the command line did not parse, and nothing was measured)"
 	}

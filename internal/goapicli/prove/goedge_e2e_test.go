@@ -1,0 +1,231 @@
+package prove
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+)
+
+// The command in Go-edge mode, driven through run() like e2e_test.go:
+// fake registry and /buildinfo, a fake receipt store, and an edge that is
+// query-api answering alone -- no Python plane and no "who am I" route.
+
+// queryAPIAloneEdge is query-api's own /graphql: a registered document is
+// served by plane go from the named build, every other document is refused
+// 404 UNREGISTERED_DOCUMENT, and the Python app's reference route does not
+// exist. asked counts requests for that route.
+func queryAPIAloneEdge(t *testing.T, asked *int) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == goapiproof.ReferencePrincipalPath {
+			*asked++
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		var parsed struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(raw, &parsed)
+		w.Header().Set("x-dev-health-plane", "go")
+		w.Header().Set("x-dev-health-build", e2eBuildSHA)
+		w.Header().Set("Content-Type", "application/json")
+		if parsed.Query != goEdgeFeatureFlagsDocument {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprintf(w, `{"errors":[{"message":"This GraphQL document is not registered.","extensions":{"code":%q}}],"data":null}`, goapiproof.UnregisteredDocumentCode)
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":{"featureFlags":[{"key":"a"}]}}`)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+const goEdgeFeatureFlagsDocument = "query FeatureFlags { featureFlags { key } }"
+
+// runAgainstEdge drives run() for the one featureFlags operation against
+// edgeURL; extraArgs are the operator's own extra flags.
+func runAgainstEdge(t *testing.T, edgeURL string, extraArgs ...string) (stdout string, runErr error, reportPath string, pool *e2ePool) {
+	t.Helper()
+	digest := goapidigest.Document(goEdgeFeatureFlagsDocument)
+	type registryOp struct {
+		Operation      string `json:"operation"`
+		DocumentDigest string `json:"document_digest"`
+	}
+	var ops []registryOp
+	for _, name := range goapiproof.KnownOperations() {
+		entry := registryOp{Operation: name, DocumentDigest: "sha256:unused-" + name}
+		if name == "featureFlags" {
+			entry.DocumentDigest = digest
+		}
+		ops = append(ops, entry)
+	}
+	registryBody, err := json.Marshal(struct {
+		SchemaDigest string       `json:"schema_digest"`
+		Operations   []registryOp `json:"operations"`
+	}{SchemaDigest: "sha256:e2e29d509cd", Operations: ops})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := httptest.NewServer(writeStaticJSONHandler(string(registryBody)))
+	t.Cleanup(registry.Close)
+	buildinfo := httptest.NewServer(writeStaticJSONHandler(`{"commit":"` + e2eBuildSHA + `","modified":false}`))
+	t.Cleanup(buildinfo.Close)
+
+	docsJSON, err := json.Marshal([]map[string]string{{"operation": "featureFlags", "document": goEdgeFeatureFlagsDocument}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	docsPath := filepath.Join(t.TempDir(), "documents.json")
+	if err := os.WriteFile(docsPath, docsJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pool = &e2ePool{routingRows: [][]any{{"featureFlags", digest, "canary", e2eBuildSHA}}}
+	withFakePool(t, pool)
+	withOrgMinter(t, "70d529e0", "70d529e0")
+	reportPath = filepath.Join(t.TempDir(), "report.json")
+	stdout = captureStdout(t, func() {
+		runErr = runCLI(t, append([]string{
+			"-registry-url=" + registry.URL + "/registry",
+			"-buildinfo-url=" + buildinfo.URL + "/buildinfo",
+			"-edge-url=" + edgeURL + "/graphql",
+			"-documents=" + docsPath,
+			"-postgres-uri=postgres://fake/ignored",
+			"-org=70d529e0",
+			"-artifact-dir=" + t.TempDir(),
+			"-recorded-by=harness",
+			"-review-evidence=go-edge harness run",
+			"-report=" + reportPath,
+			"-timeout=5s",
+		}, extraArgs...))
+	})
+	return stdout, runErr, reportPath, pool
+}
+
+// TestRunInGoEdgeModeProvesAgainstQueryAPIAlone: with -go-edge the command
+// proves the operation against an edge that has no Python plane, never asks
+// the Python app who the caller is, and says the mode on the run line, on
+// the verdict line, on the count, in the report and in the receipt.
+func TestRunInGoEdgeModeProvesAgainstQueryAPIAlone(t *testing.T) {
+	withProverCommit(t, e2eBuildSHA)
+	asked := 0
+	edge := queryAPIAloneEdge(t, &asked)
+	stdout, runErr, reportPath, pool := runAgainstEdge(t, edge.URL, "-go-edge")
+	if runErr != nil {
+		t.Fatalf("run(): %v\nstdout:\n%s", runErr, stdout)
+	}
+	if asked != 0 {
+		t.Errorf("the Python reference route was asked %d time(s); Go-edge mode has no Python app to ask", asked)
+	}
+	for _, want := range []string{
+		"go-api-prove: edge_mode=go (Go-edge:",
+		goapiproof.VerdictGoOnly + " (go-edge mode: the candidate alone, the edge is query-api, no Python answer was read)",
+		"go-api-prove:   " + goapiproof.VerdictGoOnly + " = 1 (go-edge mode)",
+		"receipts_written=1",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, stdout)
+		}
+	}
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report struct {
+		Summary struct {
+			EdgeMode     string `json:"edge_mode"`
+			ProvenGoOnly int    `json:"proven_go_only"`
+		} `json:"summary"`
+	}
+	if err := json.Unmarshal(raw, &report); err != nil || report.Summary.EdgeMode != goapiproof.EdgeModeGo || report.Summary.ProvenGoOnly != 1 {
+		t.Errorf("report summary %+v (err %v), want edge_mode go and one go-only proof:\n%s", report.Summary, err, raw)
+	}
+	inserts := pool.proofRunInserts()
+	if len(inserts) != 1 || !strings.Contains(fmt.Sprint(inserts[0].args...), `"edge_mode":"go"`) {
+		t.Errorf("want one go_api_proof_run insert whose provenance says edge_mode go, got %+v", inserts)
+	}
+}
+
+// TestRunWithoutTheFlagRefusesAnEdgeWithNoPythonPlane: the mode is never
+// detected. Against the same edge with no -go-edge, the run is the
+// Python-reference one and stops at the reference check; nothing is proven.
+func TestRunWithoutTheFlagRefusesAnEdgeWithNoPythonPlane(t *testing.T) {
+	withProverCommit(t, e2eBuildSHA)
+	asked := 0
+	edge := queryAPIAloneEdge(t, &asked)
+	stdout, runErr, _, pool := runAgainstEdge(t, edge.URL)
+	if !errors.Is(runErr, goapiproof.ErrReferencePrincipal) || asked == 0 {
+		t.Fatalf("run() = %v, reference route asked %d time(s); want the Python-reference refusal\nstdout:\n%s", runErr, asked, stdout)
+	}
+	if strings.Contains(stdout, goapiproof.VerdictGoOnly+" (") || len(pool.proofRunInserts()) != 0 {
+		t.Errorf("nothing may be proven or written:\n%s", stdout)
+	}
+}
+
+// pythonPlaneEdge is the edge the Python-reference mode proves: a registered
+// document is served by plane go, and every other document is answered by
+// the Python plane behind it.
+func pythonPlaneEdge(t *testing.T) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var parsed struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(raw, &parsed)
+		w.Header().Set("Content-Type", "application/json")
+		if parsed.Query == goEdgeFeatureFlagsDocument {
+			w.Header().Set("x-dev-health-plane", "go")
+			w.Header().Set("x-dev-health-build", e2eBuildSHA)
+			_, _ = io.WriteString(w, `{"data":{"featureFlags":[{"key":"a"}]}}`)
+			return
+		}
+		w.Header().Set("x-dev-health-plane", "python")
+		_, _ = io.WriteString(w, `{"data":{"__typename":"Query"}}`)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// TestRunInGoEdgeModeRefusesAnEdgeWithAPythonPlane: -go-edge against the
+// Python edge (its control document is answered by plane python) stops
+// before any case, by name.
+func TestRunInGoEdgeModeRefusesAnEdgeWithAPythonPlane(t *testing.T) {
+	withProverCommit(t, e2eBuildSHA)
+	stdout, runErr, _, pool := runAgainstEdge(t, pythonPlaneEdge(t).URL, "-go-edge")
+	if !errors.Is(runErr, goapiproof.ErrGoEdge) || !strings.Contains(runErr.Error(), goapiproof.RefusalGoEdgeControlOtherPlane) {
+		t.Fatalf("run() = %v, want %s\nstdout:\n%s", runErr, goapiproof.RefusalGoEdgeControlOtherPlane, stdout)
+	}
+	if !strings.Contains(stdout, "executed=0") || len(pool.proofRunInserts()) != 0 {
+		t.Errorf("nothing may be executed or written:\n%s", stdout)
+	}
+}
+
+// TestEdgeModeLinesNameTheMode: the Python-reference run says its mode too,
+// and its go-only verdict keeps its own words.
+func TestEdgeModeLinesNameTheMode(t *testing.T) {
+	if line := edgeModeLine(goapiproof.EdgeModePython); !strings.HasPrefix(line, "edge_mode=python ") {
+		t.Errorf("python-reference mode line %q", line)
+	}
+	if note := goEdgeCountNote(goapiproof.EdgeModePython); note != "" {
+		t.Errorf("python-reference count note %q, want none", note)
+	}
+	pythonLine := executedOutcomeLine(goapiproof.Outcome{Operation: "featureFlags", ProvenUnder: goapiproof.ProvenUnderGoOnly})
+	goLine := executedOutcomeLine(goapiproof.Outcome{Operation: "featureFlags", ProvenUnder: goapiproof.ProvenUnderGoOnly, EdgeMode: goapiproof.EdgeModeGo})
+	if !strings.Contains(pythonLine, goapiproof.VerdictGoOnly+" (no two-plane baseline)") || strings.Contains(pythonLine, "go-edge") {
+		t.Errorf("python-reference go-only line %q", pythonLine)
+	}
+	if !strings.Contains(goLine, "go-edge mode") || strings.Contains(goLine, "no two-plane baseline") {
+		t.Errorf("go-edge go-only line %q", goLine)
+	}
+}

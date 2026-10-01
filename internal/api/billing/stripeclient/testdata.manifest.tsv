@@ -1,3 +1,4 @@
 # Every file under internal/api/billing/stripeclient/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	golden/stripe-api-version.golden.json
+# header-before-stamp set: 60fc1d68217fbf3191d6a25cf7dbb765c2cd724aeb2dcb0d85dd96a808404924 (1 files)
+8db487417fac896f5c18f195e1ee39772a47ad195ef4c267faf40e4047de4719	header-before-stamp	golden/stripe-api-version.golden.json

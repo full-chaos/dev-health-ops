@@ -133,3 +133,26 @@ func TestAnotherIdentityIsRefusedByName(t *testing.T) {
 		t.Error("an identity program that failed was accepted")
 	}
 }
+
+// TestOutputsNeedThePinnedProducerAndSuccessfulPrograms pins successfulOutputs:
+// the pinned identity and exit code 0 give the outputs; another identity, a
+// failed program, or a missing answer is an error.
+func TestOutputsNeedThePinnedProducerAndSuccessfulPrograms(t *testing.T) {
+	const pinned = "python 3.14.7\nunicodedata 16.0.0"
+	programs := []Program{{Name: "first", Text: "print(1)"}, {Name: "second", Text: "print(2)"}}
+	identity := Answer{Stdout: pinned + "\n"}
+	outputs, err := successfulOutputs(pinned, programs, []Answer{identity, {Stdout: "1\n"}, {Stdout: "2\n"}})
+	if err != nil || len(outputs) != 2 || outputs[0] != "1\n" || outputs[1] != "2\n" {
+		t.Fatalf("outputs = %q, %v", outputs, err)
+	}
+	refused := map[string][]Answer{
+		"another identity": {{Stdout: "python 3.15.0\nunicodedata 17.0.0\n"}, {Stdout: "1\n"}, {Stdout: "2\n"}},
+		"a failed program": {identity, {Stdout: "1\n"}, {ExitCode: 2, Stdout: "partial"}},
+		"a missing answer": {identity, {Stdout: "1\n"}},
+	}
+	for name, answers := range refused {
+		if _, err := successfulOutputs(pinned, programs, answers); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}

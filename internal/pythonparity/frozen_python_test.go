@@ -1,14 +1,11 @@
 package pythonparity_test
 
 import (
-	"fmt"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // parityPythonBuild is the build whose interpreter answered the frozen oracles
@@ -38,6 +35,14 @@ var parityGoldenPins = map[string]string{
 	"utf8replace.golden.json":             "fd67060a2f796214171aedcbba1278fbb20014c887e467ddd24cd1e963f6e676",
 }
 
+// parityGoldens is the set of this package's frozen Python answers.
+var parityGoldens = programoracle.Set{
+	Package:  "./internal/pythonparity/",
+	Build:    parityPythonBuild,
+	Identity: parityProducerIdentity,
+	Pins:     parityGoldenPins,
+}
+
 // frozenPython returns the stdout of each program, in order, from the golden
 // of the running test. No Python runs: the answers were executed once on
 // parityPythonBuild and are frozen in testdata/golden. A golden that is
@@ -48,71 +53,7 @@ var parityGoldenPins = map[string]string{
 // The caller compares by value and sends no JSON number through float64.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	pin, pinned := parityGoldenPins[golden]
-	recipe := fmt.Sprintf("git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); "+
-		"then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pythonparity/ "+
-		"-test '^%s$' -python-root $DIR", parityPythonBuild, strings.SplitN(t.Name(), "/", 2)[0])
-	if !pinned {
-		t.Fatalf("test %s has no frozen golden: parityGoldenPins names no %s. A frozen oracle never runs Python and never skips. "+
-			"Add the entry with the value %q, then record: %s", t.Name(), golden, "PIN:"+strings.TrimSuffix(golden, ".json"), recipe)
-	}
-	spec := venueoracle.GoldenSpec{
-		Path:        filepath.Join("testdata", "golden", golden),
-		PythonBuild: parityPythonBuild,
-		SHA256:      pin,
-		Recipe:      recipe,
-	}
-	all := append([]programoracle.Program{programoracle.Identity()}, programs...)
-	answers := programoracle.Run(t, spec, frozenRepositoryRoot(t), all)
-	outputs, err := frozenOutputs(programs, answers)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return outputs
-}
-
-// frozenOutputs is the stdout of each program, given the answers of the
-// identity program and of programs. It is an error when the identity is not
-// parityProducerIdentity, or when a program exited non-zero when it was
-// recorded: a failed producer is not an answer.
-func frozenOutputs(programs []programoracle.Program, answers []programoracle.Answer) ([]string, error) {
-	if len(answers) != len(programs)+1 {
-		return nil, fmt.Errorf("%d answers for the identity program and %d programs", len(answers), len(programs))
-	}
-	if err := programoracle.IdentityErr(answers[0], parityProducerIdentity); err != nil {
-		return nil, err
-	}
-	outputs := make([]string, 0, len(programs))
-	for index, answer := range answers[1:] {
-		name := programs[index].Name
-		if answer.ExitCode != 0 {
-			return nil, fmt.Errorf("program %q exited %d when it was recorded (stdout %q): a failed producer is not an answer", name, answer.ExitCode, answer.Stdout)
-		}
-		outputs = append(outputs, answer.Stdout)
-	}
-	return outputs, nil
-}
-
-// TestAFrozenAnswerNeedsThePinnedProducerAndASuccessfulProgram pins
-// frozenOutputs: the pinned identity and exit code 0 give the outputs; another
-// identity, a failed program, or a missing answer is an error.
-func TestAFrozenAnswerNeedsThePinnedProducerAndASuccessfulProgram(t *testing.T) {
-	programs := []programoracle.Program{{Name: "first", Text: "print(1)"}, {Name: "second", Text: "print(2)"}}
-	identity := programoracle.Answer{Stdout: parityProducerIdentity + "\n"}
-	outputs, err := frozenOutputs(programs, []programoracle.Answer{identity, {Stdout: "1\n"}, {Stdout: "2\n"}})
-	if err != nil || len(outputs) != 2 || outputs[0] != "1\n" || outputs[1] != "2\n" {
-		t.Fatalf("outputs = %q, %v", outputs, err)
-	}
-	refused := map[string][]programoracle.Answer{
-		"another identity": {{Stdout: "python 3.15.0\nunicodedata 17.0.0\n"}, {Stdout: "1\n"}, {Stdout: "2\n"}},
-		"a failed program": {identity, {Stdout: "1\n"}, {ExitCode: 2, Stdout: "partial"}},
-		"a missing answer": {identity, {Stdout: "1\n"}},
-	}
-	for name, answers := range refused {
-		if _, err := frozenOutputs(programs, answers); err == nil {
-			t.Errorf("%s was accepted", name)
-		}
-	}
+	return parityGoldens.Outputs(t, frozenRepositoryRoot(t), golden, programs...)
 }
 
 // frozenRepositoryRoot is the repository root, from this file's own location.

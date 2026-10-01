@@ -231,3 +231,73 @@ func execute(t *testing.T, pinnedRoot string, program Program) (int, []byte) {
 	t.Fatalf("programoracle: program %q: %v", program.Name, pyoracle.RunError(python, err, stderr.Bytes()))
 	return 0, nil
 }
+
+// Set is the goldens of one package's program oracles: where they live, the
+// build and the producer they were recorded from, and their pins.
+type Set struct {
+	// Package is the package pattern the goldenrecord verb takes, for the
+	// recipe a failure prints (for example "./internal/pythonparity/").
+	Package string
+	// Build is the 40-hex commit whose interpreter answered.
+	Build string
+	// Identity is the pinned producer identity (see Identity).
+	Identity string
+	// Distributions are the installed distributions the programs import; their
+	// versions are part of the identity.
+	Distributions []string
+	// Pins maps each golden file name under testdata/golden to its SHA-256.
+	// The goldenrecord verb writes each digest when it promotes a recording; a
+	// new golden starts as "PIN:" + its file name without ".json".
+	Pins map[string]string
+}
+
+// Outputs returns the stdout of each program, in order, from the golden named
+// golden under testdata/golden of the running test's package. It fails the
+// test when the golden is not pinned in the set, when the producer identity is
+// not the pinned one, or when a program exited non-zero when it was recorded.
+// The identity program is run first, as its own request in the same golden.
+func (set Set) Outputs(t *testing.T, root, golden string, programs ...Program) []string {
+	t.Helper()
+	recipe := fmt.Sprintf("git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); "+
+		"then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg %s "+
+		"-test '^%s$' -python-root $DIR", set.Build, set.Package, strings.SplitN(t.Name(), "/", 2)[0])
+	pin, pinned := set.Pins[golden]
+	if !pinned {
+		t.Fatalf("test %s has no frozen golden: the pins of %s name no %s. A frozen oracle never runs Python and never skips. "+
+			"Add the entry with the value %q, then record: %s", t.Name(), set.Package, golden, "PIN:"+strings.TrimSuffix(golden, ".json"), recipe)
+	}
+	spec := venueoracle.GoldenSpec{
+		Path:        filepath.Join("testdata", "golden", golden),
+		PythonBuild: set.Build,
+		SHA256:      pin,
+		Recipe:      recipe,
+	}
+	all := append([]Program{Identity(set.Distributions...)}, programs...)
+	outputs, err := successfulOutputs(set.Identity, programs, Run(t, spec, root, all))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return outputs
+}
+
+// successfulOutputs is the stdout of each program, given the answers of the
+// identity program and of programs. It is an error when the identity is not
+// the pinned one, or when a program exited non-zero when it was recorded: a
+// failed producer is not an answer.
+func successfulOutputs(identity string, programs []Program, answers []Answer) ([]string, error) {
+	if len(answers) != len(programs)+1 {
+		return nil, fmt.Errorf("%d answers for the identity program and %d programs", len(answers), len(programs))
+	}
+	if err := IdentityErr(answers[0], identity); err != nil {
+		return nil, err
+	}
+	outputs := make([]string, 0, len(programs))
+	for index, answer := range answers[1:] {
+		name := programs[index].Name
+		if answer.ExitCode != 0 {
+			return nil, fmt.Errorf("program %q exited %d when it was recorded (stdout %q): a failed producer is not an answer", name, answer.ExitCode, answer.Stdout)
+		}
+		outputs = append(outputs, answer.Stdout)
+	}
+	return outputs, nil
+}

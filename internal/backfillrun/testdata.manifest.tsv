@@ -1,3 +1,4 @@
 # Every file under internal/backfillrun/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	golden/backfill_run.json
+# header-before-stamp set: c423cafe842f00971e5c12fbffd751b20805204c14d5bba6aaf5807c2153426c (1 files)
+445d484dc588e2a0dbe4682c1c7edceef2d4ed5e35f2f03df513ce44280cf4a9	header-before-stamp	golden/backfill_run.json

@@ -1,0 +1,9 @@
+{
+ "python_build": "acd02fb0a61f2d8648d3dee4e22534c426b00cc4",
+ "clickhouse_image": "clickhouse/clickhouse-server:26.7",
+ "recorded": "Python chain (ClickHouseMetricsSink.ensure_schema(force=True)) at python_build with OPERATIONAL_ORDERING_CONTRACT=2 for python_chain_contract2.json; split_sql_statements over every src/dev_health_ops/migrations/clickhouse/*.sql for python_split.json",
+ "sha256": {
+  "python_chain_contract2.json": "d86cd8faa0ee39867eea96264de7e536af1ed4bafb7e03b68e7a6992dbb01aa4",
+  "python_split.json": "59d9e0c4f038bfa31c7b7d2492180feb74a648484c47c236158f0b3c4b343a48"
+ }
+}

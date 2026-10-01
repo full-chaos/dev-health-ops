@@ -68,6 +68,38 @@ func TestBaselineMatchesTheFrozenPythonChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The golden is the Python chain's end state at the last migration it was
+	// recorded on. A chain file added after that has no Python build to record
+	// it, so the oracle covers exactly the files the golden recorded; the
+	// rest of this test runs the whole chain.
+	recorded := map[string]bool{}
+	for _, version := range captured.Versions {
+		recorded[version] = true
+	}
+	for _, version := range checkedIn.Versions {
+		if !recorded[version] {
+			t.Fatalf("the golden does not record head version %s", version)
+		}
+	}
+	var recordedChain []chmigrate.ChainFile
+	for _, file := range chain {
+		if recorded[file.Version] {
+			recordedChain = append(recordedChain, file)
+		}
+	}
+	oracleDB := scratchDatabase(t, admin)
+	oracleConn := openDatabase(t, instance.URI, oracleDB)
+	oracleStore, _, err := chmigrate.NewConnDB(ctx, oracleConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chmigrate.Upgrade(ctx, oracleStore, checkedIn, recordedChain); err != nil {
+		t.Fatalf("upgrade a fresh database to the recorded head: %v", err)
+	}
+	if diff := compare(capture(t, ctx, oracleConn, oracleDB, productionContract), captured); diff != "" {
+		t.Fatalf("dho migrate clickhouse built a different database than the Python chain: %s", diff)
+	}
+
 	goDB := scratchDatabase(t, admin)
 	goConn := openDatabase(t, instance.URI, goDB)
 	db, database, err := chmigrate.NewConnDB(ctx, goConn)
@@ -84,9 +116,6 @@ func TestBaselineMatchesTheFrozenPythonChain(t *testing.T) {
 	}
 	if result.Action != "baseline_applied" || len(result.Created) != len(checkedIn.Objects) || len(result.Applied) != len(chain) {
 		t.Fatalf("fresh upgrade = %+v, want baseline_applied creating %d objects and applying %d chain files", result, len(checkedIn.Objects), len(chain))
-	}
-	if diff := compare(capture(t, ctx, goConn, goDB, productionContract), captured); diff != "" {
-		t.Fatalf("dho migrate clickhouse built a different database than the Python chain: %s", diff)
 	}
 	requireStatus(t, ctx, goConn, goDB, db, checkedIn, chain, "at_head")
 
@@ -534,10 +563,19 @@ func TestSplitterMatchesFrozenPythonSplit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A chain file the golden recorded must still be the text it was recorded
+	// from; one added later has no Python build to record it and is not
+	// covered here.
+	covered := 0
 	for _, file := range chain {
-		recorded, ok := want[file.Version]
-		if !ok || recorded.SQL != file.SQL {
-			t.Errorf("chain file %s is not the text the Python split was recorded from", file.Version)
+		if recorded, ok := want[file.Version]; ok {
+			covered++
+			if recorded.SQL != file.SQL {
+				t.Errorf("chain file %s is not the text the Python split was recorded from", file.Version)
+			}
 		}
+	}
+	if covered == 0 {
+		t.Error("the golden covers no chain file")
 	}
 }

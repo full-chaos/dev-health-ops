@@ -1,10 +1,15 @@
 package chschema
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"go/build"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -199,5 +204,28 @@ func TestChschemaStartsNoProcess(t *testing.T) {
 	}
 	if checked == 0 || len(seen) < 3 {
 		t.Fatalf("the guard walked %d packages from %d module imports: it measured nothing", len(seen), checked)
+	}
+}
+
+// TestContract1HeadMatchesItsPin fails when the recorded contract-1 overlay is
+// edited without its pin (the Python build it was recorded on and its sha256).
+func TestContract1HeadMatchesItsPin(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "contract1_head.pin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pin struct {
+		PythonBuild string            `json:"python_build"`
+		SHA256      map[string]string `json:"sha256"`
+	}
+	if err := json.Unmarshal(data, &pin); err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(pin.PythonBuild) {
+		t.Fatalf("python_build %q is not a 40-hex commit", pin.PythonBuild)
+	}
+	sum := sha256.Sum256(contract1Head)
+	if got := hex.EncodeToString(sum[:]); got != pin.SHA256["contract1_head.json"] {
+		t.Errorf("contract1_head.json sha256 %s, pinned %s: re-record it and update the pin together", got, pin.SHA256["contract1_head.json"])
 	}
 }

@@ -207,3 +207,41 @@ func TestTheRawSinkSeesTheAnswersWhileRecordingOnlyAndTheGoldenHoldsTheProjected
 		t.Fatalf("the answer or the recorded request holds the raw token: %q", answers[0].Body)
 	}
 }
+
+func TestASinkThatChangesItsAnswerCannotChangeWhatTheGoldenHolds(t *testing.T) {
+	g := keyGolden(t, nil)
+	g.verifiedRoot = "x"
+	g.spec.RawSink = func(_ Request, answer Response) {
+		answer.Headers["x-added-by-sink"] = "1"
+		answer.Headers["x-keep"] = "changed"
+		delete(answer.Headers, "x-drop")
+	}
+	answers := g.answer(t, "Python", "", []Request{{Name: "r", Method: "GET", Path: "/r"}}, func() error { return nil }, func() []Response {
+		return []Response{{Status: 200, Headers: map[string]string{"x-keep": "kept", "x-drop": "dropped"}, Body: "{}"}}
+	}, nil)
+	want := map[string]string{"x-keep": "kept", "x-drop": "dropped"}
+	if !reflect.DeepEqual(answers[0].Headers, want) || !reflect.DeepEqual(g.recorded.Requests[0].Headers, want) {
+		t.Fatalf("a sink changed the answer the golden holds: %v / %v", answers[0].Headers, g.recorded.Requests[0].Headers)
+	}
+}
+
+// TestAProducerThatAnswersMoreRequestsThanAskedIsAnErrorNotAPanic runs in a
+// child process (the refusal is t.Fatal): the sink must not index past the
+// requests before that error is reached.
+func TestAProducerThatAnswersMoreRequestsThanAskedIsAnErrorNotAPanic(t *testing.T) {
+	if os.Getenv("VENUEORACLE_CHILD_MOREANSWERS") == "1" {
+		g := keyGolden(t, nil)
+		g.verifiedRoot = "x"
+		g.spec.RawSink = func(Request, Response) {}
+		g.answer(t, "Python", "", []Request{{Name: "r", Method: "GET", Path: "/r"}}, func() error { return nil }, func() []Response {
+			return []Response{{Status: 200, Body: "{}"}, {Status: 200, Body: "{}"}}
+		}, nil)
+		return
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestAProducerThatAnswersMoreRequestsThanAskedIsAnErrorNotAPanic$", "-test.v")
+	command.Env = append(os.Environ(), "VENUEORACLE_CHILD_MOREANSWERS=1")
+	out, err := command.CombinedOutput()
+	if err == nil || strings.Contains(string(out), "panic:") || !strings.Contains(string(out), "answered 2 of 1 requests") {
+		t.Fatalf("a producer that answered too many requests was not a clean error: err=%v\n%s", err, out)
+	}
+}

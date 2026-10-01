@@ -144,12 +144,13 @@ func normalizeAlias(s aliasScenario, text string) string {
 
 func pythonAlias(t *testing.T, root, uri string, s aliasScenario) (int, string) {
 	t.Helper()
-	// The cutover switch is part of the scenario; the hash seed is pinned (it orders Alembic's sets).
-	env := []string{"PYTHONHASHSEED=0"}
+	// The cutover switch is part of the scenario; the hash seed is pinned in pgmigratePythonSettings (it
+	// orders Alembic's sets).
+	var env []string
 	if s.cutover {
 		env = append(env, "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1")
 	}
-	return pythonCLI(t, root, env, uri, append([]string{"migrate"}, s.args...)...)
+	return pythonCLI(t, root, pgmigratePythonSettings, env, uri, append([]string{"migrate"}, s.args...)...)
 }
 
 // aliasPythonBuild is the build whose Python CLI answered the scenarios: a build that still carried it.
@@ -182,8 +183,7 @@ func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
-	request := venueoracle.ProgramRequest("alias scenarios", pythonCLIProgram, input, env)
+	request := venueoracle.ProgramRequest("alias scenarios", pythonCLIProgram, input, pgmigratePythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
 		uri, exec := revisionsDatabase(t)
 		exec("CREATE TABLE alembic_version_saved AS SELECT * FROM alembic_version")

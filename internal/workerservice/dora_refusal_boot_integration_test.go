@@ -50,11 +50,16 @@ func TestDORARefusalDoesNotTakeDownTheRemainingFamily(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 
-	// A contract-2 store, read under contract 1: the mismatch the guard exists
-	// to catch, produced by real migrations rather than a stubbed error, so
-	// this test fails if the guard stops recognising the real thing.
-	clickhouse := startContractTwoClickHouse(t, ctx)
-	t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "1")
+	// A contract-1 store (recorded legacy shape, below the head), read under
+	// contract 2 (the variable unset): the mismatch the guard exists to catch,
+	// produced by real migrations rather than a stubbed error, so this test
+	// fails if the guard stops recognising the real thing. Contract 1 itself
+	// is unsupported, so the mismatch is built from the store's side.
+	clickhouse := startLegacyClickHouse(t, ctx)
+	t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "")
+	if err := os.Unsetenv("OPERATIONAL_ORDERING_CONTRACT"); err != nil {
+		t.Fatal(err)
+	}
 
 	postgres, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -167,26 +172,16 @@ func TestDORARefusalDoesNotTakeDownTheRemainingFamily(t *testing.T) {
 	}
 }
 
-// startContractTwoClickHouse migrates a scratch store to the contract-2 schema
-// and returns a DSN for it.
-func startContractTwoClickHouse(t *testing.T, ctx context.Context) string {
+// startLegacyClickHouse migrates a scratch store to the recorded contract-1
+// shape and returns a DSN for it.
+func startLegacyClickHouse(t *testing.T, ctx context.Context) string {
 	t.Helper()
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
-
-	previous, had := os.LookupEnv("OPERATIONAL_ORDERING_CONTRACT")
-	if err := os.Setenv("OPERATIONAL_ORDERING_CONTRACT", "2"); err != nil {
-		t.Fatal(err)
-	}
-	chschema.Apply(ctx, t, instance)
-	if had {
-		_ = os.Setenv("OPERATIONAL_ORDERING_CONTRACT", previous)
-	} else {
-		_ = os.Unsetenv("OPERATIONAL_ORDERING_CONTRACT")
-	}
+	chschema.ApplyOrderingContract1(ctx, t, instance)
 
 	// Instance.URI, NOT ClickHouseHTTPDSN: the worker opens ClickHouse through
 	// clickhousestore, which speaks the NATIVE protocol. Handing it the HTTP

@@ -164,14 +164,19 @@ ORDER BY (org_id, team_id, repo_id, work_type, day, attribution_bucket)`,
 		`CREATE TABLE operational_incidents (
     id String, org_id String, service_id String, normalized_status String,
     started_at DateTime64(3, 'UTC'), resolved_at Nullable(DateTime64(3, 'UTC')),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0,
     is_deleted UInt8 DEFAULT 0, last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 		`CREATE TABLE operational_service_repository_mappings (
-    org_id String, service_id String, repo_id Nullable(UUID), is_active UInt8 DEFAULT 1,
+    org_id String, id String DEFAULT '', service_id String, repo_id Nullable(UUID), is_active UInt8 DEFAULT 1,
     valid_from Nullable(DateTime64(3, 'UTC')), valid_to Nullable(DateTime64(3, 'UTC')),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0,
     last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, service_id)
-SETTINGS allow_nullable_key = 1`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("schema: %v\nstatement: %s", err, statement)
@@ -953,14 +958,19 @@ ORDER BY (org_id, team_id, repo_id, work_type, day, attribution_bucket)`,
 		`CREATE TABLE operational_incidents (
     id String, org_id String, service_id String, normalized_status String,
     started_at DateTime64(3, 'UTC'), resolved_at Nullable(DateTime64(3, 'UTC')),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0,
     is_deleted UInt8 DEFAULT 0, last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 		`CREATE TABLE operational_service_repository_mappings (
-    org_id String, service_id String, repo_id Nullable(UUID), is_active UInt8 DEFAULT 1,
+    org_id String, id String DEFAULT '', service_id String, repo_id Nullable(UUID), is_active UInt8 DEFAULT 1,
     valid_from Nullable(DateTime64(3, 'UTC')), valid_to Nullable(DateTime64(3, 'UTC')),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0,
     last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, service_id)
-SETTINGS allow_nullable_key = 1`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("schema: %v\nstatement: %s", err, statement)
@@ -1137,14 +1147,19 @@ ORDER BY (org_id, team_id, repo_id, work_type, day, attribution_bucket)`,
 		`CREATE TABLE operational_incidents (
     id String, org_id String, service_id String, normalized_status String,
     started_at DateTime64(3, 'UTC'), resolved_at Nullable(DateTime64(3, 'UTC')),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0,
     is_deleted UInt8 DEFAULT 0, last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 		`CREATE TABLE operational_service_repository_mappings (
-    org_id String, service_id String, repo_id Nullable(UUID), is_active UInt8 DEFAULT 1,
+    org_id String, id String DEFAULT '', service_id String, repo_id Nullable(UUID), is_active UInt8 DEFAULT 1,
     valid_from Nullable(DateTime64(3, 'UTC')), valid_to Nullable(DateTime64(3, 'UTC')),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0,
     last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, service_id)
-SETTINGS allow_nullable_key = 1`,
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("schema: %v\nstatement: %s", err, statement)

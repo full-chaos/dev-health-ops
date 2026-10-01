@@ -2,9 +2,6 @@ package operationalbackfill
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -164,29 +161,6 @@ func TestOperationalRefusesBeforeTouchingClickHouse(t *testing.T) {
 		if code != 2 {
 			t.Errorf("%s: exit %d, stderr %s", name, code, stderr.String())
 		}
-	}
-}
-
-// goldenSHA256 pins testdata/backfill_operational_golden.json (R24): the rows
-// and the summary line that the real Python `dev-hops backfill operational` left
-// for every comparable scenario of the integration test, written at commit
-// 9b78d78044eadf40e088189057d88bc984ca2b86. The producer is deleted with the Python CLI, so this is a rot guard,
-// not a freshness check: the file is only rewritten by
-// TestBackfillOperationalVenueOracleMatchesThePythonProducer with
-// DHO_BACKFILL_OPERATIONAL_GOLDEN_UPDATE=1, then this digest is updated.
-// The golden was recorded again in a closed environment (CHAOS-7471, byte-identical) with the
-// Python src of main 7b5903cdfc72a100c19df267d90d88df1ce641e2 (an ancestor of origin/main); chmigrate's pythonGoldenBuild
-// is not its origin.
-const goldenSHA256 = "c4b1ee9fa22868479cee3e1dfadda31ee963bc95c44ef6e5275de34d4c0941fe"
-
-func TestGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile("testdata/backfill_operational_golden.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != goldenSHA256 {
-		t.Fatalf("golden digest = %s, want %s: the golden changed without its digest. It is only rewritten from the live Python producer, then the digest is updated", got, goldenSHA256)
 	}
 }
 

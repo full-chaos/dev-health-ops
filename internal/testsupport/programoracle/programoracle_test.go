@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -80,22 +81,76 @@ func TestAPythonStringLiteralKeepsEveryCharacter(t *testing.T) {
 	}
 }
 
+// fakeInterpreter puts a python3 that is a shell script first on PATH and
+// returns its path. The script gets the program text as its second argument:
+// "leak" prints the per-run database entry, "fail" writes it to stderr, prints
+// a part of an answer and exits 3, any other text prints "ok".
+func fakeInterpreter(t *testing.T) string {
+	t.Helper()
+	bin := t.TempDir()
+	script := "#!/bin/sh\ncase \"$2\" in\n" +
+		"leak) printf '%s' \"$ORACLE_DATABASE_URI\" ;;\n" +
+		"fail) printf 'cannot reach %s\n' \"$ORACLE_DATABASE_URI\" >&2; printf 'part'; exit 3 ;;\n" +
+		"*) printf 'ok' ;;\nesac\n"
+	python3 := filepath.Join(bin, "python3")
+	if err := os.WriteFile(python3, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return python3
+}
+
 // TestTheInterpreterRunsInThePinnedCheckout pins the command of a recording:
-// python3 by name with the program as -c text, the pinned checkout as working
-// directory, the program's input, and the interpreter environment.
+// the python3 that is first on PATH, started under its full path, with the
+// program as -c text, the pinned checkout as working directory, the program's
+// input, and the interpreter environment.
 func TestTheInterpreterRunsInThePinnedCheckout(t *testing.T) {
-	command := interpreterCommand("/pinned", Program{Text: "print(1)", Stdin: []byte("in")})
+	python3 := fakeInterpreter(t)
+	command := interpreterCommand("/pinned", Program{Text: "print(1)", Stdin: []byte("in")}, nil)
 	if command.Dir != "/pinned" {
 		t.Errorf("working directory = %q", command.Dir)
 	}
-	if strings.Join(command.Args, " ") != "python3 -c print(1)" {
-		t.Errorf("arguments = %q", command.Args)
+	if command.Path != python3 {
+		t.Errorf("the command starts %q, want the python3 first on PATH (%s)", command.Path, python3)
+	}
+	if want := []string{python3, "-c", "print(1)"}; !slices.Equal(command.Args, want) {
+		t.Errorf("arguments = %q, want %q: the interpreter must get its full path as its name", command.Args, want)
 	}
 	if input, err := io.ReadAll(command.Stdin); err != nil || string(input) != "in" {
 		t.Errorf("input = %q, %v", input, err)
 	}
 	if !slices.Contains(command.Env, "PYTHONPATH="+filepath.Join("/pinned", "src")) {
 		t.Errorf("environment = %q", command.Env)
+	}
+}
+
+// TestARunRefusesAnAnswerWithAPerRunValueAndLogsNone pins what a run does with
+// the entries of one run: an answer that holds one is an error, and the
+// stderr it returns for the log holds none.
+func TestARunRefusesAnAnswerWithAPerRunValueAndLogsNone(t *testing.T) {
+	fakeInterpreter(t)
+	address, host, _, _ := perRunAddress()
+	perRun := func() map[string]string { return map[string]string{"ORACLE_DATABASE_URI": address} }
+	root := t.TempDir()
+	if result, err := executeErr(root, Program{Name: "clean", Text: "clean", PerRun: perRun}); err != nil || result.exitCode != 0 || string(result.stdout) != "ok" {
+		t.Fatalf("a clean answer = %+v, %v", result, err)
+	}
+	result, err := executeErr(root, Program{Name: "leaks", Text: "leak", PerRun: perRun})
+	if err == nil || !strings.Contains(err.Error(), "value of the per-run entry ORACLE_DATABASE_URI") {
+		t.Fatalf("an answer that holds the address = %+v, %v: want it refused by the name of the entry", result, err)
+	}
+	if strings.Contains(err.Error(), host) || len(result.stdout) != 0 {
+		t.Fatalf("the refusal hands the address on: %v, stdout %q", err, result.stdout)
+	}
+	result, err = executeErr(root, Program{Name: "fails", Text: "fail", PerRun: perRun})
+	if err != nil || result.exitCode != 3 || string(result.stdout) != "part" {
+		t.Fatalf("a program that exits 3 = %+v, %v", result, err)
+	}
+	if want := "cannot reach <ORACLE_DATABASE_URI value>\n"; result.stderr != want {
+		t.Fatalf("stderr for the log = %q, want %q", result.stderr, want)
+	}
+	if result, err := executeErr(root, Program{Name: "no entries", Text: "leak"}); err != nil || len(result.stdout) != 0 {
+		t.Fatalf("a program with no per-run entry = %+v, %v", result, err)
 	}
 }
 
@@ -133,22 +188,110 @@ func TestTheKeyedEnvironmentHoldsTheDefaultsAndTheProgramsOwn(t *testing.T) {
 }
 
 // TestTheInterpreterGetsNothingOfTheProcessEnvironment pins the recording
-// environment: only PATH and HOME come from the process; the pinned sources,
-// the bytecode switch and the keyed entries are set; an ambient variable does
-// not reach the program.
+// environment: the repository's closed environment for the pinned sources and
+// then the keyed entries. No variable of the process reaches the program, its
+// PATH and HOME included.
 func TestTheInterpreterGetsNothingOfTheProcessEnvironment(t *testing.T) {
-	t.Setenv("PROGRAMORACLE_AMBIENT", "must not reach the program")
-	t.Setenv("PYTHONPATH", "/ambient/path")
-	t.Setenv("PATH", "/bin-of-the-test")
-	t.Setenv("HOME", "/home-of-the-test")
-	environment := interpreterEnv("/pinned", Program{Env: map[string]string{"TZ": "UTC"}})
-	want := []string{
-		"PATH=/bin-of-the-test", "HOME=/home-of-the-test",
-		"PYTHONPATH=" + filepath.Join("/pinned", "src"), "PYTHONDONTWRITEBYTECODE=1",
-		"PYTHONHASHSEED=0", "PYTHONUTF8=1", "TZ=UTC",
-	}
+	ambient := []string{"must not reach the program", "/ambient/path", "/bin-of-the-test", "/home-of-the-test"}
+	t.Setenv("PROGRAMORACLE_AMBIENT", ambient[0])
+	t.Setenv("PYTHONPATH", ambient[1])
+	t.Setenv("PATH", ambient[2])
+	t.Setenv("HOME", ambient[3])
+	environment := interpreterEnv("/pinned", Program{Env: map[string]string{"TZ": "UTC"}}, nil)
+	want := append(pyoracle.ClosedEnv("/pinned"), "PYTHONHASHSEED=0", "PYTHONUTF8=1", "TZ=UTC")
 	if strings.Join(environment, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("interpreter environment =\n%s\nwant\n%s", strings.Join(environment, "\n"), strings.Join(want, "\n"))
+	}
+	text := strings.Join(environment, "\n")
+	for _, value := range ambient {
+		if strings.Contains(text, value) {
+			t.Errorf("the interpreter environment holds %q of the process environment", value)
+		}
+	}
+	if !slices.Contains(environment, "PYTHONPATH="+filepath.Join("/pinned", "src")) {
+		t.Errorf("the pinned sources are not on the module path: %v", environment)
+	}
+}
+
+// TestAPerRunEntryReachesTheProgramAndIsNotInTheRequest pins PerRun: its
+// entries are in the interpreter environment, after the keyed ones, and the
+// keyed environment (what the request holds) does not have them.
+func TestAPerRunEntryReachesTheProgramAndIsNotInTheRequest(t *testing.T) {
+	calls := 0
+	program := Program{Env: map[string]string{"TZ": "UTC"}, PerRun: func() map[string]string {
+		calls++
+		return map[string]string{"ORACLE_DATABASE": "address-of-this-run", "ANOTHER": "x"}
+	}}
+	if keyed := keyedEnv(program); len(keyed) != 3 || keyed["ORACLE_DATABASE"] != "" {
+		t.Fatalf("the keyed environment = %v: a per-run entry is in the request", keyed)
+	}
+	if calls != 0 {
+		t.Fatalf("PerRun was called %d times to build the request: it is for a recording only", calls)
+	}
+	environment := interpreterEnv("/pinned", program, program.PerRun())
+	tail := environment[len(environment)-5:]
+	if want := []string{"PYTHONHASHSEED=0", "PYTHONUTF8=1", "TZ=UTC", "ANOTHER=x", "ORACLE_DATABASE=address-of-this-run"}; strings.Join(tail, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("interpreter environment ends with %q, want %q", tail, want)
+	}
+	if without := interpreterEnv("/pinned", Program{Env: map[string]string{"TZ": "UTC"}}, nil); len(without) != len(environment)-2 {
+		t.Fatalf("a program with no per-run entry gets %d entries, want %d", len(without), len(environment)-2)
+	}
+}
+
+// perRunAddress is an address of the shape a test hands a program for one
+// run. It is built from parts so that no line of this file holds an address.
+func perRunAddress() (address, host, password, database string) {
+	host, password, database = "127.0.0.1:"+"54329", "pw-of-this-run", "venue_ab12cd"
+	return "postgresql+psycopg2://admin:" + password + "@" + host + "/" + database, host, password, database
+}
+
+// TestAnAnswerThatHoldsAPartOfAPerRunEntryIsRefused pins the guard of a
+// recording: the whole value, the host with its port, the password or the
+// database name in the answer is an error that names the entry and the part
+// and prints none of them. A part shorter than perRunMinimum is not searched
+// for: it is in an answer by chance.
+func TestAnAnswerThatHoldsAPartOfAPerRunEntryIsRefused(t *testing.T) {
+	address, host, password, database := perRunAddress()
+	perRun := map[string]string{"ORACLE_DATABASE_URI": address, "PLAIN": "value-of-this-run", "SHORT": "abc"}
+	for _, row := range []struct{ name, answer, want string }{
+		{"clean", `[["0", "", ""], "admin"]`, ""},
+		{"a short value is not searched for", `["abc", "abcdef"]`, ""},
+		{"whole value", `{"uri": "` + address + `"}`, "value of the per-run entry ORACLE_DATABASE_URI"},
+		{"host and port", "connected to " + host, "host and port of the per-run entry ORACLE_DATABASE_URI"},
+		{"password", "auth " + password, "password of the per-run entry ORACLE_DATABASE_URI"},
+		{"database name", `relation in "` + database + `"`, "last path element of the per-run entry ORACLE_DATABASE_URI"},
+		{"value that is no address", "x value-of-this-run y", "value of the per-run entry PLAIN"},
+	} {
+		err := perRunErr("p", row.answer, perRun)
+		switch {
+		case row.want == "" && err != nil:
+			t.Errorf("%s: refused: %v", row.name, err)
+		case row.want != "" && (err == nil || !strings.Contains(err.Error(), row.want)):
+			t.Errorf("%s: error = %v, want one that holds %q", row.name, err, row.want)
+		case err != nil && (strings.Contains(err.Error(), host) || strings.Contains(err.Error(), password) || strings.Contains(err.Error(), database) || strings.Contains(err.Error(), "value-of-this-run")):
+			t.Errorf("%s: the error prints the per-run text: %v", row.name, err)
+		}
+	}
+	if err := perRunErr("p", "anything", nil); err != nil {
+		t.Errorf("a program with no per-run entry is refused: %v", err)
+	}
+}
+
+// TestALoggedErrorTextHoldsNoPartOfAPerRunEntry pins what a failed program's
+// stderr becomes in the log: each part replaced by the name of its entry, the
+// rest unchanged.
+func TestALoggedErrorTextHoldsNoPartOfAPerRunEntry(t *testing.T) {
+	address, host, password, database := perRunAddress()
+	perRun := map[string]string{"ORACLE_DATABASE_URI": address}
+	stderr := "OperationalError: connection to " + host + " failed for database " + database + " (" + address + ") password " + password + "; line 3"
+	got := withoutPerRun(stderr, perRun)
+	want := "OperationalError: connection to <ORACLE_DATABASE_URI host and port> failed for database <ORACLE_DATABASE_URI last path element> " +
+		"(<ORACLE_DATABASE_URI value>) password <ORACLE_DATABASE_URI password>; line 3"
+	if got != want {
+		t.Fatalf("logged text =\n%s\nwant\n%s", got, want)
+	}
+	if unchanged := withoutPerRun(stderr, nil); unchanged != stderr {
+		t.Fatalf("a program with no per-run entry has its text changed: %s", unchanged)
 	}
 }
 

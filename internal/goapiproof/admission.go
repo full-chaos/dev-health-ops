@@ -121,6 +121,10 @@ type AdmissionInput struct {
 	// exist for this call and Admit behaves exactly as it does for an
 	// operation whose Python path is intact.
 	GoServed *GoServedLedger
+	// GoEdge selects Go-edge mode (goedge.go): Baseline is then the control
+	// leg, the proof that the edge is query-api alone, and never a
+	// reference answer.
+	GoEdge bool
 
 	Candidate, Baseline         Observation
 	CandidateSnap, BaselineSnap Snapshot
@@ -133,6 +137,9 @@ type AdmissionInput struct {
 // and an operator reading the refusal should see the cause closest to the
 // root.
 func Admit(in AdmissionInput) Admission {
+	if in.GoEdge {
+		return admitGoEdge(in)
+	}
 	// 1. Both planes positively identified. Silence is not evidence.
 	if a := admitPlanes(in); !a.Admitted {
 		return a

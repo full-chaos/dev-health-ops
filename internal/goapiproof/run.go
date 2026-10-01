@@ -349,7 +349,11 @@ type Outcome struct {
 	// StochasticLeafClass and nothing lies outside a citation. Empty for an
 	// operation proven by equality or not proven at all, so a reader can
 	// always tell the two kinds of proof apart.
-	ProvenUnder    string       `json:"proven_under,omitempty"`
+	ProvenUnder string `json:"proven_under,omitempty"`
+	// EdgeMode is EdgeModeGo for an outcome of a Go-edge run: Baseline is
+	// then the control leg, and nothing here is a two-plane comparison.
+	// Empty in the Python-reference mode.
+	EdgeMode       string       `json:"edge_mode,omitempty"`
 	Candidate      *Observation `json:"candidate,omitempty"`
 	Baseline       *Observation `json:"baseline,omitempty"`
 	ReceiptWritten bool         `json:"receipt_written"`
@@ -386,6 +390,7 @@ type sealedOutcome struct {
 	mode            string
 	route           string
 	edgeBinding     string
+	edgeMode        string
 	routingRowBuild string
 	terminalState   string
 	executed        bool
@@ -414,7 +419,10 @@ type sealedOutcome struct {
 // every run, including the zeros: a run that measured nothing must be
 // impossible to mistake for a run that found nothing wrong.
 type Summary struct {
-	Attempted int `json:"attempted"`
+	// EdgeMode is EdgeModeGo for a Go-edge run, EdgeModePython otherwise:
+	// which kind of proof every count below is a count of.
+	EdgeMode  string `json:"edge_mode"`
+	Attempted int    `json:"attempted"`
 	// Admitted is serialised even when zero. "nothing passed admission"
 	// and "everything passed and nothing differed" are different facts,
 	// and a run whose admitted count is 0 measured nothing at all.
@@ -515,8 +523,13 @@ type Config struct {
 
 	// PythonEdgeURL is the real product edge (/graphql). Both the
 	// candidate leg (for canary/primary operations) and every baseline
-	// leg go through it.
+	// leg go through it. In Go-edge mode it is query-api's own /graphql.
 	PythonEdgeURL string
+
+	// GoEdge selects Go-edge mode (goedge.go): the edge is query-api
+	// itself, with no Python plane behind it. Explicit, never detected: the
+	// two modes prove different things.
+	GoEdge bool
 
 	// GoProofURL is the measurement-only route that can execute a
 	// SHADOW-mode operation on the deployed Go build. Empty means the
@@ -537,6 +550,14 @@ type Config struct {
 	// operation with InstanceVariable set and no entry here is refused by
 	// name (RefusalNeedsInstanceID) rather than measured with a guess.
 	InstanceIDs map[string]string
+}
+
+// edgeModeOf names the mode a config runs in.
+func edgeModeOf(config Config) string {
+	if config.GoEdge {
+		return EdgeModeGo
+	}
+	return EdgeModePython
 }
 
 // Runner executes the proof run.
@@ -596,7 +617,14 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 	}
 	sort.Strings(operations)
 
+	if r.Config.GoEdge {
+		if err := r.verifyGoEdge(ctx); err != nil {
+			return nil, Summary{EdgeMode: EdgeModeGo}, err
+		}
+	}
+
 	summary := Summary{
+		EdgeMode:        edgeModeOf(r.Config),
 		ByTerminalState: map[string]int{},
 		ByRefusalReason: map[string]int{},
 		ByOperation:     map[string]OperationVerdict{},
@@ -922,6 +950,9 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	registryDigest := r.Registry.DocumentDigest[operation]
 	row := r.Routing[operation]
 	outcome := Outcome{Operation: operation, Variant: variantName, DocumentDigest: registryDigest, Mode: row.Mode}
+	if r.Config.GoEdge {
+		outcome.EdgeMode = EdgeModeGo
+	}
 	// Recorded on EVERY outcome, refused or not: a refusal taken while the
 	// enablement record was stale is exactly as worth knowing as a match
 	// taken then. Empty when the row agrees with what is running.
@@ -1043,9 +1074,15 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	if refusal.Reason != "" {
 		return refuse(refusal.Reason, refusal.Detail)
 	}
-	baselineSnapshot, refusal := decodeLeg("baseline", baseline)
-	if refusal.Reason != "" {
-		return refuse(refusal.Reason, refusal.Detail)
+	// In Go-edge mode the other leg is the control document's refusal: the
+	// admission reads its headers and status first and its body itself, so
+	// a wrong edge is named as one even when its body is not JSON.
+	var baselineSnapshot Snapshot
+	if !r.Config.GoEdge {
+		baselineSnapshot, refusal = decodeLeg("baseline", baseline)
+		if refusal.Reason != "" {
+			return refuse(refusal.Reason, refusal.Detail)
+		}
 	}
 
 	// THE ONLY DOOR TO executed=true.
@@ -1064,6 +1101,7 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 		RootNullable:  spec.RootNullable,
 		Operation:     operation,
 		GoServed:      r.GoServed,
+		GoEdge:        r.Config.GoEdge,
 		Candidate:     candidate,
 		Baseline:      baseline,
 		CandidateSnap: candidateSnapshot,
@@ -1195,15 +1233,20 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 		outcome.DifferencesOutsideBaselineDefect++
 		countOutside("http")
 	}
-	if candidate.StatusCode != baseline.StatusCode {
-		httpDifference("$.http.status",
-			fmt.Sprintf("baseline %d != candidate %d", baseline.StatusCode, candidate.StatusCode))
-	}
-	for _, header := range comparedHeaders {
-		baselineValue, candidateValue := baseline.Headers[header], candidate.Headers[header]
-		if baselineValue != candidateValue {
-			httpDifference("$.http.header."+header,
-				fmt.Sprintf("baseline %q != candidate %q", baselineValue, candidateValue))
+	// In Go-edge mode the other leg is the control document's refusal, not
+	// an answer to compare: its status, plane and build were checked by the
+	// admission, and the candidate's own status and content type with them.
+	if !r.Config.GoEdge {
+		if candidate.StatusCode != baseline.StatusCode {
+			httpDifference("$.http.status",
+				fmt.Sprintf("baseline %d != candidate %d", baseline.StatusCode, candidate.StatusCode))
+		}
+		for _, header := range comparedHeaders {
+			baselineValue, candidateValue := baseline.Headers[header], candidate.Headers[header]
+			if baselineValue != candidateValue {
+				httpDifference("$.http.header."+header,
+					fmt.Sprintf("baseline %q != candidate %q", baselineValue, candidateValue))
+			}
 		}
 	}
 
@@ -1312,6 +1355,7 @@ func (r *Runner) seal(outcome Outcome, variables map[string]any) sealedOutcome {
 		mode:                             outcome.Mode,
 		route:                            outcome.Route,
 		edgeBinding:                      outcome.EdgeBuildBinding,
+		edgeMode:                         outcome.EdgeMode,
 		routingRowBuild:                  outcome.RoutingRowBuild,
 		terminalState:                    outcome.terminalState,
 		executed:                         outcome.Executed,
@@ -1529,6 +1573,10 @@ type ReceiptProvenance struct {
 	// CHAOS-5479's known gap, recorded so a later reader does not have to
 	// assume which it was.
 	EdgeBuildBinding string `json:"edge_build_binding,omitempty"`
+	// EdgeMode is EdgeModeGo on a receipt of a Go-edge run: the candidate
+	// stood alone against an edge that is query-api, and no Python answer
+	// was read. Absent on a Python-reference receipt.
+	EdgeMode string `json:"edge_mode,omitempty"`
 	// RoutingRowBuild is the build the routing row named, when it differed
 	// from the running build. A run refuses on this today
 	// (VerifyCandidateBuild), so a receipt carrying it means the refusal
@@ -1557,6 +1605,7 @@ func (r *Runner) reviewEvidence(sealed sealedOutcome, refusal string, measured, 
 		Operator:         r.Config.ReviewEvidence,
 		MeasurementRoute: sealed.route,
 		EdgeBuildBinding: sealed.edgeBinding,
+		EdgeMode:         sealed.edgeMode,
 		RoutingRowBuild:  sealed.routingRowBuild,
 		Refusal:          refusal,
 		CoveredByShape:   sealed.coveredByShape,

@@ -130,10 +130,16 @@ type flags struct {
 	keyID                string
 	dryRun               bool
 	adminPrincipal       bool
-	timeout              time.Duration
-	window               goapiproof.Window
-	reportPath           string
-	instanceIDs          instanceIDFlag
+	// goEdge selects Go-edge mode: -edge-url is query-api's own /graphql,
+	// with no Python plane behind it (goapiproof/goedge.go).
+	goEdge bool
+	// parsed is true once the whole command line was read: only then does
+	// goEdge say which mode the run is in (selectedEdgeMode).
+	parsed      bool
+	timeout     time.Duration
+	window      goapiproof.Window
+	reportPath  string
+	instanceIDs instanceIDFlag
 }
 
 // instanceIDFlag collects repeated -instance-id operation=value pairs into
@@ -192,6 +198,7 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	fs.StringVar(&f.principalKind, "principal-kind", "stored_account", "auth-context SHAPE recorded in request_identity; never a credential")
 	fs.StringVar(&f.audience, "audience", "query-api", "envelope audience, part of the auth-context shape")
 	fs.StringVar(&f.keyID, "key-id", "", "envelope signing key id (kid) -- a public identifier, and the value that silently broke routing three times on 2026-09-07")
+	fs.BoolVar(&f.goEdge, "go-edge", false, "Go-edge mode: -edge-url is query-api's own /graphql with NO Python plane behind it. No Python answer is read: each operation is proven by its candidate alone (PROVEN_GO_ONLY, for an operation the go-served ledger names), and the control document must be refused by query-api (404 UNREGISTERED_DOCUMENT, plane go, the named build). Never detected: without this flag an edge with no Python plane is refused, and with it an edge that has one is refused")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "execute and compare, but write NO receipts")
 	fs.BoolVar(&f.adminPrincipal, "admin-principal", false, "mint the org-admin proof principal's edge token (mint edge-token -principal admin-proof) for the operations on the closed operator-gated allowlist (internal/goapiproof/principal.go); without it those operations are refused by name, never measured as the read-level principal. Read-only queries only: a document that is not a query is refused")
 	fs.DurationVar(&f.timeout, "timeout", 60*time.Second, "per-request timeout")
@@ -212,6 +219,7 @@ func parseFlags(args []string) (flags, error) {
 		return *fp, cli.WrapFlagParseError(err)
 	}
 	f := *fp
+	f.parsed = true
 	secrets.ResolveFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar)
 
 	missing := map[string]string{
@@ -236,18 +244,27 @@ func parseFlags(args []string) (flags, error) {
 
 func run(args []string) (err error) {
 	var f flags
-	// Every exit before emitReport runs still writes -report (when one
-	// was given), with exit_cause refused_before_measuring and the
-	// redacted error: registered first, so it runs last.
+	// Every exit before emitReport runs still says which mode was refused
+	// and why the run ended, and still writes -report (when one was given),
+	// with exit_cause refused_before_measuring and the redacted error:
+	// registered first, so it runs last. Asking for help is not a run.
 	reported := false
 	// resolved is both builds once /buildinfo has named the candidate:
 	// every report written after that carries them.
 	var resolved *goapiproof.ProverBuild
 	defer func() {
-		if err == nil || reported || f.reportPath == "" {
+		if err == nil || reported || errors.Is(err, flag.ErrHelp) {
 			return
 		}
-		refused := report{OrgID: f.orgID, Window: f.window, Stage: goapiproof.Stage, Outcomes: []goapiproof.Outcome{}, ExitCause: exitRefusedBeforeMeasuring, ExitDetail: err.Error()}
+		// The mode is stated on this exit too, on stdout and in the report:
+		// a refusal read later must say which proof was refused.
+		refused := newReport(f, goapiproof.Summary{EdgeMode: selectedEdgeMode(f)}, nil, exitRefusedBeforeMeasuring)
+		refused.ExitDetail = err.Error()
+		fmt.Printf("go-api-prove: %s\n", edgeModeLine(refused.Summary.EdgeMode))
+		fmt.Printf("go-api-prove: exit_cause=%s\n", exitRefusedBeforeMeasuring)
+		if f.reportPath == "" {
+			return
+		}
 		if resolved != nil {
 			refused.ProverBuild, refused.CandidateBuild = resolved, resolved.Candidate
 		}
@@ -358,13 +375,20 @@ func run(args []string) (err error) {
 	// carries, naming the org it serves that credential: refused unless it
 	// is -org with no impersonation session in force. Every leg is still
 	// checked for the impersonation stamp (admitPlanes).
-	principalCtx, cancelPrincipal := boundedCtx()
-	err = goapiproof.VerifyReferencePrincipal(principalCtx, client, originOf(f.edgeURL), edgeCredential, f.orgID)
-	cancelPrincipal()
-	if err != nil {
-		return err
+	//
+	// Go-edge mode has no Python app to ask. Its principal check is the
+	// credential's own org claim, checked on every value sent (BindOrg
+	// above, required by the run), and the impersonation stamp on every
+	// leg; its pre-run check of the edge is the control probe Run sends.
+	if !f.goEdge {
+		principalCtx, cancelPrincipal := boundedCtx()
+		err = goapiproof.VerifyReferencePrincipal(principalCtx, client, originOf(f.edgeURL), edgeCredential, f.orgID)
+		cancelPrincipal()
+		if err != nil {
+			return err
+		}
 	}
-	if adminEdgeCredential != nil {
+	if adminEdgeCredential != nil && !f.goEdge {
 		// The widened credential gets the same check before any case: the Python app resolves it to -org, with no impersonation session.
 		adminCtx, cancelAdmin := boundedCtx()
 		err = goapiproof.VerifyReferencePrincipal(adminCtx, client, originOf(f.edgeURL), adminEdgeCredential, f.orgID)
@@ -429,6 +453,7 @@ func run(args []string) (err error) {
 			OrgID:               f.orgID,
 			Window:              f.window,
 			PythonEdgeURL:       f.edgeURL,
+			GoEdge:              f.goEdge,
 			GoProofURL:          f.proofURL,
 			EdgeCredential:      edgeCredential,
 			AdminEdgeCredential: adminEdgeCredential,
@@ -735,6 +760,9 @@ func emitReport(f flags, registry goapiproof.RegistryView, builds goapiproof.Pro
 	// outlives the terminal it was typed in -- so it is
 	// printed on every successful run rather than only on failure.
 	fmt.Printf("go-api-prove: edge=%s proof_route=%s\n", goapiproof.EndpointLabel(f.edgeURL), labelledProofURL(proofURL))
+	// Which kind of proof every line below is. Printed on every run, in
+	// both modes, so a Go-edge result is never read as a two-plane one.
+	fmt.Printf("go-api-prove: %s\n", edgeModeLine(summary.EdgeMode))
 	// Report what this run ESTABLISHED, counted from the outcomes, rather
 	// than restating what each route usually provides. Both of
 	// these lines went missing once: an earlier edit reverted the computed
@@ -773,7 +801,7 @@ func emitReport(f flags, registry goapiproof.RegistryView, builds goapiproof.Pro
 		fmt.Printf("go-api-prove:   terminal_state %s = %d\n", state, summary.ByTerminalState[state])
 	}
 	fmt.Printf("go-api-prove:   proven_under %s = %d\n", goapiproof.ProvenUnderStochasticLeafClass, summary.ProvenUnderStochasticLeafClass)
-	fmt.Printf("go-api-prove:   %s = %d\n", goapiproof.VerdictGoOnly, summary.ProvenGoOnly)
+	fmt.Printf("go-api-prove:   %s = %d%s\n", goapiproof.VerdictGoOnly, summary.ProvenGoOnly, goEdgeCountNote(summary.EdgeMode))
 	for _, reason := range sortedKeys(summary.ByRefusalReason) {
 		fmt.Printf("go-api-prove:   refused %s = %d\n", reason, summary.ByRefusalReason[reason])
 	}
@@ -790,17 +818,8 @@ func emitReport(f flags, registry goapiproof.RegistryView, builds goapiproof.Pro
 	if f.reportPath == "" {
 		return nil
 	}
-	r := report{
-		SchemaDigest:   registry.SchemaDigest,
-		CandidateBuild: registry.BuildIdentity,
-		ProverBuild:    &builds,
-		Stage:          goapiproof.Stage,
-		OrgID:          f.orgID,
-		Window:         f.window,
-		Summary:        summary,
-		Outcomes:       outcomes,
-		ExitCause:      exitCause,
-	}
+	r := newReport(f, summary, outcomes, exitCause)
+	r.SchemaDigest, r.CandidateBuild, r.ProverBuild = registry.SchemaDigest, registry.BuildIdentity, &builds
 	if runErr != nil {
 		r.ExitDetail = pgstorage.Boundary(f.postgresURI).Redact(runErr).Error()
 	}
@@ -922,6 +941,54 @@ func validateEndpointFlags(f flags) error {
 	return nil
 }
 
+// selectedEdgeMode is the mode the command line selected. A command line
+// that did not parse selected none: flag parsing stops at the first error, so
+// a -go-edge after that point was never read.
+func selectedEdgeMode(f flags) string {
+	switch {
+	case !f.parsed:
+		return goapiproof.EdgeModeUndetermined
+	case f.goEdge:
+		return goapiproof.EdgeModeGo
+	default:
+		return goapiproof.EdgeModePython
+	}
+}
+
+// newReport is the one place a report is built, for every way a run ends, so
+// no exit can leave out a field another exit carries. A summary that names no
+// mode is recorded as undetermined, never as an empty field: a report always
+// says which proof it is a report of.
+func newReport(f flags, summary goapiproof.Summary, outcomes []goapiproof.Outcome, exitCause string) report {
+	if summary.EdgeMode == "" {
+		summary.EdgeMode = goapiproof.EdgeModeUndetermined
+	}
+	if outcomes == nil {
+		outcomes = []goapiproof.Outcome{}
+	}
+	return report{Stage: goapiproof.Stage, OrgID: f.orgID, Window: f.window, Summary: summary, Outcomes: outcomes, ExitCause: exitCause}
+}
+
+// edgeModeLine is the run's one statement of which proof it is.
+func edgeModeLine(mode string) string {
+	switch mode {
+	case goapiproof.EdgeModeGo:
+		return "edge_mode=go (Go-edge: the edge is query-api with no Python plane behind it; every proof is the candidate alone, NOT a two-plane comparison)"
+	case goapiproof.EdgeModePython:
+		return "edge_mode=python (Python-reference: the control document is answered by the Python plane)"
+	default:
+		return "edge_mode=undetermined (no mode was selected: the command line did not parse, and nothing was measured)"
+	}
+}
+
+// goEdgeCountNote marks the go-only count of a Go-edge run.
+func goEdgeCountNote(mode string) string {
+	if mode == goapiproof.EdgeModeGo {
+		return " (go-edge mode)"
+	}
+	return ""
+}
+
 // originOf is raw's scheme and host: the Python app serves its own
 // ReferencePrincipalPath beside the GraphQL route -edge-url names.
 // validateEndpointFlags has already refused a URL it cannot account for.
@@ -943,6 +1010,11 @@ func executedOutcomeLine(outcome goapiproof.Outcome) string {
 	case goapiproof.ProvenUnderGoOnly:
 		// Never printed as a two-plane word: no baseline answered.
 		verdict = goapiproof.VerdictGoOnly + " (no two-plane baseline)"
+		if outcome.EdgeMode == goapiproof.EdgeModeGo {
+			// And never as the Python-reference mode's word either: here
+			// no Python plane was asked at all.
+			verdict = goapiproof.VerdictGoOnly + " (go-edge mode: the candidate alone, the edge is query-api, no Python answer was read)"
+		}
 	case goapiproof.ProvenUnderGoOnlyUnproven:
 		// The ledger names no two-plane match for this operation.
 		verdict = goapiproof.VerdictGoOnlyUnproven + " (named limit, no two-plane match)"

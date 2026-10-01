@@ -1,6 +1,7 @@
 package streamhandlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -36,21 +37,11 @@ type pythonStored struct {
 }
 
 // payloadNamedDivergences are corpus shapes whose payload_json TEXT differs from Python's although the
-// stored value is the same JSON: the Go consumer re-encodes with encoding/json (a float's ".0" is
-// dropped, non-ASCII is kept raw, <, > and & are escaped). They are accepted divergences: the only
+// stored value is the same JSON: the Go consumer re-encodes with encoding/json (non-ASCII is kept raw, <, > and & are escaped). They are accepted divergences: the only
 // reader of the column (queryapi/producttelemetry) parses it with JSONExtract*, which reads both
 // spellings as the same value. Pinned so a change on either side fails this test.
 var payloadNamedDivergences = map[string]struct{ goText, pythonText string }{
-	"payload_float_integral": {`{"f":100}`, `{"f":100.0}`},
-	"payload_unicode":        {`{"s":"héllo ☃ \u003c\u0026\u003e"}`, `{"s":"h\u00e9llo \u2603 <&>"}`},
-}
-
-// payloadKnownDefects are shapes where the Go consumer stores a DIFFERENT VALUE than Python: it decodes
-// every payload number through float64, so an integer above 2^53 changes. This is a defect, pinned at
-// its current wrong output so the fix flips this entry to the exact Python text (KNOWN DEFECT, ticket
-// CHAOS-7472).
-var payloadKnownDefects = map[string]struct{ goText, pythonText string }{
-	"payload_big_int": {`{"i":9007199254740992}`, `{"i":9007199254740993}`},
+	"payload_unicode": {`{"s":"héllo ☃ \u003c\u0026\u003e"}`, `{"s":"h\u00e9llo \u2603 <&>"}`},
 }
 
 // refusedBelowClickHouseMin are corpus shapes whose Python row holds the timestamp but whose Python
@@ -78,7 +69,10 @@ func TestConsumerStoresEveryIntakeAcceptedShapeAsPythonStoredIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	var corpus map[string]pythonStored
-	if err := json.Unmarshal(data, &corpus); err != nil {
+	// Numbers stay as written: a float64 here would round an integer above 2^53 before the intake saw it.
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&corpus); err != nil {
 		t.Fatal(err)
 	}
 	stored := 0
@@ -129,7 +123,7 @@ func TestConsumerStoresEveryIntakeAcceptedShapeAsPythonStoredIt(t *testing.T) {
 			if occurred := row[8].(interface{ Format(string) string }).Format("2006-01-02T15:04:05.000000"); occurred != want.Row.OccurredAt {
 				t.Fatalf("occurred_at %s, Python stored %s", occurred, want.Row.OccurredAt)
 			}
-			for kind, table := range map[string]map[string]struct{ goText, pythonText string }{"named divergence": payloadNamedDivergences, "KNOWN DEFECT": payloadKnownDefects} {
+			for kind, table := range map[string]map[string]struct{ goText, pythonText string }{"named divergence": payloadNamedDivergences} {
 				if pinned, listed := table[name]; listed {
 					if row[7].(string) != pinned.goText || want.Row.PayloadJSON != pinned.pythonText {
 						t.Fatalf("%s changed: Go %s (pinned %s), Python %s (pinned %s)", kind, row[7], pinned.goText, want.Row.PayloadJSON, pinned.pythonText)

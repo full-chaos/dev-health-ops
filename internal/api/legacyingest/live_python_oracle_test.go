@@ -182,7 +182,7 @@ func TestLegacyIngestMatchesFrozenFastAPI(t *testing.T) {
 	}
 	input, _ := json.Marshal(wire)
 	request := venueoracle.ProgramRequest("legacy ingest corpus", pythonProgram, input, producerEnv)
-	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		command := exec.Command(python, "-c", pythonProgram)
 		command.Env = producerCommandEnv(root)

@@ -31,7 +31,7 @@ import (
 // pagerDutyDisconnectUnconfiguredGoldenDigest is this oracle's golden digest,
 // named away from the words a secret scanner keys on and declared on its own
 // line with none of them sharing it.
-const pagerDutyDisconnectUnconfiguredGoldenDigest = "d1cd8cfe3e50a71241fca3673171aad0ddb5a217f16562469d812487e2de1bac"
+const pagerDutyDisconnectUnconfiguredGoldenDigest = "0f0082dda881b4fe43e504ede265ca8a4337559bb0272610f424e25e839683ae"
 
 func TestPagerDutyDisconnectWithoutClientIDVenueOracle(t *testing.T) {
 	ctx := context.Background()

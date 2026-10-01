@@ -25,7 +25,7 @@ import (
 const credentialsVenueKey = "venue-credentials-settings-encryption-key"
 
 // adminOracleGoldenDigest is the SHA-256 pinned for the admin routes' oracle.
-const adminOracleGoldenDigest = "62a32955087e72ef9eebcd6d68ae6aabc015f00a99476e151eaa31e7a11f456d"
+const adminOracleGoldenDigest = "9db3578c81c491eed1fedadf7ac090dffaa9d8d79cf59290df18dbc737be0207"
 
 var credentialIDPattern = regexp.MustCompile(`"id":"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"`)
 

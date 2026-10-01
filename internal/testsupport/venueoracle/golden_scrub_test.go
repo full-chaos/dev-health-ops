@@ -52,3 +52,25 @@ func TestGoldenProjectAppliesTheSpecsProjectionToAGoPlaneResponse(t *testing.T) 
 		t.Fatalf("headers not projected: %v", got.Headers)
 	}
 }
+
+func TestContentLengthIsAPlaceholderOnlyWhenTheProjectionChangedTheBody(t *testing.T) {
+	scrub := ScrubRunValues(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC), time.Date(2030, 12, 1, 0, 0, 0, 0, time.UTC))
+	golden, err := openGolden(GoldenSpec{Path: t.TempDir() + "/g.json", PythonBuild: goldenBuild, Recipe: "record it", Scrub: scrub}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := golden.projectResponse(Response{Headers: map[string]string{"content-length": "49"}, Body: `{"id":"0192f3a4-5b6c-7d8e-8f90-a1b2c3d4e5f6"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Headers["content-length"] != projectedLengthValue {
+		t.Fatalf("content-length of a changed body = %q", changed.Headers["content-length"])
+	}
+	same, err := golden.projectResponse(Response{Headers: map[string]string{"content-length": "7"}, Body: `{"a":1}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same.Headers["content-length"] != "7" {
+		t.Fatalf("content-length of an unchanged body = %q", same.Headers["content-length"])
+	}
+}

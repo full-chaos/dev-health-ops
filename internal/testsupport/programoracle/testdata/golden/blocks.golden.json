@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestTheGoHalfOfTheBlockDigestsIsThePythonHalf",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/testsupport/programoracle/ -test '^TestTheGoHalfOfTheBlockDigestsIsThePythonHalf$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "block digests",
+      "method": "PYTHON",
+      "path": "program sha256 b81800375f337855066bd3c276557aa463196ec1b2b627861a8fbb8dd760f781 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"block_lines\": 1024, \"lines\": 2500, \"block_count\": 3, \"blocks\": [{\"first\": 0, \"lines\": 1024, \"sha256\": \"7e8c2181b2b0dd699c424846566e3c1abfa1b520bba145fab9b0dcb65944592f\"}, {\"first\": 1024, \"lines\": 1024, \"sha256\": \"5cefc36b6fbf25fb80462fdf90ac56ad7d453e2821704c120acf12067bbcbb01\"}, {\"first\": 2048, \"lines\": 452, \"sha256\": \"e42aef9900ec5065c531df48bbf7fef72b0f5abebdc26a32185754c30269821e\"}]}\n"
+    }
+  ]
+}

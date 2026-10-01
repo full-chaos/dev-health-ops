@@ -1,16 +1,17 @@
-package pyunicodedata
+package pyunicodedata_test
 
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
 	"os"
 	"testing"
 )
 
 // nfcGoldenPath holds a slice of unicodedata.normalize("NFC", ...)'s own
-// answers, cut from the live oracle run (TestNFCMatchesLivePython checks
-// it is still exactly what the interpreter says), so the ordinary test run
-// pins NFC without Python.
+// answers as text, cut from TestNFCMatchesFrozenPython (which checks it is
+// still that slice of the frozen answers), so a difference can be read here,
+// answer by answer.
 const nfcGoldenPath = "testdata/nfc_golden.jsonl"
 
 type nfcCase struct {
@@ -25,7 +26,7 @@ func TestNFCMatchesGolden(t *testing.T) {
 	}
 	failures := 0
 	for _, c := range cases {
-		if got := NFC(c.Input); !equal(got, c.Want) {
+		if got := pyunicodedata.NFC(c.Input); !equal(got, c.Want) {
 			failures++
 			if failures <= 10 {
 				t.Errorf("NFC(%U) = %U, python %U", c.Input, got, c.Want)
@@ -44,24 +45,24 @@ func TestLookupsPinned(t *testing.T) {
 		name      string
 		got, want any
 	}{
-		{"Category(a)", Category('a'), "Ll"},
-		{"Category(U+0301)", Category(0x0301), "Mn"},
-		{"Category(U+00A0)", Category(0x00a0), "Zs"},
-		{"Category(U+D800)", Category(0xd800), "Cs"},
-		{"Category(U+0378)", Category(0x0378), "Cn"},
-		{"Category(U+10FFFF)", Category(0x10ffff), "Cn"},
-		{"Bidirectional(U+05D0)", Bidirectional(0x05d0), "R"},
-		{"Bidirectional(U+0378)", Bidirectional(0x0378), ""},
-		{"Combining(U+094D)", Combining(0x094d), 9},
-		{"Combining(a)", Combining('a'), 0},
-		{"HasName(a)", HasName('a'), true},
-		{"HasName(U+0000)", HasName(0), false},
-		{"DecompositionHasFullStop(U+2488)", DecompositionHasFullStop(0x2488), true},
-		{"DecompositionHasFullStop(a)", DecompositionHasFullStop('a'), false},
-		{"IsWord(_)", IsWord('_'), true},
-		{"IsWord(-)", IsWord('-'), false},
+		{"Category(a)", pyunicodedata.Category('a'), "Ll"},
+		{"Category(U+0301)", pyunicodedata.Category(0x0301), "Mn"},
+		{"Category(U+00A0)", pyunicodedata.Category(0x00a0), "Zs"},
+		{"Category(U+D800)", pyunicodedata.Category(0xd800), "Cs"},
+		{"Category(U+0378)", pyunicodedata.Category(0x0378), "Cn"},
+		{"Category(U+10FFFF)", pyunicodedata.Category(0x10ffff), "Cn"},
+		{"Bidirectional(U+05D0)", pyunicodedata.Bidirectional(0x05d0), "R"},
+		{"Bidirectional(U+0378)", pyunicodedata.Bidirectional(0x0378), ""},
+		{"Combining(U+094D)", pyunicodedata.Combining(0x094d), 9},
+		{"Combining(a)", pyunicodedata.Combining('a'), 0},
+		{"HasName(a)", pyunicodedata.HasName('a'), true},
+		{"HasName(U+0000)", pyunicodedata.HasName(0), false},
+		{"DecompositionHasFullStop(U+2488)", pyunicodedata.DecompositionHasFullStop(0x2488), true},
+		{"DecompositionHasFullStop(a)", pyunicodedata.DecompositionHasFullStop('a'), false},
+		{"IsWord(_)", pyunicodedata.IsWord('_'), true},
+		{"IsWord(-)", pyunicodedata.IsWord('-'), false},
 	}
-	name, ok := Name(0x00a0)
+	name, ok := pyunicodedata.Name(0x00a0)
 	checks = append(checks, struct {
 		name      string
 		got, want any
@@ -116,18 +117,18 @@ func checkJSONLines[T any](t *testing.T, path string, values []T, regenerate boo
 		t.Fatal(err)
 	}
 	if !bytes.Equal(committed, rendered) {
-		t.Fatalf("%s differs from the live answers; regenerate with DEV_HEALTH_REGENERATE_TABLES=1", path)
+		t.Fatalf("%s differs from the frozen answers; regenerate with DEV_HEALTH_REGENERATE_TABLES=1", path)
 	}
 }
 
 // TestNFCPinnedAgainstXText pins the two ways golang.org/x/text's
-// normalizer departs from Python, both answered by the live oracle: a
+// normalizer departs from Python, both answered by the Python oracle: a
 // supplementary-plane base does not compose with a following mark as its
 // low-16-bit BMP twin would (U+0057 U+0301 is U+1E82; U+10057 U+0301 stays),
 // and a run of more than 30 marks gets no U+034F.
 func TestNFCPinnedAgainstXText(t *testing.T) {
 	supplementary := []rune{'e', 0x10057, 0x0301}
-	if got := NFC(supplementary); !equal(got, supplementary) {
+	if got := pyunicodedata.NFC(supplementary); !equal(got, supplementary) {
 		t.Errorf("NFC(%U) = %U, python leaves it unchanged", supplementary, got)
 	}
 	long := []rune{'a'}
@@ -139,7 +140,7 @@ func TestNFCPinnedAgainstXText(t *testing.T) {
 		}
 	}
 	long, want = append(long, 'b'), append(want, 'b')
-	if got := NFC(long); !equal(got, want) {
+	if got := pyunicodedata.NFC(long); !equal(got, want) {
 		t.Errorf("NFC(a + 40 x U+0301 + b) = %U, python %U", got, want)
 	}
 }

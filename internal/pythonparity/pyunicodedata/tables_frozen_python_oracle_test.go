@@ -1,22 +1,21 @@
-package pyunicodedata
+package pyunicodedata_test
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"go/format"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
-// tablesProgram dumps, from the live interpreter, every unicodedata answer
-// this package freezes. Runs are [start, value] pairs over 0..0x10FFFF.
+// tablesProgram dumps, from the interpreter, every unicodedata answer this
+// package freezes. Runs are [start, value] pairs over 0..0x10FFFF.
 const tablesProgram = `
 import json, re, sys, unicodedata
 
@@ -108,27 +107,16 @@ type tablesDump struct {
 	Decomp32      [][2]json.RawMessage `json:"decomp32"`
 }
 
-// TestUnicodeDataTablesMatchLivePython regenerates tables.go from the live
-// interpreter and fails when the committed file differs. With
-// DEV_HEALTH_REGENERATE_TABLES=1 it rewrites the file instead.
-func TestUnicodeDataTablesMatchLivePython(t *testing.T) {
+// TestUnicodeDataTablesMatchFrozenPython renders tables.go from the frozen
+// dump of the interpreter's unicodedata and fails when the committed file
+// differs. With DEV_HEALTH_REGENERATE_TABLES=1 it rewrites the file instead.
+func TestUnicodeDataTablesMatchFrozenPython(t *testing.T) {
 	regenerate := os.Getenv("DEV_HEALTH_REGENERATE_TABLES") == "1"
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" && !regenerate {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
 	_, file, _, _ := runtime.Caller(0)
 	directory := filepath.Dir(file)
-	root := filepath.Clean(filepath.Join(directory, "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "-c", tablesProgram)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr.Bytes()))
-	}
+	output := frozenPython(t, "tables.golden.json", programoracle.Program{Name: "tables", Text: tablesProgram})[0]
 	var dump tablesDump
-	if err := json.Unmarshal(output, &dump); err != nil {
+	if err := json.Unmarshal([]byte(output), &dump); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	rendered := renderTables(t, dump)
@@ -144,11 +132,10 @@ func TestUnicodeDataTablesMatchLivePython(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(committed, rendered) {
-		t.Fatalf("tables.go differs from the live interpreter (%s, unicodedata %s); regenerate with DEV_HEALTH_REGENERATE_TABLES=1",
+		t.Fatalf("tables.go differs from the frozen dump of the interpreter (%s, unicodedata %s); regenerate with DEV_HEALTH_REGENERATE_TABLES=1",
 			dump.Python, dump.Version)
 	}
 	checkLookups(t, dump)
-	writeProof(t, "pythonparity-pyunicodedata")
 }
 
 // checkLookups asks every function about every code point and compares it
@@ -193,26 +180,26 @@ func checkLookups(t *testing.T, dump tablesDump) {
 		for ki+1 < len(dump.Combining) && rune(dump.Combining[ki+1][0].(float64)) <= r {
 			ki++
 		}
-		if got, want := Category(r), dump.Category[ci][1].(string); got != want {
+		if got, want := pyunicodedata.Category(r), dump.Category[ci][1].(string); got != want {
 			fail("Category(U+%04X) = %q, python %q", r, got, want)
 		}
-		if got, want := Bidirectional(r), dump.Bidirectional[bi][1].(string); got != want {
+		if got, want := pyunicodedata.Bidirectional(r), dump.Bidirectional[bi][1].(string); got != want {
 			fail("Bidirectional(U+%04X) = %q, python %q", r, got, want)
 		}
-		if got, want := Combining(r), int(dump.Combining[ki][1].(float64)); got != want {
+		if got, want := pyunicodedata.Combining(r), int(dump.Combining[ki][1].(float64)); got != want {
 			fail("Combining(U+%04X) = %d, python %d", r, got, want)
 		}
-		if got, want := DecompositionHasFullStop(r), fullStop[r]; got != want {
+		if got, want := pyunicodedata.DecompositionHasFullStop(r), fullStop[r]; got != want {
 			fail("DecompositionHasFullStop(U+%04X) = %v, python %v", r, got, want)
 		}
-		name, ok := Name(r)
+		name, ok := pyunicodedata.Name(r)
 		if want, wantOK := names[r]; ok != wantOK || name != want {
 			fail("Name(U+%04X) = %q %v, python %q %v", r, name, ok, want, wantOK)
 		}
-		if got, want := HasName(r), !in(&dump.NoName, r); got != want {
+		if got, want := pyunicodedata.HasName(r), !in(&dump.NoName, r); got != want {
 			fail("HasName(U+%04X) = %v, python %v", r, got, want)
 		}
-		if got, want := IsWord(r), in(&dump.Word, r); got != want {
+		if got, want := pyunicodedata.IsWord(r), in(&dump.Word, r); got != want {
 			fail("IsWord(U+%04X) = %v, python %v", r, got, want)
 		}
 	}
@@ -221,21 +208,10 @@ func checkLookups(t *testing.T, dump tablesDump) {
 	}
 }
 
-func writeProof(t *testing.T, name string) {
-	t.Helper()
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, name), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func renderTables(t *testing.T, dump tablesDump) []byte {
 	t.Helper()
 	var out strings.Builder
-	fmt.Fprintf(&out, "// Code generated from CPython %s (unicodedata %s) by TestUnicodeDataTablesMatchLivePython; DO NOT EDIT.\n\n", dump.Python, dump.Version)
+	fmt.Fprintf(&out, "// Code generated from CPython %s (unicodedata %s) by TestUnicodeDataTablesMatchFrozenPython; DO NOT EDIT.\n\n", dump.Python, dump.Version)
 	out.WriteString("package pyunicodedata\n\n")
 	fmt.Fprintf(&out, "const unidataVersion = %q\n\n", dump.Version)
 	renderRuns(t, &out, "category", dump.Category)

@@ -1,21 +1,19 @@
-package pyidna
+package pyidna_test
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"go/format"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
-// tablesProgram dumps the pinned idna package's data. Intranges become
+// tablesProgram dumps the idna package's data. Intranges become
 // half-open [start, end) pairs.
 const tablesProgram = `
 import json, idna, idna.idnadata as d, idna.uts46data as u
@@ -46,20 +44,16 @@ type tablesDump struct {
 	Joining      [][2]json.RawMessage `json:"joining"`
 }
 
-// TestIDNATablesMatchLivePython regenerates tables.go from the live idna
-// package and fails when the committed file differs. With
+// TestIDNATablesMatchFrozenPython renders tables.go from the frozen dump of
+// the idna package and fails when the committed file differs. With
 // DEV_HEALTH_REGENERATE_TABLES=1 it rewrites the file instead.
-func TestIDNATablesMatchLivePython(t *testing.T) {
+func TestIDNATablesMatchFrozenPython(t *testing.T) {
 	regenerate := os.Getenv("DEV_HEALTH_REGENERATE_TABLES") == "1"
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" && !regenerate {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
 	_, file, _, _ := runtime.Caller(0)
 	directory := filepath.Dir(file)
-	root := filepath.Clean(filepath.Join(directory, "..", "..", ".."))
-	output := runPython(t, root, tablesProgram, nil)
+	output := frozenPython(t, "tables.golden.json", programoracle.Program{Name: "tables", Text: tablesProgram})[0]
 	var dump tablesDump
-	if err := json.Unmarshal(output, &dump); err != nil {
+	if err := json.Unmarshal([]byte(output), &dump); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	rendered := renderTables(t, dump)
@@ -75,39 +69,7 @@ func TestIDNATablesMatchLivePython(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(committed, rendered) {
-		t.Fatalf("tables.go differs from the live idna %s; regenerate with DEV_HEALTH_REGENERATE_TABLES=1", dump.Version)
-	}
-	writeProof(t, "pythonparity-pyidna-tables")
-}
-
-func runPython(t *testing.T, root, program string, stdin any) []byte {
-	t.Helper()
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "-c", program)
-	if stdin != nil {
-		payload, err := json.Marshal(stdin)
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Stdin = bytes.NewReader(payload)
-	}
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr.Bytes()))
-	}
-	return output
-}
-
-func writeProof(t *testing.T, name string) {
-	t.Helper()
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, name), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
+		t.Fatalf("tables.go differs from the frozen dump of idna %s; regenerate with DEV_HEALTH_REGENERATE_TABLES=1", dump.Version)
 	}
 }
 
@@ -117,7 +79,7 @@ func renderTables(t *testing.T, dump tablesDump) []byte {
 		t.Fatalf("uts46 table lengths differ: %d %d %d", len(dump.Starts), len(dump.Statuses), len(dump.Replacements))
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, "// Code generated from idna %s (data %s) by TestIDNATablesMatchLivePython; DO NOT EDIT.\n\n", dump.Version, dump.DataVersion)
+	fmt.Fprintf(&out, "// Code generated from idna %s (data %s) by TestIDNATablesMatchFrozenPython; DO NOT EDIT.\n\n", dump.Version, dump.DataVersion)
 	out.WriteString("package pyidna\n\n")
 	fmt.Fprintf(&out, "const idnaVersion = %q\n\n", dump.Version)
 	out.WriteString("var uts46Starts = [...]rune{\n")

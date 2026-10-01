@@ -197,7 +197,7 @@ def test_the_cut_checks_dho_api_ch_before_it_recreates_go_api() -> None:
     assert "exit 1" in gate and "ABORTING before go-api" in gate, gate
     chain = next(line for line in lines if line.startswith("export COMPOSE_FILE="))
     assert "$HERE/compose.bigboy.clickhouse-users.yml" in chain
-    assert chain.rstrip().endswith("$HERE/compose.bigboy.router.yml"), chain  # the router stays last
+    assert chain.rstrip().endswith("$HERE/compose.bigboy.router.yml"), chain
     assert any(line.startswith("export DHO_API_CH_USERS_XML=") for line in lines)
 
 

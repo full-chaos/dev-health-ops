@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -187,14 +186,11 @@ func (o *teamsOracle) runGitLab(fake *fakeGitLab, orgID, owner, token string, sc
 		argv = append(argv, "--auth", token)
 	}
 	argv = append(argv, extra...)
-	answer := o.ask(map[string]any{"argv": argv, "env": pythonEnv})
-	value := func(key string) string {
-		if item, ok := answer[key].(map[string]any); ok {
-			return fmt.Sprint(item["v"])
-		}
-		return ""
+	o.python(sc.name, map[string]any{"argv": argv, "env": pythonEnv})
+	run := gitlabRun{pythonStage: o.cur.Stage, pythonCode: o.cur.Code}
+	if o.recording {
+		return run // the recording asks Python only: the Go plane runs in the comparison
 	}
-	run := gitlabRun{pythonStage: value("stage"), pythonCode: value("code")}
 	run.goCode, run.goStdout, run.goStderr = o.runGoGitLab(fake, orgID, owner, token, viaEnv, sc, extra...)
 	return run
 }
@@ -340,9 +336,8 @@ func gitlabTeamsRules() map[string]gitlabTeamsRule {
 		}, why: "legacy: bare usernames; catalog: provider-scoped identity facets"},
 		"team_uuid": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
 			wantGo := uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+py["id"])).String()
-			parsed, err := uuid.Parse(py["team_uuid"])
-			if err != nil || parsed.Version() != 4 {
-				return fmt.Sprintf("team_uuid: python's is a random uuid4, got %q", py["team_uuid"])
+			if py["team_uuid"] != "<uuid4>" { // the golden stores python's random uuid4 as its kind
+				return fmt.Sprintf("team_uuid: python's is a random uuid4 (stored as <uuid4>), got %q", py["team_uuid"])
 			}
 			if gr["team_uuid"] != wantGo {
 				return fmt.Sprintf("team_uuid: go's is uuid5(URL, \"team:<id>\") = %s, got %s", wantGo, gr["team_uuid"])
@@ -378,13 +373,13 @@ func gitlabTeamsRules() map[string]gitlabTeamsRule {
 			return ""
 		}, why: "legacy: none; catalog: the group's own projects (its path_with_namespace values)"},
 		"updated_at": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
-			if py["updated_at"] == "" || gr["updated_at"] != "2026-09-26 12:00:00.000000" {
+			if py["updated_at"] != "<time>" || gr["updated_at"] != "2026-09-26 12:00:00.000000" {
 				return fmt.Sprintf("updated_at: python %q, go %q (want the run's clock)", py["updated_at"], gr["updated_at"])
 			}
 			return ""
 		}, why: "time of the run (python: its own clock)"},
 		"last_synced": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
-			if py["last_synced"] == "" || gr["last_synced"] == "" {
+			if py["last_synced"] != "<time>" || gr["last_synced"] == "" {
 				return "last_synced is empty"
 			}
 			return ""
@@ -392,11 +387,10 @@ func gitlabTeamsRules() map[string]gitlabTeamsRule {
 	}
 }
 
-// compareGitLab checks one scenario: exit codes, then the `teams` rows column by column under
-// gitlabTeamsRules, then the tables only the catalog writes.
-func (o *teamsOracle) compareGitLab(sc *gitlabScenario, fake *fakeGitLab) {
-	t := o.t
-	t.Helper()
+// arrangeAndRunGitLab sets the fake, the failures and the seeds the scenario names and runs it: both planes when
+// comparing, the legacy verb alone when recording.
+func (o *teamsOracle) arrangeAndRunGitLab(sc *gitlabScenario, fake *fakeGitLab) gitlabRun {
+	o.t.Helper()
 	fake.set(sc.wantToken(), sc.group, sc.projects, sc.users)
 	for path, status := range sc.failPath {
 		fake.failing[path] = status
@@ -404,7 +398,15 @@ func (o *teamsOracle) compareGitLab(sc *gitlabScenario, fake *fakeGitLab) {
 	if sc.prepare != nil {
 		sc.prepare(o, fake)
 	}
-	run := o.runGitLab(fake, "org-1", sc.owner, sc.token, sc, sc.extra...)
+	return o.runGitLab(fake, "org-1", sc.owner, sc.token, sc, sc.extra...)
+}
+
+// compareGitLab checks one scenario: exit codes, then the `teams` rows column by column under
+// gitlabTeamsRules, then the tables only the catalog writes.
+func (o *teamsOracle) compareGitLab(sc *gitlabScenario, fake *fakeGitLab) {
+	t := o.t
+	t.Helper()
+	run := o.arrangeAndRunGitLab(sc, fake)
 	if run.pythonStage != "ok" && run.pythonStage != "exit" {
 		t.Fatalf("%s: python ended %s (%s)", sc.name, run.pythonStage, run.pythonCode)
 	}
@@ -416,7 +418,7 @@ func (o *teamsOracle) compareGitLab(sc *gitlabScenario, fake *fakeGitLab) {
 	if run.pythonCode != wantPython || run.goCode != wantGoExit {
 		t.Fatalf("%s: exit codes: python %s (stage %s, want %d), go %d (want %d)\ngo stderr: %s", sc.name, run.pythonCode, run.pythonStage, sc.wantExit, run.goCode, wantGoExit, run.goStderr)
 	}
-	python := o.rows(o.pythonDatabase, "teams", "org-1")
+	python := o.pythonRows("teams")
 	goRows := o.rows(o.goDatabase, "teams", "org-1")
 	if len(python) != sc.wantRows || len(goRows) != wantGoRows {
 		t.Fatalf("%s: teams written: python %d (want %d), go %d (want %d)", sc.name, len(python), sc.wantRows, len(goRows), wantGoRows)
@@ -463,7 +465,7 @@ func (o *teamsOracle) compareGitLab(sc *gitlabScenario, fake *fakeGitLab) {
 	}
 	// Python wrote nothing but `teams`; the catalog also writes ownership and memberships.
 	for _, table := range []string{"team_project_ownership", "team_memberships", "projects"} {
-		if rows := o.rows(o.pythonDatabase, table, "org-1"); len(rows) != 0 {
+		if rows := o.pythonRows(table); len(rows) != 0 {
 			t.Errorf("%s: python wrote %d %s rows", sc.name, len(rows), table)
 		}
 	}
@@ -493,14 +495,8 @@ func (o *teamsOracle) compareGitLab(sc *gitlabScenario, fake *fakeGitLab) {
 	}
 }
 
-func TestSyncTeamsGitLabVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	o := newTeamsOracleFor(t, teamsSyncOracleGitLabProgram)
-	fake := newFakeGitLab(t)
-
-	scenarios := []*gitlabScenario{
+func gitlabScenarios() []*gitlabScenario {
+	return []*gitlabScenario{
 		{name: "one top-level group with members and projects", owner: "acme", token: "tok", wantExit: 0, wantRows: 1,
 			group:    fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Description: strPtr("The Acme group"), Members: []string{"alice", "bob"}},
 			projects: []fakeGitLabProject{{ID: 501, PathWithNamespace: "acme/api", Name: "api"}, {ID: 502, PathWithNamespace: "acme/web", Name: "web"}},
@@ -524,15 +520,54 @@ func TestSyncTeamsGitLabVenueOracleMatchesThePythonProducer(t *testing.T) {
 			// fail for both planes to stop on this.
 			failPath: map[string]int{"/api/v4/groups/acme/members": 500, "/api/v4/groups/1/members": 500}},
 	}
-	for _, sc := range scenarios {
+}
+
+// gitlabCorpusKey is the golden's request key: every scenario's inputs.
+func gitlabCorpusKey() []byte {
+	type entry struct {
+		Name, Owner, Token, EnvToken, ServerToken string
+		Group                                     fakeGitLabGroup
+		Projects                                  []fakeGitLabProject
+		Users                                     map[string]string
+		Extra                                     []string
+		FailPath                                  map[string]int
+	}
+	var entries []entry
+	for _, sc := range gitlabScenarios() {
+		entries = append(entries, entry{sc.name, sc.owner, sc.token, sc.envToken, sc.serverToken, sc.group, sc.projects, sc.users, sc.extra, sc.failPath})
+	}
+	return teamsCorpusKey("gitlab", entries)
+}
+
+// TestSyncTeamsGitLabMatchesFrozenPython compares `dho sync teams --provider gitlab` (the Go team catalog) with what
+// the REAL legacy verb (python-gitlab pointed at a fake via GITLAB_URL) did over the same fake GitLab: how each run
+// ended and, column by column, the `teams` rows it wrote. Executed once on teamsPythonBuild and frozen in
+// testdata/golden/teams_gitlab.json.
+func TestSyncTeamsGitLabMatchesFrozenPython(t *testing.T) {
+	frozen, golden := openTeamsGolden(t, "gitlab", "TestSyncTeamsGitLabMatchesFrozenPython", teamsSyncOracleGitLabProgram, gitlabCorpusKey(),
+		func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen {
+			o := newTeamsOracle(t)
+			o.startPython(producer, teamsSyncOracleGitLabProgram)
+			fake := newFakeGitLab(t)
+			for _, sc := range gitlabScenarios() {
+				o.arrangeAndRunGitLab(sc, fake)
+			}
+			return o.recorded
+		})
+	o := newTeamsOracle(t)
+	o.frozen = frozen
+	fake := newFakeGitLab(t)
+	for _, sc := range gitlabScenarios() {
 		t.Run(sc.name, func(t *testing.T) {
 			o.t = t
 			o.compareGitLab(sc, fake)
 		})
 	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
+	if o.next != len(frozen) {
+		t.Fatalf("the golden holds %d runs, the corpus runs %d", len(frozen), o.next)
 	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 // The subgroup id divergence this harness deliberately does not exercise

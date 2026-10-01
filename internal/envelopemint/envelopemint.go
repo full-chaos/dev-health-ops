@@ -28,6 +28,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"os"
 	"strings"
 	"time"
@@ -126,7 +127,7 @@ func LoadPrivateKey(pemBytes []byte) (ed25519.PrivateKey, error) {
 // go-api-prove's own -proof-bearer-secret-file doctrine already applies
 // to every other credential in this codebase.
 func LoadPrivateKeyFromEnv() (ed25519.PrivateKey, error) {
-	raw := os.Getenv(PrivateKeyEnvVar)
+	raw := envsecrets.GetenvSecret(PrivateKeyEnvVar)
 	if strings.TrimSpace(raw) == "" {
 		return nil, fmt.Errorf("%s is not set", PrivateKeyEnvVar)
 	}

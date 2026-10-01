@@ -22,9 +22,9 @@ package syncadmin
 
 import (
 	"context"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -78,7 +78,7 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 	lookup := deps.LookupEnv
 	if lookup == nil {
-		lookup = os.LookupEnv
+		lookup = envsecrets.ProcessLookup
 	}
 	// One clock for the run units freshness read and the writes: Python
 	// reads datetime.now in both; nil means the wall clock.

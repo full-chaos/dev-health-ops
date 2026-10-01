@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"time"
 
@@ -96,7 +95,7 @@ type catalogRequest struct {
 func buildCatalogCollector(env cli.Env, d deps, request catalogRequest, owner, token string, conn driver.Conn) (providersync.TeamCatalogCollector, providerfoundation.Credential, *providerfoundation.HTTPClient, int) {
 	doer := d.doer
 	if doer == nil {
-		doer = &http.Client{Timeout: 45 * time.Second}
+		doer = productionDoer()
 	}
 	switch request.provider {
 	case "github":

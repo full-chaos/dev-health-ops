@@ -74,9 +74,21 @@ type HTTPClient struct {
 }
 
 func NewHTTPClient(provider, base string, doer HTTPDoer, auth Auth, retry RetryPolicy, lease LeaseGuard) (*HTTPClient, error) {
+	// Each refusal names its cause (a constructor argument that was nil, a base URL that is not absolute, a
+	// retry policy that cannot run), never a value: a client built with a nil doer used to answer a bare
+	// "provider credential is invalid" that the operator could not tell from a bad credential (CHAOS-7132).
 	parsed, err := url.Parse(base)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" || doer == nil || auth == nil || lease == nil || !retry.valid() {
-		return nil, ErrCredentialInvalid
+	switch {
+	case err != nil || parsed.Scheme == "" || parsed.Host == "":
+		return nil, credentialInvalid("base_url_invalid")
+	case doer == nil:
+		return nil, credentialInvalid("http_client_missing")
+	case auth == nil:
+		return nil, credentialInvalid("auth_missing")
+	case lease == nil:
+		return nil, credentialInvalid("lease_missing")
+	case !retry.valid():
+		return nil, credentialInvalid("retry_policy_invalid")
 	}
 	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: doer, Auth: auth, Retry: retry, Lease: lease, entropy: rand.Reader}, nil
 }

@@ -14,7 +14,7 @@ const (
 	OutcomeRefused    = "refused"     // decided before any write: nothing was attempted
 	OutcomeNoop       = "noop"        // succeeded with nothing to do (already at the target)
 	OutcomeUnknown    = "unknown"     // the read-back did not happen
-	OutcomePartial    = "partial"     // upgrade only: a later chain revision failed after earlier ones committed (one transaction each)
+	OutcomePartial    = "partial"     // the read-back differs from the start although the run failed (another migrator committed meanwhile; a walk is one transaction since CHAOS-7291)
 )
 
 // runFacts is everything the label depends on.

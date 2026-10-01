@@ -1,10 +1,10 @@
 package cli_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -52,23 +52,28 @@ func TestRootFlagsMatchThePythonRootParser(t *testing.T) {
 	}
 	env := map[string]string{"PYTHONHASHSEED": "0"}
 	request := venueoracle.ProgramRequest("root flags corpus", cli.RootFlagsOracleProgram(), input, env)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
-		python := pyoracle.Resolve(t, root)
-		probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
-		pyoracle.RequireDeployed(t, python, probe, probeErr)
-		command := exec.Command(python, "-c", cli.RootFlagsOracleProgram())
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		ctx := context.Background()
+		version, err := producer.Command(ctx, nil, nil, pyoracle.VersionProbeArgs...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		probe, probeErr := version.Output()
+		pyoracle.RequireDeployed(t, version.Path, probe, probeErr)
+		// The closed environment: the root parser's own environment defaults
+		// are unset in it (see the named limits).
+		command, err := producer.Command(ctx, env, nil, "-c", cli.RootFlagsOracleProgram())
+		if err != nil {
+			t.Fatal(err)
+		}
 		command.Stdin = strings.NewReader(string(input))
-		// Only what the program needs: the root parser's own environment
-		// defaults must be unset (see the named limits).
-		command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONPATH=" + filepath.Join(root, "src"),
-			"PYTHONDONTWRITEBYTECODE=1", "PYTHONHASHSEED=" + env["PYTHONHASHSEED"]}
 		output, err := command.Output()
 		if err != nil {
 			var stderr []byte
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				stderr = exitErr.Stderr
 			}
-			t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr))
+			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, stderr))
 		}
 		return []venueoracle.Response{{Status: 0, Body: string(output)}}
 	})

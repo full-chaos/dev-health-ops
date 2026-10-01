@@ -487,7 +487,7 @@ func TestPushMatchesTheFrozenPythonOutput(t *testing.T) {
 	}
 	env := map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
 	request := venueoracle.ProgramRequest("push corpus", pythonPushProgram, input, env)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		dir := t.TempDir()
 		command := exec.Command(python, "-c", pythonPushProgram)

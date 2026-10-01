@@ -720,7 +720,10 @@ func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, req
 // Python side is not the api's HTTP plane: a program run over a corpus, a CLI
 // verb, a function. While recording, live runs the requests from root, which
 // must be the checkout PythonRoot verified, and the answers are recorded;
-// frozen, they are read from the file and live is never called. A request
+// frozen, they are read from the file and live is never called. live starts
+// Python only with the command its Producer gives (producer.go): the pinned
+// interpreter in the one closed environment. A Python child started any other
+// way with the process environment cannot start while live runs. A request
 // names what was asked (ProgramRequest builds one for a Python program) and a
 // response what came back: Status the exit code, Body the stdout, Headers any
 // other stream. The lifecycle and the accounting are Python's: every answer
@@ -728,14 +731,17 @@ func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, req
 // carries no headers: they are keyed case-folded, as HTTP headers are, and a
 // producer's environment names are case-sensitive, so the environment belongs
 // in the path (ProgramRequest), where it compares exactly.
-func (g *Golden) Produce(t *testing.T, root string, requests []Request, live func(root string, requests []Request) []Response) []Response {
+func (g *Golden) Produce(t *testing.T, root string, requests []Request, live func(producer *Producer, requests []Request) []Response) []Response {
 	t.Helper()
 	if err := producerRequestsErr(requests); err != nil {
 		t.Fatal(err)
 	}
 	return g.answer(t, "Produce", "", requests,
 		func() error { return g.producerRootErr(root) },
-		func() []Response { return live(root, requests) },
+		func() []Response {
+			defer poisonInheritedEnvironment()()
+			return live(&Producer{Root: root, t: t}, requests)
+		},
 		func() error { return liveVenueErr(t, "golden "+g.spec.Path+"'s frozen answers") })
 }
 

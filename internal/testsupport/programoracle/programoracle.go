@@ -153,7 +153,8 @@ func Run(t *testing.T, spec venueoracle.GoldenSpec, root string, programs []Prog
 	for index, program := range programs {
 		requests[index] = venueoracle.ProgramRequest(program.Name, program.Text, program.Stdin, keyedEnv(program))
 	}
-	responses := golden.Produce(t, pythonRoot, requests, func(pinnedRoot string, _ []venueoracle.Request) []venueoracle.Response {
+	responses := golden.Produce(t, pythonRoot, requests, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		pinnedRoot := producer.Root
 		activateInterpreter(t, pinnedRoot)
 		recorded := make([]venueoracle.Response, len(programs))
 		for index, program := range programs {

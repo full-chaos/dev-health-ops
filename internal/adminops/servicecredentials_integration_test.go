@@ -449,7 +449,7 @@ func TestServiceCredentialsMatchTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("service-credentials script", credPythonProgram, input, adminPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		pinPythonRoot(t, root)
 		body, err := json.Marshal(startDatabase(t).credSession(t, credPython))
 		if err != nil {

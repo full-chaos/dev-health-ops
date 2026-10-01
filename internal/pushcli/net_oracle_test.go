@@ -464,7 +464,7 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 	}
 	env := map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
 	request := venueoracle.ProgramRequest("push net corpus", pythonNetProgram, append(append([]byte{}, input...), script...), env)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		python := pyoracle.Resolve(t, root)
 		results := netPythonRun(t, python, root, cases, input)
 		body, err := json.Marshal(results)

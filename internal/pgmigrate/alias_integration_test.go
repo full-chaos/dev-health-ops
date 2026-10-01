@@ -184,7 +184,7 @@ func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
 	}
 	env := map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
 	request := venueoracle.ProgramRequest("alias scenarios", pythonCLIProgram, input, env)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		uri, exec := revisionsDatabase(t)
 		exec("CREATE TABLE alembic_version_saved AS SELECT * FROM alembic_version")
 		var results []aliasResult

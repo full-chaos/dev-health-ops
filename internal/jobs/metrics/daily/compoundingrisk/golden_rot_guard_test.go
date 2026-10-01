@@ -23,7 +23,7 @@ import (
 // request. No Python runs in a frozen run.
 func TestCompoundingRiskGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRoot(t)
-	spec := rotguard.Spec("testdata/golden/compounding_risk_rot_guard.json", "",
+	spec := rotguard.Spec("testdata/golden/compounding_risk_rot_guard.json", "PIN:compounding_risk_rot_guard",
 		"./internal/jobs/metrics/daily/compoundingrisk/", "^TestCompoundingRiskGoldenMatchesLivePython$")
 	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
 		Name: "compounding risk golden generator",

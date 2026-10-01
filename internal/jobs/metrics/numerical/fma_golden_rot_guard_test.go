@@ -19,7 +19,7 @@ import (
 // runs in a frozen run.
 func TestFMAGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRoot(t)
-	spec := rotguard.Spec("testdata/golden/fma_rot_guard.json", "",
+	spec := rotguard.Spec("testdata/golden/fma_rot_guard.json", "PIN:fma_rot_guard",
 		"./internal/jobs/metrics/numerical/", "^TestFMAGoldenMatchesLivePython$")
 	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
 		Name: "fma golden generator",

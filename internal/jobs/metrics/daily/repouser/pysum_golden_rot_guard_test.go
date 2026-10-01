@@ -22,7 +22,7 @@ import (
 // again, and no Python runs in a frozen run.
 func TestPysumGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/pysum_rot_guard.json", "",
+	spec := rotguard.Spec("testdata/golden/pysum_rot_guard.json", "PIN:pysum_rot_guard",
 		"./internal/jobs/metrics/daily/repouser/", "^TestPysumGoldenMatchesLivePython$")
 	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
 		Name: "pysum golden generator",

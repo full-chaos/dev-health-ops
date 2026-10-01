@@ -367,7 +367,7 @@ func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
 			Args: []string{"--stdout"},
 		}
 	}
-	spec := rotguard.Spec("testdata/golden/corpus_discovery_rot_guard.json", "",
+	spec := rotguard.Spec("testdata/golden/corpus_discovery_rot_guard.json", "PIN:corpus_discovery_rot_guard",
 		"./internal/jobs/workgraph/units/", "^TestEveryDiscoverableCorpusStillMatchesLivePython$")
 	renders := rotguard.Run(t, spec, repoRoot, generatorsToRun...)
 	for index, job := range jobs {

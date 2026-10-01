@@ -37,7 +37,7 @@ import (
 
 func TestGoldenStillDescribesLiveCPython(t *testing.T) {
 	root := repoRoot(t)
-	spec := rotguard.Spec("testdata/golden/cpython_random_rot_guard.json", "",
+	spec := rotguard.Spec("testdata/golden/cpython_random_rot_guard.json", "PIN:cpython_random_rot_guard",
 		"./internal/jobs/metrics/numerical/cpyrandom/", "^TestGoldenStillDescribesLiveCPython$")
 	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
 		Name: "cpython random golden generator",

@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -514,7 +516,10 @@ func firstDifference(a, b []string) string {
 // producer is deleted with the Python CLI; the file is its recorded output.
 func loadFrozenChain(t *testing.T, name string) chmigrate.Baseline {
 	t.Helper()
-	data := readPythonGolden(t, name)
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var recorded chmigrate.Baseline
 	if err := json.Unmarshal(data, &recorded); err != nil {
 		t.Fatalf("decode %s: %v", name, err)
@@ -523,6 +528,20 @@ func loadFrozenChain(t *testing.T, name string) chmigrate.Baseline {
 		t.Fatalf("%s holds %d objects and %d versions", name, len(recorded.Objects), len(recorded.Versions))
 	}
 	return recorded
+}
+
+// freezePoint is the last migration a Python producer ran: the recorded
+// splitter output covers every migration at or below it. A later migration has
+// no Python truth and is held to Go-only splitter invariants.
+const freezePoint = "099_team_project_ownership_last_synced.sql"
+
+func splitGolden(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "python_split.json"))
+	if err != nil {
+		t.Fatalf("the recorded Python split is missing: %v", err)
+	}
+	return data
 }
 
 // TestSplitterMatchesFrozenPythonSplit holds the Go splitter to the Python
@@ -536,7 +555,7 @@ func TestSplitterMatchesFrozenPythonSplit(t *testing.T) {
 		SQL        string   `json:"sql"`
 		Statements []string `json:"statements"`
 	}
-	if err := json.Unmarshal(readPythonGolden(t, "python_split.json"), &want); err != nil {
+	if err := json.Unmarshal(splitGolden(t), &want); err != nil {
 		t.Fatalf("decode the Python split: %v", err)
 	}
 	head, err := chmigrate.LoadBaseline()

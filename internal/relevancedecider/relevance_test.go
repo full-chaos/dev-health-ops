@@ -75,7 +75,9 @@ def run(workflow_text, raw):
         with contextlib.redirect_stdout(stdout):
             code = module.main()
         failed = code != 0
-    except SystemExit:
+    except (SystemExit, Exception):
+        # A refusal is any non-zero exit: Python's own traceback (a workflow with no
+        # pull_request.paths raises KeyError) exits 1 the same as an explicit refusal.
         failed = True
     return {"stdout": stdout.getvalue(), "failed": failed}
 
@@ -154,7 +156,7 @@ func TestDeciderAnswersAsTheRecordedPythonDid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := rotguard.Spec("testdata/golden/go_relevance_cases.json", "PIN:go_relevance_cases",
+	spec := rotguard.Spec("testdata/golden/go_relevance_cases.json", "ec6a25fdf026c7597ff6b8097157cffa7d31f61dadcb62a6274f9344a9bcbe6a",
 		"./internal/relevancedecider/", "^TestDeciderAnswersAsTheRecordedPythonDid$")
 	answers := programoracle.Run(t, spec, root(t), []programoracle.Program{{Name: "go_relevance.py over the corpus", Text: pythonProgram, Stdin: request}})
 	if answers[0].ExitCode != 0 {

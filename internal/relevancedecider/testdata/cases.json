@@ -270,5 +270,53 @@
   "paths": [
    ".dockerignore"
   ]
+ },
+ {
+  "name": "double star spans several directories",
+  "format": "nul",
+  "paths": [
+   "scripts/a/b/c.sh"
+  ]
+ },
+ {
+  "name": "exactly twenty-one matches",
+  "format": "nul",
+  "paths": [
+   "internal/f00.go",
+   "internal/f01.go",
+   "internal/f02.go",
+   "internal/f03.go",
+   "internal/f04.go",
+   "internal/f05.go",
+   "internal/f06.go",
+   "internal/f07.go",
+   "internal/f08.go",
+   "internal/f09.go",
+   "internal/f10.go",
+   "internal/f11.go",
+   "internal/f12.go",
+   "internal/f13.go",
+   "internal/f14.go",
+   "internal/f15.go",
+   "internal/f16.go",
+   "internal/f17.go",
+   "internal/f18.go",
+   "internal/f19.go",
+   "internal/f20.go"
+  ]
+ },
+ {
+  "name": "newline format left padding only",
+  "format": "newline",
+  "paths": [
+   "  internal/b.go"
+  ]
+ },
+ {
+  "name": "newline format right padding only",
+  "format": "newline",
+  "paths": [
+   "internal/b.go  "
+  ]
  }
 ]

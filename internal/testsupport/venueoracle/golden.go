@@ -717,6 +717,7 @@ func (g *Golden) answer(t *testing.T, call string, requests []Request, rootErr f
 		if answers, err = g.frozenAnswers(requests); err != nil {
 			t.Fatal(err)
 		}
+		markFrozenTree(t, "the frozen answers of golden "+g.spec.Path)
 	}
 	for index := range answers {
 		g.slots = append(g.slots, answerSlot{request: requestIdentity(requests[index])})

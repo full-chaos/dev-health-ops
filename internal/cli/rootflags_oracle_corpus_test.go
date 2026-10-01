@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 
@@ -125,6 +126,10 @@ func canonicalJSON(raw []byte) string {
 	if err := decoder.Decode(&value); err != nil {
 		return string(raw)
 	}
+	// Not one JSON value: the text stands for itself, so it equals nothing canonical.
+	if _, err := decoder.Token(); err != io.EOF {
+		return string(raw)
+	}
 	out, _ := json.Marshal(value)
 	return string(out)
 }
@@ -144,5 +149,9 @@ func TestCanonicalJSONKeepsNumberLiterals(t *testing.T) {
 	}
 	if canonicalJSON([]byte(`{"b":1,"a":"x"}`)) != canonicalJSON([]byte(`{"a":"x","b":1}`)) {
 		t.Error("key order changes the canonical text")
+	}
+	// Trailing output after the value is not dropped.
+	if canonicalJSON([]byte(`{"a":1} trailing`)) == canonicalJSON([]byte(`{"a":1}`)) || canonicalJSON([]byte(`{"a":1}{"a":2}`)) == canonicalJSON([]byte(`{"a":1}`)) {
+		t.Error("text after the JSON value is ignored")
 	}
 }

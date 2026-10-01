@@ -3,6 +3,7 @@ package cli_test
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,12 +74,8 @@ func TestRootFlagsMatchThePythonRootParser(t *testing.T) {
 	})
 	golden.Consumed(t, answers...)
 
-	// Numbers stay the producer's literal text (json.Number): none passes
-	// through float64 on its way to the comparison.
-	var want []map[string]any
-	decoder := json.NewDecoder(strings.NewReader(answers[0].Body))
-	decoder.UseNumber()
-	if err := decoder.Decode(&want); err != nil {
+	want, err := decodeRootAnswers(answers[0].Body)
+	if err != nil {
 		t.Fatalf("decode python answer: %v", err)
 	}
 	if len(want) != len(corpus) {
@@ -112,4 +109,37 @@ func TestRootFlagsMatchThePythonRootParser(t *testing.T) {
 	}
 	golden.SkipDiff(t)
 	golden.Finish(t)
+}
+
+// decodeRootAnswers decodes the producer's stdout: exactly one JSON value, a
+// list of answers. Numbers stay the producer's literal text (json.Number): none
+// passes through float64 on its way to the comparison. Anything after the value
+// is output the comparison would not see, so it is refused.
+func decodeRootAnswers(body string) ([]map[string]any, error) {
+	var want []map[string]any
+	decoder := json.NewDecoder(strings.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&want); err != nil {
+		return nil, err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, fmt.Errorf("the producer's output holds more than one JSON value (next token: %v)", err)
+	}
+	return want, nil
+}
+
+func TestTheRootAnswersAreExactlyOneJSONValue(t *testing.T) {
+	if got, err := decodeRootAnswers(`[{"exit": 2, "x": 1.50}]` + "\n"); err != nil || len(got) != 1 || got[0]["x"] != json.Number("1.50") {
+		t.Fatalf("one value with a trailing newline: %v %v", got, err)
+	}
+	for name, body := range map[string]string{
+		"trailing text":     `[{"exit": 2}] TRAILING NON-JSON PRODUCER OUTPUT`,
+		"a second value":    `[{"exit": 2}][{"exit": 0}]`,
+		"a truncated value": `[{"exit": 2}`,
+		"nothing":           ``,
+	} {
+		if got, err := decodeRootAnswers(body); err == nil {
+			t.Errorf("%s: decoded %v", name, got)
+		}
+	}
 }

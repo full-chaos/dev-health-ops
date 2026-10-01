@@ -476,6 +476,11 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	}
 	v := &Venue{Root: options.Root, Tokens: map[string]string{}, Roles: map[string]string{}, frozen: frozen}
 	if !options.GoOnly && options.Golden == nil {
+		// Before anything is built: the mark and its check are the same in a
+		// tree that used a frozen golden first and in one that starts live first.
+		if err := frozenTreeErr(t); err != nil {
+			t.Fatal(err)
+		}
 		liveVenues.Store(rootTestName(t), struct{}{})
 	}
 	if !frozen {
@@ -683,6 +688,26 @@ var liveVenues sync.Map // top-level test name -> struct{}
 func rootTestName(t *testing.T) string {
 	name, _, _ := strings.Cut(t.Name(), "/")
 	return name
+}
+
+// frozenTrees holds, per top-level test, the first Python-free claim made in
+// its tree: a Go-only proof written, or a frozen golden's answers served. A
+// live venue started later in that tree is refused: the claim is already on
+// disk or already compared, and the tree would then need Python after all. An
+// entry stays for the life of the test binary, like liveVenues.
+var frozenTrees sync.Map // top-level test name -> what was claimed
+
+// markFrozenTree records what, the Python-free claim made in t's tree.
+func markFrozenTree(t *testing.T, what string) {
+	frozenTrees.LoadOrStore(rootTestName(t), what)
+}
+
+// frozenTreeErr is an error when t's tree already made a Python-free claim.
+func frozenTreeErr(t *testing.T) error {
+	if what, claimed := frozenTrees.Load(rootTestName(t)); claimed {
+		return fmt.Errorf("venue: %s starts a venue built with Python (Start without Options.GoOnly or Options.Golden), but its test tree already has %s: a top-level test is live, or Python-free, not both; split it into two top-level tests", t.Name(), what)
+	}
+	return nil
 }
 
 // liveVenueErr is an error when a test in t's tree started a live venue.
@@ -1299,5 +1324,6 @@ func WriteGoOnlyProof(t *testing.T, reason string) {
 	if err := liveVenueErr(t, "a Go-only proof"); err != nil {
 		t.Fatal(err)
 	}
+	markFrozenTree(t, "a Go-only proof")
 	writeProofText(t, "go-only: "+reason)
 }

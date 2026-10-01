@@ -1,11 +1,13 @@
 package venueoracle
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -292,5 +294,84 @@ func TestFrozenProduceIsRefusedInATestWithALiveVenue(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(output, "built with Python") || strings.Contains(output, "ANSWER SERVED") {
 		t.Fatalf("a frozen answer was served in a test with a live venue (err %v):\n%s", err, output)
+	}
+}
+
+// The mark works in both orders: a live venue started after a Python-free
+// claim in the same tree (a frozen answer served, a Go-only proof written) is
+// refused, from the parent, a sibling or a nested subtest.
+func TestALiveVenueIsRefusedAfterAPythonFreeClaimInItsTree(t *testing.T) {
+	t.Cleanup(func() { frozenTrees.Delete(rootTestName(t)) })
+	if err := frozenTreeErr(t); err != nil {
+		t.Fatalf("refused before any claim: %v", err)
+	}
+	t.Run("claims", func(child *testing.T) { markFrozenTree(child, "a Go-only proof") })
+	if err := frozenTreeErr(t); err == nil || !strings.Contains(err.Error(), "already has a Go-only proof") {
+		t.Fatalf("the parent of a subtest that made a claim may start a live venue: %v", err)
+	}
+	t.Run("sibling", func(sibling *testing.T) {
+		if err := frozenTreeErr(sibling); err == nil {
+			sibling.Fatal("a sibling of a subtest that made a claim may start a live venue")
+		}
+		sibling.Run("nested", func(nested *testing.T) {
+			if err := frozenTreeErr(nested); err == nil {
+				nested.Fatal("a nested subtest is outside the guard")
+			}
+		})
+	})
+}
+
+// laterLiveStart runs first (a Python-free claim) and then the real Start with
+// no GoOnly and no golden, as two sibling subtests in a child process, and
+// returns the child's output. Start must refuse before it builds anything.
+func laterLiveStart(t *testing.T, env string, first func(child *testing.T)) (string, error, bool) {
+	t.Helper()
+	if os.Getenv(env) == "1" {
+		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLES", "1")
+		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
+		t.Run("first", first)
+		t.Run("later", func(later *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			Start(later, ctx, Options{Root: later.TempDir(), JWTKey: "k"})
+			later.Log("LIVE VENUE STARTED")
+		})
+		return "", nil, true
+	}
+	command := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
+	command.Env = append(os.Environ(), env+"=1")
+	output, err := command.CombinedOutput()
+	return string(output), err, false
+}
+
+func TestStartRefusesALiveVenueAfterAFrozenAnswerInItsTree(t *testing.T) {
+	output, err, inChild := laterLiveStart(t, "VENUEORACLE_LATER_LIVE_ANSWER_CHILD", func(child *testing.T) {
+		child.Setenv(goldenUpdateEnv, "")
+		child.Setenv(goldenCandidateEnv, "")
+		request := ProgramRequest("corpus", sampleProgram, []byte("abc"), nil)
+		path, digest := programGolden(child, []Request{request}, "ABC\n")
+		golden := OpenGolden(child, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+		answers := golden.Produce(child, "/no/python/here", []Request{request}, func(string, []Request) []Response { return nil })
+		golden.Consumed(child, answers...)
+		golden.SkipDiff(child)
+		golden.Finish(child)
+	})
+	if inChild {
+		return
+	}
+	if err == nil || !strings.Contains(output, "already has the frozen answers of golden") || strings.Contains(output, "LIVE VENUE STARTED") {
+		t.Fatalf("a live venue started after a frozen answer in its tree (err %v):\n%s", err, output)
+	}
+}
+
+func TestStartRefusesALiveVenueAfterAGoOnlyProofInItsTree(t *testing.T) {
+	output, err, inChild := laterLiveStart(t, "VENUEORACLE_LATER_LIVE_PROOF_CHILD", func(child *testing.T) {
+		WriteGoOnlyProof(child, "measures something without Python")
+	})
+	if inChild {
+		return
+	}
+	if err == nil || !strings.Contains(output, "already has a Go-only proof") || strings.Contains(output, "LIVE VENUE STARTED") {
+		t.Fatalf("a live venue started after a Go-only proof in its tree (err %v):\n%s", err, output)
 	}
 }

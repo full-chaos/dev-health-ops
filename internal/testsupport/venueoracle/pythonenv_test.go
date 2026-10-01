@@ -496,7 +496,7 @@ func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	names := []string{"VENUE_AMBIENT_ONLY", "VENUE_AMBIENT_SAME", "VENUE_SET_BY_TEST", "TRUSTED_PROXIES", "PYTHONHASHSEED", "TZ", "LANG", "HOME", "PATH", "TMPDIR", "JWT_SECRET_KEY", "ENVIRONMENT", "EXTRA_FOR_ONE_CALL", "OTEL_SDK_DISABLED", mark}
 	// The stand-in prints what it sees, and keeps it in a file beside itself for the launch that reads no output.
-	script := "#!/bin/sh\nout=\"\"\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; out=\"$out $n=$v\"; done\necho \"$out\" > \"$(dirname \"$0\")/last.out\"\necho \"$out\"\n"
+	script := "#!/bin/sh\nout=\"\"\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; out=\"$out $n=$v\"; done\necho \"$out\" > \"${0%/*}/last.out\"\necho \"$out\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "python3"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +584,7 @@ func standInPython(t *testing.T, label string) (dir, program string) {
 	t.Helper()
 	dir = t.TempDir()
 	program = filepath.Join(dir, "python3")
-	if err := os.WriteFile(program, []byte("#!/bin/sh\ntouch \"$(dirname \"$0\")/ran\"\necho "+label+"\n"), 0o755); err != nil {
+	if err := os.WriteFile(program, []byte("#!/bin/sh\n: > \"${0%/*}/ran\"\necho "+label+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return dir, program

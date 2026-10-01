@@ -1,8 +1,0 @@
-{
- "python_build": "acd02fb0a61f2d8648d3dee4e22534c426b00cc4",
- "clickhouse_image": "clickhouse/clickhouse-server:26.7",
- "recorded": "Python chain (ensure_schema(force=True)) at python_build run with OPERATIONAL_ORDERING_CONTRACT=1 and =2; contract1_head.json holds exactly the objects whose CREATE differs, plus the version the contract-1 chain does not record (067)",
- "sha256": {
-  "contract1_head.json": "f1c2b819ce356a6358c1d625ffc4e885b157580618f5c907c13fec3b1b60faa5"
- }
-}

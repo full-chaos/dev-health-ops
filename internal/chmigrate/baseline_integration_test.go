@@ -10,8 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -516,10 +514,7 @@ func firstDifference(a, b []string) string {
 // producer is deleted with the Python CLI; the file is its recorded output.
 func loadFrozenChain(t *testing.T, name string) chmigrate.Baseline {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", name))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readPythonGolden(t, name)
 	var recorded chmigrate.Baseline
 	if err := json.Unmarshal(data, &recorded); err != nil {
 		t.Fatalf("decode %s: %v", name, err)
@@ -530,24 +525,49 @@ func loadFrozenChain(t *testing.T, name string) chmigrate.Baseline {
 	return recorded
 }
 
-// TestSplitterMatchesFrozenPythonSplit requires the Go splitter to produce,
-// for every real .sql migration, the statements the Python runner's own
-// split_sql_statements produced (testdata/python_split.json holds each file's
-// text and that split, recorded from the Python runner).
+// TestSplitterMatchesFrozenPythonSplit holds the Go splitter to the Python
+// runner's split_sql_statements. Every migration at or below freezePoint (the
+// head's .sql versions and every chain file up to it) must have a recorded
+// Python split (testdata/python_split.json, digest-pinned), and the Go split of
+// the recorded text must equal it. A chain file above freezePoint has no
+// Python truth; it is held to Go-only splitter invariants.
 func TestSplitterMatchesFrozenPythonSplit(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("testdata", "python_split.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var want map[string]struct {
 		SQL        string   `json:"sql"`
 		Statements []string `json:"statements"`
 	}
-	if err := json.Unmarshal(data, &want); err != nil {
+	if err := json.Unmarshal(readPythonGolden(t, "python_split.json"), &want); err != nil {
 		t.Fatalf("decode the Python split: %v", err)
 	}
-	if len(want) < 90 {
-		t.Fatalf("the frozen split covered %d files; the chain has more than 90 .sql migrations", len(want))
+	head, err := chmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := chmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chainText := map[string]string{}
+	required := map[string]bool{}
+	for _, version := range head.Versions {
+		if strings.HasSuffix(version, ".sql") {
+			required[version] = true
+		}
+	}
+	for _, file := range chain {
+		chainText[file.Version] = file.SQL
+		if file.Version <= freezePoint {
+			required[file.Version] = true
+		}
+	}
+	if len(required) < 90 || !required[freezePoint] {
+		t.Fatalf("%d migrations at or below the freeze point %s (present: %v); expected more than 90 including it",
+			len(required), freezePoint, required[freezePoint])
+	}
+	for name := range required {
+		if _, ok := want[name]; !ok {
+			t.Errorf("%s is at or below the freeze point and has no recorded Python split", name)
+		}
 	}
 	for name, recorded := range want {
 		got := chmigrate.SplitStatements(recorded.SQL)
@@ -558,24 +578,29 @@ func TestSplitterMatchesFrozenPythonSplit(t *testing.T) {
 		if !reflect.DeepEqual(got, statements) {
 			t.Errorf("%s: Go split %d statements, Python %d; first difference %s", name, len(got), len(statements), firstDifference(got, statements))
 		}
-	}
-	chain, err := chmigrate.LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A chain file the golden recorded must still be the text it was recorded
-	// from; one added later has no Python build to record it and is not
-	// covered here.
-	covered := 0
-	for _, file := range chain {
-		if recorded, ok := want[file.Version]; ok {
-			covered++
-			if recorded.SQL != file.SQL {
-				t.Errorf("chain file %s is not the text the Python split was recorded from", file.Version)
-			}
+		if text, ok := chainText[name]; ok && text != recorded.SQL {
+			t.Errorf("chain file %s is not the text the Python split was recorded from", name)
 		}
 	}
-	if covered == 0 {
-		t.Error("the golden covers no chain file")
+	// Above the freeze point: no Python truth, so the splitter's own
+	// invariants. Every statement is non-blank, carries no trailing
+	// separator, is not comment-only, and the split is deterministic.
+	for _, file := range chain {
+		if file.Version <= freezePoint {
+			continue
+		}
+		statements := chmigrate.SplitStatements(file.SQL)
+		if len(statements) == 0 {
+			t.Errorf("%s: the Go split found no statement", file.Version)
+		}
+		if !reflect.DeepEqual(statements, chmigrate.SplitStatements(file.SQL)) {
+			t.Errorf("%s: the Go split is not deterministic", file.Version)
+		}
+		for index, statement := range statements {
+			trimmed := strings.TrimSpace(statement)
+			if trimmed == "" || strings.HasSuffix(trimmed, ";") || strings.HasPrefix(trimmed, "--") && !strings.Contains(trimmed, "\n") {
+				t.Errorf("%s: statement %d violates the splitter invariants: %q", file.Version, index, statement)
+			}
+		}
 	}
 }

@@ -1,7 +1,9 @@
 package legacyingest
 
 import (
+	"maps"
 	"math/rand"
+	"slices"
 	"strings"
 )
 
@@ -176,7 +178,9 @@ func bodyCorpus() []oracleCase {
 		}
 		many[3] = bad
 		add(route, batchText(route, `"o"`, `"r"`, "["+strings.Join(many, ",")+"]"))
-		for name, pool := range rootPool {
+		// Sorted: the corpus is the key of a frozen golden, and a Go map ranges in a random order.
+		for _, name := range slices.Sorted(maps.Keys(rootPool)) {
+			pool := rootPool[name]
 			for _, value := range filtered(route, name, pool) {
 				org, repo := `"o"`, `"r"`
 				if name == "org_id" {

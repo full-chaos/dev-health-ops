@@ -175,6 +175,7 @@ var perRunPythonEnv = map[string]perRunName{
 	"TMPDIR":         {false, "inherited: the host's directory for temporary files"},
 
 	"REQUESTS_CA_BUNDLE":                  {true, "a temporary certificate file of the test's fake TLS server"},
+	"TELEMETRY_ENDPOINT":                  {true, "the address of the test's fake telemetry endpoint"},
 	"VENUE_PAGERDUTY_API_BASE_OVERRIDE":   {true, "the address of the test's fake PagerDuty server"},
 	"VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": {true, "the address of the test's fake PagerDuty server"},
 	"VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE":  {true, "the address of the test's fake PagerDuty server"},
@@ -184,7 +185,7 @@ var perRunPythonEnv = map[string]perRunName{
 
 // legacyPerRunPythonEnv is perRunPythonEnv as the first key version knew it.
 var legacyPerRunPythonEnv = map[string]bool{"CLICKHOUSE_URI": true, "POSTGRES_URI": true, "PYTHONPATH": true, "REDIS_URL": true,
-	"REQUESTS_CA_BUNDLE": true, "VENUE_PAGERDUTY_API_BASE_OVERRIDE": true, "VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": true,
+	"REQUESTS_CA_BUNDLE": true, "TELEMETRY_ENDPOINT": true, "VENUE_PAGERDUTY_API_BASE_OVERRIDE": true, "VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE": true,
 	"VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE": true, "VENUE_PROVIDER_STUB_PORT": true, "VENUE_STRIPE_API_BASE": true}
 
 // interpreterEnv is the start of every Python child's environment: the

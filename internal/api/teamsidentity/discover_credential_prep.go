@@ -32,7 +32,7 @@ var discoveryHostLookup func(context.Context, string) ([]netip.Addr, error) = ex
 // address that check's classification allows (no re-resolution to an
 // internal address). Every other discovery call keeps discoveryHTTPClient,
 // as Python leaves those provider URLs unguarded. Tests replace it.
-var discoveryAppExchangeClient providerfoundation.HTTPDoer = &http.Client{Timeout: discoveryPerAttemptTimeout, Transport: externalurl.GuardedTransport()}
+var discoveryAppExchangeClient providerfoundation.HTTPDoer = &http.Client{Timeout: discoveryPerAttemptTimeout, Transport: externalurl.GuardedTransport(), CheckRedirect: refuseRedirects}
 
 // prepareDiscoveryCredential turns a resolved stored credential into the
 // credential discovery is allowed to send to a provider, applying

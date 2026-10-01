@@ -46,7 +46,7 @@ func ResolveCloudID(ctx context.Context, doer providerfoundation.HTTPDoer, tenan
 
 func fetchTenantCloudID(ctx context.Context, doer providerfoundation.HTTPDoer, tenant *url.URL) (string, error) {
 	if doer == nil {
-		doer = &http.Client{Timeout: 15 * time.Second}
+		doer = &http.Client{Timeout: 15 * time.Second, CheckRedirect: RefuseRedirects}
 	}
 	target := *tenant
 	target.Path = TenantInfoPath

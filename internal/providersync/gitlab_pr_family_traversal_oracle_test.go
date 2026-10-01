@@ -188,7 +188,7 @@ func oracleGitLabPullRequestTraversalTime(t *testing.T, input map[string]any, ke
 	return &parsed
 }
 
-func TestGitLabPullRequestTraversalMatchesLivePythonProducer(t *testing.T) {
+func TestGitLabPullRequestTraversalMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "gitlab/prs/traversal", oracleGitLabPullRequestTraversalCases(),
 		buildGitLabPullRequestTraversalTrace, nil,

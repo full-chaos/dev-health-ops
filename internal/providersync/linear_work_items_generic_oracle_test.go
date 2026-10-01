@@ -10,7 +10,7 @@ var linearWorkItemOracleNormalizedAt = time.Date(
 	2026, 8, 3, 12, 0, 0, 987654321, time.UTC,
 )
 
-func TestLinearIssueWorkItemMatchesLivePythonProductionRow(t *testing.T) {
+func TestLinearIssueWorkItemMatchesFrozenPythonProductionRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"linear/work-items/issue",
@@ -20,7 +20,7 @@ func TestLinearIssueWorkItemMatchesLivePythonProductionRow(t *testing.T) {
 	)
 }
 
-func TestLinearStatusTransitionMatchesLivePythonProductionRow(t *testing.T) {
+func TestLinearStatusTransitionMatchesFrozenPythonProductionRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"linear/work-items/status-transition",

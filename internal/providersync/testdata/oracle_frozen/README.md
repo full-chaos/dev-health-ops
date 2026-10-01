@@ -32,17 +32,17 @@ live comparison output was captured once and frozen into a JSON file with the
 same shape `python_generic_row_oracle.py` itself emits (`{"cases": [{"id",
 "row"}], "excluded_fields": {...}}`).
 
-- `jira_work-items_atlassian.json` -- `TestJiraAtlassianSurfacesMatchLivePythonProducer` (`jira_atlassian_oracle_test.go`), pair `jira/work-items/atlassian`.
-- `jira_work-items_batch.json` -- `TestJiraProducerBatchMatchesLivePython` (`jira_work_items_batch_oracle_test.go`), pair `jira/work-items/batch`.
-- `jira_work-items_issue.json` -- `TestJiraWorkItemMatchesLivePythonProductionRow` (`jira_work_items_oracle_prep_test.go`), pair `jira/work-items/issue`.
+- `jira_work-items_atlassian.json` -- `TestJiraAtlassianSurfacesMatchFrozenPythonProducer` (`jira_atlassian_oracle_test.go`), pair `jira/work-items/atlassian`.
+- `jira_work-items_batch.json` -- `TestJiraProducerBatchMatchesFrozenPython` (`jira_work_items_batch_oracle_test.go`), pair `jira/work-items/batch`.
+- `jira_work-items_issue.json` -- `TestJiraWorkItemMatchesFrozenPythonProductionRow` (`jira_work_items_oracle_prep_test.go`), pair `jira/work-items/issue`.
 
 Captured 2026-09-06 on bigboy, from the pushed tip of
 `lane-5055-jira-python-delete` (based on main `16e824942ed697a1aa2f55f95f3d757f699e4e4c`),
 by temporarily instrumenting `oracleDivergences` to dump its own decoded
 `output` bytes for these 3 pairIDs while running the then-still-live
-`TestJiraAtlassianSurfacesMatchLivePythonProducer` /
-`TestJiraProducerBatchMatchesLivePython` /
-`TestJiraWorkItemMatchesLivePythonProductionRow` tests with
+`TestJiraAtlassianSurfacesMatchFrozenPythonProducer` /
+`TestJiraProducerBatchMatchesFrozenPython` /
+`TestJiraWorkItemMatchesFrozenPythonProductionRow` tests with
 `DEV_HEALTH_LIVE_PYTHON_ORACLES=1` against the SAME case sets those tests
 already use (`jiraAtlassianOracleCases`, `jiraWorkItemsBatchOracleCases`,
 `jiraWorkItemOraclePrepCases`) -- never a hand-reconstructed case set, so the
@@ -179,15 +179,15 @@ the (now missing) source paths at THIS shared loader module's own import
 time, so leaving them in place would break every one of the ~70 unrelated
 oracle pairs that import `load_live_module`, not just these 9.
 
-- `linear_work-items_reference-team.json` -- `TestLinearReferenceTeamCatalogMatchesLivePythonProducer` (`linear_reference_catalog_team_oracle_test.go`).
-- `linear_work-items_reference-member.json` -- `TestLinearReferenceMemberMatchesLivePythonProducer` (`linear_reference_catalog_member_oracle_test.go`).
-- `linear_work-items_reference-project.json` -- `TestLinearReferenceProjectMatchesLivePythonProducer` (`linear_reference_catalog_oracle_test.go`).
-- `gitlab_work-items_reference-team.json` -- `TestGitLabReferenceTeamCatalogMatchesLivePythonProducer` (`gitlab_team_catalog_team_oracle_test.go`).
-- `gitlab_work-items_reference-project.json` -- `TestGitLabReferenceProjectCatalogMatchesLivePythonProducer` (`gitlab_team_catalog_project_oracle_test.go`).
-- `gitlab_work-items_reference-ownership.json` -- `TestGitLabReferenceOwnershipMatchesLivePythonProducer` (`gitlab_team_catalog_ownership_oracle_test.go`).
-- `github_team-catalog_team.json` -- `TestGitHubTeamCatalogTeamRowMatchesLivePythonProducer` (`github_team_catalog_generic_oracle_test.go`).
-- `github_team-catalog_membership.json` -- `TestGitHubTeamCatalogMembershipRowMatchesLivePythonProducer` (`github_team_catalog_generic_oracle_test.go`).
-- `github_team-catalog_repo-ownership.json` -- `TestGitHubTeamCatalogRepoOwnershipRowMatchesLivePythonProducer` (`github_team_catalog_generic_oracle_test.go`).
+- `linear_work-items_reference-team.json` -- `TestLinearReferenceTeamCatalogMatchesFrozenPythonProducer` (`linear_reference_catalog_team_oracle_test.go`).
+- `linear_work-items_reference-member.json` -- `TestLinearReferenceMemberMatchesFrozenPythonProducer` (`linear_reference_catalog_member_oracle_test.go`).
+- `linear_work-items_reference-project.json` -- `TestLinearReferenceProjectMatchesFrozenPythonProducer` (`linear_reference_catalog_oracle_test.go`).
+- `gitlab_work-items_reference-team.json` -- `TestGitLabReferenceTeamCatalogMatchesFrozenPythonProducer` (`gitlab_team_catalog_team_oracle_test.go`).
+- `gitlab_work-items_reference-project.json` -- `TestGitLabReferenceProjectCatalogMatchesFrozenPythonProducer` (`gitlab_team_catalog_project_oracle_test.go`).
+- `gitlab_work-items_reference-ownership.json` -- `TestGitLabReferenceOwnershipMatchesFrozenPythonProducer` (`gitlab_team_catalog_ownership_oracle_test.go`).
+- `github_team-catalog_team.json` -- `TestGitHubTeamCatalogTeamRowMatchesFrozenPythonProducer` (`github_team_catalog_generic_oracle_test.go`).
+- `github_team-catalog_membership.json` -- `TestGitHubTeamCatalogMembershipRowMatchesFrozenPythonProducer` (`github_team_catalog_generic_oracle_test.go`).
+- `github_team-catalog_repo-ownership.json` -- `TestGitHubTeamCatalogRepoOwnershipRowMatchesFrozenPythonProducer` (`github_team_catalog_generic_oracle_test.go`).
 
 `github/team-catalog/facets` (same file) is untouched: its producer is
 `providers/identity.py`, still live.

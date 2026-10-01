@@ -68,7 +68,7 @@ func oraclePagerDutyTeamCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForPagerDutyTeamRow(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForPagerDutyTeamRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "pagerduty/teams/row", oraclePagerDutyTeamCases(),
 		buildPagerDutyTeamRowForOracle, nil,

@@ -39,7 +39,7 @@ type jiraBatchTransitionRow struct {
 	OrgID         string    `json:"org_id"`
 }
 
-func TestJiraProducerBatchMatchesLivePython(t *testing.T) {
+func TestJiraProducerBatchMatchesFrozenPython(t *testing.T) {
 	// CHAOS-5329/CHAOS-3092: fetch_jira_work_items_with_extras (the Python
 	// legacy-client Jira producer) is deleted -- providersync's
 	// JiraWorkItemsRouteHandler/JiraAtlassianRouteHandler own Jira work-items

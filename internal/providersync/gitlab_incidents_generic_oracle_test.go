@@ -137,7 +137,7 @@ func oracleEffectRow[T any](t *testing.T, batch CompleteRouteBatch, destination 
 	return zero
 }
 
-func TestGenericOracleMatchesLivePythonGitLabIncidentRows(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonGitLabIncidentRows(t *testing.T) {
 	cases := oracleGitLabIncidentCases()
 	compareRowsAgainstPythonOracle(t, "gitlab/incidents/service", cases,
 		func(t *testing.T, input map[string]any) gitLabOperationalServiceRow {
@@ -153,7 +153,7 @@ func TestGenericOracleMatchesLivePythonGitLabIncidentRows(t *testing.T) {
 		}, nil)
 }
 
-func TestGenericOracleMatchesLivePythonGitLabIncidentTraversal(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonGitLabIncidentTraversal(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "gitlab/incidents/traversal", oracleGitLabIncidentTraversalCases(),
 		func(t *testing.T, input map[string]any) gitLabIncidentTraversalTrace {

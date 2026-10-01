@@ -112,7 +112,7 @@ func TestGitHubWorkItemMetricsDailyMatchesFrozenPythonGolden(t *testing.T) {
 	)
 }
 
-func TestGitHubWorkItemUserMetricsDailyMatchesLivePythonProduction(t *testing.T) {
+func TestGitHubWorkItemUserMetricsDailyMatchesFrozenPythonProduction(t *testing.T) {
 	compareRowsAgainstFrozenOracle(
 		t,
 		"github_work-items_user-metrics-daily",
@@ -124,7 +124,7 @@ func TestGitHubWorkItemUserMetricsDailyMatchesLivePythonProduction(t *testing.T)
 	)
 }
 
-func TestGitHubWorkItemCycleTimesMatchLivePythonProduction(t *testing.T) {
+func TestGitHubWorkItemCycleTimesMatchFrozenPythonProduction(t *testing.T) {
 	compareRowsAgainstFrozenOracle(
 		t,
 		"github_work-items_cycle-times",

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -19,10 +18,9 @@ import (
 // the same BYTES. Decoding both sides and comparing the decoded maps would pass
 // while the stored strings differ in key order, separator spacing, or non-ASCII
 // escaping -- which is exactly the class of divergence this encoder exists to
-// prevent. Every case therefore executes the real CPython json.dumps and
-// compares the raw string.
+// prevent. Every case therefore compares the raw string with what the real
+// CPython json.dumps wrote, executed once on the pinned build and frozen.
 func TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte(t *testing.T) {
-	python := pythonExecutable(t)
 	cases := []struct {
 		name     string
 		evidence map[string]any
@@ -104,10 +102,7 @@ func TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte(t *testing.T) {
 			// Ask CPython what it stores for the same dict, in the same order.
 			script := "import json,sys; sys.stdout.write(json.dumps(" +
 				testCase.pythonLiteral + ", default=str))"
-			output, err := exec.Command(python, "-c", script).CombinedOutput()
-			if err != nil {
-				t.Fatalf("execute python json.dumps: %v: %s", err, output)
-			}
+			output := frozenScriptAnswer(t, scriptOracle{name: "json-dumps-evidence", program: script})
 			if string(output) != goEncoded {
 				t.Fatalf("stored evidence bytes diverge from Python\npython=%s\ngo    =%s",
 					output, goEncoded)

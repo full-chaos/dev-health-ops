@@ -12,6 +12,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
+// producerClockLayout is how the producer's pinned instant is written, in a world's frozen_at and on
+// the producer's command line: UTC to the microsecond, the precision Python's datetime holds, so
+// both are one value.
+const producerClockLayout = "2006-01-02T15:04:05.000000Z07:00"
+
 // frozenWorldDigests (declared in generate.go) pins the frozen `fixtures generate` worlds
 // (CHAOS-6468) by content: LoadFrozenWorld checks it on every load, not only here. This test
 // additionally pins that testdata/generate holds exactly the pinned files and that each one decodes
@@ -45,6 +50,12 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 		}
 		if !uuidText.MatchString(world.OrgID) {
 			t.Fatalf("%s: organization %q is not a UUID", path, world.OrgID)
+		}
+		// The producer ran with its clock pinned to frozen_at (TestFreezeGenerateWorlds), and the gated
+		// oracle pins a fresh run to it: a world from a freezer that let the producer read the real
+		// clock (frozen_at written with another precision) cannot be checked on a later day.
+		if at, err := time.Parse(producerClockLayout, world.FrozenAt); err != nil || at.UTC().Format(producerClockLayout) != world.FrozenAt {
+			t.Fatalf("%s: frozen_at %q is not a pinned producer instant (%s, UTC): re-freeze the world with TestFreezeGenerateWorlds", path, world.FrozenAt, producerClockLayout)
 		}
 		if _, err := world.WholeDays(time.Now()); err != nil {
 			t.Fatal(err)

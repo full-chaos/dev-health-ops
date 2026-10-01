@@ -63,3 +63,36 @@ func TestQueryAPIRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 		t.Fatalf("the operator digest is not the query-api image:\n%s", output)
 	}
 }
+
+// /graphql answers a browser with the allowed origins query-api reads from
+// CORS_ALLOWED_ORIGINS: the chart value renders that variable, an empty value
+// renders none (the binary's default), and one variable never gets two values.
+func TestQueryAPICORSAllowedOrigins(t *testing.T) {
+	render := func(extra ...string) (string, error) {
+		args := append([]string{"template", "qa-test", ".", "--set", "queryApi.enabled=true"}, extra...)
+		out, err := exec.Command("helm", args...).CombinedOutput()
+		return string(out), err
+	}
+	out, err := render()
+	if err != nil {
+		t.Fatalf("render failed: %v\n%s", err, out)
+	}
+	if deployment := deploymentOf(t, out, "qa-test-dev-health-query-api"); strings.Contains(deployment, "CORS_ALLOWED_ORIGINS") {
+		t.Fatalf("an empty queryApi.corsAllowedOrigins must render no CORS_ALLOWED_ORIGINS:\n%s", deployment)
+	}
+	out, err = render("--set-string", `queryApi.corsAllowedOrigins=https://app.example\,https://b.example`)
+	if err != nil {
+		t.Fatalf("render failed: %v\n%s", err, out)
+	}
+	deployment := deploymentOf(t, out, "qa-test-dev-health-query-api")
+	if want := "- name: CORS_ALLOWED_ORIGINS\n              value: \"https://app.example,https://b.example\"\n"; !strings.Contains(deployment, want) {
+		t.Fatalf("query-api Deployment lacks %q:\n%s", want, deployment)
+	}
+	secret := `queryApi.extraEnv=[{"name":"CORS_ALLOWED_ORIGINS","valueFrom":{"secretKeyRef":{"name":"s","key":"CORS_ALLOWED_ORIGINS"}}}]`
+	if out, err = render("--set-json", secret); err != nil || strings.Count(deploymentOf(t, out, "qa-test-dev-health-query-api"), "name: CORS_ALLOWED_ORIGINS") != 1 {
+		t.Fatalf("a Secret-backed CORS_ALLOWED_ORIGINS in extraEnv must render once: %v\n%s", err, out)
+	}
+	if out, err = render("--set-json", secret, "--set-string", "queryApi.corsAllowedOrigins=https://app.example"); err == nil || !strings.Contains(out, "two values for one variable") {
+		t.Fatalf("both sources set must fail the render: err=%v\n%s", err, out)
+	}
+}

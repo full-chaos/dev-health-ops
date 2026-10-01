@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestGitHubWorkItemPRSocialCommentAdapterMatchesLivePythonProducer(t *testing.T) {
+func TestGitHubWorkItemPRSocialCommentAdapterMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"github/work-items/pr-social-comment",
@@ -37,7 +37,7 @@ func TestGitHubWorkItemPRSocialCommentAdapterMatchesLivePythonProducer(t *testin
 	)
 }
 
-func TestGitHubWorkItemPRSocialEventAdapterMatchesLivePythonProducer(t *testing.T) {
+func TestGitHubWorkItemPRSocialEventAdapterMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"github/work-items/pr-social-event",

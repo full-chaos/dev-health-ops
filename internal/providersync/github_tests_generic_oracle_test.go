@@ -73,7 +73,7 @@ func githubTestsProducerRows(t *testing.T, input map[string]any) (githubTestsPip
 	return pipeline, jobRow, checks[0]
 }
 
-func TestGenericOracleMatchesActivePythonGitHubTestsProducer(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonGitHubTestsProducer(t *testing.T) {
 	testCase := githubTestsProducerCase()
 	compareRowsAgainstPythonOracle(t, "github/tests/pipeline", []oracleCase{testCase}, func(t *testing.T, input map[string]any) githubTestsPipelineRow {
 		pipeline, _, _ := githubTestsProducerRows(t, input)
@@ -94,7 +94,7 @@ type githubTestsSelectionObservation struct {
 	Created *string `json:"created"`
 }
 
-func TestGenericOracleMatchesActivePythonGitHubArtifactSelection(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonGitHubArtifactSelection(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "github/tests/selection", []oracleCase{{
 		ID: "default_branch_and_date_floor",
 		Input: map[string]any{
@@ -183,7 +183,7 @@ func githubTestsMalformedReportOracleCase() oracleCase {
 	return testCase
 }
 
-func TestGenericOracleMatchesLivePythonForGitHubTestsSuiteRow(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitHubTestsSuiteRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "github/tests/suite", []oracleCase{
 		githubTestsOracleCase(), githubTestsMalformedReportOracleCase(),
 	},
@@ -196,7 +196,7 @@ func TestGenericOracleMatchesLivePythonForGitHubTestsSuiteRow(t *testing.T) {
 		}, githubTestsOracleGoOnlyFields)
 }
 
-func TestGenericOracleMatchesLivePythonForGitHubTestsCaseRow(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitHubTestsCaseRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "github/tests/case", []oracleCase{
 		githubTestsOracleCase(), githubTestsMalformedReportOracleCase(),
 	},
@@ -209,7 +209,7 @@ func TestGenericOracleMatchesLivePythonForGitHubTestsCaseRow(t *testing.T) {
 		}, githubTestsOracleGoOnlyFields)
 }
 
-func TestGenericOracleMatchesLivePythonForGitHubTestsCoverageRow(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitHubTestsCoverageRow(t *testing.T) {
 	fallback := githubTestsOracleCase()
 	fallback.ID = "da_fallback_without_summaries"
 	fallback.Input["lcov"] = "SF:services/api/main.go\nDA:1,1\nDA:2,0\nDA:2,3\nend_of_record\n"

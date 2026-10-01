@@ -514,7 +514,7 @@ func investmentOracleCases() []oracleCase {
 	}
 }
 
-func TestInvestmentClassifierMatchesLivePythonProduction(t *testing.T) {
+func TestInvestmentClassifierMatchesFrozenPythonProduction(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"analytics/investment/classify",
@@ -705,7 +705,7 @@ func investmentRefusalCases() []oracleCase {
 	}
 }
 
-func TestInvestmentClassifierRefusesWhatLivePythonRefuses(t *testing.T) {
+func TestInvestmentClassifierRefusesWhatFrozenPythonRefuses(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"analytics/investment/refusal",

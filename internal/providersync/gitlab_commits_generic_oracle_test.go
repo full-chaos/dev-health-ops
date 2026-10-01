@@ -40,7 +40,7 @@ func buildGitLabCommitRowForOracle(t *testing.T, input map[string]any) gitCommit
 	return row
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabCommitsRowConstruction(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabCommitsRowConstruction(t *testing.T) {
 	cases := []oracleCase{
 		{
 			ID: "nullable_and_fallback_values",

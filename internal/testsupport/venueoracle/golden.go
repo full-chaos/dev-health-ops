@@ -79,6 +79,12 @@ type GoldenSpec struct {
 	// header holds them, and a frozen run refuses a header that differs. A
 	// variable whose value shapes an answer is not passed: the test sets it.
 	PassEnv []string
+	// Scrub turns a token field that is not a JWT (an opaque key, a session
+	// id) into a typed placeholder. It runs on every recorded and every
+	// compared body and header value after the JWT projection, on both planes,
+	// and must be deterministic and idempotent. A golden stores no token value:
+	// the recorder refuses a candidate that still holds a token shape.
+	Scrub func(text string) string
 }
 
 // Golden is an opened GoldenSpec.
@@ -699,6 +705,13 @@ func (g *Golden) answer(t *testing.T, call string, requests []Request, rootErr f
 			t.Fatal(err)
 		}
 		answers = live()
+		for index := range answers {
+			projected, err := g.projectResponse(answers[index])
+			if err != nil {
+				t.Fatalf("golden %s: %v", g.spec.Path, err)
+			}
+			answers[index] = projected
+		}
 		if len(answers) != len(requests) {
 			t.Fatalf("golden %s: the Python producer answered %d of %d requests", g.spec.Path, len(answers), len(requests))
 		}
@@ -770,7 +783,13 @@ func (g *Golden) frozenAnswers(requests []Request) ([]Response, error) {
 func (g *Golden) CompareRows(t *testing.T, name string, source func() string, goRows string) string {
 	t.Helper()
 	value := g.snapshot(t, "CompareRows", name, source)
-	if err := rowsDiffer(name, value, goRows); err != nil {
+	// Both planes' rows are compared as projected: the golden stores no token
+	// and a per-run value is a typed placeholder (GoldenSpec.Scrub).
+	projectedGo, err := g.project(goRows)
+	if err != nil {
+		t.Fatalf("golden %s: row comparison %q: %v", g.spec.Path, name, err)
+	}
+	if err := rowsDiffer(name, value, projectedGo); err != nil {
 		t.Error(err)
 	}
 	g.rowsUsed[name] = true
@@ -803,7 +822,10 @@ func (g *Golden) snapshot(t *testing.T, call, name string, source func() string)
 		if g.rowsUsed[name] {
 			t.Fatalf("golden row comparison %q is recorded twice", name)
 		}
-		value := source()
+		value, err := g.project(source())
+		if err != nil {
+			t.Fatalf("golden %s: row comparison %q: %v", g.spec.Path, name, err)
+		}
 		g.recorded.Rows[name] = goldenRows{Rows: value}
 		return value
 	}
@@ -968,6 +990,9 @@ func (g *Golden) writeCandidate(failed bool) (string, error) {
 		return "", err
 	}
 	raw = append(raw, '\n')
+	if err := tokenShapeErr(g.spec.Path, raw); err != nil {
+		return "", err
+	}
 	candidate := g.spec.Path + GoldenCandidateSuffix
 	if err := os.MkdirAll(filepath.Dir(candidate), 0o755); err != nil {
 		return "", err

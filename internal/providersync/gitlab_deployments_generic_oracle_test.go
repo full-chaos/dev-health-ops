@@ -144,7 +144,7 @@ func oracleGitLabDeploymentCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabDeploymentRowConstruction(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabDeploymentRowConstruction(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"gitlab/deployments/row",
@@ -262,7 +262,7 @@ func oracleGitLabDeploymentTraversalCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabDeploymentTraversal(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabDeploymentTraversal(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"gitlab/deployments/trace",

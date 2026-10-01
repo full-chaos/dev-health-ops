@@ -31,7 +31,7 @@ func buildCommitRowForOracle(t *testing.T, input map[string]any) gitCommitRow {
 	return row
 }
 
-func TestGenericOracleMatchesLivePythonForCommitsRowConstruction(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForCommitsRowConstruction(t *testing.T) {
 	raw := map[string]any{
 		"sha": "abc", "author": map[string]any{"login": "api-author", "email": "api@example.com"},
 		"committer": map[string]any{"login": "api-committer"}, "parents": []any{map[string]any{}, map[string]any{}},

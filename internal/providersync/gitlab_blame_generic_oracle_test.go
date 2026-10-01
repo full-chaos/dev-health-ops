@@ -41,7 +41,7 @@ func buildGitLabBlameRowForOracle(t *testing.T, input map[string]any) gitBlameRo
 	)
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabBlameRowConstruction(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabBlameRowConstruction(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "gitlab/blame/row", []oracleCase{
 		{ID: "named_author", Input: map[string]any{
 			"repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79", "path": "src/main.go",

@@ -156,7 +156,7 @@ func configCase(id, config string) oracleCase {
 	return oracleCase{ID: id, Input: map[string]any{"explicit_config": config}}
 }
 
-func TestStatusMappingLoadMatchesPythonOracle(t *testing.T) {
+func TestStatusMappingLoadMatchesFrozenPythonOracle(t *testing.T) {
 	cases := []oracleCase{
 		// The REAL config: CHAOS-3505 (no linear key), the empty github/gitlab
 		// `types` sections, the empty jira `type_labels`, and the CHAOS-3512
@@ -260,7 +260,7 @@ func normalizeCase(id string, input map[string]any) oracleCase {
 	return oracleCase{ID: id, Input: input}
 }
 
-func TestStatusMappingNormalizeMatchesPythonOracle(t *testing.T) {
+func TestStatusMappingNormalizeMatchesFrozenPythonOracle(t *testing.T) {
 	withConfig := func(config string, extra map[string]any) map[string]any {
 		input := map[string]any{"explicit_config": config}
 		for key, value := range extra {

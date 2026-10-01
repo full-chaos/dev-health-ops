@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestIdentityDriftConflictDecisionMatchesFrozenPythonProducer",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair identity-drift/review/conflict-decision: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestIdentityDriftConflictDecisionMatchesFrozenPythonProducer$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "identity-drift/review/conflict-decision",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "7e728a40f4555d91afc5f4091a9f05ba4c0893092228db6d613cf38dfafed2cc",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"same_team_manual_confirms_no_conflict\", \"row\": {\"conflict_field\": null}}, {\"id\": \"different_team_manual_conflicts\", \"row\": {\"conflict_field\": {\"t\": \"str\", \"v\": \"team_memberships\"}}}, {\"id\": \"member_has_both_same_and_different_team_still_conflicts\", \"row\": {\"conflict_field\": {\"t\": \"str\", \"v\": \"team_memberships\"}}}, {\"id\": \"no_manual_match_fallback_same_team_no_conflict\", \"row\": {\"conflict_field\": null}}, {\"id\": \"no_manual_match_fallback_different_team_conflicts\", \"row\": {\"conflict_field\": {\"t\": \"str\", \"v\": \"manual_attribution_fallbacks.member\"}}}, {\"id\": \"no_match_at_all_no_conflict\", \"row\": {\"conflict_field\": null}}], \"excluded_fields\": {}}\n"
+    }
+  ]
+}

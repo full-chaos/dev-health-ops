@@ -425,6 +425,9 @@ func TestOperationalTableContractMismatchLogsBothValues(t *testing.T) {
 				"level=WARN", "operational_ordering_contract_mismatch", "table=operational_users",
 				"env_value=" + envValue, fmt.Sprintf("env_contract=%d", envContract),
 				fmt.Sprintf("table_contract=%d", tableContract), "used=table",
+				// The remedy names the way out: the migrate Job to the head, and
+				// that a contract-1 table has no upgrade path.
+				"dho migrate upgrade", "unsupported", "re-create the database from the head",
 			} {
 				if !strings.Contains(logged, want) {
 					t.Fatalf("env=%s table=%s log %q lacks %q", env, shape, logged, want)

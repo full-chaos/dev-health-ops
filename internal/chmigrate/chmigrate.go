@@ -26,8 +26,10 @@
 //   - every baseline version applied: apply the .sql files after the head
 //     (sql/), each recorded only after all its statements succeed;
 //   - some versions applied but not all baseline versions: the database is
-//     below the head and is refused, naming what is missing. It needs the
-//     Python chain, which stays until the Python CLI is deleted;
+//     below the head and is refused, naming what is missing. There is no
+//     upgrade path: ordering contract 1 (a database without migration 067,
+//     whose rebuild exists only in the Python chain) is unsupported, and the
+//     database is re-created from the head;
 //   - no applied versions but an object the baseline does not create: a
 //     database this migrator did not create, refused.
 package chmigrate
@@ -285,6 +287,7 @@ func (e BelowHeadError) Error() string {
 		shown, suffix = shown[:5], fmt.Sprintf(" and %d more", len(e.Missing)-5)
 	}
 	return fmt.Sprintf("the ClickHouse schema is below the head (ordering contract %d): %d baseline version(s) are not applied (%s%s). "+
-		"dho applies the head only to an empty database; run the Python chain (`dev-hops migrate clickhouse upgrade`) with %s=%d first",
-		e.Contract, len(e.Missing), strings.Join(shown, ", "), suffix, OrderingContractEnv, e.Contract)
+		"dho applies the head only to an empty database and has no upgrade path for one below it. Ordering contract 1 (a database "+
+		"without migration 067) is unsupported: re-create the database from the head (`dho migrate clickhouse upgrade` on an empty database)",
+		e.Contract, len(e.Missing), strings.Join(shown, ", "), suffix)
 }

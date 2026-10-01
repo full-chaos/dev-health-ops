@@ -132,6 +132,13 @@ func run(ctx context.Context, verb string, env cli.Env) int {
 		}
 		return code
 	}
+	return upgradeOutcome(ctx, db, baseline, chain, env, boundary)
+}
+
+// upgradeOutcome runs the upgrade and reports it the way the verb does: the
+// JSON result on stdout and exit 0, or a JSON error on stderr and a failing
+// exit, with one error code per refusal.
+func upgradeOutcome(ctx context.Context, db DB, baseline Baseline, chain []ChainFile, env cli.Env, boundary secrets.Boundary) int {
 	result, err := Upgrade(ctx, db, baseline, chain)
 	if err != nil {
 		var below BelowHeadError

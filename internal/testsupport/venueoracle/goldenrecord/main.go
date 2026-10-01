@@ -54,6 +54,9 @@ type Config struct {
 	// golden holds (an intended change of the oracle). Without it the candidate
 	// must keep every request name and row name of the golden it replaces.
 	AllowDrop bool
+	// PassEnv names ambient variables a recording needs beyond the fixed set
+	// (recordingEnv): a credential a producer reads, by name only.
+	PassEnv []string
 	// Run executes one go test invocation with the extra environment. The
 	// default runs `go test -tags=integration` in Root.
 	Run func(cfg Config, env []string) error
@@ -80,7 +83,13 @@ func main() {
 	flag.StringVar(&cfg.Test, "test", "", "-run regular expression of the oracles to record")
 	flag.StringVar(&cfg.PythonRoot, "python-root", "", "clean checkout at the pinned Python-bearing build")
 	flag.BoolVar(&cfg.AllowDrop, "allow-drop", false, "let a re-record drop requests or row comparisons the existing golden holds")
+	passEnv := flag.String("pass-env", "", "comma-separated NAMES of ambient variables to pass to the recording beyond the fixed set (names only, never values)")
 	flag.Parse()
+	for _, name := range strings.Split(*passEnv, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			cfg.PassEnv = append(cfg.PassEnv, name)
+		}
+	}
 	if cfg.Package == "" || cfg.Test == "" || cfg.PythonRoot == "" {
 		fmt.Fprintln(os.Stderr, "goldenrecord: -pkg, -test and -python-root are required")
 		os.Exit(2)
@@ -336,11 +345,51 @@ func removeAll(dir string) {
 	}
 }
 
+// passedNames are the ambient variables a recording and its replay run under:
+// what the Go toolchain, the container runtime and the network need, and the
+// test harness's own switches. Nothing else of the ambient environment reaches
+// the tests, so no ambient variable can shape a producer's answers unseen; a
+// producer's own configuration is set by its test, where the request key or
+// the test text holds it.
+var passedNames = map[string]bool{
+	"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "TMPDIR": true, "XDG_RUNTIME_DIR": true,
+	"GOPATH": true, "GOROOT": true, "GOCACHE": true, "GOMODCACHE": true, "GOFLAGS": true, "GOPROXY": true,
+	"GONOPROXY": true, "GOSUMDB": true, "GONOSUMDB": true, "GOPRIVATE": true, "GOINSECURE": true, "GOTMPDIR": true,
+	"GOWORK": true, "GOTOOLCHAIN": true, "GOMAXPROCS": true, "GOENV": true, "GOEXPERIMENT": true, "CGO_ENABLED": true,
+	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
+	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true,
+}
+
+// passedPrefixes are the families passed whole: the container runtime's and
+// the test harness's (DEV_HEALTH_PYTHON, the proof directory, a test-mode switch).
+var passedPrefixes = []string{"DOCKER_", "TESTCONTAINERS_", "DEV_HEALTH_", "DHO_VENUE_GOLDEN_"}
+
+// recordingEnv is ambient reduced to the passed variables and the names in
+// extra, with a fixed UTF-8 locale.
+func recordingEnv(ambient, extra []string) []string {
+	named := map[string]bool{}
+	for _, name := range extra {
+		named[name] = true
+	}
+	var out []string
+	for _, entry := range ambient {
+		name, _, _ := strings.Cut(entry, "=")
+		passed := passedNames[name] || named[name]
+		for _, prefix := range passedPrefixes {
+			passed = passed || strings.HasPrefix(name, prefix)
+		}
+		if passed {
+			out = append(out, entry)
+		}
+	}
+	return append(out, "LANG=C.UTF-8", "LC_ALL=C.UTF-8")
+}
+
 // goTest is the default runner.
 func goTest(cfg Config, env []string) error {
 	command := exec.Command("go", "test", "-tags=integration", "-count=1", "-timeout", "120m", "-v", "-run", cfg.Test, cfg.Package)
 	command.Dir = cfg.Root
-	command.Env = append(os.Environ(), env...)
+	command.Env = append(recordingEnv(os.Environ(), cfg.PassEnv), env...)
 	command.Stdout, command.Stderr = os.Stdout, os.Stderr
 	return command.Run()
 }

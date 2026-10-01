@@ -545,7 +545,7 @@ func (g *Golden) Produce(t *testing.T, root string, requests []Request, live fun
 	return g.answer(t, "Produce", requests,
 		func() error { return g.producerRootErr(root) },
 		func() []Response { return live(root, requests) },
-		nil)
+		func() error { return liveVenueErr(t, "golden "+g.spec.Path+"'s frozen answers") })
 }
 
 // producerRequestsErr is an error when a producer request carries headers.

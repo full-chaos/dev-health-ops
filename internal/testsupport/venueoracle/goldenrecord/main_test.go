@@ -256,7 +256,7 @@ func TestTheDefaultRunnerRunsGoTestWithTheEnvironment(t *testing.T) {
 	files := map[string]string{
 		filepath.Join(root, "go.mod"): "module probe\n\ngo 1.22\n",
 		filepath.Join(dir, "probe_test.go"): "//go:build integration\n\npackage pkg\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\n" +
-			"func TestProbe(t *testing.T) {\n\tif err := os.WriteFile(\"seen.txt\", []byte(os.Getenv(\"DHO_VENUE_GOLDEN_UPDATE\")), 0o644); err != nil {\n\t\tt.Fatal(err)\n\t}\n}\n\n" +
+			"func TestProbe(t *testing.T) {\n\tseen := os.Getenv(\"DHO_VENUE_GOLDEN_UPDATE\") + \"|\" + os.Getenv(\"GOLDENRECORD_AMBIENT_PROBE\") + \"|\" + os.Getenv(\"GOLDENRECORD_NAMED_PROBE\") + \"|\" + os.Getenv(\"TESTCONTAINERS_PROBE\") + \"|\" + os.Getenv(\"LC_ALL\")\n\tif err := os.WriteFile(\"seen.txt\", []byte(seen), 0o644); err != nil {\n\t\tt.Fatal(err)\n\t}\n}\n\n" +
 			"func TestNotSelected(t *testing.T) {\n\tt.Fatal(\"the -run regexp was ignored\")\n}\n",
 	}
 	for path, content := range files {
@@ -264,13 +264,30 @@ func TestTheDefaultRunnerRunsGoTestWithTheEnvironment(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cfg := Config{Root: root, Package: "./pkg/", Test: "^TestProbe$"}
+	// An ambient variable outside the passed set must not reach the tests (it
+	// could shape a producer's answers unseen); one named with PassEnv, one of
+	// a passed family and the verb's own must; the locale is fixed.
+	t.Setenv("GOLDENRECORD_AMBIENT_PROBE", "leak")
+	t.Setenv("GOLDENRECORD_NAMED_PROBE", "named")
+	t.Setenv("TESTCONTAINERS_PROBE", "family")
+	t.Setenv("LC_ALL", "tr_TR.UTF-8")
+	cfg := Config{Root: root, Package: "./pkg/", Test: "^TestProbe$", PassEnv: []string{"GOLDENRECORD_NAMED_PROBE"}}
 	if err := goTest(cfg, []string{"DHO_VENUE_GOLDEN_UPDATE=1"}); err != nil {
 		t.Fatalf("the default runner failed: %v", err)
 	}
 	seen, err := os.ReadFile(filepath.Join(dir, "seen.txt"))
-	if err != nil || string(seen) != "1" {
-		t.Fatalf("the test did not see the environment: %q %v", seen, err)
+	if err != nil || string(seen) != "1||named|family|C.UTF-8" {
+		t.Fatalf("the test saw the environment %q (%v), want the verb's variable, no ambient probe, the named and the family ones, and the fixed locale", seen, err)
+	}
+}
+
+func TestTheRecordingEnvironmentKeepsOnlyThePassedVariables(t *testing.T) {
+	ambient := []string{"PATH=/bin", "HOME=/h", "GOCACHE=/c", "GOOGLE_APPLICATION_CREDENTIALS=/k", "LOG_LEVEL=DEBUG", "POSTGRES_URI=postgres://x",
+		"DOCKER_HOST=unix:///d", "DEV_HEALTH_PYTHON=/p", "LANG=tr_TR.UTF-8", "EMPTY=", "STRIPE_KEY_NAME=v"}
+	got := strings.Join(recordingEnv(ambient, []string{"STRIPE_KEY_NAME"}), "\n")
+	want := "PATH=/bin\nHOME=/h\nGOCACHE=/c\nDOCKER_HOST=unix:///d\nDEV_HEALTH_PYTHON=/p\nSTRIPE_KEY_NAME=v\nLANG=C.UTF-8\nLC_ALL=C.UTF-8"
+	if got != want {
+		t.Fatalf("recording environment:\n%s\nwant:\n%s", got, want)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // End-to-end loader parity against a real ClickHouse.
@@ -1264,7 +1266,8 @@ func assertArgMaxKeysAreUnique(t *testing.T, ctx context.Context, conn driver.Co
 // close, so a missing interpreter is a hard failure.
 func loaderPythonBinary(t *testing.T) string {
 	t.Helper()
-	python, rule, err := chschema.Interpreter()
+	_, file, _, _ := runtime.Caller(0)
+	python, rule, err := pyoracle.Interpreter(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
 	if err != nil {
 		t.Fatalf("no Python to run the reference loader: %v. This test compares the "+
 			"SHIPPED Python loader against the Go one, so without an interpreter it "+

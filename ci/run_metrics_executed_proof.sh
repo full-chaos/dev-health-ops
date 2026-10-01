@@ -62,19 +62,6 @@ require_cmd() {
   fi
 }
 
-run_dev_hops() {
-  if command -v dev-hops >/dev/null 2>&1; then
-    dev-hops "$@"
-    return
-  fi
-  # CHAOS-4411/4181/4407: `uv run dev-hops` here would trigger uv's own
-  # implicit sync of the local editable project -- reintroducing both the
-  # shared-cache lock (no UV_CACHE_DIR carries into a fresh `uv run`) and the
-  # setuptools_scm worktree hang the AGENTS.md `--no-install-project` recipe
-  # exists to avoid. The pure-module invocation needs neither.
-  python3 -m dev_health_ops.cli "$@"
-}
-
 # CHAOS-7040 deleted this file's only long-running-process launch (the
 # Python `dev-hops api` boot) along with it its exec-flavored counterpart,
 # exec_dev_hops() -- dead code once that call site was gone. run_dev_hops()
@@ -109,7 +96,8 @@ VALKEY_PORT="${VALKEY_PORT:-6379}"
 # binaries at 8123 fails immediately with "ClickHouse readiness check failed"
 # (confirmed by hand; see deploy/go-workers/README.md).
 CLICKHOUSE_URI_HTTP="clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@${CLICKHOUSE_HOST}:${CLICKHOUSE_HTTP_PORT}/${CLICKHOUSE_DB}"
-CLICKHOUSE_URI_NATIVE="clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@${CLICKHOUSE_HOST}:${CLICKHOUSE_NATIVE_PORT}/${CLICKHOUSE_DB}"
+# Derived from the HTTP DSN (clickhouse_native_uri) so both name the same server and database.
+CLICKHOUSE_URI_NATIVE="$(clickhouse_native_uri "${CLICKHOUSE_URI_HTTP}" "${CLICKHOUSE_NATIVE_PORT}" CLICKHOUSE_URI_HTTP)"
 POSTGRES_SUPERUSER_URI="postgresql+asyncpg://${POSTGRES_SUPERUSER}:${POSTGRES_SUPERUSER_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
 
 RIVER_DOMAIN_ROLE="devhealth_domain"
@@ -280,13 +268,20 @@ echo "   -- fixtures generate (CHAOS-4276: git_commits + a repo-pattern team for
 # 2-team/1-repo seed here would have exercised membership fallback instead
 # of the repo-pattern-first path this job's comment above says it proves.
 # One team keeps the repo genuinely single-owner.
-ORG_ID="${ORG_ID}" CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
-  run_dev_hops fixtures generate \
-  --sink "${CLICKHOUSE_URI_HTTP}" \
+FIXTURES_SINK="$(clickhouse_http_sink "${CLICKHOUSE_URI_HTTP}" CLICKHOUSE_URI_HTTP)"
+# dho loads the frozen world (CHAOS-7301) and refuses a PostgreSQL URI in its environment. The sink
+# scheme is spelled by clickhouse_http_sink (ci/lib/go_worker_fixture.sh).
+# The DSN reaches dho by environment, not argv (it can hold a password).
+env -u DATABASE_URI -u POSTGRES_URI -u DATABASE_URL CLICKHOUSE_URI="${FIXTURES_SINK}" ORG_ID="${ORG_ID}" OTEL_ENABLED=false \
+  "${BIN_DIR}/dho" fixtures generate \
+  --db-type clickhouse \
   --org "${ORG_ID}" \
+  --provider synthetic \
   --repo-name "${REPO_NAME}" \
   --repo-count 1 \
   --days "${BACKFILL_DAYS}" \
+  --commits-per-day 5 \
+  --pr-count 20 \
   --team-count 1 \
   --seed 4276
 
@@ -331,8 +326,8 @@ ASSERT_SUMMARY_JSON="${METRICS_PROOF_SUMMARY_JSON_FILE:-${TMP_DIR}/family-summar
 # identical causal chain as team_cognitive_load, so it is satisfied by the
 # same seeding with no separate fixture path needed.
 assert_readback() {
-  PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
-    --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
+  # The DSN reaches the script by environment (it reads CLICKHOUSE_URI), not argv: it can hold a password.
+  CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
     --org-id "${ORG_ID}" \
     --run-start "${RUN_START}" \
     --families cicd deploy testops_pipeline testops_test testops_coverage dora repo_user_commit team_wellbeing team_cognitive_load compounding_risk compounding_risk_team ic_finalize \

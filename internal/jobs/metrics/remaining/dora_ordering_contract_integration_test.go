@@ -421,13 +421,9 @@ func currentIncidentTitle(
 // migratedClickHouse returns a scratch store migrated to the schema shape the
 // GIVEN contract produces, building each shape at most once per package run.
 //
-// The contract is exported into the migration subprocess's environment rather
-// than passed as an argument because that is how the real chain reads it
-// (chschema.Apply inherits os.Environ). os.Setenv is used instead of t.Setenv
-// so the value is scoped to the migration call itself: these containers are
-// shared across tests, and a t.Setenv restore firing at the end of whichever
-// test happened to build one would leave the others reading a different
-// variable than the schema they were handed.
+// The contract-2 shape is chschema.Apply's (production's head); the contract-1
+// shape is chschema.ApplyOrderingContract1's. Neither reads the process
+// environment, so the shared containers here cannot see another test's value.
 //
 // Hand-typed DDL would defeat the point entirely: the divergence under test is
 // a property of what migration 067 does to the sorting key, so a test-authored
@@ -494,17 +490,22 @@ func migratedClickHouse(
 	// the scratch database on a shared server.
 	migratedInstances = append(migratedInstances, instance)
 
-	previous, had := os.LookupEnv(operationalOrderingContractEnv)
-	if err := os.Setenv(
-		operationalOrderingContractEnv, strconv.Itoa(int(contract)),
-	); err != nil {
-		t.Fatalf("set %s: %v", operationalOrderingContractEnv, err)
-	}
-	chschema.Apply(ctx, t, instance)
-	if had {
-		_ = os.Setenv(operationalOrderingContractEnv, previous)
+	if contract == OperationalOrderingLegacy {
+		chschema.ApplyOrderingContract1(ctx, t, instance)
 	} else {
-		_ = os.Unsetenv(operationalOrderingContractEnv)
+		// Another test's t.Setenv may have this process on contract 1 while a
+		// shared store is first built; Apply refuses a contract other than
+		// the one it builds, so name it for the call.
+		previous, had := os.LookupEnv(operationalOrderingContractEnv)
+		if err := os.Setenv(operationalOrderingContractEnv, "2"); err != nil {
+			t.Fatalf("set %s: %v", operationalOrderingContractEnv, err)
+		}
+		chschema.Apply(ctx, t, instance)
+		if had {
+			_ = os.Setenv(operationalOrderingContractEnv, previous)
+		} else {
+			_ = os.Unsetenv(operationalOrderingContractEnv)
+		}
 	}
 
 	conn := openClickHouse(t, ctx, instance)

@@ -169,6 +169,69 @@ instrumented in `go_api_registry_telemetry.py`
 `devhealth_go_api_candidate_build_registered_total`,
 `devhealth_go_api_proof_run_recorded_total`).
 
+### The two edge modes of `dho goapi prove`
+
+`dho goapi prove` measures through the product GraphQL edge (`-edge-url`), and
+it has two modes. The mode is a flag, never detected: each mode refuses the
+other mode's edge by name, so a run always says which proof it is. The line
+`go-api-prove: edge_mode=...` and `edge_mode` on the report summary are written
+on every exit, including a run that is refused before it measures anything. A
+Go-edge run also carries `edge_mode` on every outcome and in each receipt's
+`review_evidence`. A command line that does not parse selected no mode, and
+says `edge_mode=undetermined`.
+
+**Python-reference mode (the default).** The edge has a Python plane behind it.
+The run first asks the Python app who the credential is (`/api/v1/auth/me`),
+and for every case it sends a control document, the registered text plus an
+inert comment, which misses the document digest and is answered by the Python
+plane. That answer is the reference: a real Python result is compared with the
+Go result, and for an operation whose Python body is deleted (the go-only
+class) it is the deletion error, so the candidate stands alone.
+
+**Go-edge mode (`-go-edge`).** The edge is query-api itself, which answers
+`/graphql` with no Python plane behind it (CHAOS-6263). There is no Python app
+to ask and no Python answer to read.
+
+What Go-edge mode proves:
+
+- The edge is query-api alone. Before any case, and again for every case, the
+  control document must be refused the way query-api refuses an unregistered
+  document: HTTP 404, the `UNREGISTERED_DOCUMENT` error, `x-dev-health-plane:
+  go`, and the serving build equal to the build the receipt names.
+- The operation works on that build through that edge: the candidate answered
+  2xx from plane go, with the serving build on the response, a JSON content
+  type, no GraphQL error, and its own root present and non-empty.
+- The caller is the org the run names, with no impersonation: every credential
+  value is checked for its `org_id` claim before it is sent, and no leg may
+  carry the `X-Impersonating` header.
+
+What it does NOT prove: that the answer equals what the Python implementation
+answered. No Python comparison happens in this mode. That comparison is the
+frozen two-plane record each go-served ledger entry cites (its two-plane sha)
+and the frozen venue oracles. So a Go-edge proof is always the go-only class:
+the verdict is `PROVEN_GO_ONLY (go-edge mode: ...)`, the receipt is the
+cited-mismatch arm with the ledger's own citation, and an operation the
+go-served ledger does not name is refused, never proven by its candidate alone.
+
+Go-edge mode refuses, each by its own name:
+
+| Refusal | What the edge showed |
+| -- | -- |
+| `go_edge_control_answered_by_another_plane` | the control document was answered by plane python: a Python plane is behind the edge (run the Python-reference mode) |
+| `go_edge_control_plane_unidentified` | the control answer carried no plane header |
+| `go_edge_control_document_was_served` | the edge answered 2xx to the control document: something serves or forwards an unregistered document |
+| `go_edge_control_not_refused_as_unregistered` | the control answer is not the 404 `UNREGISTERED_DOCUMENT` refusal |
+| `go_edge_control_build_unbound`, `serving_build_is_not_the_named_build` | the refusal carried no serving build, or another build |
+| `response_carried_no_plane_evidence`, `served_by_the_wrong_plane` | the candidate carried no plane header, or was not served by plane go |
+| `go_edge_candidate_build_unbound`, `serving_build_is_not_the_named_build` | the candidate carried no serving build, or another build |
+| `go_edge_candidate_content_type` | the candidate's content type is not a GraphQL JSON type (`application/json` or `application/graphql-response+json`) |
+| `leg_was_served_under_an_impersonation_session` | a leg carried the impersonation stamp |
+| `go_edge_operation_not_in_the_go_served_ledger` | the ledger names no two-plane record for the operation |
+| `go_edge_mode_refused` (the run does not start) | the pre-run control probe was refused as above, or a credential is not bound to the run's org |
+
+The Python-reference mode stays until the Python GraphQL path is deleted
+(CHAOS-7300).
+
 ## Route switch (reachability gate)
 
 Plan §6's "cited constructor is not proof of capability" lesson, applied

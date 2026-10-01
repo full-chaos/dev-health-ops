@@ -15,6 +15,15 @@
 // A test failure at any point, including a cleanup that fails after Finish,
 // deletes the candidates and leaves every golden as it was.
 //
+// A venue golden holds the key of the Python settings its test declares
+// (venueoracle.Options.PythonEnv). -backfill-python-env adds that key to a
+// golden recorded before the key existed. It records nothing and runs no
+// Python: the frozen tests run with the backfill switch and write a candidate
+// that is the golden with the key in its header, the candidate must be the
+// golden with exactly that one field added, and then REPLAY and PROMOTE run as
+// above. It is only right for a golden whose test declares today the settings
+// it was recorded under.
+//
 // Usage, from the repository root:
 //
 //	go run ./internal/testsupport/venueoracle/goldenrecord \

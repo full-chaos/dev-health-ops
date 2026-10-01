@@ -197,7 +197,7 @@ func TestMCPClassReceiptsRule(t *testing.T) {
 			[]sealedOutcome{edgeRoute}, want{"proof_failed", 1}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			receipts, verdicts, err := classRunner(tc.sealed).MCPClassReceipts(tc.outcomes, sources, time.Now().UTC())
+			receipts, verdicts, err := classRunner(tc.sealed).MCPClassReceipts(tc.outcomes, sources, nil, time.Now().UTC())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -216,10 +216,10 @@ func TestMCPClassReceiptsRule(t *testing.T) {
 
 func TestMCPClassReceiptsRefusesOutcomesTheRunDidNotSeal(t *testing.T) {
 	sources := map[string][]string{mcpclass.Operation("hotspots"): {"hotspots"}}
-	if _, _, err := classRunner(nil).MCPClassReceipts([]Outcome{executedOutcome("hotspots", "")}, sources, time.Now()); err == nil {
+	if _, _, err := classRunner(nil).MCPClassReceipts([]Outcome{executedOutcome("hotspots", "")}, sources, nil, time.Now()); err == nil {
 		t.Fatal("outcomes without matching sealed measurements were accepted")
 	}
-	if _, _, err := classRunner([]sealedOutcome{sealedMatch("featureFlags", "")}).MCPClassReceipts([]Outcome{executedOutcome("featureFlags", "")}, sources, time.Now()); err == nil {
+	if _, _, err := classRunner([]sealedOutcome{sealedMatch("featureFlags", "")}).MCPClassReceipts([]Outcome{executedOutcome("featureFlags", "")}, sources, nil, time.Now()); err == nil {
 		t.Fatal("an outcome of an operation outside every requested root was accepted")
 	}
 }

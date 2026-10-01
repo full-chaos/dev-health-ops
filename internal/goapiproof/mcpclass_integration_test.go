@@ -105,3 +105,34 @@ func TestClassOperationWithoutTheClassKindIsAdmittedByNothing(t *testing.T) {
 		t.Fatal("a class operation with an unknown kind was admitted")
 	}
 }
+
+// DocumentOperationsReceiptBacked is `enable`'s reader for a query operation: an
+// operation holding an admissible receipt for exactly this build is backed; one with
+// no receipt, a receipt for another build, or an inadmissible one (unbound) is not.
+func TestDocumentOperationsReceiptBackedReadsTheEnablementRule(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+	write := func(op, digest, build, binding string) {
+		t.Helper()
+		if _, err := Write(ctx, pool, Receipt{
+			SchemaDigest: testSchemaDigest, DocumentDigest: digest, SelectedOperation: op, CandidateBuild: build,
+			RequestIdentity: "identity-" + op, Stage: EnablementProofStage, TerminalState: EnablementProofTerminalState,
+			MeasurementRoute: RouteEdge, BuildBinding: binding, OrgID: "70d529e0", RecordedBy: "test",
+			ReviewEvidence: "doc receipt", ObservedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("Write %s: %v", op, err)
+		}
+	}
+	d := func(c string) string { return strings.Repeat(c, 64) }
+	write("backed", d("a"), testCandidateBuild, EdgeBuildPresent)
+	write("otherbuild", d("b"), "ffffffffffffffffffffffffffffffffffffffff", EdgeBuildPresent)
+	write("unbound", d("c"), testCandidateBuild, EdgeBuildAbsent)
+	got, err := DocumentOperationsReceiptBacked(ctx, pool, testSchemaDigest, testCandidateBuild,
+		map[string]string{"backed": d("a"), "otherbuild": d("b"), "unbound": d("c"), "none": d("e")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got["backed"] || got["otherbuild"] || got["unbound"] || got["none"] {
+		t.Fatalf("backed = %v, want only the operation with an admissible receipt for this build", got)
+	}
+}

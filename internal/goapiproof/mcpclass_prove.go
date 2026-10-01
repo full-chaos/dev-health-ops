@@ -66,6 +66,9 @@ type MCPClassProvenance struct {
 	Reference string `json:"reference"`
 	Executed  int    `json:"shapes_executed"`
 	Matched   int    `json:"shapes_matched"`
+	// Stochastic names the shapes proven under the stochastic leaf class (CHAOS-5901): executed, never counted as
+	// matched. A root with any is recorded as terminal mismatch with the class citation, never as a match.
+	Stochastic []string `json:"shapes_stochastic,omitempty"`
 	// Excluded names every shape left out and why, "operation[:variant]=reason".
 	Excluded []string `json:"shapes_excluded,omitempty"`
 	// Failed names every shape that blocked the match.
@@ -74,12 +77,16 @@ type MCPClassProvenance struct {
 
 // MCPClassVerdict is one root's result of a class proof run.
 type MCPClassVerdict struct {
-	Root          string
-	Operation     string
-	Executed      int
-	Matched       int
-	Excluded      []string
-	Failed        []string
+	Root      string
+	Operation string
+	Executed  int
+	Matched   int
+	Excluded  []string
+	Failed    []string
+	// Stochastic names the shapes proven under the stochastic leaf class; Citations are the distinct class citations
+	// the root receipt carries as its baseline_defect.
+	Stochastic    []string
+	Citations     []string
 	TerminalState string
 	// Written is whether a receipt was built for the root (false: nothing was
 	// measured).
@@ -219,6 +226,8 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 		verdict MCPClassVerdict
 		sealed  []sealedOutcome
 		bound   bool
+		// citations are the distinct stochastic-leaf-class citations of the root's stochastic shapes.
+		citations []string
 	}
 	buckets := map[string]*bucket{}
 	for classOperation := range rootSources {
@@ -255,6 +264,9 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 			b.sealed = append(b.sealed, sealed)
 			if sealedMatches(sealed) {
 				b.verdict.Matched++
+			} else if citation := sealedStochasticCitation(sealed); citation != "" {
+				b.verdict.Stochastic = append(b.verdict.Stochastic, label)
+				b.citations = appendDistinct(b.citations, citation)
 			} else {
 				b.verdict.Failed = append(b.verdict.Failed, label+"="+sealed.terminalState)
 			}
@@ -278,10 +290,17 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 		switch {
 		case v.Executed == 0:
 			v.TerminalState = ""
-		case len(v.Failed) == 0:
+		case len(v.Failed) == 0 && len(v.Stochastic) == 0:
 			// Every executed shape matched (a shape that did not is in Failed), none
 			// failed, and every excluded one is named on the receipt.
 			v.TerminalState = TerminalStateMatch
+		case len(v.Failed) == 0:
+			// Every executed shape matched or is proven under the stochastic leaf class: by that
+			// class's own contract the root is NEVER a match. It is recorded as the cited mismatch
+			// `enable` admits (terminal mismatch, nothing outside the citation, a named citation).
+			v.TerminalState = TerminalStateMismatch
+			v.Citations = append([]string(nil), b.citations...)
+			sort.Strings(v.Citations)
 		case anyTerminal(b.sealed, TerminalStateMismatch):
 			v.TerminalState = TerminalStateMismatch
 		default:
@@ -316,7 +335,7 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 			MeasurementRoute: RouteProof,
 			EdgeBuildBinding: binding,
 			EdgeMode:         r.edgeMode(),
-			MCPClass:         &MCPClassProvenance{Root: v.Root, Reference: reference, Executed: v.Executed, Matched: v.Matched, Excluded: v.Excluded, Failed: v.Failed},
+			MCPClass:         &MCPClassProvenance{Root: v.Root, Reference: reference, Executed: v.Executed, Matched: v.Matched, Stochastic: v.Stochastic, Excluded: v.Excluded, Failed: v.Failed},
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("goapiproof: encode the class receipt's provenance: %w", err)
@@ -340,6 +359,7 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 			MeasurementRoute:                 RouteProof,
 			BuildBinding:                     binding,
 			DifferencesOutsideBaselineDefect: outside,
+			BaselineDefects:                  v.Citations,
 		})
 	}
 	return receipts, verdicts, nil
@@ -351,6 +371,33 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 func sealedMatches(s sealedOutcome) bool {
 	return s.terminalState == TerminalStateMatch && s.admitted && s.executed &&
 		s.differencesOutsideBaselineDefect == 0 && s.edgeBinding == EdgeBuildPresent && s.route == RouteProof
+}
+
+// sealedStochasticCitation returns the stochastic-leaf-class citation of a measurement that is PROVEN under
+// that class, or "" if it is not: terminal mismatch, nothing outside the citation, admitted and executed, the
+// serving build bound, measured through the proof route, the comparator's own verdict is
+// ProvenUnderStochasticLeafClass, and a non-blank class citation is on the sealed outcome. Every clause is
+// needed: a stochastic root counts only if its ONLY differences are the declared drawn values.
+func sealedStochasticCitation(s sealedOutcome) string {
+	if s.terminalState != TerminalStateMismatch || !s.admitted || !s.executed || s.differencesOutsideBaselineDefect != 0 ||
+		s.edgeBinding != EdgeBuildPresent || s.route != RouteProof || s.provenUnder != ProvenUnderStochasticLeafClass {
+		return ""
+	}
+	for _, citation := range s.baselineDefects {
+		if strings.HasPrefix(citation, StochasticLeafCitationPrefix) && strings.TrimSpace(strings.TrimPrefix(citation, StochasticLeafCitationPrefix)) != "" {
+			return citation
+		}
+	}
+	return ""
+}
+
+func appendDistinct(list []string, value string) []string {
+	for _, existing := range list {
+		if existing == value {
+			return list
+		}
+	}
+	return append(list, value)
 }
 
 // edgeMode is the provenance edge_mode of a class receipt: empty for the Python
@@ -405,8 +452,12 @@ func FormatMCPClassVerdict(v MCPClassVerdict) string {
 	if state == "" {
 		state = "NOT_MEASURED"
 	}
-	return fmt.Sprintf("%s state=%s executed=%d matched=%d excluded=%d failed=%d receipt=%t%s",
-		v.Operation, state, v.Executed, v.Matched, len(v.Excluded), len(v.Failed), v.Written,
+	proven := ""
+	if len(v.Stochastic) > 0 && v.TerminalState == TerminalStateMismatch {
+		proven = " proven_under=" + ProvenUnderStochasticLeafClass
+	}
+	return fmt.Sprintf("%s state=%s%s executed=%d matched=%d excluded=%d failed=%d receipt=%t%s",
+		v.Operation, state, proven, v.Executed, v.Matched, len(v.Excluded), len(v.Failed), v.Written,
 		classDetail(v))
 }
 
@@ -414,6 +465,9 @@ func classDetail(v MCPClassVerdict) string {
 	var parts []string
 	if len(v.Excluded) > 0 {
 		parts = append(parts, " excluded=["+strings.Join(v.Excluded, ",")+"]")
+	}
+	if len(v.Stochastic) > 0 {
+		parts = append(parts, " stochastic=["+strings.Join(v.Stochastic, ",")+"]")
 	}
 	if len(v.Failed) > 0 {
 		parts = append(parts, " failed=["+strings.Join(v.Failed, ",")+"]")

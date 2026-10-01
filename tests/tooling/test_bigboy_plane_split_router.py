@@ -269,7 +269,10 @@ def test_graphql_in_query_api_paths_routes_to_query_api(gen: ModuleType) -> None
     """CHAOS-6263: the flip is one queryApiPaths entry: /graphql reaches query-api, exactly."""
     doc = _graphql_values(None)
     go_paths, query_paths = gen.paths_from_doc(doc)
-    go_regex, query_regex = gen.combined_regex(go_paths), gen.combined_regex(query_paths)
+    go_regex, query_regex = (
+        gen.combined_regex(go_paths),
+        gen.combined_regex(query_paths),
+    )
     allow = gen.python_allow_list_from_doc(doc)
     assert gen.paths_on_two_planes(go_regex, query_regex, allow) == []
     routed = yaml.safe_load(gen.emit_dynamic_config(go_regex, query_regex, allow))
@@ -308,7 +311,9 @@ def test_an_allow_list_without_the_moved_path_is_accepted(
     values = tmp_path / "values.prod.yaml"
     values.write_text(
         yaml.safe_dump(
-            _graphql_values([{"path": "/metrics$", "pathType": "ImplementationSpecific"}])
+            _graphql_values(
+                [{"path": "/metrics$", "pathType": "ImplementationSpecific"}]
+            )
         )
     )
     assert gen.main([str(values), "--format", "dynamic"]) == 0

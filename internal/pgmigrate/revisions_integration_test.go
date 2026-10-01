@@ -5,8 +5,6 @@ package pgmigrate_test
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
@@ -41,16 +39,6 @@ var revisionScenarios = []revisionScenario{
 	{name: "current without a version table", setup: "DROP TABLE alembic_version", verb: "current"},
 }
 
-const revisionsGolden = "testdata/revisions_golden.json"
-
-// revisionsGoldenSHA256 pins testdata/revisions_golden.json (R24): what the real
-// `dev-hops migrate postgres current|heads` (Alembic) printed for every scenario.
-// The producer is deleted with the Python CLI, so this is a rot guard, not a
-// freshness check: the file is only rewritten by
-// TestRevisionsVenueOracleMatchesAlembic with DHO_REVISIONS_GOLDEN_UPDATE=1,
-// then this digest is updated.
-const revisionsGoldenSHA256 = "79e56e1a4d20e723bf68a3caa0a785565a0fbc0f017c5b1a117044d086c48996"
-
 type revisionResult struct {
 	Name   string `json:"name"`
 	Stdout string `json:"stdout"`
@@ -78,17 +66,13 @@ func goRevisions(t *testing.T, uri, verb string) string {
 	return stdout.String()
 }
 
-func pythonRevisions(t *testing.T, uri, verb string) string {
+func pythonRevisions(t *testing.T, root, uri, verb string) string {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	python := pyoracle.Resolve(t, root)
 	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
 	command := exec.Command(python, "-c", program, "migrate", "postgres", verb)
 	pyURI := strings.Replace(uri, "postgres://", "postgresql://", 1)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI, "OTEL_ENABLED=false")
+	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI, "OTEL_ENABLED=false", "PYTHONHASHSEED=0", "PYTHONDONTWRITEBYTECODE=1")
 	command.Env = removeEnv(command.Env, "MIGRATION_DATABASE_URI")
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
@@ -139,16 +123,63 @@ func revisionsDatabase(t *testing.T) (uri string, admin func(string)) {
 	}
 }
 
-// TestRevisionsMatchTheFrozenAlembicOutput runs the verbs on a real PostgreSQL
-// and compares their text with what Alembic printed for the same states (frozen,
-// no Python needed).
+// revisionsPythonBuild is the build whose Python CLI (Alembic) answered the scenarios: a build that still
+// carried the Python CLI.
+const revisionsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// revisionsPythonProgram is the entry point the producer runs: the real dev-hops CLI.
+const revisionsPythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
+
+// TestRevisionsMatchTheFrozenAlembicOutput runs the verbs on a real PostgreSQL and compares their text with
+// what Alembic printed for the same states. The answers were executed once on revisionsPythonBuild (the real
+// `dev-hops migrate postgres current|heads` against a database in each state) and are frozen in
+// testdata/golden/revisions.json (the recipe regenerates them by execution); the scenarios are part of the
+// golden's key.
 func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
-	raw, err := os.ReadFile(revisionsGolden)
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/revisions.json",
+		PythonBuild: revisionsPythonBuild,
+		SHA256:      "ee5e84d2dfb5c0986c255d963631f1325453ec993f82bb7849c2145af380c523",
+		Recipe: "git worktree add --detach $DIR " + revisionsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestRevisionsMatchTheFrozenAlembicOutput$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+
+	scenarios := make([]map[string]string, len(revisionScenarios))
+	for index, scenario := range revisionScenarios {
+		scenarios[index] = map[string]string{"name": scenario.name, "setup": scenario.setup, "verb": scenario.verb}
+	}
+	input, err := json.Marshal(scenarios)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
+	request := venueoracle.ProgramRequest("revisions scenarios", revisionsPythonProgram, input, env)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		uri, exec := revisionsDatabase(t)
+		exec("CREATE TABLE alembic_version_saved AS SELECT * FROM alembic_version")
+		var results []revisionResult
+		for _, scenario := range revisionScenarios {
+			if scenario.setup != "" {
+				exec(scenario.setup)
+			}
+			results = append(results, revisionResult{Name: scenario.name, Stdout: pythonRevisions(t, root, uri, scenario.verb)})
+			exec("DROP TABLE IF EXISTS alembic_version")
+			exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")
+		}
+		body, err := json.Marshal(results)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []venueoracle.Response{{Status: 0, Body: string(body)}}
+	})
+	golden.Consumed(t, answers...)
 	var frozen []revisionResult
-	if err := json.Unmarshal(goldenBody(raw), &frozen); err != nil {
+	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {
 		t.Fatal(err)
 	}
 	if len(frozen) != len(revisionScenarios) {
@@ -163,6 +194,9 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 			exec(scenario.setup)
 		}
 		got := goRevisions(t, uri, scenario.verb)
+		if frozen[index].Name != scenario.name {
+			t.Fatalf("scenario %d is %q, the golden has %q", index, scenario.name, frozen[index].Name)
+		}
 		if scenario.verb == "current" && strings.Join(sortedLines(got), "\n") != strings.TrimRight(got, "\n") {
 			t.Errorf("%s: dho printed %q, want its revisions sorted", scenario.name, got)
 		}
@@ -175,71 +209,8 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 		exec("DROP TABLE IF EXISTS alembic_version")
 		exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")
 	}
-}
-
-func TestRevisionsGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile(revisionsGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != revisionsGoldenSHA256 {
-		t.Fatalf("%s digest = %s, want %s: the golden changed without its digest", revisionsGolden, got, revisionsGoldenSHA256)
-	}
-}
-
-// TestRevisionsVenueOracleMatchesAlembic runs the real `dev-hops migrate postgres
-// current|heads` for every scenario and compares its text with dho's. With
-// DHO_REVISIONS_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestRevisionsVenueOracleMatchesAlembic(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	uri, exec := revisionsDatabase(t)
-	exec("CREATE TABLE alembic_version_saved AS SELECT * FROM alembic_version")
-	var frozen []revisionResult
-	for _, scenario := range revisionScenarios {
-		if scenario.setup != "" {
-			exec(scenario.setup)
-		}
-		want := pythonRevisions(t, uri, scenario.verb)
-		got := goRevisions(t, uri, scenario.verb)
-		if !sameRevisionText(scenario.verb, got, want) {
-			t.Errorf("%s: dho printed %q, Alembic printed %q", scenario.name, got, want)
-		}
-		frozen = append(frozen, revisionResult{Name: scenario.name, Stdout: want})
-		exec("DROP TABLE IF EXISTS alembic_version")
-		exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")
-	}
-	if os.Getenv("DHO_REVISIONS_GOLDEN_UPDATE") == "1" {
-		out, err := json.MarshalIndent(frozen, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		out = append([]byte("# written by TestRevisionsVenueOracleMatchesAlembic; Alembic's `current` order for two heads is unstable "+
-			"across runs, dho sorts it, so `current` compares as a set\n"), out...)
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(revisionsGolden, append(out, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
-}
-
-// goldenBody is the golden's JSON: its leading "#" header lines removed.
-func goldenBody(raw []byte) []byte {
-	for bytes.HasPrefix(raw, []byte("#")) {
-		end := bytes.IndexByte(raw, '\n')
-		if end < 0 {
-			return nil
-		}
-		raw = raw[end+1:]
-	}
-	return raw
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 // sameRevisionText compares a verb's output. `heads` is ordered (both sides

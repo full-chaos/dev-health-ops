@@ -96,7 +96,8 @@ VALKEY_PORT="${VALKEY_PORT:-6379}"
 # binaries at 8123 fails immediately with "ClickHouse readiness check failed"
 # (confirmed by hand; see deploy/go-workers/README.md).
 CLICKHOUSE_URI_HTTP="clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@${CLICKHOUSE_HOST}:${CLICKHOUSE_HTTP_PORT}/${CLICKHOUSE_DB}"
-CLICKHOUSE_URI_NATIVE="clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@${CLICKHOUSE_HOST}:${CLICKHOUSE_NATIVE_PORT}/${CLICKHOUSE_DB}"
+# Derived from the HTTP DSN (clickhouse_native_uri) so both name the same server and database.
+CLICKHOUSE_URI_NATIVE="$(clickhouse_native_uri "${CLICKHOUSE_URI_HTTP}" "${CLICKHOUSE_NATIVE_PORT}")"
 POSTGRES_SUPERUSER_URI="postgresql+asyncpg://${POSTGRES_SUPERUSER}:${POSTGRES_SUPERUSER_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
 
 RIVER_DOMAIN_ROLE="devhealth_domain"

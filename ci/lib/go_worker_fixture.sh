@@ -57,6 +57,28 @@ clickhouse_http_sink() {
 }
 
 # ---------------------------------------------------------------------------
+# clickhouse_native_uri HTTP_URI NATIVE_PORT -- prints the native-protocol DSN of
+# the ClickHouse server whose HTTP endpoint is HTTP_URI: same credentials, host
+# and database, the native port in place of the HTTP port. The scheme becomes
+# clickhouse:// (clickhouses:// for https://). The HTTP DSN is the one source of
+# truth for the address, so the migrate target and the fixtures sink (see
+# clickhouse_http_sink) cannot name different servers or databases. A DSN it
+# cannot split (another scheme, no explicit port) or a non-numeric NATIVE_PORT is
+# refused loudly (exit 1) rather than guessed at.
+# ---------------------------------------------------------------------------
+clickhouse_native_uri() {
+  local uri="${1:-}" port="${2:-}" scheme
+  local re='^(clickhouse|http|https)://([^@/]*@)?([^:/@[]+|\[[^]]+\]):([0-9]+)(/.*)?$'
+  if [[ ! "${port}" =~ ^[0-9]+$ ]] || [[ ! "${uri}" =~ ${re} ]]; then
+    echo "ERROR: cannot derive a native ClickHouse DSN from '${uri}' (native port '${port}'): want clickhouse://, http:// or https:// with an explicit port" >&2
+    return 1
+  fi
+  scheme="clickhouse"
+  [ "${BASH_REMATCH[1]}" = "https" ] && scheme="clickhouses"
+  printf '%s://%s%s:%s%s\n' "${scheme}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${port}" "${BASH_REMATCH[5]}"
+}
+
+# ---------------------------------------------------------------------------
 # build_go_binaries -- builds the three Go binaries this fixture needs into
 # BIN_DIR (caller-set global; created by the caller beforehand).
 # ---------------------------------------------------------------------------

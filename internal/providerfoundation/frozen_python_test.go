@@ -27,7 +27,7 @@ var goldenPins = map[string]string{
 	"credential-field-reads.golden.json":       "b0bbdea306eef69a39080c98f85ba39dbc132e9b9f6e0a50f6dc781e8dfd366b",
 	"fernet-custom-salt.golden.json":           "35ee080ae1e4ad46fbc73830e5df8d2bf68a6ee319c328b5cfc3067558be35db",
 	"fernet-default-salt.golden.json":          "12c9132f337547e1d4e8516284713116b989ef7dbd31ee758eed5be762b9291b",
-	"fernet-unconfigured.golden.json":                "0111efb8933a8b89830a68693b50c208822ec60b16e265be1cde60761b9f3c1a",
+	"fernet-unconfigured.golden.json":          "0111efb8933a8b89830a68693b50c208822ec60b16e265be1cde60761b9f3c1a",
 }
 
 // goldens is the set of this package's frozen Python answers.

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -25,15 +26,26 @@ type docRouteLeg struct {
 	status             int
 }
 
-func serveLeg(seen *[]string, leg docRouteLeg) http.HandlerFunc {
+// legRecord is what one leg's server received: the document, the variables and the
+// credential carrier, so a test pins what each pipeline was actually asked.
+type legRecord struct {
+	query     string
+	variables map[string]any
+	auth      string
+}
+
+type docRouteSeen struct{ candidate, reference []legRecord }
+
+func serveLeg(seen *[]legRecord, leg docRouteLeg) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		var parsed struct {
-			Query string `json:"query"`
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
 		}
 		_ = json.Unmarshal(raw, &parsed)
 		if seen != nil {
-			*seen = append(*seen, parsed.Query)
+			*seen = append(*seen, legRecord{query: parsed.Query, variables: parsed.Variables, auth: r.Header.Get("Authorization")})
 		}
 		if leg.plane != "-" {
 			w.Header().Set(planeHeader, leg.plane)
@@ -47,11 +59,15 @@ func serveLeg(seen *[]string, leg docRouteLeg) http.HandlerFunc {
 	}
 }
 
-func newDocRouteRunner(t *testing.T, candidate, reference docRouteLeg, seenReference *[]string) *Runner {
+func newDocRouteRunner(t *testing.T, candidate, reference docRouteLeg, seen *docRouteSeen) *Runner {
 	t.Helper()
-	proof := httptest.NewServer(serveLeg(nil, candidate))
+	var candidateSeen, referenceSeen *[]legRecord
+	if seen != nil {
+		candidateSeen, referenceSeen = &seen.candidate, &seen.reference
+	}
+	proof := httptest.NewServer(serveLeg(candidateSeen, candidate))
 	t.Cleanup(proof.Close)
-	docRoute := httptest.NewServer(serveLeg(seenReference, reference))
+	docRoute := httptest.NewServer(serveLeg(referenceSeen, reference))
 	t.Cleanup(docRoute.Close)
 	store, err := NewArtifactStore(t.TempDir())
 	if err != nil {
@@ -90,7 +106,7 @@ func goLeg(body string) docRouteLeg {
 // match, bound to the build, and the reference leg carried the REGISTERED text
 // exactly (no inert comment, which is what would send it to Python).
 func TestDocRouteReferenceMatchesTwoGoPipelinesThatAgree(t *testing.T) {
-	var seen []string
+	var seen docRouteSeen
 	runner := newDocRouteRunner(t, goLeg(docRouteAnswer), goLeg(docRouteAnswer), &seen)
 	outcomes, summary, err := runner.Run(context.Background())
 	if err != nil {
@@ -101,8 +117,20 @@ func TestDocRouteReferenceMatchesTwoGoPipelinesThatAgree(t *testing.T) {
 		o.DifferencesOutsideBaselineDefect != 0 || o.EdgeBuildBinding != EdgeBuildPresent || o.Route != RouteProof || o.ProvenUnder != "" {
 		t.Fatalf("outcome %+v summary %+v, want a bound proof-route match in doc_route mode", o, summary)
 	}
-	if len(seen) != 1 || seen[0] != runner.Documents["featureFlags"] {
-		t.Fatalf("the document route saw %q, want exactly the registered text", seen)
+	if len(seen.reference) != 1 || len(seen.candidate) != 1 {
+		t.Fatalf("legs seen: candidate %d, reference %d, want one each", len(seen.candidate), len(seen.reference))
+	}
+	ref, cand := seen.reference[0], seen.candidate[0]
+	if ref.query != runner.Documents["featureFlags"] {
+		t.Fatalf("the document route saw %q, want exactly the registered text", ref.query)
+	}
+	// The same variables on both legs, naming the run's org, and each leg its own credential:
+	// the document route the edge access token, the proof route the envelope.
+	if !reflect.DeepEqual(ref.variables, cand.variables) || ref.variables["orgId"] != goEdgeOrg {
+		t.Fatalf("variables differ between the legs or lack the org: reference %v candidate %v", ref.variables, cand.variables)
+	}
+	if ref.auth != orgToken(goEdgeOrg) || cand.auth != "Bearer envelope" {
+		t.Fatalf("credential carriers: reference %q candidate %q, want the edge token and the envelope", ref.auth, cand.auth)
 	}
 }
 

@@ -786,8 +786,14 @@ func printMCPClassStatus(report statusReport) {
 		if len(row.StaleDigests) > 0 {
 			fmt.Fprintf(stdout, "    rows at other schema or document digests, never read: %v\n", row.StaleDigests)
 		}
-		if row.Proven && row.ProofReference != "" {
-			fmt.Fprintf(stdout, "    proof: reference=%s shapes counted=%d matched=%d excluded=%d\n", row.ProofReference, row.ProofShapesCounted, row.ProofShapesMatched, len(row.ProofShapesExcluded))
+		if row.Proven && (row.ProofReference != "" || row.ProofShapesCounted > 0 || len(row.ProofShapesExcluded) > 0) {
+			// A receipt written before the reference was recorded still has counts and
+			// exclusions worth showing; it says so rather than hiding them.
+			reference := row.ProofReference
+			if reference == "" {
+				reference = "(not recorded)"
+			}
+			fmt.Fprintf(stdout, "    proof: reference=%s shapes counted=%d matched=%d excluded=%d\n", reference, row.ProofShapesCounted, row.ProofShapesMatched, len(row.ProofShapesExcluded))
 			for _, excluded := range row.ProofShapesExcluded {
 				fmt.Fprintf(stdout, "      excluded: %s\n", excluded)
 			}

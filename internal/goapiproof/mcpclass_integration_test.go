@@ -155,7 +155,7 @@ func TestMCPClassStatusShowsWhatTheClassProofRestsOn(t *testing.T) {
 	}
 	evidence, _ := json.Marshal(ReceiptProvenance{
 		MeasurementRoute: RouteProof, EdgeBuildBinding: EdgeBuildPresent, EdgeMode: EdgeModeDocRoute,
-		MCPClass: &MCPClassProvenance{Root: "hotspots", Reference: "go_document_route", Executed: 3, Matched: 3,
+		MCPClass: &MCPClassProvenance{Root: "hotspots", Reference: "go_document_route", Executed: 5, Matched: 4,
 			Excluded: []string{"featureFlagTimeseries=doc_operation_not_receipt_backed"}},
 	})
 	other, _ := json.Marshal(ReceiptProvenance{MCPClass: &MCPClassProvenance{Root: "hotspots", Reference: "NEWER_INADMISSIBLE", Executed: 99, Matched: 99}})
@@ -195,7 +195,7 @@ func TestMCPClassStatusShowsWhatTheClassProofRestsOn(t *testing.T) {
 	write(EdgeBuildAbsent, RouteProof, string(other))
 	write(EdgeBuildPresent, RouteEdge, string(other))
 	r := rootRow()
-	if !r.Proven || r.ProofReference != "go_document_route" || r.ProofExecuted != 3 || r.ProofMatched != 3 ||
+	if !r.Proven || r.ProofReference != "go_document_route" || r.ProofExecuted != 5 || r.ProofMatched != 4 ||
 		len(r.ProofExcluded) != 1 || r.ProofExcluded[0] != "featureFlagTimeseries=doc_operation_not_receipt_backed" {
 		t.Fatalf("status = %+v, want the reference, the counts and the excluded shape named", r)
 	}

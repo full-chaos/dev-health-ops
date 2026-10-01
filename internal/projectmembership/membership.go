@@ -13,6 +13,9 @@
 // writer that wants to insert into these tables asks this package for the
 // statement AND for the values; it may not spell either itself.
 //
+// The creation-time ADD rule (CHAOS-7361) also lives here, in creation.go, so
+// Linear and Jira cannot drift apart on which project an item was created in.
+//
 // What does NOT live here is anything either side can decide alone: the
 // external path's payload validation and refusal codes stay in streamhandlers,
 // where the batch pointer is visible, and the producer's fetch semantics stay

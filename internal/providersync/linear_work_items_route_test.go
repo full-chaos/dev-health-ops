@@ -144,7 +144,9 @@ func TestLinearWorkItemsRouteNormalizesLiveIssueAndHistory(t *testing.T) {
 	}
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) ||
 		batch.Evidence.Provider != "linear" || batch.Evidence.Dataset != "work-items" ||
-		batch.Evidence.Requests != 2 || batch.Evidence.Pages != 2 || batch.Evidence.Records != 4 {
+		batch.Evidence.Requests != 2 || batch.Evidence.Pages != 2 ||
+		// CHAOS-7361: Records 4 -> 6, the creation ADD row plus its catalog row.
+		batch.Evidence.Records != 6 {
 		t.Fatalf("watermark=%v evidence=%+v", batch.Watermark, batch.Evidence)
 	}
 }
@@ -309,7 +311,7 @@ func TestLinearWorkItemsRouteCollectsRawLinearSurfaces(t *testing.T) {
 	if sprint.SprintID != "linear:cycle:cycle-7" || sprint.State == nil || *sprint.State != "closed" || sprint.NativeTeamKey == nil || *sprint.NativeTeamKey != "ENG" {
 		t.Fatalf("sprint=%+v", sprint)
 	}
-	if batch.Evidence.Requests != 3 || batch.Evidence.Pages != 3 || batch.Evidence.Records != 8 {
+	if batch.Evidence.Requests != 3 || batch.Evidence.Pages != 3 || batch.Evidence.Records != 10 { // CHAOS-7361: +2 (creation ADD + catalog row)
 		t.Fatalf("evidence=%+v", batch.Evidence)
 	}
 }

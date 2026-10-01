@@ -186,7 +186,11 @@ worker to contract 2 together. Concretely:
    there is no upgrade path (the 067 rebuild exists only in the Python chain,
    which is being deleted). Re-create the database from the head before
    deploying. `dho migrate clickhouse status` reports where a database stands
-   without changing it. Where the contract is set by hand:
+   without changing it. One resolver reads the variable in every Go binary but the backfill verb
+   (`operationalordering.ResolveValue`, CHAOS-7421; `dho backfill operational`
+   keeps its Python-parity parser until CHAOS-7308 deletes the Python): unset or `2` is contract 2
+   and any other value, `1` included, is refused; the chart's own fallback is
+   `"2"` too. Where the contract is set by hand:
    - **Compose**: every `migrate`/worker service in `compose.yml` references
      `${OPERATIONAL_ORDERING_CONTRACT:-2}`.
    - **Helm**: `goWorkers.operationalOrderingContract` (default `"2"`) feeds

@@ -245,9 +245,10 @@ spec:
             # off the shared api/worker ConfigMap (envFrom below) on
             # purpose -- the Python api's own ordering-contract awareness is
             # a separate, out-of-scope concern. Omitted defaults to contract
-            # 1 (rollout-safe); see deploy/go-workers/README.md.
+            # 2, production's (contract 1 is unsupported: every Go reader
+            # refuses a value other than 2); see deploy/go-workers/README.md.
             - name: OPERATIONAL_ORDERING_CONTRACT
-              value: {{ $.Values.goWorkers.operationalOrderingContract | default "1" | quote }}
+              value: {{ include "dev-health.operationalOrderingContract" $ | quote }}
             {{- if (include "dev-health.goWorkerClickhouseURI" $) }}
             # Explicit env beats the shared Secret mounted via envFrom below,
             # so Go pods get the native port while Python keeps HTTP. The

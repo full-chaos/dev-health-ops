@@ -4,14 +4,9 @@ package adminops
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // `admin billing seed|list` are compared with the real Python verbs on one
@@ -109,33 +104,21 @@ func billingSession(t *testing.T, python bool) []bundleResult {
 	return out
 }
 
-const billingGolden = "testdata/billing_golden.json"
-
-// billingGoldenSHA256 pins testdata/billing_golden.json (R24): what the real
-// `dev-hops admin billing seed|list` verbs printed and left for every step. The
-// producer is deleted with the Python CLI, so this is a rot guard: the file is
-// only rewritten by TestBillingVenueOracleMatchesThePythonProducer with
-// DHO_BILLING_GOLDEN_UPDATE=1, then this digest is updated.
-const billingGoldenSHA256 = "e4ba12d30d8c861bd6213e8e1d6a2d20691640263b38fd93fd5c8af67abd3ff8"
-
-func TestBillingGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile(billingGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != billingGoldenSHA256 {
-		t.Fatalf("%s digest = %s, want %s: the golden changed without its digest", billingGolden, got, billingGoldenSHA256)
-	}
-}
-
-// TestBillingMatchesTheFrozenPythonOutput runs the script and compares every step
-// with what the real Python verbs did (frozen; no Python needed).
+// TestBillingMatchesTheFrozenPythonOutput runs the script and compares every step (exit, stdout, the plan and
+// price rows left) with what the REAL `dev-hops admin billing seed|list` verbs did. The answers were
+// executed once on adminPythonBuild and are frozen in testdata/golden/billing.json (the recipe regenerates
+// them by execution); the script is part of the golden's key.
 func TestBillingMatchesTheFrozenPythonOutput(t *testing.T) {
-	raw, err := os.ReadFile(billingGolden)
+	golden, root := adminGolden(t, "billing", "a90677055d98c1a8e31aa74c063a16b0cadd8ca666446479234e4aa2011cf733", "TestBillingMatchesTheFrozenPythonOutput")
+	script := make([]map[string]any, len(billingScript))
+	for index, s := range billingScript {
+		script[index] = map[string]any{"args": s.args, "env": s.env, "dbError": s.dbError, "sql": s.sql, "seed": s.seed}
+	}
+	input, err := json.Marshal(script)
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := adminProduce(t, golden, root, "billing script", input, func() any { return billingSession(t, true) })
 	var frozen []bundleResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
@@ -153,28 +136,6 @@ func TestBillingMatchesTheFrozenPythonOutput(t *testing.T) {
 	if seeded < 3 || listed < 3 {
 		t.Fatalf("the golden has %d seeds and %d listings: it measures too little", seeded, listed)
 	}
-}
-
-// TestBillingVenueOracleMatchesThePythonProducer runs the script through the real
-// Python verbs and through dho. With DHO_BILLING_GOLDEN_UPDATE=1 it rewrites the
-// frozen file.
-func TestBillingVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	py := billingSession(t, true)
-	got := billingSession(t, false)
-	compareBundles(t, got, py, "python")
-	if os.Getenv("DHO_BILLING_GOLDEN_UPDATE") == "1" {
-		raw, err := json.MarshalIndent(py, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(billingGolden, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !t.Failed() {
-		venueoracle.WriteProof(t)
-	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }

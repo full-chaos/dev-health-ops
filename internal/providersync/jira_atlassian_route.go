@@ -308,6 +308,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			}
 		}
 
+		itemMemberships := make([]projectmembership.Row, 0)
 		for _, move := range jiraIssueProjectMoves(jiraWorkItemFixtureInput{Raw: issue, AtlassianShape: true}, handler.Identity) {
 			if move.OccurredAt.IsZero() {
 				unresolvedProjectMemberships++
@@ -348,8 +349,23 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			} else {
 				membership.EventID = projectmembership.EventID(membership)
 			}
-			rows.ProjectMemberships = append(rows.ProjectMemberships, membership)
+			itemMemberships = append(itemMemberships, membership)
 		}
+		// CHAOS-7361: the changelog above is the FULL paged history
+		// (collectJiraAtlassianChangelog), so "no project rows" and "first
+		// project row" are provable.
+		rows.MembershipCreation.observeHistoryEnd(itemMemberships, derefString(item.ProjectID))
+		if creation, added := jiraCreationMembership(
+			claim, item, jiraWorkItemFixtureInput{Raw: issue, AtlassianShape: true},
+			itemMemberships, &rows.MembershipCreation, normalizedAt,
+		); added {
+			itemMemberships = append(itemMemberships, creation)
+			rows.Projects = append(rows.Projects, projectmembership.EnsureProjectsRow(
+				claim.OrgID, "jira", creation.ToProjectID, creation.ToProjectKey,
+				jiraCreationProjectName(item, creation.ToProjectID), normalizedAt,
+			))
+		}
+		rows.ProjectMemberships = append(rows.ProjectMemberships, itemMemberships...)
 
 		if fetchComments {
 			comments, _, commentErr := collectJiraIssueComments(
@@ -521,6 +537,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	if len(optionalIncomplete) > 0 {
 		result["incomplete"] = optionalIncomplete
 	}
+	rows.MembershipCreation.result("jira", result)
 	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)
 	var watermark *time.Time
 	if len(optionalIncomplete) == 0 && derivedWatermark != nil {

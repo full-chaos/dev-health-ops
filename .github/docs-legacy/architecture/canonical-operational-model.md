@@ -135,8 +135,15 @@ only through active `ServiceRepositoryMapping` rows. They never union the legacy
 
 ## Ordering-contract rollout and recovery
 
-Omitted `OPERATIONAL_ORDERING_CONTRACT` is rollout-safe contract 1 and keeps migration-066
-writers, `FINAL` readers, and schema unchanged. Explicit `1` has the same bridge behavior.
+> **Superseded (CHAOS-7421, D3635).** Contract 1 is unsupported. Every Go binary reads
+> `OPERATIONAL_ORDERING_CONTRACT` through one resolver: omitted or `2` is contract 2 and any
+> other value, `1` included, is refused; the chart and compose default is `2` and the chart
+> refuses another value at render time. The paragraph below describes the retired Python
+> rollout bridge and is kept as history; the Python reader (until it is deleted) still
+> reads omitted or `1` as the bridge, which is why the chart exports `2` to the Python API.
+
+Omitted `OPERATIONAL_ORDERING_CONTRACT` was rollout-safe contract 1 and kept migration-066
+writers, `FINAL` readers, and schema unchanged. Explicit `1` had the same bridge behavior.
 Only an explicit `OPERATIONAL_ORDERING_CONTRACT=2`, set after the maintenance boundary,
 admits candidate-preserving writers and makes migration 067 eligible. Any other configured
 value fails startup. Omitted or explicit contract 1 defers migration 067 without recording

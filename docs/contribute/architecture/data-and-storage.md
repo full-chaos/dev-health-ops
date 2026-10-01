@@ -272,6 +272,31 @@ Load-bearing properties, and why each is where it is:
   issue history — not through the `External batch` path above); the Linear
   expired-lease retry policy still advertises two fewer, because no
   retry-safety proof exists for it yet.
+- **Linear and Jira write a creation-time ADD (CHAOS-7361).** The history
+  must be complete from the item's creation: the acr touch reader skips a
+  first touch that is a REMOVE or a move P→Q as an orphan (CHAOS-7349). The
+  producer therefore writes one `("", P)` row at the provider's creation time
+  when the project history does not already begin with the add. P is the
+  FIRST project of the history (a first move P→Q means P, not the current
+  project), the item's current project when the history has no project row,
+  and no row at all when the first row is `("", P)` (created without a
+  project, added later). `occurred_at` is the provider creation time at
+  millisecond precision (equal to `work_items.created_at`); `event_id` is the
+  content hash, so a re-sync writes the same sorting key and
+  `ReplacingMergeTree` collapses it. Skipped, each counted and logged with its
+  reason: history not fetched (Linear), creation time unparseable (never the
+  sync clock), creation time not before the first history row. The sync
+  result also counts items whose history ends in a project other than
+  `work_items.project_id`. GitHub is unchanged (its ADD is written at
+  first-seen sync time by the snapshot diff); GitLab is not registered for
+  this kind. Only the wired Jira route (`JiraAtlassianRouteHandler`, full
+  paged changelog) writes the row. There is no backfill: an item gets its ADD
+  the next time it is re-fetched. **Behaviour change in
+  `project_membership_presence`:** the column arm is excluded for any subject
+  with a transition row, so an item that gains its ADD moves from
+  `source = 'work_item_column'` to `'transition'`; project_id and project_key
+  stay the same, `observed_at` becomes the creation time and `last_synced`
+  the new ingest time.
 - **`projects` rows are ensured by the producer.** GitHub Projects V2 wrote no
   `projects` row anywhere before CHAOS-4194 -- the fetcher stamped the id onto
   work items and the entity it named was never created -- so every github

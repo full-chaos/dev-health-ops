@@ -467,8 +467,9 @@ func TestDowngradeReportsOnlyVerifiedStateAfterALostCommitAcknowledgement(t *tes
 	})
 }
 
-// The upgrade verb ends with the same final outcome line: a run that failed at 0142
-// after 0139-0141 committed says "partial" with the observed revisions, not "committed".
+// The upgrade verb ends with the same final outcome line: a run that failed at 0142 is one
+// rolled-back transaction (CHAOS-7291), so it says "rolled_back" with the revisions it started
+// from, never "committed" and no longer "partial".
 func TestUpgradeVerbLogsTheVerifiedOutcome(t *testing.T) {
 	d := newDownInstance(t)
 	uri := d.at(t, 0)
@@ -491,7 +492,7 @@ func TestUpgradeVerbLogsTheVerifiedOutcome(t *testing.T) {
 		}
 		return "", false
 	}, Stdout: &out, Stderr: &errs})
-	want := `"msg":"migrate outcome","direction":"up","from":["0066","0138"],"requested":"head","observed":["0066","0141"],"outcome":"partial"`
+	want := `"msg":"migrate outcome","direction":"up","from":["0066","0138"],"requested":"head","observed":["0066","0138"],"outcome":"rolled_back"`
 	if code != cli.ExitFailure || !strings.Contains(errs.String(), want) {
 		t.Fatalf("exit %d stderr %q, want a failure with the line %s", code, errs.String(), want)
 	}
@@ -615,11 +616,13 @@ func TestDowngradeVenueOracleMatchesPythonDowngrade(t *testing.T) {
 	if got, want := schemaShape(t, goURI), schemaShape(t, pythonURI); got != want {
 		t.Errorf("-1 on a single head: dho and Python disagree:\n%s", shapeDiff(want, got))
 	}
-	// The same transaction-boundary class on the UPGRADE side (existing behaviour, not
-	// changed here, named in the PR): 0142 fails on a pre-existing table. Python's
-	// upgrade walk is one transaction and rolls back to where it started; dho's upgrade
-	// applies the baseline in one transaction and each chain revision in its own, so
-	// 0139-0141 stay applied and recorded (a re-run resumes at 0142).
+	// The same transaction-boundary class on the UPGRADE side (CHAOS-7291, ruled atomic by
+	// Chris): 0142 fails on a pre-existing table. Python's upgrade walk is one transaction
+	// and rolls back to where it started, and so is dho's: the walk (the baseline of an
+	// empty database and every pending chain revision) is one transaction, so 0139-0141 are
+	// NOT left applied or recorded. This cell used to pin the opposite (alembic_version at
+	// [0066 0141], one transaction per chain revision) as a named divergence; it now
+	// compares dho with Python.
 	pyUp, goUp := d.at(t, 0), d.at(t, 0)
 	for _, uri := range []string{pyUp, goUp} {
 		if _, err := connect(t, uri).Exec(context.Background(), "SELECT 1 AS conflict INTO webhook_sync_requests"); err != nil {
@@ -640,8 +643,11 @@ func TestDowngradeVenueOracleMatchesPythonDowngrade(t *testing.T) {
 	if got := alembicVersions(t, pyUp); !reflect.DeepEqual(got, startVersions) {
 		t.Errorf("Python's failed upgrade left alembic_version %v, want the start %v (one transaction for the walk)", got, startVersions)
 	}
-	if got := alembicVersions(t, goUp); !reflect.DeepEqual(got, []string{"0066", "0141"}) {
-		t.Errorf("dho's failed upgrade left alembic_version %v, want 0066 and 0141 (one transaction per chain revision)", got)
+	if got := alembicVersions(t, goUp); !reflect.DeepEqual(got, startVersions) {
+		t.Errorf("dho's failed upgrade left alembic_version %v, want the start %v like Python (one transaction for the walk)", got, startVersions)
+	}
+	if got, want := schemaShape(t, goUp), schemaShape(t, pyUp); got != want {
+		t.Errorf("after the failed upgrade dho and Python disagree on the schema:\n%s", shapeDiff(want, got))
 	}
 	venueoracle.WriteProof(t)
 }

@@ -34,6 +34,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -84,11 +86,30 @@ func main() {
 	flag.StringVar(&cfg.PythonRoot, "python-root", "", "clean checkout at the pinned Python-bearing build")
 	flag.BoolVar(&cfg.AllowDrop, "allow-drop", false, "let a re-record drop requests or row comparisons the existing golden holds")
 	passEnv := flag.String("pass-env", "", "comma-separated NAMES of ambient variables to pass to the recording beyond the fixed set (names only, never values)")
+	backfill := flag.Bool("backfill-python-env", false, "do not record: add the key of the venue's Python settings to the header of the selected frozen goldens that predate it (no Python runs)")
 	flag.Parse()
 	for _, name := range strings.Split(*passEnv, ",") {
 		if name = strings.TrimSpace(name); name != "" {
 			cfg.PassEnv = append(cfg.PassEnv, name)
 		}
+	}
+	if *backfill {
+		if cfg.Package == "" || cfg.Test == "" || cfg.PythonRoot != "" {
+			fmt.Fprintln(os.Stderr, "goldenrecord: -backfill-python-env takes -pkg and -test, and no -python-root (it runs no Python)")
+			os.Exit(2)
+		}
+		result, err := BackfillPythonEnv(context.Background(), cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "goldenrecord: nothing was changed: %v\n", err)
+			os.Exit(1)
+		}
+		if len(result.Promoted) == 0 {
+			fmt.Println("nothing to backfill: every selected venue golden already holds the key of its venue's Python settings")
+		}
+		for _, promotion := range result.Promoted {
+			fmt.Printf("backfilled %s\n  sha256 %s (was %s)\n", promotion.Path, promotion.NewDigest, orNone(promotion.OldDigest))
+		}
+		return
 	}
 	if cfg.Package == "" || cfg.Test == "" || cfg.PythonRoot == "" {
 		fmt.Fprintln(os.Stderr, "goldenrecord: -pkg, -test and -python-root are required")
@@ -338,6 +359,128 @@ func candidates(dir string) ([]string, error) {
 		return nil
 	})
 	return found, err
+}
+
+// BackfillPythonEnv adds the key of its venue's Python settings to the header
+// of each selected golden that was recorded before a golden kept that key. It
+// runs no Python and records nothing: the frozen tests run once with the
+// backfill switch (each must pass every frozen check and then writes a
+// candidate), the candidate must be the golden with exactly that one header
+// field added, a fresh frozen run must accept the candidates, and only then are
+// they promoted and re-pinned. No candidate means nothing needed the key.
+func BackfillPythonEnv(ctx context.Context, cfg Config) (Result, error) {
+	if cfg.Run == nil {
+		cfg.Run = goTest
+	}
+	packageDir := filepath.Join(cfg.Root, cfg.Package)
+	if _, err := os.Stat(packageDir); err != nil {
+		return Result{}, err
+	}
+	stale, err := candidates(packageDir)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(stale) > 0 {
+		return Result{}, fmt.Errorf("candidates from an earlier run are still on disk (%s): delete them, then run again", stale[0])
+	}
+	proofDir, err := os.MkdirTemp("", "goldenrecord-proof-")
+	if err != nil {
+		return Result{}, err
+	}
+	defer os.RemoveAll(proofDir)
+	base := []string{"DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=" + proofDir}
+	discard := func() { removeAll(packageDir) }
+	if err := cfg.Run(cfg, append(append([]string{}, base...), "DHO_VENUE_GOLDEN_BACKFILL_PYTHON_ENV=1")); err != nil {
+		discard()
+		return Result{}, fmt.Errorf("the frozen run failed (the key is only added to a golden whose frozen test passes): %w", err)
+	}
+	found, err := candidates(packageDir)
+	if err != nil {
+		discard()
+		return Result{}, err
+	}
+	if len(found) == 0 {
+		return Result{}, nil
+	}
+	written := map[string][]byte{}
+	for _, candidate := range found {
+		raw, err := os.ReadFile(candidate)
+		if err != nil {
+			discard()
+			return Result{}, err
+		}
+		original, err := os.ReadFile(strings.TrimSuffix(candidate, candidateSuffix))
+		if err != nil {
+			discard()
+			return Result{}, err
+		}
+		if err := onlyPythonEnvAdded(original, raw); err != nil {
+			discard()
+			return Result{}, fmt.Errorf("%s: %w", candidate, err)
+		}
+		written[candidate] = raw
+	}
+	if err := cfg.Run(cfg, append(append([]string{}, base...), "DHO_VENUE_GOLDEN_CANDIDATE=1")); err != nil {
+		discard()
+		return Result{}, fmt.Errorf("the fresh-process replay of the candidates failed: %w", err)
+	}
+	for _, candidate := range found {
+		after, err := os.ReadFile(candidate)
+		if err != nil || !bytes.Equal(after, written[candidate]) {
+			discard()
+			return Result{}, fmt.Errorf("the candidate %s changed after it was replayed: only the replayed bytes may be promoted", candidate)
+		}
+	}
+	plan, result, err := planPromotion(packageDir, found, written, false)
+	if err != nil {
+		discard()
+		return Result{}, err
+	}
+	if err := apply(plan); err != nil {
+		discard()
+		return Result{}, err
+	}
+	for _, candidate := range found {
+		_ = os.Remove(candidate)
+	}
+	return result, nil
+}
+
+var keyText = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// onlyPythonEnvAdded is an error unless candidate is original with exactly
+// one change: header.python_env added, holding a key.
+func onlyPythonEnvAdded(original, candidate []byte) error {
+	decode := func(raw []byte) (map[string]any, error) {
+		var out map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&out); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+	before, err := decode(original)
+	if err != nil {
+		return fmt.Errorf("the golden does not decode: %w", err)
+	}
+	after, err := decode(candidate)
+	if err != nil {
+		return fmt.Errorf("the candidate does not decode: %w", err)
+	}
+	header, _ := after["header"].(map[string]any)
+	key, _ := header["python_env"].(string)
+	if !keyText.MatchString(key) {
+		return errors.New("the candidate's header holds no python_env key")
+	}
+	if oldHeader, _ := before["header"].(map[string]any); oldHeader["python_env"] != nil {
+		return errors.New("the golden already holds a python_env key: a backfill never replaces one")
+	}
+	delete(header, "python_env")
+	if !reflect.DeepEqual(before, after) {
+		return errors.New("the candidate differs from the golden in more than the python_env key of its header: a backfill touches no answer")
+	}
+	return nil
 }
 
 func removeAll(dir string) {

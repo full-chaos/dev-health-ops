@@ -485,6 +485,12 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	if options.GoOnly && options.Golden != nil {
 		t.Fatal("venue: a GoOnly venue has no golden: a golden holds the Python plane's answers, which a Go-only test never compares")
 	}
+	if options.Golden != nil {
+		// The Python settings this venue declares are part of the golden's key.
+		if err := options.Golden.bindPythonEnv(options.PythonEnv); err != nil {
+			t.Fatal(err)
+		}
+	}
 	v := &Venue{Root: options.Root, Tokens: map[string]string{}, Roles: map[string]string{}, frozen: frozen}
 	if !options.GoOnly && options.Golden == nil {
 		// Before anything is built: the mark and its check are the same in a

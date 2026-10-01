@@ -379,3 +379,109 @@ func TestAReRecordThatDropsCoverageIsRefusedUnlessAllowed(t *testing.T) {
 		t.Fatalf("added coverage was refused: %v", err)
 	}
 }
+
+// backfillFixture is a package with one pinned golden and a runner standing in
+// for `go test`: the backfill run writes candidate (when not empty), the replay
+// run reads it.
+func backfillFixture(t *testing.T, golden, candidate string, replayErr error) (Config, string, *[]string) {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "pkg")
+	if err := os.MkdirAll(filepath.Join(dir, "testdata"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "testdata", "g.json"), []byte(golden), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "x_test.go"), []byte("package pkg\nconst pin = \""+digest([]byte(golden))+"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	cfg := Config{Root: root, Package: "./pkg/", Test: "^TestProbe$"}
+	cfg.Run = func(_ Config, env []string) error {
+		for _, entry := range env {
+			switch entry {
+			case "DHO_VENUE_GOLDEN_UPDATE=1":
+				t.Fatal("a backfill ran a recording")
+			case "DHO_VENUE_GOLDEN_BACKFILL_PYTHON_ENV=1":
+				calls = append(calls, "backfill")
+				if candidate == "" {
+					return nil
+				}
+				return os.WriteFile(filepath.Join(dir, "testdata", "g.json.recording"), []byte(candidate), 0o644)
+			case "DHO_VENUE_GOLDEN_CANDIDATE=1":
+				calls = append(calls, "replay")
+				return replayErr
+			}
+		}
+		return errors.New("unexpected run")
+	}
+	return cfg, dir, &calls
+}
+
+const (
+	backfillGolden = "{\n  \"header\": {\n    \"test\": \"T\"\n  },\n  \"requests\": [\n    {\n      \"name\": \"a\",\n      \"status\": 200,\n      \"body\": \"{\\\"n\\\": 1.50}\"\n    }\n  ]\n}\n"
+	backfillKey    = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+)
+
+func withKey(golden string) string {
+	return strings.Replace(golden, "\"test\": \"T\"\n", "\"test\": \"T\",\n    \"python_env\": \""+backfillKey+"\"\n", 1)
+}
+
+func TestTheBackfillPromotesAGoldenWithOnlyTheKeyAdded(t *testing.T) {
+	cfg, dir, calls := backfillFixture(t, backfillGolden, withKey(backfillGolden), nil)
+	result, err := BackfillPythonEnv(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(*calls, ",") != "backfill,replay" || len(result.Promoted) != 1 {
+		t.Fatalf("calls %v, result %+v", *calls, result)
+	}
+	landed, _ := os.ReadFile(filepath.Join(dir, "testdata", "g.json"))
+	pinned, _ := os.ReadFile(filepath.Join(dir, "x_test.go"))
+	if string(landed) != withKey(backfillGolden) || !strings.Contains(string(pinned), digest(landed)) || exists(filepath.Join(dir, "testdata", "g.json.recording")) {
+		t.Fatalf("the golden with its key did not land with its pin:\n%s\n%s", landed, pinned)
+	}
+}
+
+func TestTheBackfillTouchesNothingButTheKey(t *testing.T) {
+	for name, candidate := range map[string]string{
+		"an answer changed":       strings.Replace(withKey(backfillGolden), "1.50", "1.5", 1),
+		"a status changed":        strings.Replace(withKey(backfillGolden), "200", "201", 1),
+		"a request dropped":       strings.Replace(withKey(backfillGolden), "\"requests\": [\n    {\n      \"name\": \"a\",\n      \"status\": 200,\n      \"body\": \"{\\\"n\\\": 1.50}\"\n    }\n  ]", "\"requests\": []", 1),
+		"another header field":    strings.Replace(withKey(backfillGolden), "\"test\": \"T\"", "\"test\": \"T2\"", 1),
+		"no key":                  backfillGolden,
+		"a key that is not a key": strings.Replace(withKey(backfillGolden), backfillKey, "yes", 1),
+	} {
+		cfg, dir, calls := backfillFixture(t, backfillGolden, candidate, nil)
+		if _, err := BackfillPythonEnv(context.Background(), cfg); err == nil {
+			t.Errorf("%s: promoted", name)
+		}
+		landed, _ := os.ReadFile(filepath.Join(dir, "testdata", "g.json"))
+		if string(landed) != backfillGolden || exists(filepath.Join(dir, "testdata", "g.json.recording")) || strings.Contains(strings.Join(*calls, ","), "replay") {
+			t.Errorf("%s: the golden changed, a candidate stayed, or the replay ran (%v)", name, *calls)
+		}
+	}
+	// A golden that already holds a key is never given another.
+	cfg, _, _ := backfillFixture(t, withKey(backfillGolden), strings.Replace(withKey(backfillGolden), backfillKey, strings.Repeat("f", 64), 1), nil)
+	if _, err := BackfillPythonEnv(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "already holds") {
+		t.Fatalf("a key was replaced: %v", err)
+	}
+}
+
+func TestTheBackfillNeedsThePassingFrozenRunAndTheReplay(t *testing.T) {
+	cfg, dir, _ := backfillFixture(t, backfillGolden, withKey(backfillGolden), errors.New("replay failed"))
+	if _, err := BackfillPythonEnv(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "replay") {
+		t.Fatalf("err = %v", err)
+	}
+	landed, _ := os.ReadFile(filepath.Join(dir, "testdata", "g.json"))
+	if string(landed) != backfillGolden || exists(filepath.Join(dir, "testdata", "g.json.recording")) {
+		t.Fatal("a failed replay changed the golden or left its candidate")
+	}
+	// No candidate: nothing needed the key, nothing is changed, no replay.
+	cfg, _, calls := backfillFixture(t, backfillGolden, "", nil)
+	result, err := BackfillPythonEnv(context.Background(), cfg)
+	if err != nil || len(result.Promoted) != 0 || strings.Join(*calls, ",") != "backfill" {
+		t.Fatalf("nothing to backfill: err %v, result %+v, calls %v", err, result, *calls)
+	}
+}

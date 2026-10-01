@@ -4,6 +4,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -55,7 +56,15 @@ func TestEveryPagerDutySinkWritesAndReadsBackInBothTableShapes(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = conn.Close() })
 
-			for _, env := range []string{"<unset>", "1", "2"} {
+			// Contract 1 is unsupported (D3635, CHAOS-7421): the one resolver refuses
+			// "1" whichever table is found, and no sink writes under it.
+			setProbeEnv(t, "1")
+			for _, sinkCase := range pagerDutyContractSinkCases(t, "org-"+tableShape.name+"-env1") {
+				if _, err := (*operationalTableContracts)(nil).resolve(ctx, conn, sinkCase.table); !errors.Is(err, ErrInvalidConfiguration) {
+					t.Fatalf("env=1 sink=%s: err=%v, want invalid configuration", sinkCase.name, err)
+				}
+			}
+			for _, env := range []string{"<unset>", "2"} {
 				setProbeEnv(t, env)
 				orgID := "org-" + tableShape.name + "-env" + strings.Trim(env, "<>")
 				for _, sinkCase := range pagerDutyContractSinkCases(t, orgID) {

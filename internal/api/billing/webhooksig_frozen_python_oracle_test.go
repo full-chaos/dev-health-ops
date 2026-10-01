@@ -1,0 +1,164 @@
+package billing
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
+)
+
+// pythonSignatureProgram classifies each [payload b64, header b64] with the
+// real stripe-python WebhookSignature.verify_header (default tolerance):
+// "ok", "sig" (SignatureVerificationError) or "crash" (any other
+// exception). The header bytes reach it latin-1 decoded, as Starlette
+// hands them over.
+const pythonSignatureProgram = `
+import base64, json, sys, time
+from stripe import SignatureVerificationError
+from stripe._webhook import WebhookSignature, Webhook
+cases = json.loads(sys.stdin.read())
+out = []
+for payload, header, now in cases["cases"]:
+    # Both planes judge the tolerance of a case at the same instant.
+    time.time = lambda now=now: now
+    try:
+        WebhookSignature.verify_header(base64.b64decode(payload), base64.b64decode(header).decode("latin-1"), cases["secret"], Webhook.DEFAULT_TOLERANCE)
+        out.append("ok")
+    except SignatureVerificationError:
+        out.append("sig")
+    except Exception as exc:
+        out.append("crash:" + type(exc).__name__)
+print(json.dumps(out))
+`
+
+func sign(secret, timestamp string, payload []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp + "."))
+	mac.Write(payload)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// signatureInstant is the whole second both planes judge the tolerance from.
+// It is fixed: the timestamps and signatures of the cases are the program's
+// input, and an input is the same in every run.
+const signatureInstant int64 = 1_790_000_000
+
+// TestStripeSignatureMatchesFrozenPython holds verifyStripeSignature to the
+// frozen verdicts of stripe-python's verify_header over header shapes,
+// timestamp spellings, signature lists and bodies.
+func TestStripeSignatureMatchesFrozenPython(t *testing.T) {
+	const secret = "whsec_venue_oracle"
+	now := signatureInstant
+	// The reference instant both planes judge the tolerance at, half a
+	// second past a whole second: t = now-300 is then too old (the float
+	// comparison), t = now-299 is not.
+	reference := time.Unix(now, 500_000_000)
+	body := []byte(`{"id":"evt_1","object":"event","type":"invoice.paid","data":{"object":{"id":"in_1","metadata":{"org_id":"x"}}}}`)
+	good := func(ts int64) string { return sign(secret, fmt.Sprint(ts), body) }
+	fresh, old, future := now, now-1000, now+1000
+	type sigCase struct {
+		payload []byte
+		header  string
+		// whole is a case judged at the whole second itself, not half a
+		// second past it.
+		whole bool
+	}
+	cases := []sigCase{
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", old, good(old))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", future, good(future))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", now-299, good(now-299))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", now-300, good(now-300))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", now-301, good(now-301))},
+		{payload: body, header: fmt.Sprintf("v1=%s,t=%d", good(fresh), fresh)},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=deadbeef,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,v0=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", fresh, strings.ToUpper(good(fresh)))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s=extra", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=+%d,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t= %d ,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=\xa0%d\xa0,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%s_%s,v1=%s", fmt.Sprint(fresh)[:4], fmt.Sprint(fresh)[4:], good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=0%d,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,t=%d,v1=%s", fresh, old, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,t,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=abc,v1=%s", good(fresh))},
+		{payload: body, header: fmt.Sprintf("v1=%s", good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d", fresh)},
+		{payload: body, header: ""},
+		{payload: body, header: ","},
+		{payload: body, header: "garbage"},
+		{payload: body, header: fmt.Sprintf(" t=%d,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d, v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=\xe9\xe9,v1=%s", fresh, good(fresh))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s,v1=\xe9", fresh, good(fresh))},
+		{payload: []byte("\xff\xfe not utf-8"), header: fmt.Sprintf("t=%d,v1=%s", fresh, sign(secret, fmt.Sprint(fresh), []byte("\xff\xfe not utf-8")))},
+		{payload: []byte(""), header: fmt.Sprintf("t=%d,v1=%s", fresh, sign(secret, fmt.Sprint(fresh), nil))},
+		{payload: []byte("\ufeff{}"), header: fmt.Sprintf("t=%d,v1=%s", fresh, sign(secret, fmt.Sprint(fresh), []byte("\ufeff{}")))},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", fresh, sign("whsec_other", fmt.Sprint(fresh), body))},
+		// The boundary at the whole second itself: t = now-300 is then
+		// not too old (it is not less than now-300), t = now-301 is.
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", now-299, good(now-299)), whole: true},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", now-300, good(now-300)), whole: true},
+		{payload: body, header: fmt.Sprintf("t=%d,v1=%s", now-301, good(now-301)), whole: true},
+	}
+	instant := func(c sigCase) time.Time {
+		if c.whole {
+			return time.Unix(now, 0)
+		}
+		return reference
+	}
+	encoded := make([][3]any, len(cases))
+	for index, c := range cases {
+		at := instant(c)
+		encoded[index] = [3]any{base64.StdEncoding.EncodeToString(c.payload), base64.StdEncoding.EncodeToString([]byte(c.header)),
+			float64(at.Unix()) + float64(at.Nanosecond())/1e9}
+	}
+	input, err := json.Marshal(map[string]any{"cases": encoded, "secret": secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := frozenPython(t, "stripe-signature.golden.json", programoracle.Program{
+		Name: "stripe signature", Text: pythonSignatureProgram, Stdin: input,
+	})[0]
+	var want []string
+	if err := json.Unmarshal([]byte(output), &want); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(want) != len(cases) {
+		t.Fatalf("python answered %d of %d", len(want), len(cases))
+	}
+	verdicts := map[string]int{}
+	for index, c := range cases {
+		got := "ok"
+		switch err := verifyStripeSignature(c.payload, c.header, secret, instant(c)); err {
+		case nil:
+		case errSignature:
+			got = "sig"
+		default:
+			got = "crash"
+		}
+		wanted := want[index]
+		if strings.HasPrefix(wanted, "crash:") {
+			wanted = "crash"
+		}
+		verdicts[wanted]++
+		if got != wanted {
+			t.Errorf("case %d header %q at %s: go %s, python %s", index, c.header, instant(c).UTC().Format(time.RFC3339Nano), got, want[index])
+		}
+	}
+	for _, verdict := range []string{"ok", "sig", "crash"} {
+		if verdicts[verdict] == 0 {
+			t.Errorf("no case reached %q: the comparison did not cover that outcome", verdict)
+		}
+	}
+	t.Logf("%d cases: %v", len(cases), verdicts)
+}

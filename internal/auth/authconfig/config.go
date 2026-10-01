@@ -27,9 +27,9 @@ package authconfig
 
 import (
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
 	"net"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -174,7 +174,7 @@ type Spec struct {
 func Load(spec Spec) (Config, error) {
 	environment := spec.LookupEnv
 	if environment == nil {
-		environment = os.LookupEnv
+		environment = envsecrets.ProcessLookup
 	}
 	if err := validateOverrides(spec.Overrides); err != nil {
 		return Config{}, err

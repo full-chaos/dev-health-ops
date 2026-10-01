@@ -51,7 +51,20 @@ func NewFernetDecryptor(key secrets.Value, salt string) (FernetDecryptor, error)
 // key (Python raises RuntimeError for the first and ValueError for the second).
 func (d FernetDecryptor) Configured() bool { return d.key.Configured() }
 
+// Decrypt returns the plaintext of ciphertext. Every decrypted integration
+// credential, client secret and key passes through here, so the plaintext is
+// registered with the process logger's redaction registry at this one point
+// (CHAOS-7409): a gateway or provider that echoes a token into a log line prints
+// a marker, whichever caller decrypted it.
 func (d FernetDecryptor) Decrypt(ciphertext secrets.Value) ([]byte, error) {
+	plain, err := d.decrypt(ciphertext)
+	if err == nil {
+		secrets.RegisterDecrypted(plain)
+	}
+	return plain, err
+}
+
+func (d FernetDecryptor) decrypt(ciphertext secrets.Value) ([]byte, error) {
 	if !d.key.Configured() || !ciphertext.Configured() {
 		return nil, ErrCredentialInvalid
 	}

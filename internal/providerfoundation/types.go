@@ -276,10 +276,6 @@ func (r CredentialResolver) Resolve(ctx context.Context, lease LeaseGuard, scope
 	if err != nil {
 		return Credential{}, ErrCredentialInvalid
 	}
-	// The decrypted fields are registered with the process logger's redaction
-	// registry here, the one point every provider's credential passes through,
-	// so a gateway that echoes a token into a log line cannot print it.
-	secrets.RegisterCredentialJSON(plain)
 	credential, err := decodeCredential(record, plain)
 	if err != nil {
 		return Credential{}, err

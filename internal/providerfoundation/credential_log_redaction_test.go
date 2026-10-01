@@ -35,3 +35,26 @@ func TestResolvedCredentialTokenNeverReachesTheProcessLogger(t *testing.T) {
 		t.Fatalf("unexpected log: %s", out.String())
 	}
 }
+
+// r1: every caller of the decryptor is covered, not only the credential resolver:
+// the shared API credential store, the PagerDuty OAuth hydrator and the SSO client
+// secret all decrypt through FernetDecryptor.Decrypt.
+func TestEveryDecryptedValueIsRegisteredAtTheDecryptor(t *testing.T) {
+	key := secrets.NewValue("test-master-key")
+	decryptor, _ := NewFernetDecryptor(key, "salt")
+	for name, plain := range map[string]string{
+		"json credential, camelCase": `{"privateKey":"decrypt-private-key-7409","email":"d7409@example.test"}`,
+		"oauth token json":           `{"access_token":"decrypt-oauth-token-7409"}`,
+		"bare secret (sso client)":   "decrypt-client-secret-7409",
+	} {
+		ciphertext := secrets.NewValue("v1:" + encryptForTest(t, []byte(plain), key.Reveal(), "salt"))
+		if _, err := decryptor.Decrypt(ciphertext); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	for _, secret := range []string{"decrypt-private-key-7409", "decrypt-oauth-token-7409", "decrypt-client-secret-7409", "d7409@example.test"} {
+		if got := secrets.RedactRegistered("refused: " + secret); strings.Contains(got, secret) {
+			t.Errorf("%q was not registered by Decrypt", secret)
+		}
+	}
+}

@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -352,10 +353,10 @@ func configureWith(
 	if cfg.ClickHouseURI.Configured() {
 		deps.ClickHouseDSN = cfg.ClickHouseURI.Reveal()
 	}
-	deps.Invites = inviteConfig(cfg, logger, os.LookupEnv)
-	deps.GitHubApp = GitHubAppConfig(os.LookupEnv)
+	deps.Invites = inviteConfig(cfg, logger, envsecrets.ProcessLookup)
+	deps.GitHubApp = GitHubAppConfig(envsecrets.ProcessLookup)
 	deps.GitHubStateSigner = githubapp.Signer{Secret: cfg.APIJWTSecret.Reveal(), Issuer: cfg.APIJWTIssuer, Audience: cfg.APIJWTAudience}
-	deps.RegisterLimit, err = registerLimit(os.LookupEnv)
+	deps.RegisterLimit, err = registerLimit(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_register_limit_invalid", err)

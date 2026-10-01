@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
-	"os"
 	"reflect"
 	"slices"
 	"strconv"
@@ -441,7 +440,7 @@ type Config struct {
 func Load(spec Spec) (Config, error) {
 	environment := spec.LookupEnv
 	if environment == nil {
-		environment = os.LookupEnv
+		environment = secrets.ProcessLookup
 	}
 	if err := validateOverrides(spec.Overrides); err != nil {
 		return Config{}, err

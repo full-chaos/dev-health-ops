@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -81,5 +82,79 @@ func TestDecryptedCredentialFieldsAreRegistered(t *testing.T) {
 	}
 	if !strings.Contains(got, "https://acme.example.test/jira") {
 		t.Errorf("a non-secret field was redacted: %q", got)
+	}
+}
+
+// r1: a server may change the case of the login it echoes.
+func TestLoginEchoIsRedactedWhateverTheCase(t *testing.T) {
+	ResetRegistered()
+	t.Cleanup(ResetRegistered)
+	RegisterLogin("CaseMixedLogin7409")
+	got := RedactRegistered("casemixedlogin7409: Authentication failed")
+	if strings.Contains(strings.ToLower(got), "casemixedlogin7409") {
+		t.Fatalf("a lower-cased login echo leaked: %q", got)
+	}
+}
+
+// r1: the supported camelCase and nested forms of a credential are registered too.
+func TestCredentialFieldsAreRegisteredInEverySupportedSpelling(t *testing.T) {
+	ResetRegistered()
+	t.Cleanup(ResetRegistered)
+	RegisterCredentialJSON([]byte(`{"privateKey":"camel-private-key-7409","apiToken":"camel-api-token-7409","auth":{"client_secret":"nested-client-secret-7409"},"base_url":"https://x.example.test"}`))
+	for _, secret := range []string{"camel-private-key-7409", "camel-api-token-7409", "nested-client-secret-7409"} {
+		if got := RedactRegistered("echo " + secret); strings.Contains(got, secret) {
+			t.Errorf("%q survived", secret)
+		}
+	}
+}
+
+// r1: the registry never drops a secret: a dropped secret is a leak.
+func TestRegistryNeverDropsASecret(t *testing.T) {
+	ResetRegistered()
+	t.Cleanup(ResetRegistered)
+	previous := SetWarner(func(string, ...any) {})
+	t.Cleanup(func() { SetWarner(previous) })
+	for i := 0; i <= warnRegisteredAt; i++ {
+		Register("TOKEN", fmt.Sprintf("review-token-%06d", i))
+	}
+	for _, i := range []int{0, 1, warnRegisteredAt} {
+		secret := fmt.Sprintf("review-token-%06d", i)
+		if got := RedactRegistered("body " + secret); strings.Contains(got, secret) {
+			t.Fatalf("%q was dropped from the registry", secret)
+		}
+	}
+}
+
+// A longer secret that contains a shorter one is replaced whole.
+func TestLongestRegisteredSecretIsReplacedFirst(t *testing.T) {
+	ResetRegistered()
+	t.Cleanup(ResetRegistered)
+	Register("A", "abcdefgh")
+	Register("B", "abcdefgh-and-more")
+	if got := RedactRegistered("x abcdefgh-and-more y"); strings.Contains(got, "and-more") {
+		t.Fatalf("a suffix of the longer secret survived: %q", got)
+	}
+}
+
+// r1: a secret read straight from the environment (SMTP, webhook, API keys) or
+// through the process lookup is registered; a plain setting is not.
+func TestDirectEnvironmentReadersRegister(t *testing.T) {
+	ResetRegistered()
+	t.Cleanup(ResetRegistered)
+	t.Setenv("SMTP_PASSWORD", "smtp-pass-7409-planted")
+	t.Setenv("RESEND_API_KEY", "resend-key-7409-planted")
+	t.Setenv("CLICKHOUSE_URI", "clickhouse://env_login_7409:env-dsn-pass-7409@h:9000/d")
+	t.Setenv("APP_BASE_URL", "https://app.example.test/path")
+	_ = GetenvSecret("SMTP_PASSWORD")
+	_, _ = ProcessLookup("RESEND_API_KEY")
+	_ = GetenvNamed("CLICKHOUSE_URI")
+	_ = GetenvNamed("APP_BASE_URL")
+	for _, secret := range []string{"smtp-pass-7409-planted", "resend-key-7409-planted", "env-dsn-pass-7409"} {
+		if got := RedactRegistered("535 " + secret); strings.Contains(got, secret) {
+			t.Errorf("%q survived", secret)
+		}
+	}
+	if got := RedactRegistered("https://app.example.test/path"); got != "https://app.example.test/path" {
+		t.Errorf("a plain setting was redacted: %q", got)
 	}
 }

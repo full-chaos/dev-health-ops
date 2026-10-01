@@ -29,6 +29,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"log/slog"
 	"os"
@@ -61,7 +62,7 @@ const (
 )
 
 func main() {
-	os.Exit(execute(context.Background(), os.Args[1:], os.LookupEnv, os.Stdout, os.Stderr))
+	os.Exit(execute(context.Background(), os.Args[1:], envsecrets.ProcessLookup, os.Stdout, os.Stderr))
 }
 
 func execute(

@@ -31,10 +31,10 @@ import (
 // MinRegisteredLength is the shortest secret redacted by value.
 const MinRegisteredLength = 8
 
-// maxRegistered bounds the registry (a long-running worker resolves many
-// rotating tokens). Past it the oldest entry is dropped and the drop is
-// reported once.
-const maxRegistered = 10000
+// warnRegisteredAt is the size at which the registry reports, once, that it
+// holds many entries. It never drops one: a dropped secret is a leak, and the
+// entries a worker adds (a few per integration) are small.
+const warnRegisteredAt = 10000
 
 var registry = struct {
 	sync.RWMutex
@@ -53,6 +53,7 @@ var registry = struct {
 type loginRule struct {
 	login   string
 	pattern *regexp.Regexp
+	name    *regexp.Regexp
 }
 
 // Register puts a secret into the registry. name is the setting's name (never
@@ -71,17 +72,16 @@ func Register(name, value string) {
 	if _, ok := registry.known[value]; ok {
 		return
 	}
-	if len(registry.secrets) >= maxRegistered {
-		delete(registry.known, registry.secrets[0])
-		registry.secrets = registry.secrets[1:]
-		if !registry.dropped {
-			registry.dropped = true
-			go warn("secret_registry_full_oldest_dropped", "limit", maxRegistered)
-		}
-	}
 	registry.known[value] = struct{}{}
-	registry.secrets = append(registry.secrets, value)
-	sort.SliceStable(registry.secrets, func(i, j int) bool { return len(registry.secrets[i]) > len(registry.secrets[j]) })
+	// Longest first, so a secret that contains another is replaced whole.
+	at := sort.Search(len(registry.secrets), func(i int) bool { return len(registry.secrets[i]) < len(value) })
+	registry.secrets = append(registry.secrets, "")
+	copy(registry.secrets[at+1:], registry.secrets[at:])
+	registry.secrets[at] = value
+	if len(registry.secrets) >= warnRegisteredAt && !registry.dropped {
+		registry.dropped = true
+		go warn("secret_registry_large", "entries", warnRegisteredAt)
+	}
 }
 
 var (
@@ -147,6 +147,7 @@ func RegisterLogin(login string) {
 	quoted := regexp.QuoteMeta(login)
 	registry.logins = append(registry.logins, loginRule{
 		login: login,
+		name:  regexp.MustCompile(`(?i)` + quoted),
 		pattern: regexp.MustCompile(`(?i)(//|\buser(?:name)?(?:\s*[=:]\s*|\s+)["']?|\blogin\s+["']?)` + quoted + `(?:["'\s:@,;)]|$)` +
 			`|\b` + quoted + `(?::\s(?:Authentication failed|Not enough privileges|Access denied))`),
 	})
@@ -213,7 +214,8 @@ func RedactRegistered(text string) string {
 	for _, rule := range registry.logins {
 		if strings.Contains(strings.ToLower(text), strings.ToLower(rule.login)) {
 			text = rule.pattern.ReplaceAllStringFunc(text, func(match string) string {
-				return strings.Replace(match, rule.login, RedactedMarker, 1)
+				// A server may change the case of the login it echoes.
+				return rule.name.ReplaceAllLiteralString(match, RedactedMarker)
 			})
 		}
 	}
@@ -250,25 +252,120 @@ func ResolveDSNSetting(key string, lookup LookupEnv) (Value, bool, error) {
 	return value, set, err
 }
 
-// credentialFields are the keys of a decrypted integration credential whose
-// values are secrets (or the identity a gateway echoes beside one).
+// credentialFields are the normalised keys (lower case, no "_" or "-", so
+// api_token, apiToken and API-TOKEN are one) of a decrypted integration
+// credential whose values are secrets, or the identity a gateway echoes beside one.
 var credentialFields = map[string]bool{
-	"token": true, "api_token": true, "access_token": true, "refresh_token": true,
-	"password": true, "secret": true, "client_secret": true, "api_key": true,
-	"key": true, "private_key": true, "webhook_secret": true, "email": true,
+	"token": true, "apitoken": true, "accesstoken": true, "refreshtoken": true, "idtoken": true,
+	"password": true, "secret": true, "clientsecret": true, "apikey": true,
+	"key": true, "privatekey": true, "webhooksecret": true, "signingsecret": true, "email": true,
+}
+
+func normalizedField(name string) string {
+	return strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(name))
 }
 
 // RegisterCredentialJSON registers the secret fields of a decrypted integration
-// credential (a JSON object) by value, under "integration credential <field>".
-// Text that is not a JSON object registers nothing.
-func RegisterCredentialJSON(plain []byte) {
+// credential (a JSON object, nested objects included) by value, under
+// "integration credential <field>". It reports whether the text was a JSON object.
+func RegisterCredentialJSON(plain []byte) bool {
 	var fields map[string]any
 	if err := json.Unmarshal(plain, &fields); err != nil {
-		return
+		return false
 	}
+	registerCredentialFields(fields)
+	return true
+}
+
+func registerCredentialFields(fields map[string]any) {
 	for name, value := range fields {
-		if text, ok := value.(string); ok && credentialFields[strings.ToLower(name)] {
-			Register("integration credential "+name, text)
+		switch typed := value.(type) {
+		case string:
+			if credentialFields[normalizedField(name)] {
+				Register("integration credential "+name, typed)
+			}
+		case map[string]any:
+			registerCredentialFields(typed)
 		}
 	}
+}
+
+// RegisterDecrypted registers what a decryptor returned: the secret fields of a
+// JSON object, or the whole text of anything else (a bare client secret or key).
+func RegisterDecrypted(plain []byte) {
+	if RegisterCredentialJSON(plain) {
+		return
+	}
+	Register("decrypted value", strings.TrimSpace(string(plain)))
+}
+
+// GetenvSecret is os.Getenv for a setting that holds a secret read directly from
+// the environment: a non-empty value enters the registry under the setting's name.
+func GetenvSecret(name string) string {
+	value := os.Getenv(name)
+	Register(name, value)
+	return value
+}
+
+// LookupSecretEnv is os.LookupEnv for a secret read directly from the
+// environment, registering a non-empty value under the setting's name.
+func LookupSecretEnv(name string) (string, bool) {
+	value, ok := os.LookupEnv(name)
+	Register(name, value)
+	return value, ok
+}
+
+// GetenvDSN is os.Getenv for a DSN or URI read directly from the environment:
+// its password enters the registry by value and its login by shape.
+func GetenvDSN(name string) string {
+	value := os.Getenv(name)
+	RegisterDSN(name, value)
+	return value
+}
+
+var (
+	secretNamePattern = regexp.MustCompile(`(?i)(TOKEN|PASSWORD|PASSWD|SECRET|PRIVATE_KEY|API_KEY|_KEY$|_PASS$)`)
+	dsnNamePattern    = regexp.MustCompile(`(?i)(_URI|_DSN|^DSN)$`)
+)
+
+// LooksSecret reports whether an environment variable's name says it holds a
+// secret (a token, password, key) rather than a plain setting.
+func LooksSecret(name string) bool { return secretNamePattern.MatchString(name) }
+
+// GetenvNamed is os.Getenv for a helper that reads a variable chosen by name: the
+// value is registered when the name says it is a secret (by value) or a DSN
+// (password by value, login by shape), and left alone otherwise (a model or a
+// base URL is not redacted).
+func GetenvNamed(name string) string {
+	switch {
+	case dsnNamePattern.MatchString(name):
+		return GetenvDSN(name)
+	case LooksSecret(name):
+		return GetenvSecret(name)
+	}
+	return os.Getenv(name)
+}
+
+// ProcessLookup is os.LookupEnv for the lookup a binary hands to its
+// configuration and its verbs: a value whose variable name says it holds a secret
+// (a token, password, key) or a DSN enters the registry as it is read, so
+// whichever reader asks for it the process logger redacts it.
+func ProcessLookup(name string) (string, bool) {
+	value, ok := os.LookupEnv(name)
+	if ok && value != "" {
+		switch {
+		case dsnNamePattern.MatchString(name):
+			RegisterDSN(name, value)
+		case LooksSecret(name):
+			Register(name, value)
+		}
+	}
+	return value, ok
+}
+
+// ProcessGetenv is os.Getenv with ProcessLookup's registration, for a reader that
+// takes a Getenv function.
+func ProcessGetenv(name string) string {
+	value, _ := ProcessLookup(name)
+	return value
 }

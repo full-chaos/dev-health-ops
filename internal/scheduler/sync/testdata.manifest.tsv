@@ -1,10 +1,12 @@
 # Every file under internal/scheduler/sync/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: 20f037646e31d1e9bebe6eeb172911740fd1450138eb7170a87bd353073fa6ec (1 files)
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 -	header	golden/feature-decision-reason.golden.json
 -	header	golden/jira-discovery-rows.golden.json
 -	header	golden/operator-datasets.golden.json
 -	header	golden/planner-backfill.golden.json
 -	header	golden/planner-scheduled.golden.json
-8210d5c6419796e2092e375518052d419653dc778f41c7a5312233a4de9d13c6	python-recorded	operator_datasets_golden.json
+-	header	golden/venue-credential-fingerprint.golden.json
+-	header	golden/venue-jira-rename.golden.json
+-	header	golden/venue-zero-unit-stamp.golden.json
 b42409196680c9828ef295e9d5e2fd6f9cd9829783466197b06af2cd5f093d01	unclassified	python_feature_decision_reason_oracle.py
 e745e5334bc96a906b4794858c2e13b1e04e1d7c3607a45f5a01a6866dc50715	unclassified	python_planner_oracle.py

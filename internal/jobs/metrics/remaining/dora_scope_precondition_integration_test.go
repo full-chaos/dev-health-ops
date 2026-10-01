@@ -237,7 +237,7 @@ func TestDORAExecutorComputesThroughTheRealClaimPath(t *testing.T) {
 	defer pool.Close()
 	createRemainingTables(t, ctx, pool)
 
-	conn := migratedClickHouse(t, ctx, OperationalOrderingLegacy)
+	conn := migratedClickHouse(t, ctx, OperationalOrderingRevision)
 
 	const orgID = "00000000-0000-4000-8000-000000004242"
 	repoID := "11111111-2222-4333-8444-555555555555"

@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -22,7 +27,15 @@ type fakeOracle struct {
 	// afterReplay runs after the replay read the candidate (a cleanup that replaces it).
 	afterReplay func() error
 	// pythonRoot, and what the record run saw of it.
-	pythonRoot        string
+	pythonRoot string
+	// perRun, when set, makes each record run write another body (a per-run
+	// value); records counts them.
+	perRun            func(run int) string
+	records           int
+	dropSecond        bool
+	extraSecond       bool
+	recordEnvs        [][]string
+	failSecond        bool
 	bytecodeAtRecord  bool
 	dontWriteBytecode bool
 }
@@ -39,16 +52,29 @@ func (f *fakeOracle) run(cfg Config, env []string) error {
 	switch {
 	case has("DHO_VENUE_GOLDEN_UPDATE"):
 		f.calls = append(f.calls, "record")
+		f.recordEnvs = append(f.recordEnvs, append([]string{}, env...))
+		f.records++
+		if f.perRun != nil {
+			f.candidateBody = f.perRun(f.records)
+		}
 		_, err := os.Stat(filepath.Join(f.pythonRoot, "src", "app", "__pycache__"))
 		f.bytecodeAtRecord = err == nil
 		f.dontWriteBytecode = has("PYTHONDONTWRITEBYTECODE")
-		if f.recordWrites {
+		if f.extraSecond && f.records == 2 {
+			if err := os.WriteFile(filepath.Join(f.dir, "testdata", "extra.json.recording"), []byte(f.candidateBody), 0o644); err != nil {
+				return err
+			}
+		}
+		if f.recordWrites && !(f.dropSecond && f.records == 2) {
 			if err := os.MkdirAll(filepath.Join(f.dir, "testdata"), 0o755); err != nil {
 				return err
 			}
 			if err := os.WriteFile(filepath.Join(f.dir, "testdata", "g.json.recording"), []byte(f.candidateBody), 0o644); err != nil {
 				return err
 			}
+		}
+		if f.failSecond && f.records == 2 {
+			return errors.New("boom")
 		}
 		return f.recordErr
 	case has("DHO_VENUE_GOLDEN_CANDIDATE"):
@@ -109,7 +135,7 @@ func TestAGoldenLandsOnlyAfterTheFreshProcessReplayPasses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(fake.calls, ",") != "record,replay" || fake.replayReadBody != "NEW GOLDEN\n" {
+	if strings.Join(fake.calls, ",") != "record,record,replay" || fake.replayReadBody != "NEW GOLDEN\n" {
 		t.Fatalf("calls %v, replay read %q: the replay must run after the record run and read the candidate", fake.calls, fake.replayReadBody)
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, "testdata", "g.json"))
@@ -377,5 +403,141 @@ func TestAReRecordThatDropsCoverageIsRefusedUnlessAllowed(t *testing.T) {
 	fake.candidateBody = goldenJSON([]string{"a", "b", "c"}, []string{"orgs", "more"})
 	if _, err := Record(context.Background(), cfg); err != nil {
 		t.Fatalf("added coverage was refused: %v", err)
+	}
+}
+
+// runGolden is a golden file body for one run; v is the per-run value.
+func runGolden(v string, packed bool) func(int) string {
+	return func(run int) string {
+		value := fmt.Sprintf("%s-%d", v, run)
+		body := strconv.Quote(`{"a":{"token":"` + value + `"},"stable":1}`)
+		if packed {
+			var buf bytes.Buffer
+			zw := gzip.NewWriter(&buf)
+			_, _ = zw.Write([]byte(`{"a":{"token":"` + value + `"}}`))
+			_ = zw.Close()
+			body = strconv.Quote("gzip+base64:" + base64.StdEncoding.EncodeToString(buf.Bytes()))
+		}
+		return `{"header":{"test":"T","note":"` + "n" + `"},"requests":[{"name":"login","status":200,"headers":{"x-id":"fixed"},"body":` + body + `}],"rows":{"mail":{"rows":"line one\nlink ` + value + `"}}}` + "\n"
+	}
+}
+
+func TestTwoRecordingsThatDifferAreRefusedNamingTheFieldNotTheValue(t *testing.T) {
+	const secret = "per-run-secret"
+	cases := map[string]struct {
+		body    func(int) string
+		wantAll []string
+	}{
+		"body leaf and row line": {runGolden(secret, false), []string{"request login body $.<key sha256 ", "rows mail line 2"}},
+		"packed body unpacked":   {runGolden(secret, true), []string{"request login body $.<key sha256 "}},
+		"header field": {func(run int) string {
+			return `{"header":{"python_build":"b` + fmt.Sprint(run) + `"},"requests":[{"name":"r","body":"x"}]}` + "\n"
+		}, []string{"header.python_build"}},
+		"response header and status": {func(run int) string {
+			return `{"requests":[{"name":"r","status":` + fmt.Sprint(200+run) + `,"headers":{"x-token":"` + secret + fmt.Sprint(run) + `"},"body":"x"}]}` + "\n"
+		}, []string{"request r status", "request r header x-token"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, fake, dir := fixture(t, "")
+			fake.perRun = tc.body
+			_, err := Record(context.Background(), cfg)
+			if err == nil || !strings.Contains(err.Error(), "GoldenSpec.Scrub") {
+				t.Fatalf("two differing recordings were not refused: %v", err)
+			}
+			for _, want := range tc.wantAll {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal lacks %q: %v", want, err)
+				}
+			}
+			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "python_build\":\"b") {
+				t.Fatalf("the error shows a per-run value: %v", err)
+			}
+			if exists(filepath.Join(dir, "testdata", "g.json")) || exists(filepath.Join(dir, "testdata", "g.json.recording")) || strings.Contains(strings.Join(fake.calls, ","), "replay") {
+				t.Fatalf("a golden or candidate is left, or the replay ran, after a refusal: %v", fake.calls)
+			}
+		})
+	}
+}
+
+func TestAnyReportedDifferencesAreCappedAtFiveWithACount(t *testing.T) {
+	cfg, fake, _ := fixture(t, "")
+	fake.perRun = func(run int) string {
+		out := `{"requests":[`
+		for i := 0; i < 8; i++ {
+			if i > 0 {
+				out += ","
+			}
+			out += fmt.Sprintf(`{"name":"r%d","status":%d,"body":"x"}`, i, 200+run)
+		}
+		return out + "]}\n"
+	}
+	_, err := Record(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "and 3 more") || strings.Contains(err.Error(), "request r5 status") {
+		t.Fatalf("differences are not capped at five with a count: %v", err)
+	}
+}
+
+func TestASecondRunThatFailsIsRefused(t *testing.T) {
+	cfg, fake, dir := fixture(t, "")
+	fake.failSecond = true
+	if _, err := Record(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "second recording run failed") {
+		t.Fatalf("a failing repeat was accepted: %v", err)
+	}
+	if exists(filepath.Join(dir, "testdata", "g.json")) || exists(filepath.Join(dir, "testdata", "g.json.recording")) {
+		t.Fatal("a golden or candidate is left after a failed repeat")
+	}
+}
+
+func TestTwoRecordingsThatAgreeArePromotedOnce(t *testing.T) {
+	cfg, fake, dir := fixture(t, "")
+	fake.perRun = func(int) string { return `{"requests":[{"name":"login","body":"<token>"}]}` + "\n" }
+	if _, err := Record(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "testdata", "g.json")); !strings.Contains(string(got), "<token>") {
+		t.Fatalf("golden = %q", got)
+	}
+}
+
+func TestASecondRunThatWritesNoCandidateIsRefused(t *testing.T) {
+	cfg, fake, _ := fixture(t, "")
+	fake.dropSecond = true
+	if _, err := Record(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "wrote no candidate") {
+		t.Fatalf("a repeat that wrote nothing was accepted: %v", err)
+	}
+}
+
+func TestASecondRunThatWritesAnExtraCandidateIsRefused(t *testing.T) {
+	cfg, fake, dir := fixture(t, "")
+	fake.extraSecond = true
+	if _, err := Record(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "the first did not") {
+		t.Fatalf("an extra candidate of the repeat was accepted: %v", err)
+	}
+	if exists(filepath.Join(dir, "testdata", "g.json")) || exists(filepath.Join(dir, "testdata", "extra.json.recording")) {
+		t.Fatal("a golden or candidate is left after the refusal")
+	}
+}
+
+func TestBothRecordingRunsGetTheSameEnvironment(t *testing.T) {
+	cfg, fake, _ := fixture(t, "")
+	if _, err := Record(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.recordEnvs) != 2 || strings.Join(fake.recordEnvs[0], "\n") != strings.Join(fake.recordEnvs[1], "\n") {
+		t.Fatalf("the two recording runs got different environments: %v", fake.recordEnvs)
+	}
+}
+
+func TestAJSONKeyIsNeverPrintedInARefusal(t *testing.T) {
+	cfg, fake, _ := fixture(t, "")
+	const key = "SYNTHETIC_SECRET_KEY_DO_NOT_USE"
+	fake.perRun = func(run int) string {
+		body := strconv.Quote(`{"` + key + `":"value-` + fmt.Sprint(run) + `"}`)
+		return `{"requests":[{"name":"login","body":` + body + `}]}` + "\n"
+	}
+	_, err := Record(context.Background(), cfg)
+	if err == nil || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "request login body $.<key sha256 ") {
+		t.Fatalf("a JSON key was printed or the refusal lost its path: %v", err)
 	}
 }

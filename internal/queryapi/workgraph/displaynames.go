@@ -3,12 +3,15 @@ package workgraph
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/operationalordering"
 )
 
 // edgeEndpoint is the (id, type) shape batchResolveDisplayNames and
@@ -217,78 +220,37 @@ func resolveDeploymentDisplayNames(ctx context.Context, client QueryClient, orgI
 	_ = rows.Err()
 }
 
-// operationalOrderingContractEnv mirrors
-// operational_ordering_guard.py:15's OPERATIONAL_ORDERING_CONTRACT_ENV
-// verbatim -- the SAME env var name, read directly rather than through
-// any Python-side config object (this is a fresh Go process; nothing
-// Python parsed is inherited).
+// operationalOrderingContractEnv is the process variable naming the ordering
+// contract (operationalordering.Env), read directly here so the query API's
+// declared direct environment reads (TestDirectEnvironmentReads) stay complete.
 const operationalOrderingContractEnv = "OPERATIONAL_ORDERING_CONTRACT"
 
-// operationalOrderingIsCurrent mirrors
-// operational_ordering_guard.py:62-69's
-// parse_operational_ordering_contract: the CURRENT contract only when
-// the env var is set to EXACTLY "2"; UNSET or "1" (or anything else --
-// Python raises on anything else, but this lookup is best-effort and
-// must never itself become a new failure mode) means LEGACY, matching
-// the documented default.
-func operationalOrderingIsCurrent() bool {
-	return os.Getenv(operationalOrderingContractEnv) == "2"
-}
-
-// resolveIncidentDisplayNames mirrors work_graph.py:388-414's incident
-// branch, reading through current_operational_rows_sql's two ordering
-// contracts (storage/operational_current.py:25-64) -- found by codex
-// (2026-08-29, delta round, luna) as a real gap: an earlier version of
-// this port hard-coded the LEGACY branch only (documented as such, not
-// silently), on the reasoning that LEGACY is the contract's default
-// when the env var is unset. codex's point stands: a deployment that HAS
-// migrated to the CURRENT contract (env var = "2") needs the OTHER
-// branch, or FINAL on a contract-2 table can retain multiple revisions
-// for the same (org_id, id) (its sort key includes revision fields) and
-// silently pick a stale one instead of Python's `ORDER BY ... LIMIT 1 BY`
-// current-row selection. Both branches are now implemented, selected by
-// reading the SAME env var Python reads, exactly as
-// configured_operational_ordering_contract() does.
+// resolveIncidentDisplayNames mirrors work_graph.py:388-414's incident branch.
+// The current row of each incident is selected by revision through the one
+// shared implementation (operationalordering.RevisionCurrentRows): the
+// operational tables are ordering contract 2 (production's, the only one the
+// migrator builds), where FINAL keeps every revision of a key and would return
+// a deleted incident's older live row. The query API's deployment does not
+// export OPERATIONAL_ORDERING_CONTRACT (the chart sets it on the workers only),
+// so unset is contract 2 here; any other value than 2 is refused loudly and no
+// name resolves (the lookup stays best-effort and never fails the request).
 func resolveIncidentDisplayNames(ctx context.Context, client QueryClient, orgID string, incidentIDs map[string]struct{}, resolved map[string]string) {
+	if _, err := operationalordering.ResolveValue(os.LookupEnv(operationalOrderingContractEnv)); err != nil {
+		slog.Default().ErrorContext(ctx, "incident display names unavailable: ordering contract refused",
+			slog.String("error", err.Error()))
+		return
+	}
 	ids := make([]string, 0, len(incidentIDs))
 	for id := range incidentIDs {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 
-	var currentRowsSQL string
-	if operationalOrderingIsCurrent() {
-		// operational_current.py:54-63's CURRENT branch: the table's own
-		// sort key does not guarantee one row per (org_id, id) under
-		// contract 2 (revision columns are part of it), so the current
-		// row is selected explicitly by revision ordering, LIMIT 1 BY
-		// the entity key.
-		currentRowsSQL = `
-            SELECT *
-            FROM operational_incidents
-            WHERE org_id = {org_id:String}
-            ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC
-            LIMIT 1 BY org_id, id
-        `
-	} else {
-		// operational_current.py:46-53's LEGACY branch (the documented
-		// default when the env var is unset): FINAL alone gives one row
-		// per (org_id, id) because the pre-contract-2 sort key does not
-		// include revision columns.
-		currentRowsSQL = `
-            SELECT *
-            FROM operational_incidents FINAL
-            WHERE org_id = {org_id:String}
-        `
-	}
-
-	query := fmt.Sprintf(`
+	query := `
         SELECT id AS incident_id, normalized_status AS status, title
-        FROM (
-            %s
-        )
-        WHERE is_deleted = 0 AND id IN {inc_ids:Array(String)}
-    `, currentRowsSQL)
+        FROM ` + operationalordering.RevisionCurrentRows("operational_incidents", "org_id = {org_id:String}",
+		[]string{"is_deleted = 0", "id IN {inc_ids:Array(String)}"}) + `
+    `
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "inc_ids", Value: ids},

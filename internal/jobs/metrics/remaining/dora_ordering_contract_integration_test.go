@@ -183,18 +183,19 @@ func TestOrderingContractGuardMatchesTheDeployedSchema(t *testing.T) {
 		wantErr   error
 	}{
 		{
-			// The reachable-by-omission path: nothing set at all, so the query
-			// builder defaults to legacy while the table is v2.
-			name:      "unset against a v2 schema is refused",
+			// Unset is contract 2, production's: it builds against a v2 schema.
+			name:      "unset against a v2 schema builds",
 			configure: unsetContract,
 			schema:    OperationalOrderingRevision,
-			wantErr:   ErrOrderingContractMismatch,
+			wantBuild: true,
 		},
 		{
-			name:      "explicit legacy against a v2 schema is refused",
+			// Contract 1 is unsupported: refused as a configuration error
+			// whatever the schema is.
+			name:      "explicit contract 1 is refused against a v2 schema",
 			configure: setContract("1"),
 			schema:    OperationalOrderingRevision,
-			wantErr:   ErrOrderingContractMismatch,
+			wantErr:   ErrOrderingContractUnparseable,
 		},
 		{
 			name:      "contract 2 against a legacy schema is refused",
@@ -225,19 +226,18 @@ func TestOrderingContractGuardMatchesTheDeployedSchema(t *testing.T) {
 			wantBuild: true,
 		},
 		{
-			name:      "legacy against a legacy schema builds",
+			name:      "explicit contract 1 is refused against a legacy schema",
 			configure: setContract("1"),
 			schema:    OperationalOrderingLegacy,
-			wantBuild: true,
+			wantErr:   ErrOrderingContractUnparseable,
 		},
 		{
-			// A deployment that has never set the variable and has never run
-			// 067 is CONSISTENT, not broken. The guard must not turn it into
-			// an outage.
-			name:      "unset against a legacy schema builds",
+			// A contract-1 database is below the head and unsupported: unset
+			// (contract 2) against it is a mismatch, refused at construction.
+			name:      "unset against a legacy schema is refused",
 			configure: unsetContract,
 			schema:    OperationalOrderingLegacy,
-			wantBuild: true,
+			wantErr:   ErrOrderingContractMismatch,
 		},
 	}
 

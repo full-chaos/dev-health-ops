@@ -636,6 +636,13 @@ func (g *Golden) projectKeyText(text string) string {
 // the authorization one (headersDigest reduces a bearer token to its claims)
 // projected.
 func (g *Golden) projectRequest(request Request) Request {
+	if request.Method == programMethod {
+		// A program request (ProgramRequest) carries a corpus on stdin and no
+		// credential: its key is digests already, and projecting a multi-megabyte
+		// corpus on every key made the programoracle tests several times slower
+		// (pyidna, under -race, past its ten-minute test timeout).
+		return request
+	}
 	out := request
 	out.Path = g.projectKeyText(request.Path)
 	if request.Body != nil {
@@ -850,6 +857,9 @@ func (g *Golden) producerRootErr(root string) error {
 	return nil
 }
 
+// programMethod is the Method of a program request (ProgramRequest).
+const programMethod = "PYTHON"
+
 // ProgramRequest is the request of one run of a Python program: its name, the
 // program text's digest (a changed program cannot replay the answers of
 // another), its stdin, and the environment entries that shape its answers. The
@@ -858,7 +868,7 @@ func (g *Golden) producerRootErr(root string) error {
 func ProgramRequest(name, program string, stdin []byte, env map[string]string) Request {
 	sum := sha256.Sum256([]byte(program))
 	body := base64.StdEncoding.EncodeToString(stdin)
-	return Request{Name: name, Method: "PYTHON", Path: "program sha256 " + hex.EncodeToString(sum[:]) + " env sha256 " + envDigest(env), Body: &body}
+	return Request{Name: name, Method: programMethod, Path: "program sha256 " + hex.EncodeToString(sum[:]) + " env sha256 " + envDigest(env), Body: &body}
 }
 
 // envDigest is a digest of environment entries with each name as written:

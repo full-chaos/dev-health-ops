@@ -245,3 +245,13 @@ func TestAProducerThatAnswersMoreRequestsThanAskedIsAnErrorNotAPanic(t *testing.
 		t.Fatalf("a producer that answered too many requests was not a clean error: err=%v\n%s", err, out)
 	}
 }
+
+func TestAProgramRequestKeepsItsKeyAndIsNotProjected(t *testing.T) {
+	g := keyGolden(t, linkScrub)
+	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":1,"exp":61}`, "sig")
+	stdin := []byte(strings.Repeat("corpus line "+token+"\n", 3))
+	request := ProgramRequest("corpus", "print(1)", stdin, nil)
+	if !reflect.DeepEqual(g.keyOf(request), requestKey(request)) {
+		t.Fatal("a program request was projected: its corpus is not a credential and projecting it costs minutes under the race detector")
+	}
+}

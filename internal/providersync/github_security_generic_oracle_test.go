@@ -42,6 +42,6 @@ func oracleSecurityCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForSecurityRowConstruction(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForSecurityRowConstruction(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "github/security/row", oracleSecurityCases(), buildSecurityRowForOracle, oracleSecurityGoOnlyFields)
 }

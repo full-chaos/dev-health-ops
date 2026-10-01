@@ -24,7 +24,7 @@ type linearReferenceTeamProducerRow struct {
 	ParentTeamID  *string   `json:"parent_team_id"`
 }
 
-func TestLinearReferenceTeamCatalogMatchesLivePythonProducer(t *testing.T) {
+func TestLinearReferenceTeamCatalogMatchesFrozenPythonProducer(t *testing.T) {
 	// team_autoimport_linear.py is deleted -- native Go providersync is the
 	// only producer now. Frozen under the last live comparison (see
 	// testdata/oracle_frozen/README.md).

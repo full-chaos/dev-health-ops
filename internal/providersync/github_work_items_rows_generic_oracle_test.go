@@ -10,7 +10,7 @@ import (
 
 var githubWorkItemOracleNormalizedAt = time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 
-func TestGitHubIssueWorkItemMatchesLivePythonProductionRow(t *testing.T) {
+func TestGitHubIssueWorkItemMatchesFrozenPythonProductionRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"github/work-items/issue",
@@ -93,7 +93,7 @@ var githubWorkItemWriteStampGoOnly = map[string]string{
 		"snapshot replays to identical bytes and the readback can answer Exact.",
 }
 
-func TestGitHubSprintMatchesLivePythonProductionRow(t *testing.T) {
+func TestGitHubSprintMatchesFrozenPythonProductionRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"github/work-items/sprint",

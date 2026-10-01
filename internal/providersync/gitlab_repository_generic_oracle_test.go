@@ -43,7 +43,7 @@ func buildGitLabRepositoryRowForOracle(
 	return row
 }
 
-func TestGenericOracleMatchesLivePythonForGitLabRepositoryRow(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForGitLabRepositoryRow(t *testing.T) {
 	cases := []oracleCase{
 		{ID: "gitlab_dot_com", Input: map[string]any{
 			"gitlab_url": "https://gitlab.com", "normalized_at": "2026-07-23T12:30:00Z",

@@ -7,8 +7,8 @@ import (
 
 // team_drift_generic_oracle_test.go proves CHAOS-4444's shared drift-review
 // engine (team_drift_review.go / identity_drift_review.go) against the
-// LIVE, checked-in Python producers it ports, via the shared live-python-
-// oracle harness (ci/check_go.sh live-python-oracles) -- the same mechanism
+// checked-in Python producers it ports, as recorded on the pinned build, via
+// the shared frozen pair-oracle harness (oracle_golden_test.go) -- the same mechanism
 // every other provider oracle in this package uses.
 //
 // Scope: these four pairs pin the PURE, deterministic decision functions the
@@ -95,7 +95,7 @@ func buildTeamCatalogObservedRowOracle(t *testing.T, input map[string]any) teamC
 	}
 }
 
-func TestTeamCatalogObservedRowMatchesLivePythonProducer(t *testing.T) {
+func TestTeamCatalogObservedRowMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "team-catalog/drift/observed-row",
 		[]oracleCase{
@@ -136,7 +136,7 @@ func buildTeamCatalogChangeIDOracle(t *testing.T, input map[string]any) changeID
 	)}
 }
 
-func TestTeamCatalogChangeIDMatchesLivePythonProducer(t *testing.T) {
+func TestTeamCatalogChangeIDMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "team-catalog/drift/change-id",
 		[]oracleCase{
@@ -167,7 +167,7 @@ func buildIdentityDriftChangeIDOracle(t *testing.T, input map[string]any) change
 	)}
 }
 
-func TestIdentityDriftChangeIDMatchesLivePythonProducer(t *testing.T) {
+func TestIdentityDriftChangeIDMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "identity-drift/review/change-id",
 		[]oracleCase{
@@ -228,7 +228,7 @@ func buildIdentityConflictDecisionOracle(t *testing.T, input map[string]any) con
 	return conflictDecisionOracleRow{ConflictField: &field}
 }
 
-// TestIdentityDriftConflictDecisionMatchesLivePythonProducer deliberately
+// TestIdentityDriftConflictDecisionMatchesFrozenPythonProducer deliberately
 // never uses row.source="manual" -- Python's _conflict_for short-circuits
 // to None for a manual-source row (a case a native provider_access
 // collector's own rows never construct; the pre-existing, already-shipped
@@ -236,7 +236,7 @@ func buildIdentityConflictDecisionOracle(t *testing.T, input map[string]any) con
 // ever runs AFTER also lacks that check -- CHAOS-4499 tracks reconciling
 // this, out of scope here, see that ticket's description for the full
 // analysis).
-func TestIdentityDriftConflictDecisionMatchesLivePythonProducer(t *testing.T) {
+func TestIdentityDriftConflictDecisionMatchesFrozenPythonProducer(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "identity-drift/review/conflict-decision",
 		[]oracleCase{

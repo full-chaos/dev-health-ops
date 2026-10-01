@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestGitLabPullRequestReviewRowsMatchFrozenPython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair gitlab/pr-reviews/row: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGitLabPullRequestReviewRowsMatchFrozenPython$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "gitlab/pr-reviews/row",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "7f97827f0af589a7ebff780da2ffdbc0bb132b84d2bfcd0d0a6939f1809a5841",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"approval_note_diff_note_and_approval_backfill\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"number\": {\"t\": \"int\", \"v\": \"7\"}, \"review_id\": {\"t\": \"str\", \"v\": \"note-1\"}, \"reviewer\": {\"t\": \"str\", \"v\": \"reviewer\"}, \"state\": {\"t\": \"str\", \"v\": \"APPROVED\"}, \"submitted_at\": {\"t\": \"datetime\", \"v\": \"2026-07-16T11:00:00Z\"}}}, {\"id\": \"merged_mr_unapproval_is_dismissed\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"number\": {\"t\": \"int\", \"v\": \"8\"}, \"review_id\": {\"t\": \"str\", \"v\": \"note-5\"}, \"reviewer\": {\"t\": \"str\", \"v\": \"reviewer\"}, \"state\": {\"t\": \"str\", \"v\": \"DISMISSED\"}, \"submitted_at\": {\"t\": \"datetime\", \"v\": \"2026-07-23T11:00:00Z\"}}}, {\"id\": \"approval_only_without_timestamp\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"number\": {\"t\": \"int\", \"v\": \"9\"}, \"review_id\": {\"t\": \"str\", \"v\": \"approval-91\"}, \"reviewer\": {\"t\": \"str\", \"v\": \"reviewer3\"}, \"state\": {\"t\": \"str\", \"v\": \"APPROVED\"}, \"submitted_at\": {\"t\": \"datetime\", \"v\": \"2026-07-12T10:00:00Z\"}}}], \"excluded_fields\": {\"last_synced\": \"stamped from the Go collection instant, not the Python mapper\"}}\n"
+    }
+  ]
+}

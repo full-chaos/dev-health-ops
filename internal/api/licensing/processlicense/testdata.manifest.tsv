@@ -1,3 +1,4 @@
 # Every file under internal/api/licensing/processlicense/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	golden/license-verifier.golden.json
+# header-before-stamp set: 3c1289282d268b5b8f4cadd6d60e13e057eebb6348e523ba4f0aebd7d695d40f (1 files)
+25c843bc72fdcf01f38e74e208b479dacd3f9c303eb30b3dad0bd49414dda4c7	header-before-stamp	golden/license-verifier.golden.json

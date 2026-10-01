@@ -255,3 +255,28 @@ func TestAProgramRequestKeepsItsKeyAndIsNotProjected(t *testing.T) {
 		t.Fatal("a program request was projected: its corpus is not a credential and projecting it costs minutes under the race detector")
 	}
 }
+
+// TestACredentialShapedCorpusReachesNoGoldenThroughItsProgramKey pins why a program
+// request needs no projection: only the sha256 of its stdin enters the key, so a
+// corpus (credential-shaped fixtures included) never appears in the golden.
+func TestACredentialShapedCorpusReachesNoGoldenThroughItsProgramKey(t *testing.T) {
+	sample := tokenSamples()["github-token"]
+	g := keyGolden(t, nil)
+	request := ProgramRequest("redaction inputs", "print(1)", []byte("input one\n"+sample+"\ninput three\n"), nil)
+	entry := g.keyOf(request)
+	entry.Status, entry.Body = 0, "ok"
+	g.recorded.Requests = []goldenRequest{entry}
+	if _, err := g.writeCandidate(false); err != nil {
+		t.Fatalf("a program request with a credential-shaped corpus was refused: %v", err)
+	}
+	raw, err := os.ReadFile(g.spec.Path + GoldenCandidateSuffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), sample) || strings.Contains(string(raw), "input one") || len(TokenShapesIn(string(raw))) > 0 {
+		t.Fatalf("the corpus reached the golden through the program request key: %s", raw)
+	}
+	if entry.BodySHA256 == "" || len(entry.BodySHA256) != 64 {
+		t.Fatalf("the key holds %q of the body, want its sha256", entry.BodySHA256)
+	}
+}

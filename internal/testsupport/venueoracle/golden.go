@@ -637,10 +637,15 @@ func (g *Golden) projectKeyText(text string) string {
 // projected.
 func (g *Golden) projectRequest(request Request) Request {
 	if request.Method == programMethod {
-		// A program request (ProgramRequest) carries a corpus on stdin and no
-		// credential: its key is digests already, and projecting a multi-megabyte
-		// corpus on every key made the programoracle tests several times slower
-		// (pyidna, under -race, past its ten-minute test timeout).
+		// A program request (ProgramRequest) is not projected, for two reasons. Cost: its
+		// stdin is a corpus (235 MB in pyidna) and projecting it on every key took minutes
+		// under -race. Safety: nothing of it can reach a golden through the key -- the key
+		// holds only the sha256 of the body (requestKey, BodySHA256; goldenRequest has no
+		// field for the body itself), and a program path is digests already. A corpus may
+		// hold credential-SHAPED fixtures on purpose (the sanitize-error-text oracle's
+		// redaction inputs), so a guard that forbade them would refuse a valid test.
+		// Determinism: a corpus holding a per-run value changes its digest between runs, and
+		// the two-run check and the frozen replay both refuse that by name.
 		return request
 	}
 	out := request

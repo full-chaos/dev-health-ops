@@ -1,0 +1,23 @@
+{
+  "header": {
+    "test": "TestTeamCatalogFingerprintVenueOracleMatchesFrozenPython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/workerservice/ -test '^TestTeamCatalogFingerprintVenueOracleMatchesFrozenPython$' -python-root $DIR",
+    "python_env": "d59e90712b27dd17b94abd11c96426234b9bbf6a754d7b5454f4aa50ebdcc485",
+    "python_env_version": 2,
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "team catalog credential stamp",
+      "method": "PYTHON",
+      "path": "program sha256 0aef77ee13d46720c192e910441c4c7a8e752bc57b28e4b9d8cc5fea70b380fc env sha256 eb3d7134b85ce291b10e39b6c591e45b3c87b9e016f6f3f220da024ef7da4565",
+      "body_sha256": "c078d25dade31765802ee1ef0b22b1978fe02fda5697dba6f9789fcba71c36f5",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "[[\"187635e4-2760-5f19-aa97-989313f46ce3\", \"1b4d845e8fc9918139f82a8e2712dfe47eecfab7fc1892fe62d375488667eef1\", \"integration_credential\"], [\"b5e12ece-e6f0-5ffa-8b83-f5bbbf5cc445\", \"4631da82194d375988f12b1fde94f7c7929d01357020e3dcedfd3580e1d02f66\", \"integration_credential\"], [\"a0828b74-21ab-5ddc-a5fc-2c2267f92fc6\", \"77c563903f5eaa1294cc0691427b896c7b4a4dee4190e58e2ac0e65d0ee11ba0\", \"integration_credential\"], [\"0f963e37-9345-53a6-8c82-57723774751a\", \"f8f20ced3baf89b855b3c655c345b55834b3ad53a5836c1912e72af50d418ec5\", \"integration_credential\"], [\"06e283c9-90fd-5dfe-a554-54195f911e5b\", \"907587860e1b3ba9f98f20f4b413ca5438b51b81c66590e6da112d3d23fd8210\", \"integration_credential\"], [\"550e06da-66eb-53dd-b356-92bd07830dce\", \"0e8160c9c1982a0c6a2b1f02b8caa229ad66d85c942110e1d991efd6d282c603\", \"integration_credential\"], [\"1fb5fef8-5379-5876-b771-b17755b8acd7\", \"09ad5b1dc2f1cfac1142c81985fe11a344bf7a5d565323a302c7417d542e283b\", \"integration_credential\"], [\"ae7c2dd0-744d-5097-8710-b4f04fd962df\", \"f32d928b287b671cffcd398f1f2ea88a7b6a5cc0d437fb3d2552b027a01100f1\", \"integration_credential\"], [\"0826f2a4-7614-52d0-b6de-36b2a2ddb2b2\", \"b91eb1023d31134afe8add97b01c2bb800eb59c468d0abb21f7f7a7436b1ffea\", \"integration_credential\"], [\"272cad76-f3e9-50c3-b750-db203f86ccfc\", \"704ee81977aabd88be6591916d7d5a20be851ddee6e60719d2e3372dc3569f99\", \"integration_credential\"], [\"c5bc1784-758a-5d80-b1b5-6e95c47f034f\", \"704ee81977aabd88be6591916d7d5a20be851ddee6e60719d2e3372dc3569f99\", \"integration_credential\"], [\"34ca8f6a-a1cb-56d4-8a00-8cc18c56736b\", \"7527b7479497f8d7ee914b3361738991e63e48b8a1106fbbd4425bda7b6dfaef\", \"integration_credential\"], [\"78f0a9f7-71b4-5cb9-b238-1917d46a0db1\", \"44bcd4bd9455e8780b877c37c10eabf87530e0f89bd97e47bf929da0bc3a537c\", \"integration_credential\"], [\"a9b04b44-d031-5c07-b09d-6d8b9ce5080d\", \"d9a6c3ae7b0cb65e12beba67d1652243756feb31f11208f4edfad416dffe4281\", \"integration_credential\"], [\"1471fc65-ce61-51c8-a0c6-38cd0a0030c7\", \"77c563903f5eaa1294cc0691427b896c7b4a4dee4190e58e2ac0e65d0ee11ba0\", \"integration_credential\"], [\"6fad5ac8-fcd5-5aa3-80bc-806893594ff7\", \"98309e17efbb7d38eaa50adb7f4d9827f5c4dcc93d7a4214d56185b9a21b978a\", \"integration_credential\"], [\"68e4f77d-b6db-5ec9-89c9-81695547b44c\", \"e9a4498b19606919eb2d8c4a23206d24e441a37a2e205735671949acdf152e90\", \"integration_credential\"], [\"5ac00b2a-40a8-521d-b3a8-997405d0ffae\", \"c7b2b7c3ee628832089461bf4b4e4aae2dec675f0d7932fad3a0733b40712bb9\", \"integration_credential\"], [\"27a261f7-8578-553c-8c10-d3780962291c\", \"53112d10a16400b04f8d9029475dec19d4cc94c4c69863d93270d6c19f8cbf33\", \"integration_credential\"], [\"0e1d55fa-a34b-5d57-b3b2-84a7491490d5\", \"6738aee2fa32f31d872029795afd4867ae12372279c5550991e17901ec384945\", \"integration_credential\"], [\"644cf479-3d4b-59eb-b752-9a1eff4240f4\", \"38c2caece3fad5e46c83e876e26caef8dd587fb3e33a4e491d621f4bddc02780\", \"integration_credential\"], [\"b5656ab3-bae7-5f74-bdd1-2d20b31b7415\", \"357209fca89f687cad12ed44c9140a060c5f6a41b758cc210f35639b5ebec344\", \"integration_credential\"]]\n"
+    }
+  ]
+}

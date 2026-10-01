@@ -48,6 +48,8 @@ func storeEntry(t *testing.T, message streamrunner.Message) (string, error) {
 //
 //	{"z":1,"a":2,"m":3}  -> {"a":2,"m":3,"z":1}     keys are stored sorted
 //	{"f":1e999}          -> {"f":Infinity}          Python stored the word; chris's CHAOS-6299 ruling stores null
+//	{"f":1e999,"f":1}    -> {"f":1}                 json.loads keeps the LAST duplicate, so the overflow never exists
+//	{"a":1,"a":2}        -> {"a":2}
 //	9999...(4301 digits) -> json.loads raises ValueError; the intake answers 400 (4300-digit limit)
 func TestIntakeAndConsumerAgreeWithPythonOnKeyOrderOverflowAndHugeIntegers(t *testing.T) {
 	code, entry := intakeRawBody(t, batchWithPayload(`{"z":1,"a":2,"m":3}`))
@@ -58,6 +60,13 @@ func TestIntakeAndConsumerAgreeWithPythonOnKeyOrderOverflowAndHugeIntegers(t *te
 	if got, err := storeEntry(t, entry); code != http.StatusAccepted || err != nil || got != `{"f":null}` {
 		t.Fatalf("float overflow: status %d, stored %q, err %v (Python stored the word Infinity; CHAOS-6299 stores null)", code, got, err)
 	}
+	// A duplicate key: the last value wins (as json.loads), so an overflowing float it shadows is not an overflow.
+	for payload, want := range map[string]string{`{"f":1e999,"f":1}`: `{"f":1}`, `{"a":1,"a":2}`: `{"a":2}`} {
+		code, entry = intakeRawBody(t, batchWithPayload(payload))
+		if got, err := storeEntry(t, entry); code != http.StatusAccepted || err != nil || got != want {
+			t.Fatalf("duplicate key %s: status %d, stored %q, err %v, want %q (Python keeps the last duplicate)", payload, code, got, err, want)
+		}
+	}
 	if code, _ := intakeRawBody(t, batchWithPayload(`{"i":`+strings.Repeat("9", 4301)+`}`)); code != http.StatusBadRequest {
 		t.Fatalf("4301-digit integer: intake status %d, want 400 (Python's json.loads refuses it too)", code)
 	}
@@ -65,5 +74,27 @@ func TestIntakeAndConsumerAgreeWithPythonOnKeyOrderOverflowAndHugeIntegers(t *te
 	code, entry = intakeRawBody(t, batchWithPayload(`{"i":`+huge+`}`))
 	if got, err := storeEntry(t, entry); code != http.StatusAccepted || err != nil || got != `{"i":`+huge+`}` {
 		t.Fatalf("4300-digit integer: status %d, stored %d bytes, err %v", code, len(got), err)
+	}
+}
+
+// A stream entry written by anything other than this intake can carry the payload text as the client wrote it.
+// Python's json.loads keeps the LAST of a duplicate key (executed: `{"f":1e999,"f":1}` -> {'f': 1}, stored as
+// {"f":1}), so an overflowing float that a later duplicate shadows is not an overflow and the event is stored;
+// an overflowing float that stays is refused.
+func TestConsumerKeepsTheLastDuplicatePayloadKeyLikePython(t *testing.T) {
+	_, entry := intakeRawBody(t, batchWithPayload(`{}`))
+	direct := func(payload string) streamrunner.Message {
+		fields := map[string]string{}
+		for key, value := range entry.Fields {
+			fields[key] = value
+		}
+		fields["events"] = `[{"name":"page_viewed","schemaVersion":"1","eventId":"e","ts":"2026-09-23T02:00:00Z","sessionId":"s","anonymousUserId":"a","payload":` + payload + `}]`
+		return streamrunner.Message{Stream: entry.Stream, ID: entry.ID, Fields: fields}
+	}
+	if got, err := storeEntry(t, direct(`{"f":1e999,"f":1}`)); err != nil || got != `{"f":1}` {
+		t.Fatalf("shadowed overflow: stored %q, err %v, want {\"f\":1} (Python keeps the last duplicate)", got, err)
+	}
+	if got, err := storeEntry(t, direct(`{"f":1,"f":1e999}`)); err == nil {
+		t.Fatalf("a surviving overflow was stored as %q, want a permanent refusal", got)
 	}
 }

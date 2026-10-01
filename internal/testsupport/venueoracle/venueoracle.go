@@ -486,10 +486,9 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		t.Fatal("venue: a GoOnly venue has no golden: a golden holds the Python plane's answers, which a Go-only test never compares")
 	}
 	if options.Golden != nil {
-		// The environment this venue sets for the Python plane is part of the
-		// golden's key: the harness's settings, the JWT key and PythonEnv. What
-		// the child inherits from the test process is not (pythonPlaneEnv).
-		if err := options.Golden.bindPythonEnv(pythonPlaneEnv(options, nil)); err != nil {
+		// The environment this venue gives the Python plane is the golden's
+		// key: what the test set in the process, and the plane's own entries.
+		if err := options.Golden.bindPythonEnv(options); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -598,8 +597,8 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 
 	async := strings.Replace(v.AdminURI(t, v.SourceDB), "postgres://", "postgresql+asyncpg://", 1)
 	async = strings.Replace(async, "postgresql://", "postgresql+asyncpg://", 1)
-	v.pythonEnv = pythonPlaneEnv(options, map[string]string{"PYTHONPATH": filepath.Join(options.Root, "src"), "POSTGRES_URI": async,
-		"REDIS_URL": v.PythonValkeyURI, "CLICKHOUSE_URI": v.AdminClickHouseHTTPURI(t, v.PythonClickHouseDB)})
+	v.pythonEnv = pythonPlaneEnv(options, inheritedValues(map[string]string{"PYTHONPATH": filepath.Join(options.Root, "src"), "POSTGRES_URI": async,
+		"REDIS_URL": v.PythonValkeyURI, "CLICKHOUSE_URI": v.AdminClickHouseHTTPURI(t, v.PythonClickHouseDB)}))
 
 	// 1. The real schema, then one seed and its tokens.
 	if goSchema {
@@ -826,6 +825,13 @@ func (v *Venue) ServePythonWithEnv(t *testing.T, extra []string, requests []Requ
 	return clone.ServePython(t, requests)
 }
 
+// pythonChildEnv is the whole environment of the venue's Python child: the
+// variables test code set in the process, then the plane's entries, so the
+// plane's win, as they did when the child inherited the process environment.
+func (v *Venue) pythonChildEnv() []string {
+	return append(testSetEnv(), v.pythonEnv...)
+}
+
 func (v *Venue) runPython(t *testing.T, stdin any, args ...string) []byte {
 	t.Helper()
 	if v.frozen {
@@ -835,7 +841,9 @@ func (v *Venue) runPython(t *testing.T, stdin any, args ...string) []byte {
 	// program is the compiled-in pythonProgram; only its mode and the JSON
 	// on stdin vary.
 	command := exec.Command("python3", append([]string{"-c", pythonProgram}, args...)...)
-	command.Env = append(os.Environ(), v.pythonEnv...)
+	// The child's whole environment: what the test set in the process, then
+	// the plane's entries (a later entry wins). Nothing else is inherited.
+	command.Env = v.pythonChildEnv()
 	if stdin != nil {
 		payload, err := json.Marshal(stdin)
 		if err != nil {
@@ -866,11 +874,11 @@ func (v *Venue) runPython(t *testing.T, stdin any, args ...string) []byte {
 func (v *Venue) migrateClickHouse(t *testing.T, ctx context.Context, database string) {
 	t.Helper()
 	command := exec.CommandContext(ctx, "python3", "-m", "dev_health_ops.cli", "migrate", "clickhouse", "upgrade")
-	// os.Environ() already carries the activated interpreter's PATH (Start
-	// set it with t.Setenv, which changes this test process's own env, not
-	// only pythonEnv); only PYTHONPATH and CLICKHOUSE_URI are this call's
-	// own additions.
-	command.Env = append(os.Environ(),
+	// The child's whole environment: what the test set in the process, the
+	// inherited names (PATH carries the activated interpreter: Start put its
+	// directory first) and the interpreter's settings, and this call's two
+	// own entries. Nothing else is inherited.
+	command.Env = append(append(testSetEnv(), interpreterEnv(inheritedValues(map[string]string{}))...),
 		"PYTHONPATH="+filepath.Join(v.Root, "src"), "CLICKHOUSE_URI="+v.AdminClickHouseHTTPURI(t, database))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("clickhouse migrate %s: %v\n%s", database, err, output)

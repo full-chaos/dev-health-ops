@@ -1,0 +1,43 @@
+# Goldens that still hold the first version of the key of their Python environment (no
+# python_env_version in the header): what the harness and the test declared, not the whole
+# environment of the Python child. CLOSED list: it only shrinks. A golden that is recorded again
+# gets the current key version and its row is deleted; no row is ever added. When the list is
+# empty, the first key version (legacyPlaneEnv, legacyPythonEnvKey) is deleted with it.
+internal/api/syncadmin/testdata/golden/TestSyncAdminReadsVenueOracle.json
+internal/api/syncadmin/testdata/golden/TestSyncConfigBatchCreateVenueOracle.json
+internal/api/syncadmin/testdata/golden/TestSyncConfigCreateVenueOracle.json
+internal/api/syncadmin/testdata/golden/TestSyncConfigDeleteVenueOracle.json
+internal/api/syncadmin/testdata/golden/TestSyncConfigRepositoriesVenueOracle.json
+internal/api/syncadmin/testdata/golden/TestSyncConfigUpdateVenueOracle.json
+internal/api/syncadmin/testdata/manual_trigger_oracle.golden.json
+internal/apiservice/admin/testdata/governance/credentialdelete.json
+internal/apiservice/admin/testdata/governance/governance.json
+internal/apiservice/admin/testdata/governance/llmsettings_keyed.json
+internal/apiservice/admin/testdata/governance/llmsettings_nokey.json
+internal/apiservice/admin/testdata/governance/retention.json
+internal/apiservice/admin/testdata/governance/settings_keyed.json
+internal/apiservice/admin/testdata/governance/settings_nokey.json
+internal/apiservice/admin/testdata/pagerduty/authorize_full.json
+internal/apiservice/admin/testdata/pagerduty/authorize_noclientid.json
+internal/apiservice/admin/testdata/pagerduty/authorize_nokey.json
+internal/apiservice/admin/testdata/pagerduty/bindings.json
+internal/apiservice/admin/testdata/pagerduty/callback.json
+internal/apiservice/admin/testdata/pagerduty/disconnect.json
+internal/apiservice/admin/testdata/pagerduty/disconnect_noclient.json
+internal/apiservice/admin/testdata/pagerduty/services_full.json
+internal/apiservice/admin/testdata/pagerduty/services_noapp.json
+internal/apiservice/admin/testdata/pagerduty/status_preflight.json
+internal/apiservice/adminllmspendvenue/testdata/spend_localzone.json
+internal/apiservice/adminllmspendvenue/testdata/spend_utc.json
+internal/apiservice/adminllmvenue/testdata/budget.json
+internal/apiservice/billingvenue/testdata/golden/TestInvoiceWebhookAppliesTestModeEvents.json
+internal/apiservice/billingvenue/testdata/golden/TestRefundEventOwnershipGrid.json
+internal/apiservice/billingvenue/testdata/golden/TestRefundEventSettledGrid.json
+internal/apiservice/billingvenue/testdata/golden/TestVenueOracleBillingEdge.json
+internal/apiservice/billingvenue/testdata/golden/TestVenueOracleBillingLedger.json
+internal/apiservice/billingvenue/testdata/golden/TestVenueOracleBillingPlansCheckout.json
+internal/apiservice/billingvenue/testdata/golden/TestVenueOracleBillingWebhook.json
+internal/apiservice/billingvenue/testdata/golden/TestVenueOracleBillingWithoutStripeKey.json
+internal/apiservice/metricsvenue/testdata/counter_parity.json
+internal/apiservice/testdata/credentials/admin.json
+internal/apiservice/testdata/credentials/connection_test.json

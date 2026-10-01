@@ -1,13 +1,13 @@
 package venueoracle
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -62,13 +62,14 @@ func TestThePythonEnvKeyHoldsEveryDeclaredSettingAndThePerRunNamesOnly(t *testin
 	}
 }
 
-// frozenWithEnv writes a frozen golden whose header holds key (none when empty) and opens it.
-func frozenWithEnv(t *testing.T, key string) (*Golden, string) {
+// frozenWithEnv writes a frozen golden whose header holds key in the given key
+// version (0 = the first version, no mark) and opens it.
+func frozenWithEnv(t *testing.T, key string, version int) (*Golden, string) {
 	t.Helper()
 	request := ProgramRequest("corpus", sampleProgram, []byte("abc"), nil)
 	entry := requestKey(request)
 	entry.Body = "ABC\n"
-	file := goldenFile{Header: goldenHeader{Test: "TestSample", PythonBuild: goldenBuild, ProducerDigest: strings.Repeat("a", 64), Recipe: "record it", PythonEnv: key}, Requests: []goldenRequest{entry}}
+	file := goldenFile{Header: goldenHeader{Test: "TestSample", PythonBuild: goldenBuild, ProducerDigest: strings.Repeat("a", 64), Recipe: "record it", PythonEnv: key, PythonEnvVersion: version}, Requests: []goldenRequest{entry}}
 	path, digest := writeGoldenFile(t, t.TempDir(), file)
 	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, "TestSample", false)
 	if err != nil {
@@ -77,41 +78,68 @@ func frozenWithEnv(t *testing.T, key string) (*Golden, string) {
 	return golden, path
 }
 
-func TestAFrozenGoldenIsBoundToTheVenuesDeclaredPythonSettings(t *testing.T) {
-	declared := []string{"VENUE_PINNED_NOW=2026-01-01T00:00:00Z", "SETTINGS_ENCRYPTION_KEY=k"}
-	key, _ := pythonEnvKey(declared)
-	none, _ := pythonEnvKey(nil)
+// currentKey is the key a golden recorded now holds for options, under the
+// variables this test process has set.
+func currentKey(t *testing.T, options Options) string {
+	t.Helper()
+	key, err := pythonEnvKey(append(testSetEnv(), pythonPlaneEnv(options, nil)...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
 
-	// Recording: the key goes into the header.
+func legacyKey(t *testing.T, options Options) string {
+	t.Helper()
+	key, err := legacyPythonEnvKey(legacyPlaneEnv(options))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+func TestAFrozenGoldenIsBoundToItsVenuesPythonEnvironment(t *testing.T) {
+	declared := Options{JWTKey: "recorded", PythonEnv: []string{"VENUE_PINNED_NOW=2026-01-01T00:00:00Z", "SETTINGS_ENCRYPTION_KEY=k"}}
+	key := currentKey(t, declared)
+
+	// Recording: the key of the current version goes into the header, with its version.
 	recording, err := openGolden(GoldenSpec{Path: t.TempDir() + "/g.json", PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := recording.bindPythonEnv(declared); err != nil || recording.recorded.Header.PythonEnv != key {
-		t.Fatalf("recording: err %v, header key %q, want %q", err, recording.recorded.Header.PythonEnv, key)
+	if err := recording.bindPythonEnv(declared); err != nil || recording.recorded.Header.PythonEnv != key || recording.recorded.Header.PythonEnvVersion != pythonEnvKeyVersion {
+		t.Fatalf("recording: err %v, header key %q version %d, want %q version %d", err, recording.recorded.Header.PythonEnv, recording.recorded.Header.PythonEnvVersion, key, pythonEnvKeyVersion)
 	}
-	if err := recording.bindPythonEnv(declared[:1]); err == nil || !strings.Contains(err.Error(), "two venues") {
-		t.Fatalf("a second venue with other settings was bound to one golden: %v", err)
+	if err := recording.bindPythonEnv(Options{JWTKey: "recorded"}); err == nil || !strings.Contains(err.Error(), "two venues") {
+		t.Fatalf("a second venue with another environment was bound to one golden: %v", err)
 	}
 
+	other := "recorded under another Python environment"
 	for name, c := range map[string]struct {
 		recorded string
-		env      []string
+		version  int
+		options  Options
 		refusal  string // "" = accepted
 	}{
-		"the settings the golden was recorded under": {key, declared, ""},
-		"the same settings in another order":         {key, []string{declared[1], declared[0]}, ""},
-		"no settings, recorded with none":            {none, nil, ""},
-		"a first setting on a venue that had none":   {none, declared[:1], "recorded under other Python settings"},
-		"a golden from before the key, no settings":  {"", nil, "backfill the key"},
-		"a changed value (the pinned clock)":         {key, []string{"VENUE_PINNED_NOW=2099-01-01T00:00:00Z", declared[1]}, "recorded under other Python settings"},
-		"a new variable":                             {key, append(append([]string{}, declared...), "TRIAL_DAYS=7"), "recorded under other Python settings"},
-		"a removed variable":                         {key, declared[:1], "recorded under other Python settings"},
-		"settings removed from the test":             {key, nil, "recorded under other Python settings"},
-		"a golden from before the key":               {"", declared, "backfill the key"},
+		"the environment the golden was recorded under": {key, 2, declared, ""},
+		"the same entries in another order":             {key, 2, Options{JWTKey: "recorded", PythonEnv: []string{declared.PythonEnv[1], declared.PythonEnv[0]}}, ""},
+		"a changed value (the pinned clock)":            {key, 2, Options{JWTKey: "recorded", PythonEnv: []string{"VENUE_PINNED_NOW=2099-01-01T00:00:00Z", declared.PythonEnv[1]}}, other},
+		"a variable more":                               {key, 2, Options{JWTKey: "recorded", PythonEnv: append(append([]string{}, declared.PythonEnv...), "TRIAL_DAYS=7")}, other},
+		"a variable less":                               {key, 2, Options{JWTKey: "recorded", PythonEnv: declared.PythonEnv[:1]}, other},
+		"another JWT key":                               {key, 2, Options{JWTKey: "other", PythonEnv: declared.PythonEnv}, other},
+		"another interpreter setting":                   {key, 2, Options{JWTKey: "recorded", PythonEnv: append(append([]string{}, declared.PythonEnv...), "PYTHONHASHSEED=7")}, other},
+		"a golden with no key":                          {"", 2, declared, "holds no key"},
+		"a key version this harness does not know":      {key, 3, declared, "version 3, which this harness does not know"},
+		// The first key version: what the harness and the test declared.
+		"first version: the declared settings":      {legacyKey(t, declared), 0, declared, ""},
+		"first version: another JWT key":            {legacyKey(t, declared), 0, Options{JWTKey: "other", PythonEnv: declared.PythonEnv}, other},
+		"first version: a changed value":            {legacyKey(t, declared), 0, Options{JWTKey: "recorded", PythonEnv: declared.PythonEnv[:1]}, other},
+		"first version: no key":                     {"", 0, declared, "holds no key"},
+		"first version: a current key in its place": {key, 0, declared, other},
+		"current version: a first-version key":      {legacyKey(t, declared), 2, declared, other},
 	} {
-		golden, _ := frozenWithEnv(t, c.recorded)
-		err := golden.bindPythonEnv(c.env)
+		golden, _ := frozenWithEnv(t, c.recorded, c.version)
+		err := golden.bindPythonEnv(c.options)
 		if c.refusal == "" && err != nil {
 			t.Errorf("%s: refused: %v", name, err)
 		}
@@ -120,10 +148,26 @@ func TestAFrozenGoldenIsBoundToTheVenuesDeclaredPythonSettings(t *testing.T) {
 		}
 	}
 
-	// A golden recorded under a venue's settings, in a test that builds no venue for it.
-	golden, _ := frozenWithEnv(t, key)
+	// A variable the test sets in the process is part of the current key, and of no first-version key.
+	t.Run("a variable set by the test", func(t *testing.T) {
+		t.Setenv("TRUSTED_PROXIES", "127.0.0.1")
+		if currentKey(t, declared) == key {
+			t.Fatal("a variable the test set is not in the key")
+		}
+		golden, _ := frozenWithEnv(t, key, 2)
+		if err := golden.bindPythonEnv(declared); err == nil || !strings.Contains(err.Error(), other) {
+			t.Fatalf("a golden recorded without the variable was accepted: %v", err)
+		}
+		legacy, _ := frozenWithEnv(t, legacyKey(t, declared), 0)
+		if err := legacy.bindPythonEnv(declared); err != nil {
+			t.Fatalf("a first-version golden was refused for a variable its version does not hold: %v", err)
+		}
+	})
+
+	// A golden recorded under a venue's environment, in a test that builds no venue for it.
+	golden, _ := frozenWithEnv(t, key, 2)
 	if err := golden.pythonEnvUnboundErr(); err == nil || !strings.Contains(err.Error(), "built no venue") {
-		t.Fatalf("a golden with a settings key and no venue was accepted: %v", err)
+		t.Fatalf("a golden with a key and no venue was accepted: %v", err)
 	}
 	if err := golden.bindPythonEnv(declared); err != nil {
 		t.Fatal(err)
@@ -131,93 +175,253 @@ func TestAFrozenGoldenIsBoundToTheVenuesDeclaredPythonSettings(t *testing.T) {
 	if err := golden.pythonEnvUnboundErr(); err != nil {
 		t.Fatalf("a bound golden was refused: %v", err)
 	}
-	// A second venue of the same test with the same settings uses the same golden.
-	if err := golden.bindPythonEnv([]string{declared[1], declared[0]}); err != nil {
-		t.Fatalf("a second venue with the same settings was refused: %v", err)
+	// A second venue of the same test with the same environment uses the same golden.
+	if err := golden.bindPythonEnv(Options{JWTKey: "recorded", PythonEnv: []string{declared.PythonEnv[1], declared.PythonEnv[0]}}); err != nil {
+		t.Fatalf("a second venue with the same environment was refused: %v", err)
 	}
 }
 
-func TestWithPythonEnvKeyAddsTheKeyAndTouchesNothingElse(t *testing.T) {
-	key, _ := pythonEnvKey([]string{"VENUE_PINNED_NOW=2026-01-01T00:00:00Z"})
-	_, path := frozenWithEnv(t, "")
-	raw, err := os.ReadFile(path)
+func TestTheVariablesATestSetAreToldFromTheAmbientOnes(t *testing.T) {
+	before := map[string]string{"AMBIENT": "a", "CHANGED": "old", "PATH": "/bin", "HOME": "/home/x", "SAME": "s"}
+	now := []string{"AMBIENT=a", "CHANGED=new", "NEW=1", "EMPTY=", "PATH=/venv/bin:/bin", "HOME=/home/x", "TMPDIR=/t", "SAME=s"}
+	if got := strings.Join(testSetSince(before, now), " "); got != "CHANGED=new EMPTY= NEW=1" {
+		t.Fatalf("test-set variables = %q", got)
+	}
+	// What changed between two moments of a test, for a call's key.
+	start := []string{"A=1", "B=2", "C=3"}
+	for name, c := range map[string]struct {
+		now  []string
+		want string
+	}{
+		"nothing":        {[]string{"C=3", "B=2", "A=1"}, ""},
+		"a new variable": {[]string{"A=1", "B=2", "C=3", "D=4"}, "D=4"},
+		"a changed one":  {[]string{"A=1", "B=9", "C=3"}, "B=9"},
+		"one gone":       {[]string{"A=1", "C=3"}, "B=\x00unset"},
+	} {
+		if got := strings.Join(testSetDelta(start, c.now), " "); got != c.want {
+			t.Errorf("%s: delta = %q, want %q", name, got, c.want)
+		}
+	}
+	// This process: a variable set here is seen, and gone again when the test that set it ends.
+	t.Run("in this process", func(t *testing.T) {
+		t.Setenv("VENUEORACLE_SET_BY_THIS_TEST", "x")
+		if !strings.Contains(" "+strings.Join(testSetEnv(), " ")+" ", " VENUEORACLE_SET_BY_THIS_TEST=x ") {
+			t.Fatalf("a variable this test set is not in %q", testSetEnv())
+		}
+	})
+	if strings.Contains(strings.Join(testSetEnv(), " "), "VENUEORACLE_SET_BY_THIS_TEST") {
+		t.Fatal("a variable of an ended test is still counted")
+	}
+}
+
+func TestACallsKeyHoldsItsExtraEntriesAndWhatTheTestChangedSinceTheVenueWasBuilt(t *testing.T) {
+	declared := Options{JWTKey: "k"}
+	extra := []string{"STRIPE_SECRET_KEY=", "POSTGRES_URI=postgresql://nobody@127.0.0.1:1/none"}
+	extraKey, _ := pythonEnvKey(extra)
+	legacyExtraKey, _ := legacyPythonEnvKey(extra)
+	if extraKey != legacyExtraKey {
+		t.Fatal("the key of a call's extra entries changed between the key versions: a golden with call keys of the first version would be refused")
+	}
+	recording, err := openGolden(GoldenSpec{Path: t.TempDir() + "/g.json", PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	withKey, err := WithPythonEnvKey(raw, key)
-	if err != nil {
+	if err := recording.bindPythonEnv(declared); err != nil {
 		t.Fatal(err)
 	}
-	// Numbers stay the text the file holds: a float64 would call two numbers equal that are not.
-	decode := func(raw []byte) map[string]any {
-		var out map[string]any
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
-		if err := decoder.Decode(&out); err != nil {
+	call := func(g *Golden, extra []string) string {
+		t.Helper()
+		key, err := g.callEnvKey(extra)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
+	if call(recording, nil) != "" || call(recording, extra) != extraKey || call(recording, []string{}) == "" {
+		t.Fatalf("with nothing changed: %q, %q, %q", call(recording, nil), call(recording, extra), call(recording, []string{}))
+	}
+	t.Run("a variable set after the venue was built", func(t *testing.T) {
+		t.Setenv("EMAIL_PROVIDER", "smtp")
+		plain, withExtra := call(recording, nil), call(recording, extra)
+		if plain == "" || withExtra == extraKey || plain == withExtra {
+			t.Fatalf("a variable set after Start is not in the call's key: %q %q", plain, withExtra)
+		}
+		t.Setenv("EMAIL_PROVIDER", "other")
+		if call(recording, nil) == plain {
+			t.Fatal("another value of the variable gives the same call key")
+		}
+		// A golden of the first key version keeps its rule: the extra entries alone.
+		legacy, _ := frozenWithEnv(t, legacyKey(t, declared), 0)
+		if err := legacy.bindPythonEnv(declared); err != nil {
+			t.Fatal(err)
+		}
+		if call(legacy, nil) != "" || call(legacy, extra) != legacyExtraKey {
+			t.Fatalf("first version call keys: %q %q", call(legacy, nil), call(legacy, extra))
+		}
+	})
+	// The subtest ended and took its variable with it: the call runs under the venue's environment again.
+	if call(recording, nil) != "" {
+		t.Fatal("a variable of an ended subtest is still in the call's key")
+	}
+}
+
+// The plane's environment, entry for entry, and the first key version's: a
+// change of either list changes every golden's key of that version.
+func TestThePlaneEnvironmentAndItsFirstKeyVersion(t *testing.T) {
+	options := Options{JWTKey: "jwt", PythonEnv: []string{"TRIAL_DAYS=7", "ENVIRONMENT=other"}}
+	perRun := map[string]string{"HOME": "/home/x", "PATH": "/venv/bin:/bin", "TMPDIR": "/t", "PYTHONPATH": "/checkout/src", "POSTGRES_URI": "postgresql+asyncpg://db", "REDIS_URL": "redis://cache", "CLICKHOUSE_URI": "http://ch"}
+	want := []string{"HOME=/home/x", "PATH=/venv/bin:/bin", "TMPDIR=/t",
+		"PYTHONHASHSEED=0", "PYTHONDONTWRITEBYTECODE=1", "TZ=UTC", "LANG=C.UTF-8", "LC_ALL=C.UTF-8",
+		"PYTHONPATH=/checkout/src", "POSTGRES_URI=postgresql+asyncpg://db",
+		"JWT_SECRET_KEY=jwt", "OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
+		"PGBOUNCER_TRANSACTION_MODE=true", "ENVIRONMENT=test", "REDIS_URL=redis://cache",
+		"CLICKHOUSE_URI=http://ch", "TRIAL_DAYS=7", "ENVIRONMENT=other"}
+	if got := pythonPlaneEnv(options, perRun); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("the Python plane's environment changed (every golden of the current key version must then be recorded again):\n got %q\nwant %q", got, want)
+	}
+	wantLegacy := []string{"PYTHONPATH=", "POSTGRES_URI=", "JWT_SECRET_KEY=jwt", "OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
+		"PGBOUNCER_TRANSACTION_MODE=true", "ENVIRONMENT=test", "REDIS_URL=", "CLICKHOUSE_URI=", "TRIAL_DAYS=7", "ENVIRONMENT=other"}
+	if got := legacyPlaneEnv(options); strings.Join(got, "\n") != strings.Join(wantLegacy, "\n") {
+		t.Fatalf("the first key version's environment changed (no golden of that version would be accepted any more):\n got %q\nwant %q", got, wantLegacy)
+	}
+	// The first key version of these Options is the digest the harness computed for them before the
+	// versions existed (executed on that code): the goldens of that version hold keys made this way.
+	if got := legacyKey(t, options); got != "5c83ca122b16bf0986dc02d0498cd5548298baa505516e64b123ca1d3c5034f8" {
+		t.Fatalf("the first key version computes %s for these Options: no golden of that version would be accepted", got)
+	}
+	key := func(o Options, values map[string]string) string {
+		out, err := pythonEnvKey(pythonPlaneEnv(o, values))
+		if err != nil {
 			t.Fatal(err)
 		}
 		return out
 	}
-	before, after := decode(raw), decode(withKey)
-	header := after["header"].(map[string]any)
-	if header["python_env"] != key {
-		t.Fatalf("the key is %v, want %s", header["python_env"], key)
+	// The values made for a run or a host are not in the key; every name of them is listed as per-run.
+	if key(options, perRun) != key(options, nil) {
+		t.Fatal("the key depends on a per-run value")
 	}
-	delete(header, "python_env")
-	beforeText, _ := json.Marshal(before)
-	afterText, _ := json.Marshal(after)
-	if string(beforeText) != string(afterText) {
-		t.Fatalf("more than the key differs:\n%s\n%s", beforeText, afterText)
-	}
-	// The result is a golden a frozen run of the test with those settings opens and accepts.
-	sum := sha256.Sum256(withKey)
-	if err := os.WriteFile(path, withKey, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: hex.EncodeToString(sum[:]), Recipe: "record it"}, "TestSample", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := golden.bindPythonEnv([]string{"VENUE_PINNED_NOW=2026-01-01T00:00:00Z"}); err != nil {
-		t.Fatalf("the golden with its key is refused by its own settings: %v", err)
-	}
-
-	for name, c := range map[string]struct {
-		raw     []byte
-		key     string
-		refusal string
-	}{
-		"a file in another form":            {append([]byte(" "), raw...), key, "not in the form"},
-		"a golden that already holds a key": {withKey, key, "already holds"},
-		"a key that is not a key":           {raw, "yes", "is not a key"},
-		"no key":                            {raw, "", "is not a key"},
-		"not a golden":                      {[]byte("[]"), key, "not a golden file"},
-	} {
-		if out, err := WithPythonEnvKey(c.raw, c.key); err == nil || !strings.Contains(err.Error(), c.refusal) || out != nil {
-			t.Errorf("%s: err = %v, want a refusal holding %q", name, err, c.refusal)
+	for name := range perRun {
+		if _, listed := perRunPythonEnv[name]; !listed {
+			t.Fatalf("%s is given a per-run value and is not in perRunPythonEnv", name)
 		}
+	}
+	for _, name := range inheritedPythonEnv {
+		if _, listed := perRunPythonEnv[name]; !listed {
+			t.Fatalf("the inherited name %s is not keyed by name", name)
+		}
+	}
+	// An inherited name the process does not hold is not handed on; for the key it is always there.
+	if got := strings.Join(interpreterEnv(map[string]string{"PATH": "/bin"}), " "); !strings.HasPrefix(got, "PATH=/bin PYTHONHASHSEED=0") {
+		t.Fatalf("interpreter environment with only PATH held: %q", got)
+	}
+	if got := strings.Join(interpreterEnv(nil), " "); !strings.HasPrefix(got, "HOME= PATH= TMPDIR= PYTHONHASHSEED=0") {
+		t.Fatalf("interpreter environment for the key: %q", got)
+	}
+	// A setting of the harness or the interpreter is in the key by value: PythonEnv giving it its own value changes nothing, another value does.
+	plain := Options{JWTKey: "jwt"}
+	for _, entry := range []string{"ENVIRONMENT=test", "PYTHONHASHSEED=0", "TZ=UTC"} {
+		name, _, _ := strings.Cut(entry, "=")
+		if key(Options{JWTKey: "jwt", PythonEnv: []string{entry}}, nil) != key(plain, nil) || key(Options{JWTKey: "jwt", PythonEnv: []string{name + "=another"}}, nil) == key(plain, nil) {
+			t.Fatalf("%s is not in the key by value", name)
+		}
+	}
+}
+
+// probeChild runs this test again in a child process whose ambient environment
+// holds extra, and returns the child's output.
+func probeChild(t *testing.T, mark string, extra ...string) (string, error) {
+	t.Helper()
+	command := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
+	command.Env = append(append(os.Environ(), mark+"=1"), extra...)
+	output, err := command.CombinedOutput()
+	return string(output), err
+}
+
+// The real launch of the Python child (runPython), with a stand-in python3
+// that prints which variables it sees: only the explicit environment reaches
+// it. The child process of this test is the test process of a venue test; what
+// the parent gives it is that test's ambient environment.
+func TestThePythonChildSeesOnlyItsExplicitEnvironment(t *testing.T) {
+	const mark = "VENUEORACLE_CHILD_ENV_PROBE"
+	if os.Getenv(mark) == "" {
+		output, err := probeChild(t, mark, "VENUE_AMBIENT_ONLY=ambient", "VENUE_AMBIENT_SAME=same", "PYTHONHASHSEED=123", "TZ=Pacific/Auckland", "TRUSTED_PROXIES=ambient")
+		if err != nil {
+			t.Fatalf("the probe failed: %v\n%s", err, output)
+		}
+		return
+	}
+	dir := t.TempDir()
+	names := []string{"VENUE_AMBIENT_ONLY", "VENUE_AMBIENT_SAME", "VENUE_SET_BY_TEST", "TRUSTED_PROXIES", "PYTHONHASHSEED", "TZ", "LANG", "HOME", "PATH", "JWT_SECRET_KEY", "ENVIRONMENT", "EXTRA_FOR_ONE_CALL", mark}
+	script := "#!/bin/sh\nout=\"\"\nfor n in " + strings.Join(names, " ") + "; do eval \"v=\\${$n-<unset>}\"; out=\"$out $n=$v\"; done\necho \"$out\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "python3"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// As Start does: the interpreter's directory first on PATH.
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("VENUE_SET_BY_TEST", "by-test")
+	t.Setenv("VENUE_AMBIENT_SAME", "same")   // the value it already has: the snapshot cannot see this one
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1") // an ambient variable the test gives another value
+	venue := &Venue{pythonEnv: pythonPlaneEnv(Options{JWTKey: "k"}, inheritedValues(map[string]string{}))}
+	seen := func(v *Venue) map[string]string {
+		out := map[string]string{}
+		for _, field := range strings.Fields(string(v.runPython(t, nil, "probe"))) {
+			name, value, _ := strings.Cut(field, "=")
+			out[name] = value
+		}
+		return out
+	}
+	got := seen(venue)
+	for name, want := range map[string]string{
+		"VENUE_AMBIENT_ONLY": "<unset>",   // ambient: not inherited
+		mark:                 "<unset>",   // ambient: not inherited
+		"VENUE_SET_BY_TEST":  "by-test",   // set by the test: handed on
+		"TRUSTED_PROXIES":    "127.0.0.1", // set by the test over an ambient value: the test's value
+		"PYTHONHASHSEED":     "0",         // the interpreter's settings are the harness's, never the ambient ones
+		"TZ":                 "UTC",
+		"LANG":               "C.UTF-8",
+		"JWT_SECRET_KEY":     "k",
+		"ENVIRONMENT":        "test",
+		"EXTRA_FOR_ONE_CALL": "<unset>",
+		"VENUE_AMBIENT_SAME": "<unset>", // the stated limit: set to its ambient value, it is not seen as set by the test
+	} {
+		if got[name] != want {
+			t.Errorf("the Python child sees %s=%q, want %q", name, got[name], want)
+		}
+	}
+	if got["HOME"] == "<unset>" || !strings.HasPrefix(got["PATH"], dir) {
+		t.Errorf("the inherited names did not reach the child: HOME=%q PATH=%q", got["HOME"], got["PATH"])
+	}
+	// One call's extra entries reach that call's child only, and win over the plane's.
+	clone := *venue
+	clone.pythonEnv = append(append([]string(nil), venue.pythonEnv...), "EXTRA_FOR_ONE_CALL=x", "ENVIRONMENT=other")
+	if extra := seen(&clone); extra["EXTRA_FOR_ONE_CALL"] != "x" || extra["ENVIRONMENT"] != "other" || seen(venue)["EXTRA_FOR_ONE_CALL"] != "<unset>" {
+		t.Errorf("a call's extra entries: %v", extra)
+	}
+	// What the child sees of the test's variables is what the key holds.
+	if set := strings.Join(testSetEnv(), " "); !strings.Contains(set, "VENUE_SET_BY_TEST=by-test") || !strings.Contains(set, "TRUSTED_PROXIES=127.0.0.1") || strings.Contains(set, "VENUE_AMBIENT") || strings.Contains(set, "PATH=") {
+		t.Errorf("the test-set variables for the key: %q", set)
 	}
 }
 
 // startWithSettingsInChild runs the real Start in a child process, in a frozen
 // venue test whose golden was recorded under the Options recorded and which
 // declares the Options declared(name), and returns the child's output. The
-// context is cancelled, so a Start that gets past the settings check fails on
-// its first build step instead of building a venue.
-func startWithSettingsInChild(t *testing.T, env string, recorded Options, declared func(name string) Options, name string) (string, error, bool) {
+// context is cancelled, so a Start that gets past the environment check fails
+// on its first build step instead of building a venue.
+func startWithSettingsInChild(t *testing.T, env string, recorded Options, declared func(name string) (Options, []string), name string) (string, error, bool) {
 	t.Helper()
 	if which := os.Getenv(env); which != "" {
 		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLES", "1")
 		t.Setenv(goldenUpdateEnv, "")
 		t.Setenv(goldenCandidateEnv, "")
-		key, err := pythonEnvKey(pythonPlaneEnv(recorded, nil))
-		if err != nil {
-			t.Fatal(err)
+		golden, _ := frozenWithEnv(t, currentKey(t, recorded), pythonEnvKeyVersion)
+		options, set := declared(which)
+		for _, entry := range set {
+			name, value, _ := strings.Cut(entry, "=")
+			t.Setenv(name, value)
 		}
-		golden, _ := frozenWithEnv(t, key)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		options := declared(which)
 		options.Root, options.Golden = t.TempDir(), golden
 		t.Log("START CALLED")
 		Start(t, ctx, options)
@@ -231,20 +435,26 @@ func startWithSettingsInChild(t *testing.T, env string, recorded Options, declar
 }
 
 // The real Start: a frozen golden recorded under one environment of the Python
-// plane is refused, before anything is built, by a test that declares another
-// value (the pinned clock), one variable more, none, or another JWT key.
-func TestStartRefusesAGoldenRecordedUnderOtherPythonSettings(t *testing.T) {
+// plane is refused, before anything is built, by a test that gives the plane
+// another value (the pinned clock), one variable more, none, another JWT key,
+// or a variable set in the process.
+func TestStartRefusesAGoldenRecordedUnderAnotherPythonEnvironment(t *testing.T) {
 	env := []string{"VENUE_PINNED_NOW=2026-01-01T00:00:00Z", "SETTINGS_ENCRYPTION_KEY=k"}
 	recorded := Options{JWTKey: "recorded", PythonEnv: env}
-	cases := map[string]Options{
-		"a changed value":  {JWTKey: recorded.JWTKey, PythonEnv: []string{"VENUE_PINNED_NOW=2099-01-01T00:00:00Z", env[1]}},
-		"a variable more":  {JWTKey: recorded.JWTKey, PythonEnv: append(append([]string{}, env...), "TRIAL_DAYS=7")},
-		"no settings":      {JWTKey: recorded.JWTKey},
-		"another per-run":  {JWTKey: recorded.JWTKey, PythonEnv: append(append([]string{}, env...), "VENUE_STRIPE_API_BASE=http://127.0.0.1:1")},
-		"another JWT key":  {JWTKey: "other", PythonEnv: env},
-		"the same (start)": recorded,
+	type declaration struct {
+		options Options
+		set     []string
 	}
-	declared := func(name string) Options { return cases[name] }
+	cases := map[string]declaration{
+		"a changed value":            {options: Options{JWTKey: recorded.JWTKey, PythonEnv: []string{"VENUE_PINNED_NOW=2099-01-01T00:00:00Z", env[1]}}},
+		"a variable more":            {options: Options{JWTKey: recorded.JWTKey, PythonEnv: append(append([]string{}, env...), "TRIAL_DAYS=7")}},
+		"no settings":                {options: Options{JWTKey: recorded.JWTKey}},
+		"another per-run":            {options: Options{JWTKey: recorded.JWTKey, PythonEnv: append(append([]string{}, env...), "VENUE_STRIPE_API_BASE=http://127.0.0.1:1")}},
+		"another JWT key":            {options: Options{JWTKey: "other", PythonEnv: env}},
+		"a variable set by t.Setenv": {options: recorded, set: []string{"TRUSTED_PROXIES=127.0.0.1"}},
+		"the same (start)":           {options: recorded},
+	}
+	declared := func(name string) (Options, []string) { return cases[name].options, cases[name].set }
 	for name := range cases {
 		output, err, inChild := startWithSettingsInChild(t, "VENUEORACLE_PYTHON_ENV_START_CHILD", recorded, declared, name)
 		if inChild {
@@ -253,9 +463,9 @@ func TestStartRefusesAGoldenRecordedUnderOtherPythonSettings(t *testing.T) {
 		if !strings.Contains(output, "START CALLED") {
 			t.Fatalf("%s: the child did not reach Start:\n%s", name, output)
 		}
-		refused := strings.Contains(output, "recorded under other Python settings")
+		refused := strings.Contains(output, "recorded under another Python environment")
 		if name == "the same (start)" {
-			// The control: with the recorded settings the check lets Start go on.
+			// The control: with the recorded environment the check lets Start go on.
 			if refused {
 				t.Errorf("%s: refused:\n%s", name, output)
 			}
@@ -267,51 +477,167 @@ func TestStartRefusesAGoldenRecordedUnderOtherPythonSettings(t *testing.T) {
 	}
 }
 
-// The key is taken over the environment Start sets for the Python plane: the
-// harness's own settings, the JWT key and PythonEnv (not over what the child
-// inherits from the test process). And that environment is
-// the one Start built before a golden kept its key, entry for entry: a golden
-// from before the key can only be given the key of today's environment
-// because the two are the same.
-func TestTheEnvironmentStartSetsIsKeyedAndIsTheOneOfTheGoldensFromBeforeTheKey(t *testing.T) {
-	options := Options{JWTKey: "jwt", PythonEnv: []string{"TRIAL_DAYS=7", "ENVIRONMENT=other"}}
-	perRun := map[string]string{"PYTHONPATH": "/checkout/src", "POSTGRES_URI": "postgresql+asyncpg://db", "REDIS_URL": "redis://cache", "CLICKHOUSE_URI": "http://ch"}
-	want := []string{"PYTHONPATH=/checkout/src", "POSTGRES_URI=postgresql+asyncpg://db",
-		"JWT_SECRET_KEY=jwt", "OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
-		"PGBOUNCER_TRANSACTION_MODE=true", "ENVIRONMENT=test", "REDIS_URL=redis://cache",
-		"CLICKHOUSE_URI=http://ch", "TRIAL_DAYS=7", "ENVIRONMENT=other"}
-	if got := pythonPlaneEnv(options, perRun); strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("the Python plane's environment changed:\n got %q\nwant %q\na golden from before the key was recorded under the second one: it can no longer be given a key (remove the backfill verb), and every keyed golden must be recorded again", got, want)
+// legacyKeyGoldenCeiling is how many goldens held the first key version when
+// the versions were introduced. The list can only shrink: this number is never
+// raised, and legacyKeyGoldenCount goes down with every row that is deleted.
+const (
+	legacyKeyGoldenCeiling = 38
+	legacyKeyGoldenCount   = 38
+)
+
+// legacyKeyGoldens reads the closed list: repository-relative paths, one per line.
+func legacyKeyGoldens(t *testing.T, path string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	key := func(o Options, values map[string]string) string {
-		out, err := pythonEnvKey(pythonPlaneEnv(o, values))
+	var rows []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			rows = append(rows, line)
+		}
+	}
+	return rows
+}
+
+// keyVersionProblems walks root for venue goldens (a golden whose header holds
+// a key of its Python environment) and lists every breach of the closed list:
+// a golden of the first key version that is not listed, a listed golden that
+// holds the current version or is gone or is listed twice.
+func keyVersionProblems(t *testing.T, root string, listed []string) (venueGoldens int, problems []string) {
+	t.Helper()
+	onList := map[string]int{}
+	for _, row := range listed {
+		onList[row]++
+		if onList[row] == 2 {
+			problems = append(problems, row+": listed twice")
+		}
+	}
+	found := map[string]bool{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if name := entry.Name(); name == ".git" || name == "node_modules" || name == ".venv" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".json") || !strings.Contains(filepath.ToSlash(path), "/testdata/") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(raw), `"python_build"`) {
+			return nil
+		}
+		var file goldenFile
+		if err := json.Unmarshal(raw, &file); err != nil || file.Header.PythonEnv == "" {
+			return nil // not a golden of this harness, or a golden of a program producer: no venue, no key
+		}
+		venueGoldens++
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		found[relative] = true
+		switch version := file.Header.PythonEnvVersion; {
+		case version == pythonEnvKeyVersion && onList[relative] > 0:
+			problems = append(problems, relative+": holds the current key version and is still on the list of the first version: delete its row")
+		case version == 0 && onList[relative] == 0:
+			problems = append(problems, relative+": holds the first key version and is not on the closed list: a golden recorded now holds the current version; record it with this harness")
+		case version != 0 && version != pythonEnvKeyVersion:
+			problems = append(problems, fmt.Sprintf("%s: holds key version %d, which this harness does not know", relative, version))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for row := range onList {
+		if !found[row] {
+			problems = append(problems, row+": on the list of the first key version, and no such venue golden exists: delete its row")
+		}
+	}
+	sort.Strings(problems)
+	return venueGoldens, problems
+}
+
+// The ratchet of the first key version: only the goldens on the closed list
+// may hold it, the list holds nothing else, and it never grows.
+func TestOnlyTheListedGoldensHoldTheFirstKeyVersion(t *testing.T) {
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := legacyKeyGoldens(t, filepath.Join("testdata", "legacy_python_env_goldens.txt"))
+	if len(listed) != legacyKeyGoldenCount || legacyKeyGoldenCount > legacyKeyGoldenCeiling {
+		t.Fatalf("the closed list holds %d goldens, the count says %d, the ceiling is %d: the list only shrinks, and the count goes down with it", len(listed), legacyKeyGoldenCount, legacyKeyGoldenCeiling)
+	}
+	venueGoldens, problems := keyVersionProblems(t, root, listed)
+	if venueGoldens == 0 {
+		t.Fatal("the walk found no venue golden: a ratchet that checks nothing passes everything")
+	}
+	if len(problems) > 0 {
+		t.Fatalf("%d venue goldens, the closed list of the first key version is broken:\n%s", venueGoldens, strings.Join(problems, "\n"))
+	}
+}
+
+// The walk above, on trees with each breach planted.
+func TestTheKeyVersionRatchetNamesEachBreach(t *testing.T) {
+	golden := func(version int, key string) string {
+		header := goldenHeader{Test: "TestX", PythonBuild: goldenBuild, ProducerDigest: strings.Repeat("a", 64), Recipe: "r", PythonEnv: key, PythonEnvVersion: version}
+		raw, err := json.Marshal(goldenFile{Header: header})
 		if err != nil {
 			t.Fatal(err)
 		}
-		return out
+		return string(raw)
 	}
-	base := key(options, nil)
-	// The values made for a run are not in the key; every name of them is listed as per-run.
-	if key(options, perRun) != base {
-		t.Fatal("the key depends on a per-run value")
-	}
-	for name := range perRun {
-		if _, listed := perRunPythonEnv[name]; !listed {
-			t.Fatalf("%s is given a per-run value and is not in perRunPythonEnv", name)
+	key := strings.Repeat("1", 64)
+	tree := func(files map[string]string) string {
+		root := t.TempDir()
+		for path, content := range files {
+			full := filepath.Join(root, filepath.FromSlash(path))
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
+		return root
 	}
-	for name, other := range map[string]Options{
-		"another JWT key":       {JWTKey: "other", PythonEnv: options.PythonEnv},
-		"a PythonEnv value":     {JWTKey: "jwt", PythonEnv: []string{"TRIAL_DAYS=8", "ENVIRONMENT=other"}},
-		"an override taken out": {JWTKey: "jwt", PythonEnv: []string{"TRIAL_DAYS=7"}},
+	files := map[string]string{
+		"a/testdata/old.json":     golden(0, key),
+		"a/testdata/new.json":     golden(2, key),
+		"a/testdata/program.json": golden(0, ""), // a program producer's golden: no key, not a venue golden
+		"a/testdata/notes.json":   `{"a":1}`,
+	}
+	if count, problems := keyVersionProblems(t, tree(files), []string{"a/testdata/old.json"}); count != 2 || len(problems) != 0 {
+		t.Fatalf("a correct tree: %d venue goldens, problems %v", count, problems)
+	}
+	for name, c := range map[string]struct {
+		listed []string
+		want   string
+	}{
+		"a first-version golden that is not listed":      {nil, "a/testdata/old.json: holds the first key version and is not on the closed list"},
+		"a listed golden that holds the current version": {[]string{"a/testdata/old.json", "a/testdata/new.json"}, "a/testdata/new.json: holds the current key version and is still on the list"},
+		"a row with no golden":                           {[]string{"a/testdata/old.json", "a/testdata/gone.json"}, "a/testdata/gone.json: on the list of the first key version, and no such venue golden exists"},
+		"a row for a program golden":                     {[]string{"a/testdata/old.json", "a/testdata/program.json"}, "a/testdata/program.json: on the list of the first key version, and no such venue golden exists"},
+		"a row twice":                                    {[]string{"a/testdata/old.json", "a/testdata/old.json"}, "a/testdata/old.json: listed twice"},
 	} {
-		if key(other, nil) == base {
-			t.Errorf("%s: the same key", name)
+		_, problems := keyVersionProblems(t, tree(files), c.listed)
+		if len(problems) != 1 || !strings.HasPrefix(problems[0], c.want) {
+			t.Errorf("%s: problems = %q, want exactly one, starting %q", name, problems, c.want)
 		}
 	}
-	// A harness setting is in the key by value: PythonEnv setting it to its own value changes nothing, another value does.
-	plain := Options{JWTKey: "jwt"}
-	if key(Options{JWTKey: "jwt", PythonEnv: []string{"ENVIRONMENT=test"}}, nil) != key(plain, nil) || key(Options{JWTKey: "jwt", PythonEnv: []string{"ENVIRONMENT=production"}}, nil) == key(plain, nil) {
-		t.Fatal("the harness setting ENVIRONMENT is not in the key by value")
+	files["a/testdata/future.json"] = golden(3, key)
+	if _, problems := keyVersionProblems(t, tree(files), []string{"a/testdata/old.json"}); len(problems) != 1 || !strings.Contains(problems[0], "holds key version 3") {
+		t.Errorf("a golden of an unknown key version: %q", problems)
 	}
 }

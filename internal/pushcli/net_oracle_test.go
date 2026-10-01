@@ -305,28 +305,61 @@ for case in job["cases"]:
 print("RESULT" + json.dumps(out))
 `
 
-// netPythonRun runs every case through the real dev-hops entry point against the
-// Python plane's fake.
-func netPythonRun(t *testing.T, python, root string, cases []netCase, dir string) []netResult {
+var (
+	netAuthScheme = regexp.MustCompile(`(?i)\b(bearer|basic)\s+([A-Za-z0-9._~+/=-]{8,})`)
+	netPushToken  = regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{16,}`)
+)
+
+// netScrub turns a credential the corpus sends (the fake's request log holds the Authorization header; the
+// cases carry test push tokens) into a typed placeholder that keeps what the oracle compares: whether two
+// requests carried the SAME credential (a short digest of the value). A golden stores no token value. It runs
+// on the recorded answers and on dho's answers alike, and is idempotent.
+func netScrub(text string) string {
+	digest := func(value string) string {
+		sum := sha256.Sum256([]byte(value))
+		return hex.EncodeToString(sum[:6])
+	}
+	text = netAuthScheme.ReplaceAllStringFunc(text, func(match string) string {
+		parts := netAuthScheme.FindStringSubmatch(match)
+		return parts[1] + " <credential sha256:" + digest(parts[2]) + ">"
+	})
+	return netPushToken.ReplaceAllStringFunc(text, func(match string) string {
+		return "<push token sha256:" + digest(match) + ">"
+	})
+}
+
+func netScrubResult(result netResult) netResult {
+	result.Stdout = netScrub(result.Stdout)
+	result.Stderr = netScrub(result.Stderr)
+	requests := make([]string, len(result.Requests))
+	for index, request := range result.Requests {
+		requests[index] = netScrub(request)
+	}
+	result.Requests = requests
+	return result
+}
+
+// netOracleBase and netOracleDir stand for the fake server's address and the run directory: the golden's
+// key must not hold a per-run port or temporary path, so the producer swaps them for the live ones.
+const (
+	netOracleHost = "dho-net-oracle.invalid"
+	netOracleBase = "http://" + netOracleHost
+	netOracleDir  = "/tmp/dho-net-oracle-dir"
+)
+
+// netPythonRun runs every case through the real dev-hops entry point against the Python plane's fake. The
+// jobs (input) name netOracleBase and netOracleDir; they are replaced by the live fake and a fresh directory.
+func netPythonRun(t *testing.T, python, root string, cases []netCase, input []byte) []netResult {
 	t.Helper()
 	fake := newNetFake(cases)
 	server := httptest.NewServer(fake)
 	defer server.Close()
-	type job struct {
-		Args     []string          `json:"args"`
-		Env      map[string]string `json:"env"`
-		Stdin    string            `json:"stdin"`
-		File     *string           `json:"file"`
-		FilePath string            `json:"filePath"`
-	}
-	jobs := make([]job, len(cases))
-	for index, c := range cases {
-		jobs[index] = job{Args: c.resolve(server.URL, dir, index), Env: c.env(server.URL, index), Stdin: c.Stdin, File: c.File, FilePath: netFilePath(dir, index)}
-	}
-	stdin, _ := json.Marshal(map[string]any{"cases": jobs})
+	dir := t.TempDir()
+	// The host alone is swapped: userinfo cases put "login:password@" between the scheme and the host.
+	live := bytes.ReplaceAll(bytes.ReplaceAll(input, []byte(netOracleHost), []byte(strings.TrimPrefix(server.URL, "http://"))), []byte(netOracleDir), []byte(dir))
 	command := exec.Command(python, "-c", pythonNetProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_ENABLED=false")
-	command.Stdin = bytes.NewReader(stdin)
+	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_ENABLED=false", "PYTHONHASHSEED=0", "PYTHONDONTWRITEBYTECODE=1")
+	command.Stdin = bytes.NewReader(live)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
@@ -386,90 +419,85 @@ func compareNet(t *testing.T, c netCase, got, want netResult, wantName string) b
 	return ok
 }
 
-const netGolden = "testdata/push_net_golden.json"
+// netPythonBuild is the build whose Python `dev-hops push batch|status` verbs answered the corpus: a build
+// that still carried the Python CLI.
+const netPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
-// netGoldenSHA256 pins testdata/push_net_golden.json (R24): what the real
-// `dev-hops push batch|status` verbs printed, exited with and asked of the API
-// for every case. The producer is deleted with the Python CLI, so this is a rot
-// guard: the file is only rewritten by TestPushNetVenueOracleMatchesThePythonProducer
-// with DHO_PUSHNET_GOLDEN_UPDATE=1, then this digest is updated.
-const netGoldenSHA256 = "2458f39dc54898a68daf7e0ea91c90d3a15e5974b0433723bb8920d54363b14a"
-
-func TestPushNetGoldenIsTheFileTheDigestPins(t *testing.T) {
-	raw, err := os.ReadFile(netGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != netGoldenSHA256 {
-		t.Fatalf("%s digest = %s, want %s: the golden changed without its digest", netGolden, got, netGoldenSHA256)
-	}
-}
-
+// TestPushNetMatchesTheFrozenPythonOutput runs the network corpus through dho against its fake of the
+// external-ingest API and compares exit, stdout, the verb's own stderr and every request with what the REAL
+// `dev-hops push batch|status` did against the same scripted fake. The answers were executed once on
+// netPythonBuild and are frozen in testdata/golden/push_net.json (the recipe regenerates them by
+// execution); the corpus (its scripted answers included) and the program are part of the golden's key.
 func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
-	raw, err := os.ReadFile(netGolden)
+	_, file, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/golden/push_net.json",
+		PythonBuild: netPythonBuild,
+		SHA256:      "4f320314de5108821f1fb8570ac4d4581ef3efaa1a3e8b801fd090d04c1ea723",
+		Scrub:       netScrub,
+		Recipe: "git worktree add --detach $DIR " + netPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pushcli/ -test '^TestPushNetMatchesTheFrozenPythonOutput$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, repoRoot)
+
+	cases := netCorpus(t)
+	type job struct {
+		Args     []string          `json:"args"`
+		Env      map[string]string `json:"env"`
+		Stdin    string            `json:"stdin"`
+		File     *string           `json:"file"`
+		FilePath string            `json:"filePath"`
+	}
+	jobs := make([]job, len(cases))
+	for index, c := range cases {
+		jobs[index] = job{Args: c.resolve(netOracleBase, netOracleDir, index), Env: c.env(netOracleBase, index), Stdin: c.Stdin, File: c.File, FilePath: netFilePath(netOracleDir, index)}
+	}
+	input, err := json.Marshal(map[string]any{"cases": jobs})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var frozen struct {
-		Cases   []netCase   `json:"cases"`
-		Results []netResult `json:"results"`
-	}
-	if err := json.Unmarshal(raw, &frozen); err != nil {
+	// The scripted answers of the fake shape the Python answers too: they are part of the key.
+	script, err := json.Marshal(cases)
+	if err != nil {
 		t.Fatal(err)
 	}
-	cases := netCorpus(t)
-	if len(cases) != len(frozen.Cases) {
-		t.Fatalf("the corpus has %d cases, the golden %d", len(cases), len(frozen.Cases))
-	}
-	got := runNetGoAll(t, cases, t.TempDir())
-	for index, c := range cases {
-		if c.Name != frozen.Cases[index].Name {
-			t.Fatalf("case %d is %q, the golden has %q", index, c.Name, frozen.Cases[index].Name)
-		}
-		compareNet(t, c, got[index], frozen.Results[index], "frozen Python")
-	}
-	measured := netMeasured(frozen.Results)
-	if measured.polled < 6 || measured.retried < 4 || measured.rejected < 6 || measured.sent < 15 {
-		t.Fatalf("the golden measures too little: %+v", measured)
-	}
-}
-
-// TestPushNetVenueOracleMatchesThePythonProducer runs the corpus through the real Python
-// verbs and through dho. With DHO_PUSHNET_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestPushNetVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	python := pyoracle.Resolve(t, root)
-	cases := netCorpus(t)
-	dir := t.TempDir()
-	want := netPythonRun(t, python, root, cases, dir)
-	got := runNetGoAll(t, cases, dir)
-	mismatches := 0
-	for index, c := range cases {
-		if !compareNet(t, c, got[index], want[index], "python") {
-			mismatches++
-		}
-	}
-	t.Logf("%d cases, %d mismatches; measured %+v", len(cases), mismatches, netMeasured(want))
-	if os.Getenv("DHO_PUSHNET_GOLDEN_UPDATE") == "1" {
-		body, err := json.MarshalIndent(map[string]any{"cases": cases, "results": want}, "", " ")
+	env := map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
+	request := venueoracle.ProgramRequest("push net corpus", pythonNetProgram, append(append([]byte{}, input...), script...), env)
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		python := pyoracle.Resolve(t, root)
+		results := netPythonRun(t, python, root, cases, input)
+		body, err := json.Marshal(results)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(netGolden, append(body, '\n'), 0o644); err != nil {
-			t.Fatal(err)
+		return []venueoracle.Response{{Status: 0, Body: string(body)}}
+	})
+	golden.Consumed(t, answers...)
+	var want []netResult
+	if err := json.Unmarshal([]byte(answers[0].Body), &want); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(want) != len(cases) {
+		t.Fatalf("python answered %d of %d cases", len(want), len(cases))
+	}
+	got := runNetGoAll(t, cases, t.TempDir())
+	mismatches := 0
+	for index, c := range cases {
+		if !compareNet(t, c, netScrubResult(got[index]), want[index], "frozen Python") {
+			mismatches++
 		}
 	}
-	if mismatches == 0 {
-		venueoracle.WriteProof(t)
+	measured := netMeasured(want)
+	t.Logf("%d cases, %d mismatches; measured %+v", len(cases), mismatches, measured)
+	if measured.polled < 6 || measured.retried < 4 || measured.rejected < 6 || measured.sent < 15 {
+		t.Fatalf("the golden measures too little: %+v", measured)
 	}
+	if mismatches > 0 {
+		t.Fatalf("%d of %d cases differ", mismatches, len(cases))
+	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }
 
 type netMeasure struct{ polled, retried, rejected, sent int }

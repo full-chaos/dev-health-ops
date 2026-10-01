@@ -20,8 +20,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -71,7 +71,7 @@ func Command() cli.Command {
 type openFunc func(ctx context.Context) (edgetokenmint.RowQuerier, func(), error)
 
 func openPostgres(ctx context.Context) (edgetokenmint.RowQuerier, func(), error) {
-	uri := os.Getenv(postgresURIEnvVar)
+	uri := envsecrets.GetenvNamed(postgresURIEnvVar)
 	if strings.TrimSpace(uri) == "" {
 		return nil, nil, fmt.Errorf("%s is not set", postgresURIEnvVar)
 	}

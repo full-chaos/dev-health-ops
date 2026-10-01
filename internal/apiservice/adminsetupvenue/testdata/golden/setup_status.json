@@ -1,0 +1,630 @@
+{
+  "header": {
+    "test": "TestAdminSetupStatusVenueOracle",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/adminsetupvenue/ -test '^TestAdminSetupStatusVenueOracle$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "no integration",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "7bfbdad699dbcacd1d5c4d245c34c8c94251c7a3178ebd9819c95ad4ccbc27e7",
+      "status": 200,
+      "headers": {
+        "content-length": "314",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c70f73c6-a995-4485-bf0a-270684ec3006"
+      },
+      "body": "{\"has_integration\":false,\"providers\":[],\"has_sync_config\":false,\"sync_config_id\":null,\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"connect_integration\",\"blocker\":\"No integration connected\"}"
+    },
+    {
+      "name": "github credential only",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "9f59cc6ce5108b39f8928e2ab42edb99d63ab6150c0801c80ff6a13bfc54c3a5",
+      "status": 200,
+      "headers": {
+        "content-length": "318",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c5100721-6b9c-4cda-9e2e-3750c7c39c25"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":false,\"sync_config_id\":null,\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"select_repositories\",\"blocker\":\"No sync configuration\"}"
+    },
+    {
+      "name": "jira credential only",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "4b8b4f409669fa4f649336b7d0734cd1002e3bf6c6f55800abfe44bcfac29a04",
+      "status": 200,
+      "headers": {
+        "content-length": "315",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f2e77371-02fa-434b-9e06-d9fa1ba5c243"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":false,\"sync_config_id\":null,\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"create_sync_config\",\"blocker\":\"No sync configuration\"}"
+    },
+    {
+      "name": "inactive credential is ignored",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "0987ab6e5f5f0ac9ff30a814aa76a43f7c0afa8f1233895cac1b33aae2aca672",
+      "status": 200,
+      "headers": {
+        "content-length": "314",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3ad0c10e-f69d-48d7-a386-93bf613379db"
+      },
+      "body": "{\"has_integration\":false,\"providers\":[],\"has_sync_config\":false,\"sync_config_id\":null,\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"connect_integration\",\"blocker\":\"No integration connected\"}"
+    },
+    {
+      "name": "two providers sorted",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "1ac0616e189b0473087bf3556f662846d6f7c0b3a52ed3a78383ccd4c39f6090",
+      "status": 200,
+      "headers": {
+        "content-length": "325",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8dae67a7-fdec-4a1c-9f15-8a162224a413"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\",\"jira\"],\"has_sync_config\":false,\"sync_config_id\":null,\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"select_repositories\",\"blocker\":\"No sync configuration\"}"
+    },
+    {
+      "name": "github config, no repositories, no runs",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d937b0a291f306fa4986aa5bb4084f4c14962cb0ec4963fd504809954ca60bcf",
+      "status": 200,
+      "headers": {
+        "content-length": "354",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e739c4fc-adfa-48dd-8709-b1a1b97e7846"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"4542f811-1fca-5db5-b53c-adfabfd9586e\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"select_repositories\",\"blocker\":\"No repositories selected\"}"
+    },
+    {
+      "name": "github config, all_repos true",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "a16d87f418b245d86a43607bccda11ce1fdebb28aa2780381a182b76d73e400c",
+      "status": 200,
+      "headers": {
+        "content-length": "322",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a2ec8e42-14dd-4c3b-9b42-c1491c5a008d"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"d9122a54-6d9e-5150-8c0c-044fa0136cb6\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":null}"
+    },
+    {
+      "name": "github config, all_repos falsy string",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "5292b86c62adde10fd4be533f78774076ff2baf54887ed387353b7981978e4bc",
+      "status": 200,
+      "headers": {
+        "content-length": "354",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a1414d77-f306-474d-8067-4d1e94cccede"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"1093b0e4-d915-5464-9c14-a6254319f799\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"select_repositories\",\"blocker\":\"No repositories selected\"}"
+    },
+    {
+      "name": "github config, selected repositories",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8b5bd1858d68224abc11d08496061e7651bdc67d7c3181e539892fa919d2a6a3",
+      "status": 200,
+      "headers": {
+        "content-length": "322",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8dcd3fb8-5648-4370-a99a-861019d701a3"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"64f85508-43a9-5e4b-a8da-b26d542700cc\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":2,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":null}"
+    },
+    {
+      "name": "jira config, no runs",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "a88097742057f98c041d87d3a520695f99dfe777f2157e29ab096ce68aa2ab1d",
+      "status": 200,
+      "headers": {
+        "content-length": "320",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4798734a-92a9-42e8-90b6-f7ee38787dd5"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"59daac9c-ca7a-527c-8973-b0d5505eae3e\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":null}"
+    },
+    {
+      "name": "run pending",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d0d42d358c361ae7b7547ed57803f9c3750829cfc06b062e760d2e7a2ff26515",
+      "status": 200,
+      "headers": {
+        "content-length": "323",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "10a2bc4b-663e-4290-9d94-650c10ab30f3"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"02685b73-81e2-5ae2-b341-187abe8fbe4c\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"pending\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "run running",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "96f90fb3e4f1dbf8b1bacc6a44109d2ed4a27d0f359f3bb75dc62e6af4ae475c",
+      "status": 200,
+      "headers": {
+        "content-length": "323",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d9cc78ed-d825-43ea-9efc-303df12a364c"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"a795776f-2daa-5c58-9d20-88c19ea95a34\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"running\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "run failed with error",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "803c8af601206ab4efb8c9de78321fc266702caccf00a2ea12ac7d4c0bfe244b",
+      "status": 200,
+      "headers": {
+        "content-length": "355",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "be894f51-deef-43c2-b3e5-9062b7a10761"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"b16123a3-cb56-5abb-88b6-759be272a7b9\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":\"boom: provider 500\",\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"boom: provider 500\"}"
+    },
+    {
+      "name": "run failed empty error falls back to the config error",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "db9847387b3f1aabbd7802bd1d4b11b8683fceafdf1867a4e4212f8cc9c799e6",
+      "status": 200,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2db61cb4-93e5-4da2-9633-659dc23bde8d"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"b527301b-239a-52a2-952a-3022be536501\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":\"config-level failure\",\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"config-level failure\"}"
+    },
+    {
+      "name": "run failed with no error anywhere",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c70e89102ec9d4f8524942c87105480c1d027066372311abf3ea800a1fd49e74",
+      "status": 200,
+      "headers": {
+        "content-length": "337",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b3f9a666-e8ed-4048-adbd-bed9e87c06e3"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"fc0ea937-2e00-53f2-879c-efae7bb472a3\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"Last sync failed\"}"
+    },
+    {
+      "name": "run cancelled",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "dab74df462f8089858d395b3fd1d2ace366d6cb782452ffe1d887e895ecf89ed",
+      "status": 200,
+      "headers": {
+        "content-length": "361",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "150d5399-78bb-4d9b-b438-b6310cf81162"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"69e7e639-851b-5add-96c9-39442090ccf5\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":\"cancelled by operator\",\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"cancelled by operator\"}"
+    },
+    {
+      "name": "run success",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "f6d7f3a55c201f0383da9314e8726257c2e1169c93bbeed8e7a97d1caa6e60bf",
+      "status": 200,
+      "headers": {
+        "content-length": "322",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d622c559-b2ee-45af-bdb1-738852d1dffe"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"b3120c42-b2be-5a63-876e-0a84cf20fce3\",\"first_sync_started\":true,\"first_sync_completed\":true,\"sync_status\":\"complete\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "run success, result partial_failed",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8c51be18681de62b9c404fa5f2b6af03c7edcbd16a25ff3269db5e678ee4e1b6",
+      "status": 200,
+      "headers": {
+        "content-length": "322",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0e821588-260a-464b-a0ce-7190729b6860"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"1561c481-5833-56f8-b200-6c99a62ea10c\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"partial\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "run failed, result partial",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8ec37bfb52b48e5eb37abe79de764534d914670f30acf7e90f5b0a8a2dcf0853",
+      "status": 200,
+      "headers": {
+        "content-length": "322",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "805809f8-52df-4221-8392-c104958cb916"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"9e0e2fb9-ad83-5b59-b52e-48d376952452\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"partial\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "newest run failed after an older success",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c478680b53fb1179c84899d1e82958be6195731725710d29e18f339b052c5788",
+      "status": 200,
+      "headers": {
+        "content-length": "344",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "85cab3b4-4d95-43d2-86f0-a3bbcf399b50"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"953c7045-6b97-5fff-8082-dc556b5f2962\",\"first_sync_started\":true,\"first_sync_completed\":true,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":\"later failure\",\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"later failure\"}"
+    },
+    {
+      "name": "no run, last_sync_success true",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d4257d7cbf3d8e61281ca9cde94ff56c773cb7141321f40da585b0a35d25fe8",
+      "status": 200,
+      "headers": {
+        "content-length": "322",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a116d630-dfc8-4796-9f4e-fbfbadd77ff8"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"93119630-9158-52ba-a7f4-692789e3faf8\",\"first_sync_started\":true,\"first_sync_completed\":true,\"sync_status\":\"complete\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "no run, last_sync_success false",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ea294f7079ae0d4877b3905492c92b8fcae388f8f985744e52f44337c25ad9ac",
+      "status": 200,
+      "headers": {
+        "content-length": "337",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "968f924f-2b3a-4865-a95b-965af0908f19"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"92b4944a-2daf-5ee6-a818-8e04e0d4f78b\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"Last sync failed\"}"
+    },
+    {
+      "name": "no run, error text only",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "7003d938bb72c26eec21a5bde0f59d622cc5088704d5b1cea72bb605ff575d9f",
+      "status": 200,
+      "headers": {
+        "content-length": "361",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d1b9e907-2168-4ffe-9705-06fd385ad9e1"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"c3aa7d80-b7df-5094-85af-07f0853744df\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":\"configured but broken\",\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"configured but broken\"}"
+    },
+    {
+      "name": "inactive primary config cannot start",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2936459dbbab023dfa2aeb2a624b06865dd61f8114939e39057f6509e6edeb22",
+      "status": 200,
+      "headers": {
+        "content-length": "323",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e10cf8ba-f4c8-4ebc-b239-900d14285a7a"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"93f1d7c5-5add-59e0-9079-e130e4061ca8\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"start_sync\",\"blocker\":null}"
+    },
+    {
+      "name": "active older parent beats inactive newer parent",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "d6ebd628a1e2eaa55a2a61af059f755cbc48e04b6414c768c11a22df7eb3069e",
+      "status": 200,
+      "headers": {
+        "content-length": "320",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1f40b2d8-54bd-48e6-b71f-6b20034098e4"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"2dd6b944-3afc-50db-9390-ea950732bf06\",\"first_sync_started\":true,\"first_sync_completed\":true,\"sync_status\":\"complete\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "newer of two active parents",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "3ac312eba11b647b4a1412f82cdd3e681ed77128214a661f5e7dbf741fd87300",
+      "status": 200,
+      "headers": {
+        "content-length": "320",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5e7cba34-35fc-464a-bebb-e03a6d1b4cc2"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"b54ad489-1c26-5602-bb92-82bc994b688e\",\"first_sync_started\":true,\"first_sync_completed\":true,\"sync_status\":\"complete\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "child configs are not parents",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c85199d4d56a436e76b3be08e312bcd948abdd42d7e84b10a6c331e2a35ff169",
+      "status": 200,
+      "headers": {
+        "content-length": "322",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "33d4efe9-6797-4fcb-b869-1a7817189378"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"github\"],\"has_sync_config\":true,\"sync_config_id\":\"42fbf486-722b-5915-ad80-dc8cf001bd48\",\"first_sync_started\":false,\"first_sync_completed\":false,\"sync_status\":\"none\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":null}"
+    },
+    {
+      "name": "active parents: a running run outranks a newer failed one",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c61b0d0bdd391acb12fd56462cd030a00c4a8962b66d99ca218119976ecb9101",
+      "status": 200,
+      "headers": {
+        "content-length": "321",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1083f446-67d8-4fdf-82a5-c2bd41497800"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"15f9bbf5-6ac5-5397-9262-e1e2ebcc18b7\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"running\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "active parents: failed outranks cancelled, newest first within a status",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "c5defd1fa5e0b734366c7f927a8cd515e1ef517de041c966f2615eb098a48417",
+      "status": 200,
+      "headers": {
+        "content-length": "345",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7c5c8e3a-a174-4b53-b710-eddd7a6bfea5"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"45c1b8df-d3f9-5e33-95ec-eb965f70879b\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"failed\",\"selected_repositories_count\":0,\"last_sync_error\":\"c failed newer\",\"can_start_sync\":true,\"next_action\":\"start_sync\",\"blocker\":\"c failed newer\"}"
+    },
+    {
+      "name": "a completed run of another parent marks the first sync completed",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8f041db45e7ffa65080ed6d53b9a1ab8115ac680c96263d9c167b93599404a44",
+      "status": 200,
+      "headers": {
+        "content-length": "320",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3fd1fbfd-9a00-4601-9a07-43e18756d95b"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"9d06e783-966a-56e0-9461-a72644ad0920\",\"first_sync_started\":true,\"first_sync_completed\":true,\"sync_status\":\"pending\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"complete\",\"blocker\":null}"
+    },
+    {
+      "name": "a partial success run does not mark the first sync completed",
+      "method": "GET",
+      "path": "/api/v1/admin/setup/status",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ceaa0683c9cf5ebccb9883262e665a3105485a23f5b0fd2e42badf18dc47fea6",
+      "status": 200,
+      "headers": {
+        "content-length": "321",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9bcae318-686c-4d0a-ba68-074601dbd9cf"
+      },
+      "body": "{\"has_integration\":true,\"providers\":[\"jira\"],\"has_sync_config\":true,\"sync_config_id\":\"491bac52-ce1a-5c12-8e9d-02a562f12146\",\"first_sync_started\":true,\"first_sync_completed\":false,\"sync_status\":\"pending\",\"selected_repositories_count\":0,\"last_sync_error\":null,\"can_start_sync\":false,\"next_action\":\"complete\",\"blocker\":null}"
+    }
+  ]
+}

@@ -65,16 +65,19 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, id)
 // times in a row gets five 200s then a 429, on both planes, byte-for-byte.
 func TestSetUserPasswordRateLimitMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminGolden("setpassword_ratelimit", t.Name(), "104df06221af7fe265b4ba90b92b4eb1b9176b024892854ceaa1b90d89b2abb1"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("spr")
 	const jwtKey = "venue-oracle-test-secret-key-for-password-rate-limit-32-byt"
 	const adminPlaintextPassword = "correct horse battery staple rl"
 	const attempts = 6
 
-	orgID := uuid.New()
-	adminID := uuid.New()
-	targetID := uuid.New()
+	orgID := nextID()
+	adminID := nextID()
+	targetID := nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
@@ -92,7 +95,7 @@ func TestSetUserPasswordRateLimitMatchesThePythonAPI(t *testing.T) {
 			Body:    venueoracle.B64(fmt.Sprintf(`{"admin_password":%q,"password":"a new strong password %d"}`, adminPlaintextPassword, i)),
 		}
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
 
 	// Diff fires each request against Go exactly once (Do, internally) and
@@ -102,8 +105,9 @@ func TestSetUserPasswordRateLimitMatchesThePythonAPI(t *testing.T) {
 	// naming which numbered request diverged. Neither response shape
 	// carries a wall-clock field (success:true, or slowapi's rate-limit
 	// error body), so no Normalize redaction is needed.
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
+	golden.Finish(t)
 }
 
 // TestSetUserPasswordRateLimitIsIndependentPerTargetAndAdmin is an
@@ -122,15 +126,18 @@ func TestSetUserPasswordRateLimitMatchesThePythonAPI(t *testing.T) {
 // proves the Go KeyedLimiter now agrees, not just that Python does.
 func TestSetUserPasswordRateLimitIsIndependentPerTargetAndAdmin(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminGolden("setpassword_ratelimit_independent", t.Name(), "d6b53d510ccce2d1fd8ffa51a0c39cd3ce3f83aac3524f3113c4c9f3bdf777a1"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("spri")
 	const jwtKey = "venue-oracle-test-secret-key-for-password-rl-independence-32"
 	const adminPlaintextPassword = "correct horse battery staple ind"
 
-	orgID := uuid.New()
-	admin0, admin1 := uuid.New(), uuid.New()
-	target0, target1 := uuid.New(), uuid.New()
+	orgID := nextID()
+	admin0, admin1 := nextID(), nextID()
+	target0, target1 := nextID(), nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
@@ -159,11 +166,12 @@ func TestSetUserPasswordRateLimitIsIndependentPerTargetAndAdmin(t *testing.T) {
 		venueoracle.Request{Name: "admin0 -> target1 (cross-target: must NOT be refused by target0's exhausted bucket)", Method: "POST", Path: pathFor(target1), Headers: headersFor("admin0"), Body: body(6)},
 		venueoracle.Request{Name: "admin1 -> target0 (cross-admin: must NOT be refused by admin0's exhausted bucket)", Method: "POST", Path: pathFor(target0), Headers: headersFor("admin1"), Body: body(7)},
 	)
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
 
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
+	golden.Finish(t)
 }
 
 // TestSetUserPasswordRateLimitWindowDoesNotRollOverEarly is the
@@ -258,12 +266,15 @@ func TestSetUserPasswordRateLimitWindowDoesNotRollOverEarly(t *testing.T) {
 // limited, on both planes.
 func TestSetUserPasswordValidationBeforeLimitVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminGolden("setpassword_validation_before_limit", t.Name(), "659c34ba60def76077b77b2077d61d32e8dbfd2d068b83729de8a40493d096fa"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("spv")
 	const jwtKey = "venue-oracle-test-secret-key-for-password-validate-limit-32"
 	const adminPlaintextPassword = "correct horse battery staple vl"
 
-	orgID, adminID, targetID := uuid.New(), uuid.New(), uuid.New()
+	orgID, adminID, targetID := nextID(), nextID(), nextID()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
@@ -289,7 +300,8 @@ func TestSetUserPasswordValidationBeforeLimitVenueOracle(t *testing.T) {
 		requests = append(requests, send(fmt.Sprintf("valid %d/4", i+1),
 			fmt.Sprintf(`{"admin_password":%q,"password":"a new strong password %d"}`, adminPlaintextPassword, i)))
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
-	t.Log(venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{}))
+	t.Log(venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden}))
+	golden.Finish(t)
 }

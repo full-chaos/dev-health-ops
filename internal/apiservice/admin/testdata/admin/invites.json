@@ -1,0 +1,708 @@
+{
+  "header": {
+    "test": "TestCreateOrgInviteVenueOracle",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestCreateOrgInviteVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+  },
+  "requests": [
+    {
+      "name": "invite normalizes case and whitespace",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "7908fc77260279bf713730b7da91197754a23448c19135fdd4c2efdc234ed207",
+      "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
+      "status": 201,
+      "headers": {
+        "content-length": "364",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8ba205e1-eebc-4aa6-8959-7c88e8079076"
+      },
+      "body": "{\"id\":\"1321338d-6bcc-4fcd-bcec-32db900d6f7b\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"new.person@example.com\",\"role\":\"member\",\"invited_by_id\":\"a2090699-e366-59dc-a85b-d8111508a42b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:06:57.860864Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:06:57.870600Z\",\"updated_at\":\"2026-10-01T02:06:57.870605Z\"}"
+    },
+    {
+      "name": "invite duplicate pending is refused",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "bbde61d8b2c19ce1447dc637a6c2939e1c3fe5b63996f2dea3de7f1efd9d05eb",
+      "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
+      "status": 409,
+      "headers": {
+        "content-length": "59",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9eba0b83-f8c7-4e79-abad-184d435fa33c"
+      },
+      "body": "{\"detail\":\"A pending invite already exists for this email\"}"
+    },
+    {
+      "name": "invite duplicate differing only in case is refused",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "9b2e86f6ea3a0c9981d0a7dee6f4f96ac09f47738d44f05b56f8f0254707d035",
+      "request_headers_sha256": "c35c3f80a1b9f1a9782aa328e5815ecd15ce8fe938a5867472e88cbece75988c",
+      "status": 409,
+      "headers": {
+        "content-length": "59",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "03a2720e-4404-490e-a41f-0186e460a8bb"
+      },
+      "body": "{\"detail\":\"A pending invite already exists for this email\"}"
+    },
+    {
+      "name": "invite explicit role",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "8b0cf3c27d057f5befaa44828ff5e2571415ff928a01715ec7edb4ee48049fd4",
+      "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7db3733d-fbc7-4841-aba9-6df8d7f58a76"
+      },
+      "body": "{\"id\":\"e25730aa-18e3-40c5-9bba-dda1eab891f0\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"second@example.com\",\"role\":\"admin\",\"invited_by_id\":\"a2090699-e366-59dc-a85b-d8111508a42b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:06:58.273461Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:06:58.279380Z\",\"updated_at\":\"2026-10-01T02:06:58.279385Z\"}"
+    },
+    {
+      "name": "invite empty role becomes member",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "60221a5363612c6c065cc2d85054ee30d5e73f1dfeee6a8b743e61dec4ac4dd0",
+      "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c826070f-3200-4cdd-99fe-0d8b0d6df946"
+      },
+      "body": "{\"id\":\"fac6d2cc-63c5-4e67-9c69-0527f7fb7ef4\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"third@example.com\",\"role\":\"member\",\"invited_by_id\":\"a2090699-e366-59dc-a85b-d8111508a42b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:06:58.412780Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:06:58.418338Z\",\"updated_at\":\"2026-10-01T02:06:58.418342Z\"}"
+    },
+    {
+      "name": "invite non-ascii address",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "14d2ea85b3dfbab3a7e4d2b7a17fe6fb3a5b6031d1a0b65e14cb94e357b3dadb",
+      "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2b3603c3-e246-4e0e-a350-8bb51179cc0c"
+      },
+      "body": "{\"id\":\"feff3a24-738c-4ec3-b2ff-1aedddc699e9\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"jörg@example.com\",\"role\":\"member\",\"invited_by_id\":\"a2090699-e366-59dc-a85b-d8111508a42b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:06:58.551209Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:06:58.557677Z\",\"updated_at\":\"2026-10-01T02:06:58.557680Z\"}"
+    },
+    {
+      "name": "invite by admin without a full name",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "d8f03a0d847384cb605ab8da6eec75242032582be80bbea18e39cea25c84216d",
+      "request_headers_sha256": "c35c3f80a1b9f1a9782aa328e5815ecd15ce8fe938a5867472e88cbece75988c",
+      "status": 201,
+      "headers": {
+        "content-length": "360",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f40d5035-63ae-4d22-ac7a-169f40894af4"
+      },
+      "body": "{\"id\":\"d31e7a60-15c4-4eb0-a9a5-381d3c5b0840\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"fourth@example.com\",\"role\":\"member\",\"invited_by_id\":\"eafd80ed-7f43-5713-9061-4a63cb5e0a9b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:06:58.692498Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:06:58.698220Z\",\"updated_at\":\"2026-10-01T02:06:58.698224Z\"}"
+    },
+    {
+      "name": "invite by admin with an empty full name",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "b0ff58be30ce4b79e44a775d4fc30863b35b455dd9cc358d46fc69a06d3df65a",
+      "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e6f40b7a-a4f4-4842-a116-dfeb0daf556c"
+      },
+      "body": "{\"id\":\"4774a8c3-9220-4e02-88db-80a612f9091c\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"fifth@example.com\",\"role\":\"member\",\"invited_by_id\":\"57811663-5231-5305-94c1-20a2b96a05f3\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:06:58.830812Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:06:58.836607Z\",\"updated_at\":\"2026-10-01T02:06:58.836611Z\"}"
+    },
+    {
+      "name": "invite in an ascii-named org",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/00703064-8b09-5ab7-8f9f-3cbd1e8e01fb/invites",
+      "body_sha256": "5a058cef7bf16715977a3fda9bd560d510133ab1aaa6d86c715a187a22adae35",
+      "request_headers_sha256": "d87e7852686cbafd0be31877749d59c9c9aec0cc7c9c720181a2d3bee1c36c4a",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "79820e55-0a5e-4551-af84-9509feb409ca"
+      },
+      "body": "{\"id\":\"8cf25ff4-0807-4e0f-b62c-58d00cd64a8d\",\"org_id\":\"00703064-8b09-5ab7-8f9f-3cbd1e8e01fb\",\"email\":\"sixth@example.com\",\"role\":\"member\",\"invited_by_id\":\"33e72bc3-7932-5e3c-b6e8-04807b93d2ba\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:06:58.970589Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:06:58.976098Z\",\"updated_at\":\"2026-10-01T02:06:58.976102Z\"}"
+    },
+    {
+      "name": "invite as superuser",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "8f612c5fa95be22fe55aa0059c47cf07f850936b8fa4c99f883e01495090a7f4",
+      "request_headers_sha256": "355aa570f06469cb30c17e94cf75fe86e6048fe449e20812bb9dc99d068a85e3",
+      "status": 201,
+      "headers": {
+        "content-length": "361",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e2283b8a-4d7c-428b-8b13-2a2d05f92c89"
+      },
+      "body": "{\"id\":\"8f3158a2-9765-427a-8e8d-f8c92c0340b5\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"seventh@example.com\",\"role\":\"member\",\"invited_by_id\":\"f0a75953-98b4-5192-9431-50b943b9d46b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:06:59.191699Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:06:59.197746Z\",\"updated_at\":\"2026-10-01T02:06:59.197750Z\"}"
+    },
+    {
+      "name": "invite short email",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "ccef46dc4fc6627836cdd3bda6561dec4f98e71b3fb526f8a51e17e92007fdcc",
+      "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
+      "status": 422,
+      "headers": {
+        "content-length": "148",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "855c54d8-f7e3-47dd-a7e9-b45072a92a93"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"email\"],\"msg\":\"String should have at least 3 characters\",\"input\":\"ab\",\"ctx\":{\"min_length\":3}}]}"
+    },
+    {
+      "name": "invite missing email",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "26593b93a679a88d82debcee1fc6e6bf045c1f0b42fff6855a04270a115dd572",
+      "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
+      "status": 422,
+      "headers": {
+        "content-length": "102",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5bc0f083-f2a1-4c22-bd5c-aad8cbce51e1"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"email\"],\"msg\":\"Field required\",\"input\":{\"role\":\"admin\"}}]}"
+    },
+    {
+      "name": "invite null role",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "007f7376a980eb410cd5785ce27083707123d4627009d05cef3f853aa984ea30",
+      "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
+      "status": 422,
+      "headers": {
+        "content-length": "109",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "874e9621-f157-4e49-90d4-f1b87f4cf418"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"role\"],\"msg\":\"Input should be a valid string\",\"input\":null}]}"
+    },
+    {
+      "name": "invite non-string email",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "c623846b277ad9219e523e8766fa24cf3e555e54c4f90f1833f1fd0601db7e7d",
+      "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
+      "status": 422,
+      "headers": {
+        "content-length": "109",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cae68bae-1688-4425-92d7-ffda410a6ef7"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"email\"],\"msg\":\"Input should be a valid string\",\"input\":123}]}"
+    },
+    {
+      "name": "invite body not an object",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "89e71170-37c5-4cd1-8295-3ca9decf3047"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "invalid body by a non-admin token is refused before validation",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "ccef46dc4fc6627836cdd3bda6561dec4f98e71b3fb526f8a51e17e92007fdcc",
+      "request_headers_sha256": "012a4c72e4090cfb77d17947576c2d13e8115f011d38c4e9b1b3fba44a9f5023",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "58592013-7152-4b7b-a869-8c1012301010"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "invalid body by another org's admin is a 422",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "ccef46dc4fc6627836cdd3bda6561dec4f98e71b3fb526f8a51e17e92007fdcc",
+      "request_headers_sha256": "ab61954809de2f62ddcd4f4ce588d44e177b5707c76ec850170f5908bfe06302",
+      "status": 422,
+      "headers": {
+        "content-length": "148",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "94079b08-dd4c-43a9-9c16-7bb681678a7c"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"email\"],\"msg\":\"String should have at least 3 characters\",\"input\":\"ab\",\"ctx\":{\"min_length\":3}}]}"
+    },
+    {
+      "name": "valid body by another org's admin is a 403",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "0512ba768d160ea60ee905dbb89accad8d1d7613f9311391ae01a0778be053d9",
+      "request_headers_sha256": "ab61954809de2f62ddcd4f4ce588d44e177b5707c76ec850170f5908bfe06302",
+      "status": 403,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fb54e572-0806-45d2-8279-335cd394af56"
+      },
+      "body": "{\"detail\":\"Admin access required for organization\"}"
+    },
+    {
+      "name": "invite by a plain member is refused",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "3a2c98cc789e9190a144cfc1649866ba820594ddcf7dcb7c1491d9ecb9261a88",
+      "request_headers_sha256": "012a4c72e4090cfb77d17947576c2d13e8115f011d38c4e9b1b3fba44a9f5023",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a566e4fb-1e8e-47a8-8eb3-6aad44497154"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "invite into another org is refused",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "3b45d0e49930629b6d73f334e8244ccec754abb8c2218104cf965f0f0921b65e",
+      "request_headers_sha256": "adeeecba7cce372ca5c809fb209b748b3575482a03b4f7209058559a134bdc86",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f8ac46e8-0c41-4dcc-81f3-68185c080087"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "invite into a missing org",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/0bea1b35-1cf9-5ecf-a967-ecf6ffcee46b/invites",
+      "body_sha256": "78f544304adae6f8a878a71e2581bb9f81c1aab6244976abbffa608cd051e550",
+      "request_headers_sha256": "355aa570f06469cb30c17e94cf75fe86e6048fe449e20812bb9dc99d068a85e3",
+      "status": 404,
+      "headers": {
+        "content-length": "35",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f2704f72-04b1-4e8f-a735-1e933d266735"
+      },
+      "body": "{\"detail\":\"Organization not found\"}"
+    },
+    {
+      "name": "invite unauthenticated",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "cf727287a68132e9728ff56cb45f3213fe4c2168de7d6df9966fd2047c1f33d6",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "dd93f2bf-19e7-4f54-9381-160b93e5f54d"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "admin2 bucket fill 1/9",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "1dc5889af67f1765e0225cfc3cba6b4fc3728c3739805bbe7f7085f886615b9f",
+      "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "51b81987-2849-4e35-8d5a-a2e7d2c64ba2"
+      },
+      "body": "{\"id\":\"89716715-a4c0-49d6-bde5-3c35196c2385\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"fill0@example.com\",\"role\":\"member\",\"invited_by_id\":\"57811663-5231-5305-94c1-20a2b96a05f3\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:07:00.402772Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:07:00.408107Z\",\"updated_at\":\"2026-10-01T02:07:00.408110Z\"}"
+    },
+    {
+      "name": "admin2 bucket fill 2/9",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "479939203ad8d6d1e99ae0acb1672b1c0db1053b92b45cceeeb78276dcad0be2",
+      "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a8e14dde-a18f-42a2-991f-1a76a4c91287"
+      },
+      "body": "{\"id\":\"578b39e7-860c-438b-acdd-dd1b7b76d7c1\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"fill1@example.com\",\"role\":\"member\",\"invited_by_id\":\"57811663-5231-5305-94c1-20a2b96a05f3\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:07:00.538941Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:07:00.544499Z\",\"updated_at\":\"2026-10-01T02:07:00.544502Z\"}"
+    },
+    {
+      "name": "admin2 bucket fill 3/9",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "ce1b7a3428867762b793f6a10f2a30b061c4ee8022756568e743ca5243420a28",
+      "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "17b3aa0e-bb66-4901-a66f-014a68a4842a"
+      },
+      "body": "{\"id\":\"5b4d2c58-e765-4ae4-bfe7-3a3ef7130de8\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"fill2@example.com\",\"role\":\"member\",\"invited_by_id\":\"57811663-5231-5305-94c1-20a2b96a05f3\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:07:00.676782Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:07:00.682332Z\",\"updated_at\":\"2026-10-01T02:07:00.682336Z\"}"
+    },
+    {
+      "name": "admin2 bucket fill 4/9",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "26f93d67ddc97adecc39070f7f2f37f28b5db2d8ac20ccfc3bd75ead3c391dc3",
+      "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0595edfd-9de8-4acb-9689-b667b7be0912"
+      },
+      "body": "{\"id\":\"b3f64e5d-8804-4829-a7ec-d9cff6fd49b2\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"fill3@example.com\",\"role\":\"member\",\"invited_by_id\":\"57811663-5231-5305-94c1-20a2b96a05f3\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:07:00.816341Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:07:00.822088Z\",\"updated_at\":\"2026-10-01T02:07:00.822092Z\"}"
+    },
+    {
+      "name": "admin2 bucket fill 5/9",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "31f2c84752f6f84b4894ee4cffb389ec67d40441374b681804332ce9e4ea42b4",
+      "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "004d1a98-cd34-4976-8970-790175a7548d"
+      },
+      "body": "{\"id\":\"37d8b38c-9e7c-4630-95a9-42d28c9eddb0\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"fill4@example.com\",\"role\":\"member\",\"invited_by_id\":\"57811663-5231-5305-94c1-20a2b96a05f3\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:07:00.954554Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:07:00.960019Z\",\"updated_at\":\"2026-10-01T02:07:00.960022Z\"}"
+    },
+    {
+      "name": "admin2 bucket fill 6/9",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "bfca17c70e6331e03414f15e093028b7e67b6da74485dffb85f2d5ea4f4c7a42",
+      "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "42e0fcdc-e067-40a5-8637-e9df808f3835"
+      },
+      "body": "{\"id\":\"a0395acc-abb3-4d17-a603-14931e24d946\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"fill5@example.com\",\"role\":\"member\",\"invited_by_id\":\"57811663-5231-5305-94c1-20a2b96a05f3\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:07:01.092152Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:07:01.097669Z\",\"updated_at\":\"2026-10-01T02:07:01.097672Z\"}"
+    },
+    {
+      "name": "admin2 bucket fill 7/9",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "ad211c8519bab57ab6fba8e90b548e5566906d94f33d1c9f4d9aa4399a9768f8",
+      "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "37d5b946-be4b-485e-a5f6-b491d02e8401"
+      },
+      "body": "{\"id\":\"2a7331a6-43d7-473e-a699-3f0f815c2da6\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"fill6@example.com\",\"role\":\"member\",\"invited_by_id\":\"57811663-5231-5305-94c1-20a2b96a05f3\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:07:01.230612Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:07:01.236129Z\",\"updated_at\":\"2026-10-01T02:07:01.236132Z\"}"
+    },
+    {
+      "name": "admin2 bucket fill 8/9",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "2001085c997bb145185d4ce6ab87f811824a6ed7657e396dcf27acd87122d154",
+      "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f0d43dde-2739-45db-8aff-2040b51ef19e"
+      },
+      "body": "{\"id\":\"b96d0545-b6b5-4cf2-8d5b-2abc9cf7e194\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"fill7@example.com\",\"role\":\"member\",\"invited_by_id\":\"57811663-5231-5305-94c1-20a2b96a05f3\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:07:01.390532Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:07:01.396116Z\",\"updated_at\":\"2026-10-01T02:07:01.396119Z\"}"
+    },
+    {
+      "name": "admin2 bucket fill 9/9",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "031c408f670d7c1ccf3093b0a792547e89262f484e5628b285f4b82f62af3972",
+      "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
+      "status": 201,
+      "headers": {
+        "content-length": "359",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b8a5496c-7da2-4938-bb6b-41e113d993d5"
+      },
+      "body": "{\"id\":\"177f39fe-b25e-449e-80b7-95face10ba8a\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"fill8@example.com\",\"role\":\"member\",\"invited_by_id\":\"57811663-5231-5305-94c1-20a2b96a05f3\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:07:01.530829Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:07:01.536796Z\",\"updated_at\":\"2026-10-01T02:07:01.536800Z\"}"
+    },
+    {
+      "name": "admin2 eleventh invite in the window is limited",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "9323313975c113d8e1818fb1e539530a20bdfa431dc267dd27ae15ca5d50bf75",
+      "request_headers_sha256": "dc7bb246810b8cc12e06d363cb5975a0a46414a939e0f3787007b55cf5915cd6",
+      "status": 429,
+      "headers": {
+        "content-length": "69",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0e04f786-857e-431b-a6f3-91f86a953233"
+      },
+      "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+    },
+    {
+      "name": "admin still has its own bucket",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "7d3e37a5fad9d4fe539a426c867f15e693fc47de1e95fb21ff99faaf1f5f05e7",
+      "request_headers_sha256": "c35c3f80a1b9f1a9782aa328e5815ecd15ce8fe938a5867472e88cbece75988c",
+      "status": 201,
+      "headers": {
+        "content-length": "370",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a8ee3e99-88ef-4991-989c-1c03b21a5f6b"
+      },
+      "body": "{\"id\":\"faac322e-62e0-4533-a53c-6100aae347b5\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"admin-own-bucket@example.com\",\"role\":\"member\",\"invited_by_id\":\"eafd80ed-7f43-5713-9061-4a63cb5e0a9b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:07:01.758352Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:07:01.764046Z\",\"updated_at\":\"2026-10-01T02:07:01.764050Z\"}"
+    },
+    {
+      "name": "owner still has its own bucket",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/7633f815-0e8e-5a87-92fb-2c8235603412/invites",
+      "body_sha256": "00ab75014836368f3e0bfae6d97d948b5c1ec388b89f445bd46d383b619012a3",
+      "request_headers_sha256": "f614a274127ced9979b215a1aa044b28873850d5ef15b0b044334a168f65b5e6",
+      "status": 201,
+      "headers": {
+        "content-length": "370",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8fc151d8-138a-4d04-814e-4bb6f2c3faf7"
+      },
+      "body": "{\"id\":\"56729257-311d-4b1b-b7e8-9614915ca7e7\",\"org_id\":\"7633f815-0e8e-5a87-92fb-2c8235603412\",\"email\":\"owner-own-bucket@example.com\",\"role\":\"member\",\"invited_by_id\":\"a2090699-e366-59dc-a85b-d8111508a42b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:07:01.896600Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:07:01.902244Z\",\"updated_at\":\"2026-10-01T02:07:01.902248Z\"}"
+    }
+  ],
+  "rows": {
+    "audit_logs.changes JSON text where action = 'member_invited'": {
+      "rows": "{\"email\": \"new.person@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"second@example.com\", \"role\": \"admin\", \"status\": \"pending\"}\u001e{\"email\": \"third@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"j\\u00f6rg@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"fourth@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"fifth@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"sixth@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"seventh@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"fill0@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"fill1@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"fill2@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"fill3@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"fill4@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"fill5@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"fill6@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"fill7@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"fill8@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"admin-own-bucket@example.com\", \"role\": \"member\", \"status\": \"pending\"}\u001e{\"email\": \"owner-own-bucket@example.com\", \"role\": \"member\", \"status\": \"pending\"}"
+    },
+    "member_invited audit rows": {
+      "rows": "7633f815-0e8e-5a87-92fb-2c8235603412|eafd80ed-7f43-5713-9061-4a63cb5e0a9b|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|57811663-5231-5305-94c1-20a2b96a05f3|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|57811663-5231-5305-94c1-20a2b96a05f3|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|57811663-5231-5305-94c1-20a2b96a05f3|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|57811663-5231-5305-94c1-20a2b96a05f3|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|57811663-5231-5305-94c1-20a2b96a05f3|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|57811663-5231-5305-94c1-20a2b96a05f3|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|57811663-5231-5305-94c1-20a2b96a05f3|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|57811663-5231-5305-94c1-20a2b96a05f3|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|57811663-5231-5305-94c1-20a2b96a05f3|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|57811663-5231-5305-94c1-20a2b96a05f3|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|eafd80ed-7f43-5713-9061-4a63cb5e0a9b|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|a2090699-e366-59dc-a85b-d8111508a42b|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|a2090699-e366-59dc-a85b-d8111508a42b|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|a2090699-e366-59dc-a85b-d8111508a42b|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|a2090699-e366-59dc-a85b-d8111508a42b|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|f0a75953-98b4-5192-9431-50b943b9d46b|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e00703064-8b09-5ab7-8f9f-3cbd1e8e01fb|33e72bc3-7932-5e3c-b6e8-04807b93d2ba|member_invited|membership|Organization invite created|success|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|a2090699-e366-59dc-a85b-d8111508a42b|member_invited|membership|Organization invite created|success|\u003cnull\u003e"
+    },
+    "org_invites rows": {
+      "rows": "7633f815-0e8e-5a87-92fb-2c8235603412|admin-own-bucket@example.com|member|pending|eafd80ed-7f43-5713-9061-4a63cb5e0a9b|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|fifth@example.com|member|pending|57811663-5231-5305-94c1-20a2b96a05f3|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|fill0@example.com|member|pending|57811663-5231-5305-94c1-20a2b96a05f3|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|fill1@example.com|member|pending|57811663-5231-5305-94c1-20a2b96a05f3|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|fill2@example.com|member|pending|57811663-5231-5305-94c1-20a2b96a05f3|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|fill3@example.com|member|pending|57811663-5231-5305-94c1-20a2b96a05f3|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|fill4@example.com|member|pending|57811663-5231-5305-94c1-20a2b96a05f3|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|fill5@example.com|member|pending|57811663-5231-5305-94c1-20a2b96a05f3|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|fill6@example.com|member|pending|57811663-5231-5305-94c1-20a2b96a05f3|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|fill7@example.com|member|pending|57811663-5231-5305-94c1-20a2b96a05f3|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|fill8@example.com|member|pending|57811663-5231-5305-94c1-20a2b96a05f3|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|fourth@example.com|member|pending|eafd80ed-7f43-5713-9061-4a63cb5e0a9b|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|jörg@example.com|member|pending|a2090699-e366-59dc-a85b-d8111508a42b|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|new.person@example.com|member|pending|a2090699-e366-59dc-a85b-d8111508a42b|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|owner-own-bucket@example.com|member|pending|a2090699-e366-59dc-a85b-d8111508a42b|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|second@example.com|admin|pending|a2090699-e366-59dc-a85b-d8111508a42b|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|seventh@example.com|member|pending|f0a75953-98b4-5192-9431-50b943b9d46b|72|\u003cnull\u003e\u001e00703064-8b09-5ab7-8f9f-3cbd1e8e01fb|sixth@example.com|member|pending|33e72bc3-7932-5e3c-b6e8-04807b93d2ba|72|\u003cnull\u003e\u001e7633f815-0e8e-5a87-92fb-2c8235603412|third@example.com|member|pending|a2090699-e366-59dc-a85b-d8111508a42b|72|\u003cnull\u003e"
+    },
+    "python invite mails": {
+      "rows": "[{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cnew.person@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"new.person@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003eOlivia Öwner invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"1321338d6bcc4fcdbcec32db900d6f7b.a74ced68de2ec6288acb5d3a37732528bfe453c6ccb6fa37d1c48503c2762356\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003csecond@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"second@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003eOlivia Öwner invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"e25730aa18e340c59bbadda1eab891f0.d0dc4274984b5a88d04cbf233efb7d44495825b076cc7d8ea0e17356fdeca292\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cthird@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"third@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003eOlivia Öwner invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"fac6d2cc63c54e679c690527f7fb7ef4.a540f84fed0f33b51d5d4990099af1b1c266cd4e87aab889d2b42f030c3f18d4\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cfourth@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"fourth@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-admin@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"d31e7a6015c44eb0a9a5381d3c5b0840.913597e59bd8a6cadedec529ef3274dfa38599282a29b088ef53c029e73fffca\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cfifth@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"fifth@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-admin2@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"4774a8c392204e0288db80a612f9091c.4f2409cd19144321f68466b86656cac195de97b934aa9124e9230c996ae8bdb6\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003csixth@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"sixth@example.com\",\"Subject\":\"You're invited to join Plain Invite Org\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"us-ascii\\\"\",\"PartCTE\":\"7bit\",\"HTML\":\"\\u003c!doctype html\\u003e\\r\\n\\u003chtml lang=\\\"en\\\"\\u003e\\r\\n  \\u003cbody\\u003e\\r\\n    \\u003ch1\\u003eYou're invited to join Plain Invite Org\\u003c/h1\\u003e\\r\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\r\\n    \\u003cp\\u003ePaula Plain invited you to join Plain Invite Org on Dev Health.\\u003c/p\\u003e\\r\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\r\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\r\\n  \\u003c/body\\u003e\\r\\n\\u003c/html\\u003e\\r\\n\",\"Token\":\"8cf25ff408074e0fb62c58d00cd64a8d.a5ad07feb9fcff444570090f4bd91e113582b75ebda8a61965fc0948f861f4aa\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cseventh@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"seventh@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-super@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"8f3158a29765427a8e8df8c92c0340b5.2342e4731312527dfdd602d5b413e34c70b0740a317e07af26b68caa9dec97b4\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cfill0@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"fill0@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-admin2@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"89716715a4c049d6bde53c35196c2385.8f75e8eaedd5fed01e3d1a7996e4e2dc984c8f8c1f6084c471240afe787e6461\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cfill1@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"fill1@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-admin2@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"578b39e7860c438bacdddd1b7b76d7c1.4fc571db1bd4cec4bc289c733c7c31e61420f6be4220553f99bc0def7dec90d6\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cfill2@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"fill2@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-admin2@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"5b4d2c58e7654ae4bfe73a3ef7130de8.bd0c0c146c00de25491c83a103fa35a234d8ba69a8fbb37af8f2321d9029ae19\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cfill3@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"fill3@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-admin2@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"b3f64e5d88044829a7ecd9cff6fd49b2.e8a52dc192a9b0df4a917e393edf8dae0f1c0c76876d932c43606c7d7f79125a\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cfill4@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"fill4@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-admin2@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"37d8b38c9e7c463095a942d28c9eddb0.8b3925cb19f763fb39642441bf3bfa2d0a6b60f422d2cb6438ea428ea92476b6\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cfill5@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"fill5@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-admin2@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"a0395accabb34d17a60314931e24d946.34b113840c0cdcac339125a95a13dd889a72b044614ad8d971e9cce1bb7af5eb\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cfill6@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"fill6@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-admin2@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"2a7331a643d7473ea6993f0f815c2da6.e7fdd4757b55076a07b493c95e306711333989d0f7ba2140ae25cf1994148365\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cfill7@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"fill7@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-admin2@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"b96d0545b6b54cf28d5b2abc9cf7e194.12a51ddb0bfebaa289743e5172f3a0af959456f5bf328019afcb9af08fa12fc2\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cfill8@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"fill8@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-admin2@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"177f39feb25e449e80b795face10ba8a.ba2c4608febc44409d65d7783ec85e782d2ffb92be3c677bb3100d07f33d76d8\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cadmin-own-bucket@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"admin-own-bucket@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003evenue-invite-admin@example.com invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"faac322e62e04533a53c6100aae347b5.5a38c56eb610237abbff797e3cab1ec5f659c30182527c6d9281ce6ddf9ff5aa\"},{\"MailFrom\":\"\\u003cinvites@example.test\\u003e\",\"RcptTo\":\"\\u003cowner-own-bucket@example.com\\u003e\",\"From\":\"Dev Health \\u003cinvites@example.test\\u003e\",\"To\":\"owner-own-bucket@example.com\",\"Subject\":\"=?utf-8?q?You=27re_invited_to_join_Caf=C3=A9_Org_=26_S=C3=B6hne?=\",\"ContentType\":\"multipart/alternative\",\"PartType\":\"text/html; charset=\\\"utf-8\\\"\",\"PartCTE\":\"base64\",\"HTML\":\"\\u003c!doctype html\\u003e\\n\\u003chtml lang=\\\"en\\\"\\u003e\\n  \\u003cbody\\u003e\\n    \\u003ch1\\u003eYou're invited to join Café Org \\u0026 Söhne\\u003c/h1\\u003e\\n    \\u003cp\\u003eHi,\\u003c/p\\u003e\\n    \\u003cp\\u003eOlivia Öwner invited you to join Café Org \\u0026 Söhne on Dev Health.\\u003c/p\\u003e\\n    \\u003cp\\u003e\\u003ca href=\\\"https://app.example.test/accept-invite?token=TOKEN\\\"\\u003eAccept invitation\\u003c/a\\u003e\\u003c/p\\u003e\\n    \\u003cp\\u003eThis link expires in 72 hours.\\u003c/p\\u003e\\n  \\u003c/body\\u003e\\n\\u003c/html\\u003e\\n\",\"Token\":\"56729257311d4b1bb7e89614915ca7e7.98542b6ae48361c571f42a0b4a939a5c17e0c15a87a3fe7bc952262fd155a91d\"}]"
+    },
+    "python invite token hashes": {
+      "rows": "{\"1321338d-6bcc-4fcd-bcec-32db900d6f7b\":\"57247e4c7867f6a9084d22277b827eb6797d06168a66caeb20d55839a9e170de\",\"177f39fe-b25e-449e-80b7-95face10ba8a\":\"34237a2c8e576c9e97549619c3dfab012d3b71e89c431e829773381bc4e691af\",\"2a7331a6-43d7-473e-a699-3f0f815c2da6\":\"46d940d79a8644ad963a7c78c61d6b242cd59c88dfb07ce0a6b0249c0afddfd4\",\"37d8b38c-9e7c-4630-95a9-42d28c9eddb0\":\"1de8374112edc23153fabe0b9fa40f99ca5e2b9ebd299525034fbdffdd75ada3\",\"4774a8c3-9220-4e02-88db-80a612f9091c\":\"7ccd1c7e776fb6b9713b8a51d3b8cddcfbeac407fb75f4a7963e58fb75d10911\",\"56729257-311d-4b1b-b7e8-9614915ca7e7\":\"9fee26ace230ba85acba70363e5ec5162443f51d75afe98171ee5c7d588369af\",\"578b39e7-860c-438b-acdd-dd1b7b76d7c1\":\"8f5582d476c275c6cb09d8be2bc831f59325304c7b4d4c0f4cc4615b736f5af6\",\"5b4d2c58-e765-4ae4-bfe7-3a3ef7130de8\":\"258f4e3a9472e2ba392121781f724920e87f19893181ff728e67ca68e264d294\",\"89716715-a4c0-49d6-bde5-3c35196c2385\":\"4f173a180c8fc7467d5133c3f634d1ffa60257a7336c41d61c4acc18529b9f07\",\"8cf25ff4-0807-4e0f-b62c-58d00cd64a8d\":\"29002dc23dfb44a47046c3f9cf75573fae504a4033a6de230daa20e03b79718e\",\"8f3158a2-9765-427a-8e8d-f8c92c0340b5\":\"02a04253497bf5f6b84f7a1f6b4ac97d78e80e71eef0dead92873ea55106cad1\",\"a0395acc-abb3-4d17-a603-14931e24d946\":\"62eda004004f004ff2cf56ecd2b0a4ab50eb39c0f82d325b98fff599096eb68a\",\"b3f64e5d-8804-4829-a7ec-d9cff6fd49b2\":\"57d3083b70c1d94918eb516867f483f9751d1b6c3beead0f0bbdcc639668c6ab\",\"b96d0545-b6b5-4cf2-8d5b-2abc9cf7e194\":\"46b6fc270f2c8be8e10c07464663b1bc33b8444af084fba56bee85084bf193ee\",\"d31e7a60-15c4-4eb0-a9a5-381d3c5b0840\":\"5761de10388d34faf6fb71787a1cd227513913642e478216c2f6e38c95bb9240\",\"e25730aa-18e3-40c5-9bba-dda1eab891f0\":\"405d784a2cc6e75a324c6500c441b3cc5c6300cbd361e98fbce8387e1973ea8f\",\"faac322e-62e0-4533-a53c-6100aae347b5\":\"95be3e0efe7915591f50422a7900454acd76e14e118d0a4d50f0e7794cb7e003\",\"fac6d2cc-63c5-4e67-9c69-0527f7fb7ef4\":\"b083e1d7b47a14d447cc81bcb0046f7b9ac02cc00c05eb5a51cc74448dc0d6a5\",\"feff3a24-738c-4ec3-b2ff-1aedddc699e9\":\"85c50045f21a5e98ab2fb36216c332537ee2857596c9c942c18837e95ec9b6a5\"}"
+    }
+  }
+}

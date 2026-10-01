@@ -1,12 +1,15 @@
 package admin
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // orgDeletionRepoRoot walks up from this file to the directory holding
@@ -20,24 +23,9 @@ func orgDeletionRepoRoot(t *testing.T) string {
 	if !ok {
 		t.Fatal("cannot locate this test's source file")
 	}
-	directory := filepath.Dir(file)
-	for {
-		if info, statErr := os.Stat(filepath.Join(directory, "src", "dev_health_ops")); statErr == nil && info.IsDir() {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatalf("no src/dev_health_ops above %s", file)
-		}
-		directory = parent
-	}
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 }
 
-// orgDeletionInterpreter resolves a Python interpreter with this repo's
-// dependencies importable: the repo .venv first, PATH python3 as a
-// fallback (mirrors the venue oracle's own pyoracle interpreter
-// resolution, without pulling in that package's testcontainers/database
-// machinery for what is otherwise a fast, no-DB test).
 func orgDeletionInterpreter(t *testing.T, root string) string {
 	t.Helper()
 	venv := filepath.Join(root, ".venv", "bin", "python3")
@@ -46,7 +34,7 @@ func orgDeletionInterpreter(t *testing.T, root string) string {
 	}
 	path, err := exec.LookPath("python3")
 	if err != nil {
-		t.Skip("no python3 interpreter available")
+		t.Fatal("recording needs a python3 interpreter")
 	}
 	return path
 }
@@ -86,9 +74,19 @@ type pythonDeletionTarget struct {
 // ...)`) predicate, the outer foreign-id column plus the subquery's own
 // table/id-column/org-column/bind-type -- rather than trusting the
 // predicate's declared table name alone.
+// orgDeletionTargetsPythonBuild is the build whose org_deletion._postgres_targets
+// answered the frozen list: main when it was recorded.
+const orgDeletionTargetsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
 func TestOrgDeletionTargetsMatchThePythonList(t *testing.T) {
-	root := orgDeletionRepoRoot(t)
-	interpreter := orgDeletionInterpreter(t, root)
+	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+		Path:        "testdata/admin/org_deletion_targets.json",
+		PythonBuild: orgDeletionTargetsPythonBuild,
+		SHA256:      "10e4e3cb5844264ec6bc3e434ebb9f6793ee785f130df8dc39363f255f27d711",
+		Recipe: "git worktree add --detach $DIR " + orgDeletionTargetsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
+			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestOrgDeletionTargetsMatchThePythonList$' -python-root $DIR",
+	})
+	root := golden.PythonRoot(t, orgDeletionRepoRoot(t))
 
 	script := `
 import json
@@ -127,12 +125,22 @@ def describe(target):
 out = [describe(t) for t in org_deletion._postgres_targets()]
 print(json.dumps(out))
 `
-	cmd := exec.Command(interpreter, "-c", script)
-	cmd.Dir = root
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("python: %v\n%s", err, output)
-	}
+	answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("org deletion targets", script, nil, nil)},
+		func(root string, _ []venueoracle.Request) []venueoracle.Response {
+			cmd := exec.Command(orgDeletionInterpreter(t, root), "-c", script)
+			cmd.Dir = root
+			// The producer's whole environment: nothing ambient shapes its answer.
+			cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "PYTHONDONTWRITEBYTECODE=1"}
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			output, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("python: %v\n%s", err, stderr.String())
+			}
+			return []venueoracle.Response{{Status: 0, Body: string(output)}}
+		})
+	golden.Consumed(t, answers...)
+	output := []byte(answers[0].Body)
 
 	var pythonTargets []pythonDeletionTarget
 	if err := json.Unmarshal(output, &pythonTargets); err != nil {
@@ -199,4 +207,6 @@ print(json.dumps(out))
 			t.Fatalf("%s: python predicate introspection returned an unrecognized shape: %s", goTarget.Table, py.Kind)
 		}
 	}
+	golden.SkipDiff(t)
+	golden.Finish(t)
 }

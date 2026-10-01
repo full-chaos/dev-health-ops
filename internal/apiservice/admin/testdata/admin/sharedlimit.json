@@ -1,0 +1,390 @@
+{
+  "header": {
+    "test": "TestSharedRateLimitAcrossReplicasVenueOracle",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestSharedRateLimitAcrossReplicasVenueOracle$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+  },
+  "requests": [
+    {
+      "name": "invite 1/12",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/fd3bc324-2afa-5858-b4b1-9166806d3147/invites",
+      "body_sha256": "92626d519a00def1a77887ee030f6d1b425f5cf1eed05abf1211361f714dde12",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 201,
+      "headers": {
+        "content-length": "368",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a642509d-badc-40c6-9a5f-80ad7859bcc6"
+      },
+      "body": "{\"id\":\"03a41f57-4631-474b-a1e5-55ed298a5905\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-0@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.145594Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.154633Z\",\"updated_at\":\"2026-10-01T02:13:21.154638Z\"}"
+    },
+    {
+      "name": "invite 2/12",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/fd3bc324-2afa-5858-b4b1-9166806d3147/invites",
+      "body_sha256": "4153be0184e1b349de1593475ca7e4efc0d6bea593d29e5859ea0e1cf9989771",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 201,
+      "headers": {
+        "content-length": "368",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "60f9f5fa-7d0b-4cc8-8679-f7032cb87bc8"
+      },
+      "body": "{\"id\":\"f984fb88-4c87-45dd-9a8a-96adbc82189a\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-1@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.290051Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.295808Z\",\"updated_at\":\"2026-10-01T02:13:21.295812Z\"}"
+    },
+    {
+      "name": "invite 3/12",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/fd3bc324-2afa-5858-b4b1-9166806d3147/invites",
+      "body_sha256": "46334aabc903b018c6fca0c69772e1ab9bf5b977a878f0f4257b50d1fc6f6d94",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 201,
+      "headers": {
+        "content-length": "368",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "02d42ffa-ea0a-4412-a7e0-eafc08d6c899"
+      },
+      "body": "{\"id\":\"7323b7f2-a93e-4115-90ef-e6764971eda2\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-2@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.427145Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.432886Z\",\"updated_at\":\"2026-10-01T02:13:21.432890Z\"}"
+    },
+    {
+      "name": "invite 4/12",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/fd3bc324-2afa-5858-b4b1-9166806d3147/invites",
+      "body_sha256": "d62c97840984be111e73784257ba77ebb109076d281f59079f553429a417c437",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 201,
+      "headers": {
+        "content-length": "368",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6792d0f6-f928-460d-83ed-efee23c50e26"
+      },
+      "body": "{\"id\":\"476cc64e-613f-4bea-ad2a-2c42e57fea80\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-3@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.563694Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.569331Z\",\"updated_at\":\"2026-10-01T02:13:21.569335Z\"}"
+    },
+    {
+      "name": "invite 5/12",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/fd3bc324-2afa-5858-b4b1-9166806d3147/invites",
+      "body_sha256": "9ccb7b26b25e06eca143bcb0d091db08cec17d36c93455fa4db27537aa59951e",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 201,
+      "headers": {
+        "content-length": "368",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c463c4a6-b7fd-40a0-8fba-04f1fb120b5b"
+      },
+      "body": "{\"id\":\"26becd91-1267-4c89-8729-993424626d80\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-4@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.700006Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.705644Z\",\"updated_at\":\"2026-10-01T02:13:21.705648Z\"}"
+    },
+    {
+      "name": "invite 6/12",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/fd3bc324-2afa-5858-b4b1-9166806d3147/invites",
+      "body_sha256": "fb3845da74e7709fc8bbb44611035e8ab8e3a4a781720be0fedc4892d0eee622",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 201,
+      "headers": {
+        "content-length": "368",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "39e3f0bf-9b35-4a27-b434-cc22980839f3"
+      },
+      "body": "{\"id\":\"d7ea8ea0-7079-4821-9007-e49f883f6e1b\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-5@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.835564Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.841255Z\",\"updated_at\":\"2026-10-01T02:13:21.841259Z\"}"
+    },
+    {
+      "name": "invite 7/12",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/fd3bc324-2afa-5858-b4b1-9166806d3147/invites",
+      "body_sha256": "c731687c5f32c141ccd4544283f0fd95bd3329e0f6723696aba7f2e12f037b03",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 201,
+      "headers": {
+        "content-length": "368",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bc98c225-90da-40b4-98fb-72632e5c90c4"
+      },
+      "body": "{\"id\":\"031551cf-3560-459e-bbc4-85e27e95182d\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-6@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:21.971092Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:21.976511Z\",\"updated_at\":\"2026-10-01T02:13:21.976514Z\"}"
+    },
+    {
+      "name": "invite 8/12",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/fd3bc324-2afa-5858-b4b1-9166806d3147/invites",
+      "body_sha256": "e33ecc9862ffe8b857c4ab0c19eba0db6d415c7a03a04a93e2aab6621be0a40e",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 201,
+      "headers": {
+        "content-length": "368",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8df083db-6c18-4d96-af7f-1365d1c86191"
+      },
+      "body": "{\"id\":\"632d7ad6-75d9-4f2e-8f2a-3b096608c520\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-7@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:22.107065Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:22.112568Z\",\"updated_at\":\"2026-10-01T02:13:22.112572Z\"}"
+    },
+    {
+      "name": "invite 9/12",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/fd3bc324-2afa-5858-b4b1-9166806d3147/invites",
+      "body_sha256": "d87a082eb0cfb76546c8d780bbc633e65dbb9ce50f8ee6b0659907323d422c37",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 201,
+      "headers": {
+        "content-length": "368",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "42b765ee-cbc4-467f-8dff-64ff4f632eff"
+      },
+      "body": "{\"id\":\"a663d4aa-89a6-4886-bf67-6cf02a79f27a\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-8@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:22.243054Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:22.248785Z\",\"updated_at\":\"2026-10-01T02:13:22.248789Z\"}"
+    },
+    {
+      "name": "invite 10/12",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/fd3bc324-2afa-5858-b4b1-9166806d3147/invites",
+      "body_sha256": "5f0ce185e9e7dcf55cbc158d14e688024284509d65666f771b9f11e5b7ace2a3",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 201,
+      "headers": {
+        "content-length": "368",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a38eddb4-5ca0-411b-9a96-06913742bea9"
+      },
+      "body": "{\"id\":\"fbc27d61-b7a8-4ba8-a8fd-22764e3b08a7\",\"org_id\":\"fd3bc324-2afa-5858-b4b1-9166806d3147\",\"email\":\"shared-limit-9@example.com\",\"role\":\"member\",\"invited_by_id\":\"65705b66-ccf9-5e3d-9351-6b407cbe733b\",\"status\":\"pending\",\"expires_at\":\"2026-10-04T02:13:22.380464Z\",\"accepted_at\":null,\"created_at\":\"2026-10-01T02:13:22.385931Z\",\"updated_at\":\"2026-10-01T02:13:22.385934Z\"}"
+    },
+    {
+      "name": "invite 11/12",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/fd3bc324-2afa-5858-b4b1-9166806d3147/invites",
+      "body_sha256": "6acbe57e27685eefcee4f0e286c872437c6c2d8649c31f55174b8331a94926a6",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 429,
+      "headers": {
+        "content-length": "69",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3ac1f805-71f7-4d6e-96ef-e484126cdf73"
+      },
+      "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+    },
+    {
+      "name": "invite 12/12",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/fd3bc324-2afa-5858-b4b1-9166806d3147/invites",
+      "body_sha256": "01bde9fcdde0adaa5e579853deaa1831a7948ab1e67173c31c5ef597ce74a842",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 429,
+      "headers": {
+        "content-length": "69",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b8e1b253-6c13-439c-a44a-b441c54e25c9"
+      },
+      "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+    },
+    {
+      "name": "set password 1/7",
+      "method": "POST",
+      "path": "/api/v1/admin/users/5073c594-c00c-5981-9d6e-d85642fa9424/password",
+      "body_sha256": "d4df1adf07654c88826a2d2671464a26fead0aef3d50a30a8665936177a44a89",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "350b5653-45f8-4d93-b797-16262ff661c1"
+      },
+      "body": "{\"success\":true}"
+    },
+    {
+      "name": "set password 2/7",
+      "method": "POST",
+      "path": "/api/v1/admin/users/5073c594-c00c-5981-9d6e-d85642fa9424/password",
+      "body_sha256": "5b9c3bfc1c3c4ce1884d6d00ace6a19bc685fbf50c77cc8e00f68a46b1b1d7f3",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "89c7f049-1784-4305-8b6f-25a22160e426"
+      },
+      "body": "{\"success\":true}"
+    },
+    {
+      "name": "set password 3/7",
+      "method": "POST",
+      "path": "/api/v1/admin/users/5073c594-c00c-5981-9d6e-d85642fa9424/password",
+      "body_sha256": "11459f0ce104c8da389b31b72faaeea743c6f2c62a2d5c90e9acc4ccc23e71ac",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0821df91-0670-496f-8880-30a556efaa51"
+      },
+      "body": "{\"success\":true}"
+    },
+    {
+      "name": "set password 4/7",
+      "method": "POST",
+      "path": "/api/v1/admin/users/5073c594-c00c-5981-9d6e-d85642fa9424/password",
+      "body_sha256": "32e8d8785573c9abe61614c882b959fe341474435143f2bee5bae24d35bfb9c5",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "256aa01a-1314-498f-9c7d-180d1d63a883"
+      },
+      "body": "{\"success\":true}"
+    },
+    {
+      "name": "set password 5/7",
+      "method": "POST",
+      "path": "/api/v1/admin/users/5073c594-c00c-5981-9d6e-d85642fa9424/password",
+      "body_sha256": "91051a8a24be00b2f0294ecce07a1794a975d1bed6b908794d7fe88161878037",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "54b40c70-c46c-4782-ae2b-15eb7060f520"
+      },
+      "body": "{\"success\":true}"
+    },
+    {
+      "name": "set password 6/7",
+      "method": "POST",
+      "path": "/api/v1/admin/users/5073c594-c00c-5981-9d6e-d85642fa9424/password",
+      "body_sha256": "b20a41bc9df14880f13ad30404dff1100d3626f8a2586aaefcc73febaa0ff1bf",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 429,
+      "headers": {
+        "content-length": "69",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9eab0a98-b40f-45e7-a6f6-e3f894abd6eb"
+      },
+      "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+    },
+    {
+      "name": "set password 7/7",
+      "method": "POST",
+      "path": "/api/v1/admin/users/5073c594-c00c-5981-9d6e-d85642fa9424/password",
+      "body_sha256": "57c741e6ab24116ba635ee6aec859d0bbea209aa33005202c043f1ce14cb099f",
+      "request_headers_sha256": "3c90920eceb015da290a98326592beb3470baf820099fbed1a5c6821ffa3c7a8",
+      "status": 429,
+      "headers": {
+        "content-length": "69",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "14acfa1c-173d-4e58-93d2-45ec9bff4341"
+      },
+      "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+    }
+  ]
+}

@@ -46,14 +46,17 @@ func roundRobin(t *testing.T, backends ...string) string {
 // counters each replica would admit its own full allowance.
 func TestSharedRateLimitAcrossReplicasVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminGolden("sharedlimit", t.Name(), "3ebba60f06c643495f0b679247a52ae5233fd0d97bbe519ff3fcf3f3ce0a6fd4"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("shl")
 	const jwtKey = "venue-oracle-test-secret-key-for-shared-rate-limit-32-by"
 	const adminPlaintextPassword = "correct horse battery staple sl"
 	const invites, resets = 12, 7
 
-	orgID, adminID, targetID := uuid.New(), uuid.New(), uuid.New()
+	orgID, adminID, targetID := nextID(), nextID(), nextID()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, JWTKey: jwtKey,
+		Golden: golden,
+		Root:   root, JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			return seedRateLimitVenue(t, ctx, admin, orgID, []uuid.UUID{adminID}, []uuid.UUID{targetID}, adminPlaintextPassword)
 		},
@@ -74,7 +77,7 @@ func TestSharedRateLimitAcrossReplicasVenueOracle(t *testing.T) {
 			Body: venueoracle.B64(fmt.Sprintf(`{"admin_password":%q,"password":"a new strong password %d"}`, adminPlaintextPassword, i)),
 		})
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 
 	// Two replicas: separate pools, separate Valkey clients, one Valkey.
 	replicaA, _ := startGoServer(t, ctx, venue, jwtKey)
@@ -82,6 +85,7 @@ func TestSharedRateLimitAcrossReplicasVenueOracle(t *testing.T) {
 	balanced := roundRobin(t, replicaA, replicaB)
 
 	receipt := venueoracle.Diff(t, balanced, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
 			for _, field := range []string{"id", "created_at", "updated_at", "expires_at"} {
 				body = redactField(t, body, field)
@@ -90,4 +94,5 @@ func TestSharedRateLimitAcrossReplicasVenueOracle(t *testing.T) {
 		},
 	})
 	t.Log(receipt)
+	golden.Finish(t)
 }

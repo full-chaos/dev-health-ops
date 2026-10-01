@@ -96,6 +96,26 @@ func decodeInviteMail(t *testing.T, captured smtpcapture.Mail) decodedInviteMail
 // checkInviteToken proves a token is the one invites.py's _build_token makes
 // for id under secret (the plane that produced it is named by label), and that
 // the stored token_hash is the sha256 of it.
+// pythonTokenHashes is the stored token hash of every invite the Python plane
+// created (each 201 answer's id), read through storedHash.
+func pythonTokenHashes(t *testing.T, responses []venueoracle.Response, storedHash func(string) string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, response := range responses {
+		if response.Status != 201 {
+			continue
+		}
+		var body struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(response.Body), &body); err != nil {
+			t.Fatalf("python: %v", err)
+		}
+		out[body.ID] = storedHash(body.ID)
+	}
+	return out
+}
+
 func checkInviteToken(t *testing.T, label, token, id, secret, storedHash string) {
 	t.Helper()
 	idHex := strings.ReplaceAll(id, "-", "")
@@ -117,12 +137,14 @@ func checkInviteToken(t *testing.T, label, token, id, secret, storedHash string)
 // construction, and the route's 10/hour keyed rate limit.
 func TestCreateOrgInviteVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminGolden("invites", t.Name(), "ee2ebb15c6c6a148575637d446ede9ce4f698321f910f00466d48aca499076fd"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("inv")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-invites-flow-32-bytes!"
 
-	orgID, plainOrgID, otherOrgID := uuid.New(), uuid.New(), uuid.New()
+	orgID, plainOrgID, otherOrgID := nextID(), nextID(), nextID()
 	ownerID, adminID, secondAdminID, memberID, outsiderID, superID, plainOwnerID, otherAdminID :=
-		uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+		nextID(), nextID(), nextID(), nextID(), nextID(), nextID(), nextID(), nextID()
 
 	sink := smtpcapture.Start(t)
 	smtpHost, smtpPort := sink.HostPort(t)
@@ -130,6 +152,7 @@ func TestCreateOrgInviteVenueOracle(t *testing.T) {
 	const appBaseURL = "https://app.example.test/"
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{
@@ -179,7 +202,7 @@ VALUES ($1, $2, $3, true, true, $4, 0, now(), now())`, row.id, row.email, row.fu
 				{orgID, memberID, "member"}, {plainOrgID, plainOwnerID, "owner"}, {otherOrgID, otherAdminID, "admin"},
 			} {
 				exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), row.org, row.user, row.role)
+VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), row.org, row.user, row.role)
 			}
 			token := func(id uuid.UUID, email string, org uuid.UUID, role string) map[string]any {
 				return map[string]any{"user_id": id.String(), "email": email, "org_id": org.String(), "role": role}
@@ -235,7 +258,7 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), row.org, row.user, ro
 		post("valid body by another org's admin is a 403", "otheradmin", orgID, `{"email":"cross@example.com"}`),
 		post("invite by a plain member is refused", "member", orgID, `{"email":"eighth@example.com"}`),
 		post("invite into another org is refused", "outsider", orgID, `{"email":"ninth@example.com"}`),
-		post("invite into a missing org", "super", uuid.New(), `{"email":"tenth@example.com"}`),
+		post("invite into a missing org", "super", nextID(), `{"email":"tenth@example.com"}`),
 		{Name: "invite unauthenticated", Method: "POST", Path: invitesPath(orgID),
 			Headers: map[string]string{"Content-Type": "application/json"}, Body: venueoracle.B64(`{"email":"anon@example.com"}`)},
 	}
@@ -254,14 +277,26 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), row.org, row.user, ro
 		post("owner still has its own bucket", "owner", orgID, `{"email":"owner-own-bucket@example.com"}`),
 	)
 
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 
 	// Every plane's mail, in the order sent. What each plane sent is compared
-	// below by RECIPIENT, never assumed to be one per 201.
-	pythonCaptured := sink.Drain(t)
-	pythonMails := make([]decodedInviteMail, 0, len(pythonCaptured))
-	for _, captured := range pythonCaptured {
-		pythonMails = append(pythonMails, decodeInviteMail(t, smtpcapture.Normalize(captured)))
+	// below by RECIPIENT, never assumed to be one per 201. The Python plane's
+	// mail is captured while recording and frozen with its answers.
+	var pythonMails []decodedInviteMail
+	pythonMailText := golden.InspectRows(t, "python invite mails", func() string {
+		captured := sink.Drain(t)
+		mails := make([]decodedInviteMail, 0, len(captured))
+		for _, message := range captured {
+			mails = append(mails, decodeInviteMail(t, smtpcapture.Normalize(message)))
+		}
+		raw, err := json.Marshal(mails)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	})
+	if err := json.Unmarshal([]byte(pythonMailText), &pythonMails); err != nil {
+		t.Fatalf("python invite mails %q: %v", pythonMailText, err)
 	}
 
 	t.Setenv("EMAIL_PROVIDER", "smtp")
@@ -279,6 +314,7 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), row.org, row.user, ro
 
 	var goResponses []venueoracle.Response
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Inspect: func(_ venueoracle.Request, response venueoracle.Response) {
 			goResponses = append(goResponses, response)
 		},
@@ -319,7 +355,7 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), row.org, row.user, ro
 	// _build_token(invite id) under the shared secret, and the stored hash is
 	// the sha256 of it -- so a token minted by either plane is one the other
 	// would accept.
-	verify := func(label, database string, responses []venueoracle.Response, mails []decodedInviteMail) {
+	verify := func(label string, storedHash func(id string) string, responses []venueoracle.Response, mails []decodedInviteMail) {
 		for _, response := range responses {
 			if response.Status != 201 {
 				continue
@@ -330,7 +366,7 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), row.org, row.user, ro
 			if err := json.Unmarshal([]byte(response.Body), &body); err != nil {
 				t.Fatalf("%s: %v", label, err)
 			}
-			stored := venueoracle.TableRows(t, ctx, database, fmt.Sprintf(`SELECT token_hash FROM org_invites WHERE id = '%s'`, body.ID))
+			stored := storedHash(body.ID)
 			found := false
 			for _, m := range mails {
 				if strings.HasPrefix(m.Token, strings.ReplaceAll(body.ID, "-", "")+".") {
@@ -343,30 +379,46 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), row.org, row.user, ro
 			}
 		}
 	}
-	verify("python", venue.AdminURI(t, venue.SourceDB), python, pythonMails)
-	verify("go", venue.AdminURI(t, venue.GoDB), goResponses, goMails)
+	hashes := func(uri string) func(string) string {
+		return func(id string) string {
+			return venueoracle.TableRows(t, ctx, uri, fmt.Sprintf(`SELECT token_hash FROM org_invites WHERE id = '%s'`, id))
+		}
+	}
+	// The Python plane's stored hashes, by invite id: read while recording,
+	// frozen otherwise.
+	pythonHashes := map[string]string{}
+	pythonHashText := golden.InspectRows(t, "python invite token hashes", func() string {
+		raw, err := json.Marshal(pythonTokenHashes(t, python, hashes(venue.AdminURI(t, venue.SourceDB))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	})
+	if err := json.Unmarshal([]byte(pythonHashText), &pythonHashes); err != nil {
+		t.Fatalf("python invite token hashes %q: %v", pythonHashText, err)
+	}
+	verify("python", func(id string) string { return pythonHashes[id] }, python, pythonMails)
+	verify("go", hashes(venue.AdminURI(t, venue.GoDB)), goResponses, goMails)
 
 	// The rows each route left, ignoring only what is random or clock-derived.
 	rowsQuery := `SELECT coalesce(string_agg(concat_ws('|', org_id::text, email, role, status, invited_by_id::text,
   round(extract(epoch from (expires_at - created_at)) / 3600)::text, coalesce(accepted_at::text, '<null>')), E'\x1e' ORDER BY email, org_id), '')
 FROM org_invites`
-	pythonRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), rowsQuery)
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), rowsQuery)
-	if pythonRows != goRows {
-		t.Errorf("org_invites rows differ:\n python: %q\n go:     %q", pythonRows, goRows)
-	}
+	golden.CompareRows(t, "org_invites rows", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), rowsQuery)
+	}, goRows)
 	auditQuery := `SELECT coalesce(string_agg(concat_ws('|', org_id::text, user_id::text, action, resource_type, description, status,
   coalesce(error_message, '<null>')), E'\x1e' ORDER BY changes::text, org_id), '')
 FROM audit_logs WHERE action = 'member_invited'`
-	pythonAudit := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), auditQuery)
 	goAudit := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), auditQuery)
-	if pythonAudit != goAudit {
-		t.Errorf("member_invited audit rows differ:\n python: %q\n go:     %q", pythonAudit, goAudit)
-	}
+	pythonAudit := golden.CompareRows(t, "member_invited audit rows", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), auditQuery)
+	}, goAudit)
 	if pythonAudit == "" {
 		t.Error("no member_invited audit rows on either plane: the comparison compared nothing")
 	}
-	compareAuditJSONWithSpacingGap(t, ctx, venue, `action = 'member_invited'`, "changes")
+	compareAuditJSONWithSpacingGap(t, ctx, golden, venue, `action = 'member_invited'`, "changes")
 
 	// The rate-limit is per (admin, path): the eleventh call above was
 	// limited on both planes (Diff compared status and body), and the
@@ -402,6 +454,7 @@ FROM audit_logs WHERE action = 'member_invited'`
 	if rows != "1" || audit != "1" {
 		t.Errorf("invite rows %s, audit rows %s, want 1 and 1 after a failed send", rows, audit)
 	}
+	golden.Finish(t)
 }
 
 func strPtr(value string) *string { return &value }

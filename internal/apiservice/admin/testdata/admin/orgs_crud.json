@@ -1,0 +1,810 @@
+{
+  "header": {
+    "test": "TestOrgCRUDMatchesThePythonAPI",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestOrgCRUDMatchesThePythonAPI$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)"
+  },
+  "requests": [
+    {
+      "name": "list orgs",
+      "method": "GET",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "117bd029998e8f8757e50cca5cd57cdd8607aa2956e9696bbc205c9f3e0fdea0",
+      "status": 200,
+      "headers": {
+        "content-length": "244",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f4ae3e9c-194a-49b7-86d7-21c1e780a327"
+      },
+      "body": "[{\"id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"slug\":\"venue-org-3\",\"name\":\"Venue Org 3\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-01-01T00:00:01.123456Z\",\"updated_at\":\"2026-01-01T00:00:01.123456Z\"}]"
+    },
+    {
+      "name": "list orgs empty limit",
+      "method": "GET",
+      "path": "/api/v1/admin/orgs?limit=",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "117bd029998e8f8757e50cca5cd57cdd8607aa2956e9696bbc205c9f3e0fdea0",
+      "status": 422,
+      "headers": {
+        "content-length": "148",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ff5283c8-47e4-4527-893a-88b3fe275644"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"\"}]}"
+    },
+    {
+      "name": "list orgs mixed-case bool",
+      "method": "GET",
+      "path": "/api/v1/admin/orgs?active_only=YeS",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "117bd029998e8f8757e50cca5cd57cdd8607aa2956e9696bbc205c9f3e0fdea0",
+      "status": 200,
+      "headers": {
+        "content-length": "244",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fd586aa8-58fc-48de-99b6-41af12338cad"
+      },
+      "body": "[{\"id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"slug\":\"venue-org-3\",\"name\":\"Venue Org 3\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-01-01T00:00:01.123456Z\",\"updated_at\":\"2026-01-01T00:00:01.123456Z\"}]"
+    },
+    {
+      "name": "list orgs duplicate limit",
+      "method": "GET",
+      "path": "/api/v1/admin/orgs?limit=0\u0026limit=1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "117bd029998e8f8757e50cca5cd57cdd8607aa2956e9696bbc205c9f3e0fdea0",
+      "status": 200,
+      "headers": {
+        "content-length": "244",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c4126aa9-89e4-47c3-a009-e3b0a8630b7b"
+      },
+      "body": "[{\"id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"slug\":\"venue-org-3\",\"name\":\"Venue Org 3\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-01-01T00:00:01.123456Z\",\"updated_at\":\"2026-01-01T00:00:01.123456Z\"}]"
+    },
+    {
+      "name": "list orgs padded limit",
+      "method": "GET",
+      "path": "/api/v1/admin/orgs?limit=%201%20",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "117bd029998e8f8757e50cca5cd57cdd8607aa2956e9696bbc205c9f3e0fdea0",
+      "status": 200,
+      "headers": {
+        "content-length": "244",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e38b8fe2-bf41-4778-8a27-8d01a1c87a96"
+      },
+      "body": "[{\"id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"slug\":\"venue-org-3\",\"name\":\"Venue Org 3\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-01-01T00:00:01.123456Z\",\"updated_at\":\"2026-01-01T00:00:01.123456Z\"}]"
+    },
+    {
+      "name": "get org",
+      "method": "GET",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "117bd029998e8f8757e50cca5cd57cdd8607aa2956e9696bbc205c9f3e0fdea0",
+      "status": 200,
+      "headers": {
+        "content-length": "242",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fde8cb91-da9a-431b-b20b-e55ea6ba87ff"
+      },
+      "body": "{\"id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"slug\":\"venue-org-3\",\"name\":\"Venue Org 3\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-01-01T00:00:01.123456Z\",\"updated_at\":\"2026-01-01T00:00:01.123456Z\"}"
+    },
+    {
+      "name": "get org as non-superuser refused",
+      "method": "GET",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "73060b428866aacf4edd500bf5c6d6b443f0c2a5c7aed8fab38ed5fda1efeb8c",
+      "status": 403,
+      "headers": {
+        "content-length": "38",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "caf46d65-6215-4f74-8938-0541f3f90af0"
+      },
+      "body": "{\"detail\":\"Superuser access required\"}"
+    },
+    {
+      "name": "create org",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "df617da0c154a4ad959faea509b3f81f81cc01c2ad39070ac8d244aa947dce4b",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "238",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b3737ea1-2614-467a-8a3c-178316684d67"
+      },
+      "body": "{\"id\":\"5dd3cc3d-b080-4036-b8e8-c8049614f2bf\",\"slug\":\"a-new-org\",\"name\":\"A New Org\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:05.214526Z\",\"updated_at\":\"2026-10-01T02:09:05.214530Z\"}"
+    },
+    {
+      "name": "create org with settings",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "a5f8ede7b17b7da5c06bcca27963a0a9a967aff081d78113a78b88d534b6c725",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "265",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4214aaf4-8daf-44b2-a977-c45ef873465f"
+      },
+      "body": "{\"id\":\"aec88a96-5be1-4299-a7a8-51e5c61aba37\",\"slug\":\"org-with-settings\",\"name\":\"Org With Settings\",\"description\":null,\"tier\":\"community\",\"settings\":{\"flag\":true},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:05.417974Z\",\"updated_at\":\"2026-10-01T02:09:05.417978Z\"}"
+    },
+    {
+      "name": "create org with float settings",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "cf50e2cce9dc4423589550222ca5efcdbc4d9d31b7075660139a6b1d427dae49",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "346",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "81234d54-044d-4891-88ad-903a4dff40e0"
+      },
+      "body": "{\"id\":\"ee9e0e98-1175-4e3f-a22f-8c05fa93fc44\",\"slug\":\"org-with-float-settings\",\"name\":\"Org With Float Settings\",\"description\":null,\"tier\":\"community\",\"settings\":{\"tiny\":1e-7,\"edge\":0.00001,\"below\":9.99e-6,\"big\":1e+21,\"neg\":-2.5e-9,\"whole\":3.0},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:05.617230Z\",\"updated_at\":\"2026-10-01T02:09:05.617233Z\"}"
+    },
+    {
+      "name": "create org whitespace name",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "14dedb816d08387d0ac4a537c525286b444f6c8c25eb9bcd32d85dc47ac53997",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 422,
+      "headers": {
+        "content-length": "138",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a94ec19e-2af8-4f20-9942-cfff2bb370fc"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"name\"],\"msg\":\"Value error, Workspace name is required\",\"input\":\"   \",\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "create org owner insert fails",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "07c1aa0ff0f3f9d45ee6bdb2f60f5569048687eb125ac4aaa62e1ff5418bb32f",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "create org malformed owner id",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "b9d92fd8d650422166d0f76e049bf841a7dbb834f07fa2a44e8cf006e096e207",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "create org empty description",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "40e0427af54dacbcece2a4eb573e66ba3fe4c4189d9185c3c308931ec784647d",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "260",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7671ce87-f269-4ef6-b84e-0a58f2579099"
+      },
+      "body": "{\"id\":\"79202e19-bf95-4303-8fe8-cb123e8addca\",\"slug\":\"org-empty-description\",\"name\":\"Org Empty Description\",\"description\":\"\",\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:06.405619Z\",\"updated_at\":\"2026-10-01T02:09:06.405622Z\"}"
+    },
+    {
+      "name": "create org unicode name",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "79fe277ecc036823151fdfbe4d8f5f0a6c149085ed7ed0f49f8e93d7a8021dd9",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "244",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "219ef816-9422-4d6a-be6f-5105a80da7e0"
+      },
+      "body": "{\"id\":\"03b27240-754c-4f0e-b06c-d8cd1522fdae\",\"slug\":\"café-東京\",\"name\":\"Café 東京\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:06.606956Z\",\"updated_at\":\"2026-10-01T02:09:06.606960Z\"}"
+    },
+    {
+      "name": "create org control-whitespace name",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "16ed76ebefa8c4557979ba8885c4cfd65b3aab3c7e151e1366474236461955c8",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 422,
+      "headers": {
+        "content-length": "141",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "86a943e0-9bdf-460e-8b10-1e9c1bbaff21"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"name\"],\"msg\":\"Value error, Workspace name is required\",\"input\":\"\\u001c\",\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "create org name padded with control whitespace",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "eab7de2b2b152491a8a056bb2943f8ddd730bd85e5f6af551b401e6cae65e3fb",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "246",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b7830309-d25c-48f0-a026-ec8db7d46643"
+      },
+      "body": "{\"id\":\"f8038f49-016a-48a0-bf09-d51bd6d6d0d6\",\"slug\":\"stripped-name\",\"name\":\"Stripped Name\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:06.964726Z\",\"updated_at\":\"2026-10-01T02:09:06.964729Z\"}"
+    },
+    {
+      "name": "create org name with control whitespace inside",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "ebfcce19d74e5b527d0f6d4d1220a82b6ec22ffc08b4a8bd5e4114114d0dbf61",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "245",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "38c95df7-6340-4067-86e9-4e5d34c39a60"
+      },
+      "body": "{\"id\":\"3dc45978-cd96-4e56-a3e2-a9875ed8e48f\",\"slug\":\"left-right\",\"name\":\"Left\\u001cRight\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:07.164275Z\",\"updated_at\":\"2026-10-01T02:09:07.164277Z\"}"
+    },
+    {
+      "name": "create org dotted capital I name",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "be2fe4ddab8fdd6b9b5beb6c7e577bbde5f516d0c06c7847876288144f5f890f",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "237",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "17bfa284-a713-481a-bc20-1d9433c71ddd"
+      },
+      "body": "{\"id\":\"1dd55d90-8d62-4ee4-82f2-a5cb6771c8e0\",\"slug\":\"istanbul\",\"name\":\"İstanbul\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:07.364293Z\",\"updated_at\":\"2026-10-01T02:09:07.364297Z\"}"
+    },
+    {
+      "name": "create org dotted capital I name again",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "be2fe4ddab8fdd6b9b5beb6c7e577bbde5f516d0c06c7847876288144f5f890f",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "246",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a71a3f83-533a-4bfc-b67f-d3db04c6a79f"
+      },
+      "body": "{\"id\":\"7e795ed7-1109-4f58-ba98-c2e89171898a\",\"slug\":\"istanbul-a788a9ac\",\"name\":\"İstanbul\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:07.562043Z\",\"updated_at\":\"2026-10-01T02:09:07.562045Z\"}"
+    },
+    {
+      "name": "create org dotted capital I name padded again",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "e4ad193cd93fe94e8b08c4945321d494eaa78a38955f1924aff475fe3c992618",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "246",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c182ddd7-d0ce-4ba8-8fbf-34ecb986b094"
+      },
+      "body": "{\"id\":\"843e307d-afee-4e2c-b116-4b84dd1bcafc\",\"slug\":\"istanbul-271e2204\",\"name\":\"İSTANBUL\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:07.760667Z\",\"updated_at\":\"2026-10-01T02:09:07.760671Z\"}"
+    },
+    {
+      "name": "create org lowered dotted i name",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "73911533e53e480af10b1327b400fabaf03990fa447d923e59933c1f1a29c3c7",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "247",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "26f57ca8-b84d-42ec-8d9b-aafd05f45ca7"
+      },
+      "body": "{\"id\":\"d463d1a0-6bb6-45f9-8eef-90ced9cfe0a8\",\"slug\":\"istanbul-8f6455e0\",\"name\":\"i̇stanbul\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:07.959088Z\",\"updated_at\":\"2026-10-01T02:09:07.959091Z\"}"
+    },
+    {
+      "name": "create org explicit dotted capital I slug",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "d082145190493308a99e14f4c30aacc117353a7d074d7d4be83851572bf411a7",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "255",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4f3f7761-a97f-40c5-b9ed-e0f619a6f2e9"
+      },
+      "body": "{\"id\":\"38251939-be46-4695-8a6e-985252ec508f\",\"slug\":\"İstanbul-explicit\",\"name\":\"Explicit Slug Org\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:08.159765Z\",\"updated_at\":\"2026-10-01T02:09:08.159768Z\"}"
+    },
+    {
+      "name": "create org explicit dotted capital I slug again",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "f040a650410cb8f4c3aeac4ecdc945d36d85db39f40a59203b229b8340711e6a",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "create org explicit lowered dotted i slug",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "b74fc6272d0512af8a0f03f96df8724f11a504eff73c6bb91588704355857ff8",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "262",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "477306cd-b005-44b3-bb7e-e97a794a313d"
+      },
+      "body": "{\"id\":\"3b5a8f2e-2532-45a2-93b0-d8b9f36e80b7\",\"slug\":\"i̇stanbul-explicit\",\"name\":\"Explicit Slug Org Three\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:08.568485Z\",\"updated_at\":\"2026-10-01T02:09:08.568489Z\"}"
+    },
+    {
+      "name": "create org explicit plain i slug",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs",
+      "body_sha256": "57c855c1e7744b9b041654f5ab7acf27bff94f4a0c1effd3eee5ff07cc28dc9c",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 201,
+      "headers": {
+        "content-length": "268",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ebf06230-11a4-4bef-9994-5ac30f616ae8"
+      },
+      "body": "{\"id\":\"e0660d15-5d39-4d9e-8d3f-d7ad888d5760\",\"slug\":\"istanbul-explicit-6f20587a\",\"name\":\"Explicit Slug Org Four\",\"description\":null,\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-10-01T02:09:08.769213Z\",\"updated_at\":\"2026-10-01T02:09:08.769216Z\"}"
+    },
+    {
+      "name": "patch org",
+      "method": "PATCH",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109",
+      "body_sha256": "d638f56a59dbd57bca0688297ce1bf017e24b99e6103d0c8476091cdc6e76ae1",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 200,
+      "headers": {
+        "content-length": "259",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1a35b5cc-ba34-4b8e-ade5-e97c5a208d85"
+      },
+      "body": "{\"id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"slug\":\"venue-org-3\",\"name\":\"Venue Org 3\",\"description\":\"updated description\",\"tier\":\"community\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-01-01T00:00:01.123456Z\",\"updated_at\":\"2026-10-01T02:09:08.965108Z\"}"
+    },
+    {
+      "name": "patch org not found",
+      "method": "PATCH",
+      "path": "/api/v1/admin/orgs/fe5fac9e-cdbc-503d-a6ad-0c4e907b8763",
+      "body_sha256": "38cc295f1804bce7bc8a5b18987effccdef215258a71be58132b40c6e5053b03",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 404,
+      "headers": {
+        "content-length": "35",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7a6746ee-2c5e-43a5-a25f-60598c90d0d0"
+      },
+      "body": "{\"detail\":\"Organization not found\"}"
+    },
+    {
+      "name": "patch org tier",
+      "method": "PATCH",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109",
+      "body_sha256": "4888f72623af6a09c71db379e3ab465117372a7d229c11bd7b69e1de52b9e129",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 200,
+      "headers": {
+        "content-length": "260",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5d1fb8b3-a8dd-4ef0-b690-c8a5feb36235"
+      },
+      "body": "{\"id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"slug\":\"venue-org-3\",\"name\":\"Venue Org 3\",\"description\":\"updated description\",\"tier\":\"enterprise\",\"settings\":{},\"is_active\":true,\"created_at\":\"2026-01-01T00:00:01.123456Z\",\"updated_at\":\"2026-10-01T02:09:09.370369Z\"}"
+    },
+    {
+      "name": "patch org invalid settings type",
+      "method": "PATCH",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109",
+      "body_sha256": "735652d3e44f930341c7f28f3db20ee92eb3d3896a7ef98a2d96cd70d28fdffa",
+      "request_headers_sha256": "d969da3e76f9221aa7a634e8cd6bcd1247e85c1e5759ccee3b062404208f9d56",
+      "status": 422,
+      "headers": {
+        "content-length": "113",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e901288e-efcb-4135-81b4-7e9defd55fdd"
+      },
+      "body": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\",\"settings\"],\"msg\":\"Input should be a valid dictionary\",\"input\":[]}]}"
+    },
+    {
+      "name": "list members",
+      "method": "GET",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109/members",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "73060b428866aacf4edd500bf5c6d6b443f0c2a5c7aed8fab38ed5fda1efeb8c",
+      "status": 200,
+      "headers": {
+        "content-length": "924",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b1850613-c10f-4c59-9351-62a9d083a840"
+      },
+      "body": "[{\"id\":\"7d0f4dd6-a932-5599-94f1-5344033c777f\",\"org_id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"user_id\":\"c3d3ace1-55a2-59a7-8e46-2c31ceacad2e\",\"role\":\"owner\",\"invited_by_id\":null,\"joined_at\":\"2026-01-01T00:00:10.123456Z\",\"created_at\":\"2026-01-01T00:00:10.123456Z\",\"updated_at\":\"2026-01-01T00:00:10.123456Z\"},{\"id\":\"5f604262-d3f3-5db2-8017-ea8e6b4c17f4\",\"org_id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"user_id\":\"465e1f58-a113-5673-aa63-d1dbc1dc14fb\",\"role\":\"member\",\"invited_by_id\":null,\"joined_at\":\"2026-01-01T00:00:11.123456Z\",\"created_at\":\"2026-01-01T00:00:11.123456Z\",\"updated_at\":\"2026-01-01T00:00:11.123456Z\"},{\"id\":\"05204288-71b0-59fd-b62c-a409808ca1e9\",\"org_id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"user_id\":\"d868b2ae-7264-5f04-9425-d5a304cfb5e5\",\"role\":\"member\",\"invited_by_id\":null,\"joined_at\":\"2026-01-01T00:00:12.123456Z\",\"created_at\":\"2026-01-01T00:00:12.123456Z\",\"updated_at\":\"2026-01-01T00:00:12.123456Z\"}]"
+    },
+    {
+      "name": "add member missing user",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109/members",
+      "body_sha256": "6304ad6c18a309ae39939c85011b5290f2b99f4beca7e5206c77350d7e0be69a",
+      "request_headers_sha256": "7279795e51b1cda5bed7f1fcf170411e285374b18b44f8f0960eb3b5e638f516",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "add member already exists",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109/members",
+      "body_sha256": "0800d88a03eb2c21b8651533577e1583d4adf5582ffdac7cba7c6ab82512bdaa",
+      "request_headers_sha256": "7279795e51b1cda5bed7f1fcf170411e285374b18b44f8f0960eb3b5e638f516",
+      "status": 400,
+      "headers": {
+        "content-length": "58",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9ecf3334-b1d8-40e0-af1a-18a0f0c6810f"
+      },
+      "body": "{\"detail\":\"User is already a member of this organization\"}"
+    },
+    {
+      "name": "add member malformed inviter id",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109/members",
+      "body_sha256": "55c9ba0ffff892cb9bd51679c737719a4bffc47618706dab0f4e357f183a44b5",
+      "request_headers_sha256": "7279795e51b1cda5bed7f1fcf170411e285374b18b44f8f0960eb3b5e638f516",
+      "status": 400,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "15ce83ad-49fd-47d5-8db9-addcfeb28c93"
+      },
+      "body": "{\"detail\":\"badly formed hexadecimal UUID string\"}"
+    },
+    {
+      "name": "add member empty role",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109/members",
+      "body_sha256": "f5d55fa7e86ec8201daa7f7dd6d6abd87444fcb8603cede00d3a8881df040cc5",
+      "request_headers_sha256": "7279795e51b1cda5bed7f1fcf170411e285374b18b44f8f0960eb3b5e638f516",
+      "status": 201,
+      "headers": {
+        "content-length": "301",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f57eea61-1a09-4f8c-926a-247d3326f081"
+      },
+      "body": "{\"id\":\"9e9d7c72-ce8e-4e78-81c9-3235f0a8789b\",\"org_id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"user_id\":\"745dbc20-e1ed-5335-97af-fcd0c2a5b8d1\",\"role\":\"\",\"invited_by_id\":null,\"joined_at\":\"2026-10-01T02:09:10.148958Z\",\"created_at\":\"2026-10-01T02:09:10.148962Z\",\"updated_at\":\"2026-10-01T02:09:10.148962Z\"}"
+    },
+    {
+      "name": "add member null role",
+      "method": "POST",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109/members",
+      "body_sha256": "601b71bf0bfc1cdf30df582bfe4d91d787ab67517b0b57889310dacd430eeeea",
+      "request_headers_sha256": "7279795e51b1cda5bed7f1fcf170411e285374b18b44f8f0960eb3b5e638f516",
+      "status": 422,
+      "headers": {
+        "content-length": "109",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d77c7345-99c1-4311-ba50-a520075414f7"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"role\"],\"msg\":\"Input should be a valid string\",\"input\":null}]}"
+    },
+    {
+      "name": "patch member role",
+      "method": "PATCH",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109/members/d868b2ae-7264-5f04-9425-d5a304cfb5e5",
+      "body_sha256": "26593b93a679a88d82debcee1fc6e6bf045c1f0b42fff6855a04270a115dd572",
+      "request_headers_sha256": "7279795e51b1cda5bed7f1fcf170411e285374b18b44f8f0960eb3b5e638f516",
+      "status": 200,
+      "headers": {
+        "content-length": "306",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5f2eccfb-f12c-4fd9-9713-ae71c9afccdc"
+      },
+      "body": "{\"id\":\"05204288-71b0-59fd-b62c-a409808ca1e9\",\"org_id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"user_id\":\"d868b2ae-7264-5f04-9425-d5a304cfb5e5\",\"role\":\"admin\",\"invited_by_id\":null,\"joined_at\":\"2026-01-01T00:00:12.123456Z\",\"created_at\":\"2026-01-01T00:00:12.123456Z\",\"updated_at\":\"2026-10-01T02:09:10.355028Z\"}"
+    },
+    {
+      "name": "patch member role invalid",
+      "method": "PATCH",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109/members/d868b2ae-7264-5f04-9425-d5a304cfb5e5",
+      "body_sha256": "1ff97601b7ec06aec5f8ba3901042fe88d49f547283775e62d2a256fe670d0e1",
+      "request_headers_sha256": "7279795e51b1cda5bed7f1fcf170411e285374b18b44f8f0960eb3b5e638f516",
+      "status": 400,
+      "headers": {
+        "content-length": "37",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "38105fb7-b408-4ec4-8b14-f301bc472888"
+      },
+      "body": "{\"detail\":\"Invalid role: not-a-role\"}"
+    },
+    {
+      "name": "list members duplicate role",
+      "method": "GET",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109/members?role=owner\u0026role=member",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "73060b428866aacf4edd500bf5c6d6b443f0c2a5c7aed8fab38ed5fda1efeb8c",
+      "status": 200,
+      "headers": {
+        "content-length": "309",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ec42e70d-c4a6-4688-b6f1-863e3cc69918"
+      },
+      "body": "[{\"id\":\"5f604262-d3f3-5db2-8017-ea8e6b4c17f4\",\"org_id\":\"3ca3f1ce-0187-57a0-9f92-85dce653c109\",\"user_id\":\"465e1f58-a113-5673-aa63-d1dbc1dc14fb\",\"role\":\"member\",\"invited_by_id\":null,\"joined_at\":\"2026-01-01T00:00:11.123456Z\",\"created_at\":\"2026-01-01T00:00:11.123456Z\",\"updated_at\":\"2026-01-01T00:00:11.123456Z\"}]"
+    },
+    {
+      "name": "remove member",
+      "method": "DELETE",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109/members/d868b2ae-7264-5f04-9425-d5a304cfb5e5",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "73060b428866aacf4edd500bf5c6d6b443f0c2a5c7aed8fab38ed5fda1efeb8c",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "627ab039-5610-4a46-8f6b-6eca477e559d"
+      },
+      "body": "{\"deleted\":true}"
+    },
+    {
+      "name": "remove last owner refused",
+      "method": "DELETE",
+      "path": "/api/v1/admin/orgs/3ca3f1ce-0187-57a0-9f92-85dce653c109/members/c3d3ace1-55a2-59a7-8e46-2c31ceacad2e",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "73060b428866aacf4edd500bf5c6d6b443f0c2a5c7aed8fab38ed5fda1efeb8c",
+      "status": 400,
+      "headers": {
+        "content-length": "60",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bf0e1b58-d975-4636-b291-af6a9b60e752"
+      },
+      "body": "{\"detail\":\"Cannot remove the last owner of an organization\"}"
+    }
+  ],
+  "rows": {
+    "org_licenses row": {
+      "rows": "enterprisemanual{}{}"
+    },
+    "orphan organization count": {
+      "rows": "0"
+    }
+  }
+}

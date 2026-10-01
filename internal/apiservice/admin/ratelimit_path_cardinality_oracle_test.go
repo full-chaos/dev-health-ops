@@ -27,14 +27,17 @@ import (
 // answer is a 403/404 from the endpoint, not a 429 from the limiter.
 func TestRateLimitPathCardinalityVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminGolden("ratelimit_path_cardinality", t.Name(), "c38e50feba645bb0998bf03dab80a47d9f131bba581b3de03806b911b9d201ff"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("rlpc")
 	const jwtKey = "venue-oracle-test-secret-key-for-path-cardinality-32-by"
 	const adminPlaintextPassword = "correct horse battery staple pc"
 	const distinctPaths = 1001
 
-	orgID, adminID, targetID := uuid.New(), uuid.New(), uuid.New()
+	orgID, adminID, targetID := nextID(), nextID(), nextID()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, JWTKey: jwtKey,
+		Golden: golden,
+		Root:   root, JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			return seedRateLimitVenue(t, ctx, admin, orgID, []uuid.UUID{adminID}, []uuid.UUID{targetID}, adminPlaintextPassword)
 		},
@@ -44,11 +47,11 @@ func TestRateLimitPathCardinalityVenueOracle(t *testing.T) {
 	for i := range distinctPaths {
 		requests = append(requests, venueoracle.Request{
 			Name: fmt.Sprintf("invite to distinct org %d/%d", i+1, distinctPaths), Method: "POST",
-			Path: "/api/v1/admin/orgs/" + uuid.NewString() + "/invites", Headers: headers,
+			Path: "/api/v1/admin/orgs/" + nextID().String() + "/invites", Headers: headers,
 			Body: venueoracle.B64(fmt.Sprintf(`{"email":"path-cardinality-%d@example.com"}`, i)),
 		})
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	for i, response := range python {
 		if response.Status == 429 {
 			t.Fatalf("python refused request %d with 429: the oracle case is wrong, Python bounds nothing", i+1)
@@ -56,6 +59,7 @@ func TestRateLimitPathCardinalityVenueOracle(t *testing.T) {
 	}
 
 	replica, _ := startGoServer(t, ctx, venue, jwtKey)
-	receipt := venueoracle.Diff(t, replica, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, replica, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
+	golden.Finish(t)
 }

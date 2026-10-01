@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -62,23 +63,27 @@ func (f *fakePagerDutyRevokeServer) count() int {
 // Python encrypt_value does (via venue.CallPython, never a hand-rolled
 // ciphertext), is seeded for a target org and a control org; a real
 // (non-dry-run) delete is sent to BOTH planes, and this test asserts the
-// fake server saw exactly one revoke call per plane and that the
+// fake server saw exactly one revoke call per plane (the Python plane's
+// count is recorded with its answers) and that the
 // credential row is gone for the target org, present for the control org,
 // on both planes.
 func TestOrgDeletionRevokesPagerDutyOnBothPlanes(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminGolden("orgdeletion_pagerduty", t.Name(), "1ab118083883b7b8a9df15050c5200c5e1d000c1a5f7ec4b5fd54a174cf31d43"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("odpd")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-pd-flow-32-byt"
 
 	fake := &fakePagerDutyRevokeServer{}
 	fakeServer := httptest.NewServer(http.HandlerFunc(fake.handler))
 	t.Cleanup(fakeServer.Close)
 
-	targetOrgID := uuid.New()
-	controlOrgID := uuid.New()
-	superID := uuid.New()
+	targetOrgID := nextID()
+	controlOrgID := nextID()
+	superID := nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{
@@ -137,7 +142,12 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 		{Name: "delete org real (pagerduty revoke)", Method: "DELETE",
 			Path: "/api/v1/admin/orgs/" + targetOrgID.String(), Headers: map[string]string{"Authorization": bearer}},
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
+	// The Python plane's revoke calls, counted while it answered (recorded
+	// with its answers; a frozen run reads them back). The Go plane's are
+	// counted from here on.
+	pythonCalls := golden.InspectRows(t, "pagerduty revoke calls by the python plane", func() string { return strconv.Itoa(fake.count()) })
+	beforeGo := fake.count()
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: orgDeletionVenuePagerDutyID, RevokeURL: fakeServer.URL}
@@ -149,14 +159,18 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 	})
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
 			return dropKnownStaleClickHouseWarnings(t, redactField(t, body, "timestamp"))
 		},
 	})
 	t.Log(receipt)
 
-	if got := fake.count(); got != 2 {
-		t.Errorf("fake pagerduty revoke server saw %d calls, want 2 (one per plane)", got)
+	if pythonCalls != "1" {
+		t.Errorf("the python plane made %s pagerduty revoke call(s), want 1", pythonCalls)
+	}
+	if got := fake.count() - beforeGo; got != 1 {
+		t.Errorf("the go plane made %d pagerduty revoke call(s), want 1", got)
 	}
 
 	credentialQuery := func(orgID uuid.UUID) string {
@@ -170,13 +184,13 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 		{"target", targetOrgID, "0"},
 		{"control", controlOrgID, "1"},
 	} {
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), credentialQuery(check.org))
 		got := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), credentialQuery(check.org))
-		if source != got {
-			t.Errorf("pagerduty credential row count differs for %s org:\n python: %s\n go:     %s", check.label, source, got)
-		}
+		golden.CompareRows(t, "pagerduty credential row count: "+check.label, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), credentialQuery(check.org))
+		}, got)
 		if got != check.want {
 			t.Errorf("pagerduty credential row count for %s org = %s, want %s", check.label, got, check.want)
 		}
 	}
+	golden.Finish(t)
 }

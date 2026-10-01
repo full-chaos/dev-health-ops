@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -26,25 +27,30 @@ var slugSuffix = regexp.MustCompile(`"slug":"([^"]*?)-[0-9a-f]{8}"`)
 
 func TestOrgCRUDMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, adminGolden("orgs_crud", t.Name(), "54a367db4ef0eb13ef8e18c2bc516d4dd7906b984d04ab7201f805b961968ae4"))
+	root := golden.PythonRoot(t, repoRoot(t))
+	nextID := goldenIDs("orgs")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-crud-flow-32-bytes!!!"
 
-	orgID := uuid.New()
-	ownerID := uuid.New()
-	memberID := uuid.New()
-	newMemberID := uuid.New()
-	superID := uuid.New()
-	inviterTargetID := uuid.New()
-	emptyRoleTargetID := uuid.New()
-	nullRoleTargetID := uuid.New()
+	orgID := nextID()
+	ownerID := nextID()
+	memberID := nextID()
+	newMemberID := nextID()
+	superID := nextID()
+	inviterTargetID := nextID()
+	emptyRoleTargetID := nextID()
+	nullRoleTargetID := nextID()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
+			clock := seedClock()
 			exec := func(sql string, args ...any) {
 				t.Helper()
+				sql = strings.ReplaceAll(sql, "now()", clock())
 				if _, err := admin.Exec(ctx, sql, args...); err != nil {
 					t.Fatalf("seed: %v\n%s", err, sql)
 				}
@@ -56,7 +62,7 @@ VALUES ($1, 'venue-org-3', 'Venue Org 3', 'community', 'stripe', true, now(), no
 			// inserts one, so this seed is required for that case to
 			// exercise the sync path at all.
 			exec(`INSERT INTO org_licenses (id, org_id, tier, is_valid, license_type, managed_by, created_at, updated_at)
-VALUES ($1, $2, 'community', true, 'saas', 'stripe', now(), now())`, uuid.New(), orgID)
+VALUES ($1, $2, 'community', true, 'saas', 'stripe', now(), now())`, nextID(), orgID)
 			for _, row := range []struct {
 				id    uuid.UUID
 				email string
@@ -74,11 +80,11 @@ VALUES ($1, $2, 'community', true, 'saas', 'stripe', now(), now())`, uuid.New(),
 VALUES ($1, $2, true, true, $3, 0, now(), now())`, row.id, row.email, row.super)
 			}
 			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'owner', now(), now(), now())`, uuid.New(), orgID, ownerID)
+VALUES ($1, $2, $3, 'owner', now(), now(), now())`, nextID(), orgID, ownerID)
 			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID)
+VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, memberID)
 			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMemberID)
+VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, newMemberID)
 			return map[string]map[string]any{
 				"owner": {"user_id": ownerID.String(), "email": "venue-owner@example.com", "org_id": orgID.String(), "role": "owner"},
 				"super": {"user_id": superID.String(), "email": "venue-super@example.com", "is_superuser": true},
@@ -138,7 +144,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 		// must not survive that failure either. A live round found Go
 		// leaving a committed, ownerless org behind.
 		{Name: "create org owner insert fails", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
-			Body: venueoracle.B64(fmt.Sprintf(`{"name":"Orphan Owner Org","owner_user_id":%q}`, uuid.New().String()))},
+			Body: venueoracle.B64(fmt.Sprintf(`{"name":"Orphan Owner Org","owner_user_id":%q}`, nextID().String()))},
 		// A MALFORMED owner_user_id is a different failure than a
 		// well-formed-but-nonexistent one above: uuid.UUID() itself raises,
 		// unhandled, all the way to a generic 500 -- a live round found Go
@@ -188,7 +194,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 			Body: venueoracle.B64(`{"name":"Explicit Slug Org Four","slug":"istanbul-explicit"}`)},
 		{Name: "patch org", Method: "PATCH", Path: "/api/v1/admin/orgs/" + orgID.String(), Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"description":"updated description"}`)},
-		{Name: "patch org not found", Method: "PATCH", Path: "/api/v1/admin/orgs/" + uuid.New().String(), Headers: jsonHeaders("super"),
+		{Name: "patch org not found", Method: "PATCH", Path: "/api/v1/admin/orgs/" + nextID().String(), Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"description":"x"}`)},
 		{Name: "patch org tier", Method: "PATCH", Path: "/api/v1/admin/orgs/" + orgID.String(), Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"tier":"enterprise"}`)},
@@ -201,7 +207,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 		// Members.
 		{Name: "list members", Method: "GET", Path: "/api/v1/admin/orgs/" + orgID.String() + "/members", Headers: authHeaders("owner")},
 		{Name: "add member missing user", Method: "POST", Path: "/api/v1/admin/orgs/" + orgID.String() + "/members", Headers: jsonHeaders("owner"),
-			Body: venueoracle.B64(fmt.Sprintf(`{"user_id":%q,"role":"member"}`, uuid.New().String()))},
+			Body: venueoracle.B64(fmt.Sprintf(`{"user_id":%q,"role":"member"}`, nextID().String()))},
 		{Name: "add member already exists", Method: "POST", Path: "/api/v1/admin/orgs/" + orgID.String() + "/members", Headers: jsonHeaders("owner"),
 			Body: venueoracle.B64(fmt.Sprintf(`{"user_id":%q,"role":"member"}`, memberID.String()))},
 		// MembershipService.add_member: `uuid.UUID(invited_by_id)` is a
@@ -231,10 +237,11 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 		{Name: "remove last owner refused", Method: "DELETE", Path: "/api/v1/admin/orgs/" + orgID.String() + "/members/" + ownerID.String(),
 			Headers: authHeaders("owner")},
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
 			// joined_at: a fresh add-member INSERT sets it independently on
 			// each plane (now(), genuinely wall-clock-different), same
@@ -258,20 +265,18 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 	// valid but nonexistent owner_user_id) must leave ZERO matching
 	// organizations behind on both planes, never a committed orphan.
 	orphanQuery := `SELECT count(*) FROM organizations WHERE name = 'Orphan Owner Org'`
-	sourceOrphans := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), orphanQuery)
 	goOrphans := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), orphanQuery)
-	if sourceOrphans != goOrphans {
-		t.Errorf("orphan organization count differs after a failed owner insert:\n python: %s\n go:     %s", sourceOrphans, goOrphans)
-	}
+	golden.CompareRows(t, "orphan organization count", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), orphanQuery)
+	}, goOrphans)
 
 	// Finding: a tier PATCH that actually changes the tier must sync a
 	// PRE-EXISTING org_licenses row's own tier/managed_by, on both planes.
 	licenseQuery := fmt.Sprintf(`SELECT tier, managed_by, coalesce(features_override::text, '<null>'), coalesce(limits_override::text, '<null>') FROM org_licenses WHERE org_id = '%s'`, orgID)
-	sourceLicense := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), licenseQuery)
 	goLicense := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), licenseQuery)
-	if sourceLicense != goLicense {
-		t.Errorf("org_licenses row differs after a tier patch:\n python: %s\n go:     %s", sourceLicense, goLicense)
-	}
+	golden.CompareRows(t, "org_licenses row", func() string {
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), licenseQuery)
+	}, goLicense)
 
 	// transfer-ownership is NOT diffed against Python: it is the one ruled,
 	// intentional shape divergence in this PR (team-lead: "Go serves the
@@ -288,9 +293,10 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 	transferToNonMember := venueoracle.Request{
 		Name: "transfer ownership to non-member (go-only, web shape)", Method: "POST",
 		Path:    "/api/v1/admin/orgs/" + orgID.String() + "/transfer-ownership",
-		Headers: jsonHeaders("owner"), Body: venueoracle.B64(fmt.Sprintf(`{"new_owner_user_id":%q}`, uuid.New().String())),
+		Headers: jsonHeaders("owner"), Body: venueoracle.B64(fmt.Sprintf(`{"new_owner_user_id":%q}`, nextID().String())),
 	}
 	if got := venueoracle.Do(t, goBase, transferToNonMember); got.Status != 400 || got.Body != `{"detail":"Target user is not a member"}` {
 		t.Errorf("transfer ownership to non-member: got %d %s, want 400 Target user is not a member", got.Status, got.Body)
 	}
+	golden.Finish(t)
 }

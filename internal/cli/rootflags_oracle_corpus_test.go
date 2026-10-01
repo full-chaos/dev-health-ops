@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"strings"
+	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -113,11 +115,34 @@ var (
 	RootFlagsOracleProgram = func() string { return rootFlagsOracleProgram }
 )
 
+// canonicalJSON is raw with its object keys sorted. A number keeps its literal
+// text (json.Number): 2 and 2.0, or two integers a float64 cannot tell apart,
+// stay different.
 func canonicalJSON(raw []byte) string {
 	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
 		return string(raw)
 	}
 	out, _ := json.Marshal(value)
 	return string(out)
+}
+
+// The comparison must not pass a number through float64: an integer and the
+// float of the same value, and two integers one float64 apart, are different
+// answers.
+func TestCanonicalJSONKeepsNumberLiterals(t *testing.T) {
+	for name, pair := range map[string][2]string{
+		"int and float":           {`{"a":2}`, `{"a":2.0}`},
+		"beyond float64 integers": {`{"a":9007199254740992}`, `{"a":9007199254740993}`},
+		"exponent":                {`{"a":1000}`, `{"a":1e3}`},
+	} {
+		if canonicalJSON([]byte(pair[0])) == canonicalJSON([]byte(pair[1])) {
+			t.Errorf("%s: %s and %s compare equal", name, pair[0], pair[1])
+		}
+	}
+	if canonicalJSON([]byte(`{"b":1,"a":"x"}`)) != canonicalJSON([]byte(`{"a":"x","b":1}`)) {
+		t.Error("key order changes the canonical text")
+	}
 }

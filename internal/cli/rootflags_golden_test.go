@@ -73,8 +73,12 @@ func TestRootFlagsMatchThePythonRootParser(t *testing.T) {
 	})
 	golden.Consumed(t, answers...)
 
+	// Numbers stay the producer's literal text (json.Number): none passes
+	// through float64 on its way to the comparison.
 	var want []map[string]any
-	if err := json.Unmarshal([]byte(answers[0].Body), &want); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(answers[0].Body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&want); err != nil {
 		t.Fatalf("decode python answer: %v", err)
 	}
 	if len(want) != len(corpus) {

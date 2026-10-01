@@ -172,6 +172,16 @@ def build() -> dict[str, Any]:
         )
     )
 
+    # The 365-day simulation cap. Added after a planted off-by-one on the cap
+    # (days < max_days - 1) survived the corpus: no history above needed more
+    # than 364 days. These are registered AFTER the loop above, so they add
+    # cases without adding a history to every seed x mode combination.
+    HISTORIES["len1_zero"] = [0]
+    HISTORIES["len1_one"] = [1]
+    cases.append(case("cap/never_completes", "len1_zero", 42, target_items=40))
+    cases.append(case("cap/exactly_365_days", "len1_one", 42, target_items=365))
+    cases.append(case("cap/needs_366_days", "len1_one", 42, target_items=366))
+
     # Date arithmetic across boundaries the parity comparison cannot reach,
     # because the date columns are excluded there as wall-clock derived.
     date_cases: list[dict[str, Any]] = []

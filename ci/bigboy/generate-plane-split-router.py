@@ -16,6 +16,11 @@ the k8s Ingress controller/chart expands and anchors them); queryApiPaths use pa
 are converted here to one traefik PathRegexp per plane: {param} -> [^/]+, Exact paths escaped and
 used literally, ImplementationSpecific paths used as-is (already regex).
 
+An entry of the ops chart's allow-list (ops.ingress.pythonAllowList) goes to the Python api,
+unless it names its backend with `service: query-api`: prod changes the backend of a path that
+way INSIDE the Ingress object that holds it (ingress-nginx's admission denies a path that moves
+to another live object). Such an entry is a query-api path of this router.
+
 Usage:
   generate-plane-split-router.py <values.prod.yaml> [--format labels|dynamic]
   generate-plane-split-router.py --deploy-repo <deploy repo> --deploy-sha <sha> --expect-ops-sha <ops sha>
@@ -153,6 +158,13 @@ def paths_from_doc(doc: dict) -> tuple[list[str], list[str]]:
         _queryapi_entry_to_regex(e["path"], e["pathType"])
         for e in ingress["queryApiPaths"]
     ]
+    # An allow-list entry that names query-api (`service: query-api`) is a query-api path of
+    # this router too, from whichever list in use it is on. main refuses values in which the
+    # hosts do not agree on such a path (query_api_paths_that_differ_by_host), so the lists
+    # name the same paths and each is routed once.
+    for _, _, _, segments in query_api_allow_list_entries(doc):
+        if (regex := _segments_regex(segments)) not in query_paths:
+            query_paths.append(regex)
     if not go_paths:
         raise SystemExit(
             "generate-plane-split-router: found ZERO goApiPaths entries -- refusing to emit an empty router (values.prod.yaml shape may have changed)"
@@ -205,12 +217,166 @@ BIGBOY_LOCAL_PYTHON_PATHS: list[tuple[str, str]] = [
 ]
 
 
+SHARED_ALLOW_LIST = "ops.ingress.pythonAllowList"
+
+
+def entry_service(entry: dict, source: str) -> str:
+    """The backend an allow-list entry names: `api` (the Python api, also when it has no
+    `service` key) or `query-api`. The ops chart accepts no other value; neither does this."""
+    service = entry["service"] if "service" in entry else "api"
+    if service not in ("api", "query-api"):
+        raise SystemExit(
+            f"generate-plane-split-router: {source} entry {entry.get('path')!r} has service {service!r}:"
+            " an allow-list entry routes to api (the Python api, the default) or to query-api"
+        )
+    return service
+
+
+def _allow_lists(doc: dict) -> list[tuple[str, list[dict]]]:
+    """Every allow-list of the values, by the name a values author knows it by: the shared
+    one, then each host's own."""
+    ingress = (doc.get("ops") or {}).get("ingress") or {}
+    lists = [(SHARED_ALLOW_LIST, ingress.get("pythonAllowList") or [])]
+    for host in ingress.get("hosts") or []:
+        own = host.get("pythonAllowList") if isinstance(host, dict) else None
+        if isinstance(own, list):
+            lists.append(
+                (f"ops.ingress.hosts[{host.get('host')}].pythonAllowList", own)
+            )
+    return lists
+
+
+def _ops_hosts(doc: dict) -> list[dict]:
+    hosts = ((doc.get("ops") or {}).get("ingress") or {}).get("hosts") or []
+    return [host for host in hosts if isinstance(host, dict)]
+
+
+def _host_list_name(host: dict) -> str:
+    return f"ops.ingress.hosts[{host.get('host')}].pythonAllowList"
+
+
+def _allow_lists_in_use(doc: dict) -> list[tuple[str, list[dict]]]:
+    """The allow-lists the ops chart renders rules from: the shared one when a host opts into
+    it (`pythonAllowList: true`), and each host's own. A list that no host uses renders
+    nothing. Values that list no host at all have only the shared list to read."""
+    ingress = (doc.get("ops") or {}).get("ingress") or {}
+    hosts = _ops_hosts(doc)
+    lists = []
+    if not hosts or any(host.get("pythonAllowList") is True for host in hosts):
+        lists.append((SHARED_ALLOW_LIST, ingress.get("pythonAllowList") or []))
+    lists += [
+        (_host_list_name(host), host["pythonAllowList"])
+        for host in hosts
+        if isinstance(host.get("pythonAllowList"), list)
+    ]
+    return lists
+
+
+def query_api_allow_list_entries(doc: dict) -> list[tuple[str, str, str, Segments]]:
+    """(list name, path as written, pathType, segments) for every entry that names query-api
+    on an allow-list in use.
+
+    Such an entry must be ANCHORED (ImplementationSpecific `/literal$`). That is the one shape
+    which means one path on every host of the ops chart: the chart reads an Exact entry by
+    the host it is on (it refuses one beside an anchored entry, and regex mode on the host
+    changes what it matches), and this router has no rule for a subtree on query-api. A shape
+    this generator would have to read the way the chart does is refused, not read.
+    """
+    found = []
+    for source, entries in _allow_lists_in_use(doc):
+        for entry in entries:
+            if entry_service(entry, source) != "query-api":
+                continue
+            path, path_type = entry["path"], entry["pathType"]
+            if not (
+                path_type == "ImplementationSpecific"
+                and _ANCHORED_ENTRY.fullmatch(path)
+            ):
+                raise SystemExit(
+                    f"generate-plane-split-router: {source} entry {{path: {path}, pathType: {path_type}}}"
+                    " names query-api but is not an anchored entry (pathType ImplementationSpecific,"
+                    " path `/literal$`): write it anchored, the one shape that is one path on every host"
+                )
+            literal = allow_list_literal(path, path_type)
+            # The ops chart refuses a `.` or `..` segment; an anchored entry can spell one.
+            if any(segment in (".", "..") for segment in literal.split("/")):
+                raise SystemExit(
+                    f"generate-plane-split-router: {source} entry {{path: {path}, pathType: {path_type}}}"
+                    " names query-api but has a `.` or `..` segment, which the ops chart refuses"
+                )
+            found.append((source, path, path_type, _segments(literal)))
+    return found
+
+
+def query_api_paths_that_differ_by_host(doc: dict) -> list[str]:
+    """One line for each host of the ops Ingress that does not send to query-api a path an
+    allow-list entry sends there.
+
+    This router has ONE host; prod has several. It can prove a path's backend only when every
+    prod host that serves the api gives the path that backend. So each host must be one of
+    two kinds: a host whose allow-list in use carries the entry and whose own paths are the
+    default `/` only, or a web host (all its paths go to web: it does not serve the api). On
+    any other host another backend answers the path, or can: by the host's default, or by a
+    path of its own that the chart refuses beside the entry or that matches the same request.
+    The router would prove a route that host does not have. (A Python entry for the path on
+    another list is the same defect; paths_on_two_planes names that one.)
+    """
+    carried: dict[str, list[str]] = {}
+    for source, path, _, _ in query_api_allow_list_entries(doc):
+        carried.setdefault(path, []).append(source)
+    found = []
+    for host in _ops_hosts(doc):
+        own = host.get("pythonAllowList")
+        if isinstance(own, list):
+            source = _host_list_name(host)
+        elif own is True:
+            source = SHARED_ALLOW_LIST
+        else:
+            services = sorted(
+                {
+                    str(p.get("service"))
+                    for p in host.get("paths") or []
+                    if isinstance(p, dict)
+                }
+            )
+            if services != ["web"]:
+                found += [
+                    f"{path} is sent to query-api by {', '.join(have)}, and host {host.get('host')}"
+                    f" has no allow-list: its own paths answer it (services: {', '.join(services) or 'none'})"
+                    for path, have in carried.items()
+                ]
+            continue
+        found += [
+            f"{path} is sent to query-api by {', '.join(have)} and not by {source}"
+            f" (host {host.get('host')})"
+            for path, have in carried.items()
+            if source not in have
+        ]
+        own_paths = [
+            str(p.get("path"))
+            for p in host.get("paths") or []
+            if isinstance(p, dict) and p.get("path") != "/"
+        ]
+        if own_paths:
+            found += [
+                f"{path} is sent to query-api by {', '.join(have)}, and host {host.get('host')}"
+                f" has paths of its own beside `/`: {', '.join(own_paths)}"
+                for path, have in carried.items()
+            ]
+    return found
+
+
 def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
+    """The shared list's entries that the Python api answers (an entry that names query-api is
+    not one of them)."""
     entries = ((doc.get("ops") or {}).get("ingress") or {}).get("pythonAllowList")
     if entries is None:
         return list(DEFAULT_PYTHON_ALLOW_LIST)
-    out = [(e["path"], e["pathType"]) for e in entries]
-    return out
+    return [
+        (e["path"], e["pathType"])
+        for e in entries
+        if entry_service(e, SHARED_ALLOW_LIST) == "api"
+    ]
 
 
 def allow_list_literal(path: str, path_type: str) -> str:
@@ -244,17 +410,18 @@ def python_sources(doc: dict) -> list[tuple[str, list[tuple[str, str]]]]:
     server-side calls use, carries one), so it is checked too: a flip that takes a path off the
     shared list and leaves it on a host's list is half a flip.
     """
-    ingress = (doc.get("ops") or {}).get("ingress") or {}
-    sources = [("ops.ingress.pythonAllowList", python_allow_list_from_doc(doc))]
-    for host in ingress.get("hosts") or []:
-        own = host.get("pythonAllowList") if isinstance(host, dict) else None
-        if isinstance(own, list):
-            sources.append(
-                (
-                    f"ops.ingress.hosts[{host.get('host')}].pythonAllowList",
-                    [(e["path"], e["pathType"]) for e in own],
-                )
+    sources = [(SHARED_ALLOW_LIST, python_allow_list_from_doc(doc))]
+    for source, entries in _allow_lists(doc)[1:]:
+        sources.append(
+            (
+                source,
+                [
+                    (e["path"], e["pathType"])
+                    for e in entries
+                    if entry_service(e, source) == "api"
+                ],
             )
+        )
     sources.append((BIGBOY_LOCAL_SOURCE, list(BIGBOY_LOCAL_PYTHON_PATHS)))
     return sources
 
@@ -274,7 +441,41 @@ def go_plane_paths(doc: dict) -> list[tuple[str, str, Segments]]:
         )
         for e in ingress["queryApiPaths"]
     ]
+    # An allow-list entry that names query-api is a path a Go plane claims, on whichever list
+    # it is: a Python entry for the same path on ANOTHER list is half a move, and is refused.
+    claimed += [
+        (f"{source} (service: query-api)", path, segments)
+        for source, path, _, segments in query_api_allow_list_entries(doc)
+    ]
     return claimed
+
+
+def paths_in_two_objects(doc: dict) -> list[str]:
+    """One line for each allow-list entry that names query-api while ingress.goApiPaths or
+    ingress.queryApiPaths also claims its path. Prod renders the allow-list in one Ingress
+    object and those two tables in others, and its ingress controller's admission webhook
+    denies two live objects that claim one host and path: such values cannot roll."""
+    ingress = doc["ingress"]
+    tables = [
+        ("ingress.goApiPaths", e["path"], _goapi_path_segments(e["path"]))
+        for e in ingress["goApiPaths"]
+    ] + [
+        (
+            "ingress.queryApiPaths",
+            e["path"],
+            _queryapi_entry_segments(e["path"], e["pathType"]),
+        )
+        for e in ingress["queryApiPaths"]
+    ]
+    found = []
+    for source, path, path_type, _ in query_api_allow_list_entries(doc):
+        for table, table_path, segments in tables:
+            if python_entry_overlaps(path, path_type, segments):
+                found.append(
+                    f"{source} entry {{path: {path}, pathType: {path_type}, service: query-api}}"
+                    f" and {table} entry {table_path}"
+                )
+    return found
 
 
 def _segment_is(parts: list[str], text: str) -> bool:
@@ -489,13 +690,34 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 4
+    if per_host := query_api_paths_that_differ_by_host(doc):
+        print(
+            "REFUSED: one path, a backend that differs by host. An allow-list entry sends the path"
+            " to query-api, and a host of the ops Ingress answers it from another backend. This"
+            " router has one host and cannot show both. Every host must carry the entry on the"
+            " allow-list it uses (the shared one or its own) and have no path of its own beside"
+            " `/`, or be a web host (all paths to web):\n  " + "\n  ".join(per_host),
+            file=sys.stderr,
+        )
+        return 4
+    if twice := paths_in_two_objects(doc):
+        print(
+            "REFUSED: one path, two Ingress objects. An allow-list entry that names query-api and an"
+            " entry of ingress.goApiPaths or ingress.queryApiPaths can match the same request. Prod's"
+            " ingress admission denies two live Ingress objects for one host and path. Keep the path"
+            " in ONE place:\n  " + "\n  ".join(twice),
+            file=sys.stderr,
+        )
+        return 4
     if a.format == "dynamic":
         out = emit_dynamic_config(go_regex, query_regex, python_allow)
     else:
         out = emit_labels(go_regex, query_regex)
     print(out)
     print(
-        f"# {len(go_paths)} goApiPaths, {len(query_paths)} queryApiPaths",
+        f"# {len(go_paths)} goApiPaths, {len(query_paths)} query-api paths"
+        f" ({len(doc['ingress']['queryApiPaths'])} queryApiPaths,"
+        f" {len(query_paths) - len(doc['ingress']['queryApiPaths'])} allow-list entries that name query-api)",
         file=sys.stderr,
     )
     return 0

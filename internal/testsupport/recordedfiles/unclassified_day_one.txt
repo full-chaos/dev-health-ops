@@ -922,7 +922,6 @@ tests/fixtures/external_ingest/v1/work_item_dependency.json
 tests/fixtures/external_ingest/v1/work_item_transition.json
 tests/fixtures/fma_followup_golden.json
 tests/fixtures/fma_hotspot_score_golden.json
-tests/fixtures/generate_capacity_forecast_golden.py
 tests/fixtures/generate_categorization_prompts_python_golden.py
 tests/fixtures/generate_clickhouse_string_decode_golden.py
 tests/fixtures/generate_confidence_coercion_python_golden.py

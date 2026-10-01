@@ -3,69 +3,46 @@ package repouser
 import (
 	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
 // TestPysumGoldenMatchesLivePython is the CHAOS-4824 rot guard for
-// tests/fixtures/pysum_golden.json, in the same shape as the sibling
-// CHAOS-4818 rot guards this session added after codex (round 4 on #2106)
-// found a generator that imports and calls live production Python but is
-// never actually invoked by CI -- a frozen fixture with no regeneration
-// guard measures history, not parity, and degrades silently the moment the
-// Python reference changes.
+// tests/fixtures/pysum_golden.json: a frozen fixture with no regeneration guard
+// measures history, not parity, and degrades silently the moment the Python
+// reference changes.
+//
+// The generator's stdout (compute_code_ownership_gini / compute_pipeline_stability
+// rendered from real Python) was executed once on the last build that carried the
+// Python sources and is frozen in testdata/golden/pysum_rot_guard.json; a frozen
+// run compares the recorded stdout with the checked-in fixture (see rotguard), so
+// the guard still fails when the fixture is edited without recording the producer
+// again, and no Python runs in a frozen run.
 func TestPysumGoldenMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	root, err := filepath.Abs(filepath.Join("..", "..", "..", "..", ".."))
+	root := repositoryRootPath(t)
+	spec := rotguard.Spec("testdata/golden/pysum_rot_guard.json", "",
+		"./internal/jobs/metrics/daily/repouser/", "^TestPysumGoldenMatchesLivePython$")
+	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+		Name: "pysum golden generator",
+		Path: "tests/fixtures/generate_pysum_golden.py",
+		Args: []string{"--stdout"},
+	})[0]
+
+	frozen, err := os.ReadFile(filepath.Join(root, "tests", "fixtures", "pysum_golden.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	python := pyoracle.Resolve(t, root)
-	generator := filepath.Join(root, "tests", "fixtures", "generate_pysum_golden.py")
-	if info, statErr := os.Stat(generator); statErr != nil || !info.Mode().IsRegular() {
-		t.Fatalf("golden generator is missing at %s: %v", generator, statErr)
+	if !bytes.Equal(bytes.TrimSpace(frozen), bytes.TrimSpace([]byte(rendered))) {
+		t.Errorf(
+			"the recorded Python render no longer equals the checked-in pysum golden.\n" +
+				"Either tests/fixtures/pysum_golden.json was edited by hand or the generator changed. " +
+				"Regenerate the fixture on the pinned build with\n" +
+				"    python tests/fixtures/generate_pysum_golden.py\n" +
+				"review the diff as a real behaviour change -- if Go should follow, change Go " +
+				"too and re-verify TestCodeOwnershipGiniMatchesLivePythonBitExact; if it should not, " +
+				"the Python change is the bug -- and record the producer again (the golden's recipe).",
+		)
 	}
-
-	command := exec.Command(python, generator, "--stdout")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("run the pysum golden generator against live Python: %v", pyoracle.RunError(python, err, stderr.Bytes()))
-	}
-	rendered := stdout.Bytes()
-
-	goldenPath := filepath.Join(root, "tests", "fixtures", "pysum_golden.json")
-	frozen, err := os.ReadFile(goldenPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if bytes.Equal(bytes.TrimSpace(frozen), bytes.TrimSpace(rendered)) {
-		if writeErr := os.WriteFile(filepath.Join(proofDirectory, "pysum-golden"), []byte("executed"), 0o600); writeErr != nil {
-			t.Fatalf("write live Python oracle proof: %v", writeErr)
-		}
-		return
-	}
-
-	t.Errorf(
-		"live Python no longer reproduces the frozen pysum golden.\n" +
-			"This is Python drift, not a Go bug: tests/fixtures/pysum_golden.json was " +
-			"generated from production compute_code_ownership_gini/compute_pipeline_stability " +
-			"and frozen. Regenerate with\n" +
-			"    python tests/fixtures/generate_pysum_golden.py\n" +
-			"and review the diff as a real behaviour change -- if Go should follow, change Go " +
-			"too and re-verify TestCodeOwnershipGiniMatchesLivePythonBitExact; if it should not, " +
-			"the Python change is the bug.",
-	)
 }

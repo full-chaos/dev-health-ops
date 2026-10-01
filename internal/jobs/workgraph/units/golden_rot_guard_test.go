@@ -4,13 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
 // TestWorkgraphComponentsGoldenMatchesLivePython is the rot guard for
@@ -31,49 +30,25 @@ import (
 // text, and the generator is hermetic (it reads the frozen edge input rather
 // than querying ClickHouse), so this runs anywhere the interpreter does.
 func TestWorkgraphComponentsGoldenMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
+	root := repositoryRootPath(t)
+	spec := rotguard.Spec("testdata/golden/workgraph_components_rot_guard.json", "",
+		"./internal/jobs/workgraph/units/", "^TestWorkgraphComponentsGoldenMatchesLivePython$")
+	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+		Name: "workgraph components golden generator",
+		Path: "tests/fixtures/generate_workgraph_components_python_golden.py",
+		Args: []string{"--stdout"},
+	})[0]
 
-	repoRoot := repositoryRootPath(t)
-	python := workgraphComponentsLivePython(t, repoRoot)
-	generator := filepath.Join(
-		repoRoot, "tests", "fixtures", "generate_workgraph_components_python_golden.py",
-	)
-	if info, err := os.Stat(generator); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("golden generator is missing at %s: %v", generator, err)
-	}
-
-	command := exec.Command(python, generator, "--stdout")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-	rendered, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("run the golden generator against live Python: %v: %s", err, stderr)
-	}
-
-	frozen, err := os.ReadFile(filepath.Join(repoRoot, "tests", "fixtures", goldenFixture))
+	frozen, err := os.ReadFile(filepath.Join(root, "tests", "fixtures", goldenFixture))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if string(frozen) == string(rendered) {
-		if writeErr := os.WriteFile(
-			filepath.Join(proofDirectory, "workgraph-components-golden"), []byte("executed"), 0o644,
-		); writeErr != nil {
-			t.Fatalf("write live-python-oracle proof: %v", writeErr)
-		}
+	if string(frozen) == rendered {
 		return
 	}
 	t.Error(
-		"live Python no longer reproduces the frozen golden.\n" +
+		"the recorded Python render no longer equals the frozen golden.\n" +
 			"This is Python drift, not a Go bug: tests/fixtures/" +
 			"workgraph_components_split_python_golden.json was generated from the deployed\n" +
 			"work_graph/investment/components.py and frozen. Regenerate with\n" +
@@ -81,36 +56,9 @@ func TestWorkgraphComponentsGoldenMatchesLivePython(t *testing.T) {
 			"and treat the diff as a REAL behaviour change with cross-plane consequences: a change\n" +
 			"to component grouping or to work_unit_id re-addresses work_unit_investments and\n" +
 			"work_unit_membership, which are written by two different jobs. Port the change into\n" +
-			"internal/jobs/workgraph/units in the SAME change set, or the planes diverge silently.",
+			"internal/jobs/workgraph/units in the SAME change set, or the planes diverge silently." +
+			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again (the golden's recipe).",
 	)
-}
-
-// workgraphComponentsLivePython mirrors the repo_user_commit guard's helper:
-// PYTHON wins, else python3 on PATH, and either way the resolved interpreter
-// must resolve dev_health_ops to a module INSIDE this checkout -- otherwise the
-// guard would silently compare another worktree's producer against this
-// worktree's frozen golden.
-func workgraphComponentsLivePython(t *testing.T, repoRoot string) string {
-	t.Helper()
-	resolved := pyoracle.Resolve(t, repoRoot)
-	command := exec.Command(
-		resolved, "-c", "import dev_health_ops, sys; sys.stdout.write(dev_health_ops.__file__)",
-	)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-	located, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("resolve dev_health_ops: %v", pyoracle.RunError(resolved, err, located))
-	}
-	module := string(located)
-	if !strings.HasPrefix(module, repoRoot+string(os.PathSeparator)) {
-		t.Fatalf(
-			"%s resolves dev_health_ops to %s, which is OUTSIDE this checkout (%s) -- "+
-				"the guard would be comparing another worktree's producer against this "+
-				"worktree's frozen golden; set PYTHONPATH to this checkout's src",
-			resolved, module, repoRoot,
-		)
-	}
-	return resolved
 }
 
 // TestConfidenceCoercionGoldenMatchesLivePython is the rot guard for
@@ -122,53 +70,32 @@ func workgraphComponentsLivePython(t *testing.T, repoRoot string) string {
 // (whitespace stripping, C99 hex literals plus ErrRange saturation, and signed
 // NaN words), so it is the last place to rely on a shared marker.
 func TestConfidenceCoercionGoldenMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
+	root := repositoryRootPath(t)
+	spec := rotguard.Spec("testdata/golden/confidence_coercion_rot_guard.json", "",
+		"./internal/jobs/workgraph/units/", "^TestConfidenceCoercionGoldenMatchesLivePython$")
+	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+		Name: "confidence coercion golden generator",
+		Path: "tests/fixtures/generate_confidence_coercion_python_golden.py",
+		Args: []string{"--stdout"},
+	})[0]
 
-	repoRoot := repositoryRootPath(t)
-	python := workgraphComponentsLivePython(t, repoRoot)
-	generator := filepath.Join(
-		repoRoot, "tests", "fixtures", "generate_confidence_coercion_python_golden.py",
-	)
-	if info, err := os.Stat(generator); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("coercion golden generator is missing at %s: %v", generator, err)
-	}
-
-	command := exec.Command(python, generator, "--stdout")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-	rendered, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("run the coercion golden generator against live Python: %v: %s", err, stderr)
-	}
-
-	frozen, err := os.ReadFile(filepath.Join(repoRoot, "tests", "fixtures", coercionGoldenFixture))
+	frozen, err := os.ReadFile(filepath.Join(
+		root, "tests", "fixtures", coercionGoldenFixture,
+	))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if string(frozen) == string(rendered) {
-		if writeErr := os.WriteFile(
-			filepath.Join(proofDirectory, "confidence-coercion-golden"), []byte("executed"), 0o644,
-		); writeErr != nil {
-			t.Fatalf("write live-python-oracle proof: %v", writeErr)
-		}
+	if string(frozen) == rendered {
 		return
 	}
 	t.Error(
-		"live Python no longer coerces the corpus the way the frozen golden records.\n" +
+		"the recorded Python render no longer equals the frozen fixture: live Python no longer coerces the corpus the way the frozen golden records.\n" +
 			"Regenerate with\n" +
 			"    python tests/fixtures/generate_confidence_coercion_python_golden.py\n" +
 			"and treat the diff as a real behaviour change: the coerced confidence decides which\n" +
-			"edges the oversized-component split protects, which decides work_unit_id.",
+			"edges the oversized-component split protects, which decides work_unit_id." +
+			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again (the golden's recipe).",
 	)
 }
 
@@ -194,51 +121,27 @@ func TestConfidenceCoercionGoldenMatchesLivePython(t *testing.T) {
 // work_graph/investment entirely -- so a reviewer editing normalization.py has
 // no local cue that the investment port depends on its NaN behaviour.
 func TestInvestmentQualityGoldenMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-
-	repoRoot := repositoryRootPath(t)
-	python := workgraphComponentsLivePython(t, repoRoot)
-	generator := filepath.Join(
-		repoRoot, "tests", "fixtures", "generate_investment_quality_golden.py",
-	)
-	if info, err := os.Stat(generator); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("quality generator is missing at %s: %v", generator, err)
-	}
-
-	command := exec.Command(python, generator, "--stdout")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-	rendered, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("run the quality generator against live Python: %v: %s", err, stderr)
-	}
+	root := repositoryRootPath(t)
+	spec := rotguard.Spec("testdata/golden/investment_quality_rot_guard.json", "",
+		"./internal/jobs/workgraph/units/", "^TestInvestmentQualityGoldenMatchesLivePython$")
+	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+		Name: "investment quality golden generator",
+		Path: "tests/fixtures/generate_investment_quality_golden.py",
+		Args: []string{"--stdout"},
+	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(
-		repoRoot, "tests", "fixtures", "investment_quality_python_golden.json",
+		root, "tests", "fixtures", "investment_quality_python_golden.json",
 	))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if string(frozen) == string(rendered) {
-		if writeErr := os.WriteFile(
-			filepath.Join(proofDirectory, "investment-quality-golden"), []byte("executed"), 0o644,
-		); writeErr != nil {
-			t.Fatalf("write live-python-oracle proof: %v", writeErr)
-		}
+	if string(frozen) == rendered {
 		return
 	}
 	t.Error(
-		"live Python no longer reproduces the frozen evidence-quality golden.\n" +
+		"the recorded Python render no longer equals the frozen evidence-quality golden.\n" +
 			"Regenerate with\n" +
 			"    PYTHONPATH=src python tests/fixtures/generate_investment_quality_golden.py\n" +
 			"and read the diff before accepting it. Three things it could mean, with\n" +
@@ -251,7 +154,8 @@ func TestInvestmentQualityGoldenMatchesLivePython(t *testing.T) {
 			"     evidence_quality_band -- evidence_quality is a stored column and the\n" +
 			"     bands are stored categories, so this is a data change.\n" +
 			"  3. evidence._float_value and components._edge_confidence have DIVERGED.\n" +
-			"     The Go port shares one function for both; it must be split.",
+			"     The Go port shares one function for both; it must be split." +
+			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again (the golden's recipe).",
 	)
 }
 
@@ -276,52 +180,27 @@ func TestInvestmentQualityGoldenMatchesLivePython(t *testing.T) {
 // included), so a regenerated fixture that disagrees is naming a real change
 // rather than a formatting one.
 func TestMaxComponentNodesGoldenMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-
-	repoRoot := repositoryRootPath(t)
-	python := workgraphComponentsLivePython(t, repoRoot)
-	generator := filepath.Join(
-		repoRoot, "tests", "fixtures", "generate_max_component_nodes_golden.py",
-	)
-	if info, err := os.Stat(generator); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("magnitude generator is missing at %s: %v", generator, err)
-	}
-
-	command := exec.Command(python, generator, "--stdout")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-	rendered, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("run the magnitude generator against live Python: %v: %s", err, stderr)
-	}
+	root := repositoryRootPath(t)
+	spec := rotguard.Spec("testdata/golden/max_component_nodes_rot_guard.json", "",
+		"./internal/jobs/workgraph/units/", "^TestMaxComponentNodesGoldenMatchesLivePython$")
+	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+		Name: "max component nodes golden generator",
+		Path: "tests/fixtures/generate_max_component_nodes_golden.py",
+		Args: []string{"--stdout"},
+	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(
-		repoRoot, "tests", "fixtures", "max_component_nodes_python_golden.json",
+		root, "tests", "fixtures", "max_component_nodes_python_golden.json",
 	))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if string(frozen) == string(rendered) {
-		if writeErr := os.WriteFile(
-			filepath.Join(proofDirectory, "max-component-nodes-magnitude"),
-			[]byte("executed"), 0o644,
-		); writeErr != nil {
-			t.Fatalf("write live-python-oracle proof: %v", writeErr)
-		}
+	if string(frozen) == rendered {
 		return
 	}
 	t.Error(
-		"live Python no longer reproduces the frozen magnitude golden.\n" +
+		"the recorded Python render no longer equals the frozen magnitude golden.\n" +
 			"Regenerate with\n" +
 			"    PYTHONPATH=src python tests/fixtures/generate_max_component_nodes_golden.py\n" +
 			"then read the diff rather than accepting it. The likeliest cause is that\n" +
@@ -330,7 +209,8 @@ func TestMaxComponentNodesGoldenMatchesLivePython(t *testing.T) {
 			"updated with it, or every value between the two limits is parsed by one plane\n" +
 			"and refused by the other. For INVESTMENT_MAX_COMPONENT_NODES that means one\n" +
 			"plane splits oversized components and the other does not, which mints\n" +
-			"different work_unit_ids for the same graph.",
+			"different work_unit_ids for the same graph." +
+			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again (the golden's recipe).",
 	)
 }
 
@@ -348,53 +228,28 @@ func TestMaxComponentNodesGoldenMatchesLivePython(t *testing.T) {
 // would leave parsePythonInt accepting the OLD set while the golden described
 // the new one -- green tests, wrong parser.
 func TestDecimalDigitsGoldenMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-
-	repoRoot := repositoryRootPath(t)
-	python := workgraphComponentsLivePython(t, repoRoot)
-	generator := filepath.Join(
-		repoRoot, "tests", "fixtures", "generate_python_decimal_digits_golden.py",
-	)
-	if info, err := os.Stat(generator); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("decimal-digits generator is missing at %s: %v", generator, err)
-	}
-
-	command := exec.Command(python, generator, "--stdout")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-	rendered, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("run the decimal-digits generator against live Python: %v: %s", err, stderr)
-	}
+	root := repositoryRootPath(t)
+	spec := rotguard.Spec("testdata/golden/decimal_digits_rot_guard.json", "",
+		"./internal/jobs/workgraph/units/", "^TestDecimalDigitsGoldenMatchesLivePython$")
+	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+		Name: "decimal digits golden generator",
+		Path: "tests/fixtures/generate_python_decimal_digits_golden.py",
+		Args: []string{"--stdout"},
+	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(
-		repoRoot, "tests", "fixtures", "python_decimal_digits_python_golden.json",
+		root, "tests", "fixtures", "python_decimal_digits_python_golden.json",
 	))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	verdict := evaluateDecimalDigitsGolden(t, frozen, rendered)
+	verdict := evaluateDecimalDigitsGolden(t, frozen, []byte(rendered))
 	if !verdict.Pass {
 		t.Error(verdict.Message)
 		return
 	}
 	t.Log(verdict.Message)
-
-	if writeErr := os.WriteFile(
-		filepath.Join(proofDirectory, "python-decimal-digits"), []byte("executed"), 0o644,
-	); writeErr != nil {
-		t.Fatalf("write live-python-oracle proof: %v", writeErr)
-	}
 }
 
 // decimalDigitsProvenanceFields are the decimal-digits golden's fields that
@@ -604,56 +459,33 @@ func marshalGoldenDocument(t *testing.T, fields map[string]any) []byte {
 // touch input_hash, so it will not re-bill categorisation, but it will silently
 // re-date work units.
 func TestTimeBoundsGoldenMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-
-	repoRoot := repositoryRootPath(t)
-	python := workgraphComponentsLivePython(t, repoRoot)
-	generator := filepath.Join(
-		repoRoot, "tests", "fixtures", "generate_time_bounds_golden.py",
-	)
-	if info, err := os.Stat(generator); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("time-bounds generator is missing at %s: %v", generator, err)
-	}
-
-	command := exec.Command(python, generator, "--stdout")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-	rendered, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("run the time-bounds generator against live Python: %v: %s", err, stderr)
-	}
+	root := repositoryRootPath(t)
+	spec := rotguard.Spec("testdata/golden/time_bounds_rot_guard.json", "",
+		"./internal/jobs/workgraph/units/", "^TestTimeBoundsGoldenMatchesLivePython$")
+	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+		Name: "time bounds golden generator",
+		Path: "tests/fixtures/generate_time_bounds_golden.py",
+		Args: []string{"--stdout"},
+	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(
-		repoRoot, "tests", "fixtures", "time_bounds_python_golden.json",
+		root, "tests", "fixtures", "time_bounds_python_golden.json",
 	))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if string(frozen) == string(rendered) {
-		if writeErr := os.WriteFile(
-			filepath.Join(proofDirectory, "time-bounds-golden"), []byte("executed"), 0o644,
-		); writeErr != nil {
-			t.Fatalf("write live-python-oracle proof: %v", writeErr)
-		}
+	if string(frozen) == rendered {
 		return
 	}
 	t.Error(
-		"live Python no longer reproduces the frozen time-bounds golden.\n" +
+		"the recorded Python render no longer equals the frozen time-bounds golden.\n" +
 			"Regenerate with\n" +
 			"    PYTHONPATH=src python tests/fixtures/generate_time_bounds_golden.py\n" +
 			"and read the diff: the per-type fallback chains (completed_at before\n" +
 			"updated_at, merged_at before closed_at, an absent end standing in as the\n" +
-			"start) decide the stored TimeBounds on every work unit.",
+			"start) decide the stored TimeBounds on every work unit." +
+			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again (the golden's recipe).",
 	)
 }
 

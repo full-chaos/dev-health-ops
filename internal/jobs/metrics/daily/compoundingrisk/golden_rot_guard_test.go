@@ -1,109 +1,48 @@
 package compoundingrisk
 
 import (
+	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
 // TestCompoundingRiskGoldenMatchesLivePython is the rot guard for
-// tests/fixtures/daily_compounding_risk_python_golden.json (CHAOS-4287),
-// following the pattern internal/jobs/metrics/daily/cicd's
-// golden_rot_guard_test.go established: the frozen file was generated from REAL
-// Python (compute_compounding_risk) and checked in;
-// TestComputeMatchesFrozenPythonGolden asserts Go matches it, but nothing
-// asserts Python STILL matches it. This re-runs the generator against the live
-// interpreter and fails loudly, with a pointer to regenerate, the moment
-// compute_compounding_risk changes its numbers out from under the frozen file.
+// tests/fixtures/daily_compounding_risk_python_golden.json (CHAOS-4287): the
+// frozen file was generated from REAL Python (compute_compounding_risk) and
+// checked in; TestComputeMatchesFrozenPythonGolden asserts Go matches it, and
+// this asserts the Python that rendered it still renders the same bytes.
+//
+// The generator's stdout was executed once on the last build that carried the
+// Python sources and is frozen in testdata/golden/compounding_risk_rot_guard.json
+// (recipe in the golden's spec); a frozen run compares that recorded stdout with
+// the checked-in fixture, so the guard fails the moment the fixture is edited
+// without recording the producer again, and a changed generator is another
+// request. No Python runs in a frozen run.
 func TestCompoundingRiskGoldenMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
+	root := repositoryRoot(t)
+	spec := rotguard.Spec("testdata/golden/compounding_risk_rot_guard.json", "",
+		"./internal/jobs/metrics/daily/compoundingrisk/", "^TestCompoundingRiskGoldenMatchesLivePython$")
+	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+		Name: "compounding risk golden generator",
+		Path: "tests/fixtures/generate_daily_compounding_risk_python_golden.py",
+		Args: []string{"--stdout"},
+	})[0]
 
-	repoRoot := compoundingRiskRepositoryRoot(t)
-	python := compoundingRiskLivePython(t, repoRoot)
-	generator := filepath.Join(
-		repoRoot, "tests", "fixtures", "generate_daily_compounding_risk_python_golden.py",
-	)
-	if info, err := os.Stat(generator); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("golden generator is missing at %s: %v", generator, err)
-	}
-
-	cmd := exec.Command(python, generator, "--stdout")
-	cmd.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-	rendered, err := cmd.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("run the golden generator against live Python: %v", pyoracle.RunError(python, err, stderr))
-	}
-
-	goldenPath := filepath.Join(
-		repoRoot, "tests", "fixtures", "daily_compounding_risk_python_golden.json",
-	)
-	frozen, err := os.ReadFile(goldenPath)
+	frozen, err := os.ReadFile(filepath.Join(root, "tests", "fixtures", "daily_compounding_risk_python_golden.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if string(frozen) == string(rendered) {
-		// Distinct marker name per family: a dropped or mistyped -run filter in
-		// ci/check_go.sh must not be able to hide behind a sibling family's
-		// proof file.
-		if writeErr := os.WriteFile(
-			filepath.Join(proofDirectory, "compounding-risk-golden"), []byte("executed"), 0o644,
-		); writeErr != nil {
-			t.Fatalf("write live-python-oracle proof: %v", writeErr)
-		}
-		return
-	}
-	t.Errorf(
-		"live Python no longer reproduces the frozen golden.\n" +
-			"This is Python drift, not a Go bug: tests/fixtures/daily_compounding_risk_python_golden.json " +
-			"was generated from production Python and frozen. Regenerate with\n" +
-			"    python tests/fixtures/generate_daily_compounding_risk_python_golden.py\n" +
-			"and review the diff as a real behaviour change -- if Go should follow, port the change " +
-			"into compute.go and update compute_test.go's goldenCases too.",
-	)
-}
-
-func compoundingRiskRepositoryRoot(t *testing.T) string {
-	t.Helper()
-	return repositoryRoot(t)
-}
-
-// compoundingRiskLivePython mirrors cicd's cicdLivePython: PYTHON env var wins,
-// else python3 on PATH, and either way the resolved interpreter must resolve
-// dev_health_ops to a module INSIDE this checkout -- otherwise the guard would
-// silently compare another worktree's producer against this worktree's frozen
-// golden.
-func compoundingRiskLivePython(t *testing.T, repoRoot string) string {
-	t.Helper()
-	resolved := pyoracle.Resolve(t, repoRoot)
-	cmd := exec.Command(resolved, "-c", "import dev_health_ops, sys; sys.stdout.write(dev_health_ops.__file__)")
-	cmd.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-	located, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("resolve dev_health_ops: %v", pyoracle.RunError(resolved, err, located))
-	}
-	module := string(located)
-	if !strings.HasPrefix(module, repoRoot+string(os.PathSeparator)) {
-		t.Fatalf(
-			"%s resolves dev_health_ops to %s, which is OUTSIDE this checkout (%s) -- "+
-				"the guard would be comparing another worktree's producer against this "+
-				"worktree's frozen golden; set PYTHONPATH to this checkout's src",
-			resolved, module, repoRoot,
+	if !bytes.Equal(frozen, []byte(rendered)) {
+		t.Errorf(
+			"the recorded Python render no longer equals the checked-in golden.\n" +
+				"Either tests/fixtures/daily_compounding_risk_python_golden.json was edited by hand or the generator changed. " +
+				"Regenerate the fixture on the pinned build with\n" +
+				"    python tests/fixtures/generate_daily_compounding_risk_python_golden.py\n" +
+				"review the diff as a real behaviour change -- if Go should follow, port the change " +
+				"into compute.go and update compute_test.go's goldenCases too -- and record the producer again (the golden's recipe).",
 		)
 	}
-	return resolved
 }

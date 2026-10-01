@@ -265,10 +265,16 @@ type goldenRequest struct {
 	// HeadersSHA256 is the digest of the request headers the Python plane was
 	// sent (see headersDigest), so a caller or content type that drifted is
 	// refused instead of being served the answer of another.
-	HeadersSHA256 string            `json:"request_headers_sha256"`
-	Status        int               `json:"status"`
-	Headers       map[string]string `json:"headers"`
-	Body          string            `json:"body"`
+	HeadersSHA256 string `json:"request_headers_sha256"`
+	// CallEnv is the key of the extra environment the Python plane answered
+	// this request under (Golden.PythonWithEnv: pythonEnvKey over the call's
+	// entries, so a value is never stored). It is empty for an answer given
+	// under the venue's own environment. A frozen run refuses a request whose
+	// call passes another extra environment than the recorded one.
+	CallEnv string            `json:"call_env,omitempty"`
+	Status  int               `json:"status"`
+	Headers map[string]string `json:"headers"`
+	Body    string            `json:"body"`
 }
 
 type goldenRows struct {
@@ -614,18 +620,32 @@ func (g *Golden) Python(t *testing.T, v *Venue, requests []Request) []Response {
 // PythonWithEnv is Python for requests the Python plane answers under another
 // configuration (Venue.ServePythonWithEnv: each entry KEY=value, later entries
 // winning over the venue's own), for example the same probe with a secret
-// unset. The environment is executed only while recording and is not part of
-// the frozen file's key, so the test must put what distinguishes a scenario
-// into each request's Name: a frozen run then refuses a scenario whose name
-// drifted, and two scenarios of one request cannot be told apart otherwise.
+// unset. The extra environment is executed only while recording, and its key
+// (pythonEnvKey, so no value is stored) is kept with each of the call's
+// answers: a frozen run refuses a call that passes another extra environment
+// than the recorded one, and an answer recorded before a golden kept that
+// key. The test still puts what distinguishes a scenario into each request's
+// Name, so a refusal names the scenario.
 func (g *Golden) PythonWithEnv(t *testing.T, v *Venue, extra []string, requests []Request) []Response {
 	t.Helper()
+	if extra == nil {
+		extra = []string{}
+	}
 	return g.python(t, v, "PythonWithEnv", extra, requests)
 }
 
 func (g *Golden) python(t *testing.T, v *Venue, call string, extra []string, requests []Request) []Response {
 	t.Helper()
-	return g.answer(t, call, requests,
+	// The key of the call's extra environment: none for the venue's own.
+	callEnv := ""
+	if extra != nil {
+		key, err := pythonEnvKey(extra)
+		if err != nil {
+			t.Fatal(err)
+		}
+		callEnv = key
+	}
+	return g.answer(t, call, callEnv, requests,
 		func() error { return g.recordingRootErr(v) },
 		func() []Response {
 			if extra == nil {
@@ -653,7 +673,7 @@ func (g *Golden) Produce(t *testing.T, root string, requests []Request, live fun
 	if err := producerRequestsErr(requests); err != nil {
 		t.Fatal(err)
 	}
-	return g.answer(t, "Produce", requests,
+	return g.answer(t, "Produce", "", requests,
 		func() error { return g.producerRootErr(root) },
 		func() []Response { return live(root, requests) },
 		func() error { return liveVenueErr(t, "golden "+g.spec.Path+"'s frozen answers") })
@@ -755,7 +775,7 @@ func unpackBody(body string) (string, error) {
 // answer is the one path every Python answer takes: recorded from live while
 // recording (after rootErr), read from the frozen file otherwise (after
 // frozenErr, when there is one), then bound to its request.
-func (g *Golden) answer(t *testing.T, call string, requests []Request, rootErr func() error, live func() []Response, frozenErr func() error) []Response {
+func (g *Golden) answer(t *testing.T, call, callEnv string, requests []Request, rootErr func() error, live func() []Response, frozenErr func() error) []Response {
 	t.Helper()
 	g.step(t, call, stateOpen, statePython, stateDiffed)
 	var answers []Response
@@ -776,6 +796,7 @@ func (g *Golden) answer(t *testing.T, call string, requests []Request, rootErr f
 		}
 		for index, request := range requests {
 			entry := requestKey(request)
+			entry.CallEnv = callEnv
 			entry.Status, entry.Headers, entry.Body = answers[index].Status, answers[index].Headers, answers[index].Body
 			g.recorded.Requests = append(g.recorded.Requests, entry)
 		}
@@ -786,7 +807,7 @@ func (g *Golden) answer(t *testing.T, call string, requests []Request, rootErr f
 			}
 		}
 		var err error
-		if answers, err = g.frozenAnswers(requests); err != nil {
+		if answers, err = g.frozenAnswers(requests, callEnv); err != nil {
 			t.Fatal(err)
 		}
 		markFrozenTree(t, "the frozen answers of golden "+g.spec.Path)
@@ -815,7 +836,7 @@ func (g *Golden) frozenVenueErr(t *testing.T, v *Venue) error {
 	return nil
 }
 
-func (g *Golden) frozenAnswers(requests []Request) ([]Response, error) {
+func (g *Golden) frozenAnswers(requests []Request, callEnv string) ([]Response, error) {
 	if g.served+len(requests) > len(g.loaded.Requests) {
 		return nil, fmt.Errorf("golden %s holds %d answers, %d already served, the test asks for %d more; regenerate: %s", g.spec.Path, len(g.loaded.Requests), g.served, len(requests), g.spec.Recipe)
 	}
@@ -826,6 +847,15 @@ func (g *Golden) frozenAnswers(requests []Request) ([]Response, error) {
 		if got.Name != want.Name || got.Method != want.Method || got.Path != want.Path || got.BodySHA256 != want.BodySHA256 || got.HeadersSHA256 != want.HeadersSHA256 {
 			return nil, fmt.Errorf("golden %s request %d is %q %s %s (body %s.., headers %s..); the test sends %q %s %s (body %s.., headers %s..); regenerate: %s",
 				g.spec.Path, g.served+index, got.Name, got.Method, got.Path, short(got.BodySHA256), short(got.HeadersSHA256), want.Name, want.Method, want.Path, short(want.BodySHA256), short(want.HeadersSHA256), g.spec.Recipe)
+		}
+		switch {
+		case got.CallEnv == callEnv:
+		case got.CallEnv == "":
+			return nil, fmt.Errorf("golden %s request %d (%q) was recorded before a golden kept the key of a call's extra environment (PythonWithEnv), so it cannot show that its answer was given under the extra environment this test passes; record the golden again (for billingvenue's TestVenueOracleBillingEdge that is CHAOS-7408): %s",
+				g.spec.Path, g.served+index, got.Name, g.spec.Recipe)
+		default:
+			return nil, fmt.Errorf("golden %s request %d (%q) was recorded under another extra environment than this call passes (key %s, the golden's %s): a changed, added or removed entry changes what the real Python api answers; regenerate: %s",
+				g.spec.Path, g.served+index, got.Name, keyHead(callEnv), keyHead(got.CallEnv), g.spec.Recipe)
 		}
 		out[index] = Response{Status: got.Status, Headers: got.Headers, Body: got.Body}
 	}

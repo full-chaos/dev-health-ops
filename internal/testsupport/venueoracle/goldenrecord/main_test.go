@@ -741,4 +741,9 @@ func TestTheHarnessOfARecordingCommitMustHandThePythonPlaneTheSameEnvironment(t 
 			t.Errorf("%s: err = %v, want a refusal holding %q", name, err, c.refusal)
 		}
 	}
+	// The default reader of the declared keys makes that check before it runs any test of a recording commit's tree.
+	other := tree(strings.Replace(legacy, "ENVIRONMENT=test", "ENVIRONMENT=dev", 1), "")
+	if keys, err := declaredKeys(Config{Root: root, Package: "./internal/testsupport/venueoracle/", Test: "^TestNone$"}, other); err == nil || !strings.Contains(err.Error(), "another environment than the one known") || keys != nil {
+		t.Fatalf("the keys of a tree whose harness handed Python another environment were read: %v %v", keys, err)
+	}
 }

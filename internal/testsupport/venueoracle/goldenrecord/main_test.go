@@ -428,8 +428,8 @@ func TestTwoRecordingsThatDifferAreRefusedNamingTheFieldNotTheValue(t *testing.T
 		body    func(int) string
 		wantAll []string
 	}{
-		"body leaf and row line": {runGolden(secret, false), []string{"request login body $.a.token", "rows mail line 2"}},
-		"packed body unpacked":   {runGolden(secret, true), []string{"request login body $.a.token"}},
+		"body leaf and row line": {runGolden(secret, false), []string{"request login body $.<key sha256 ", "rows mail line 2"}},
+		"packed body unpacked":   {runGolden(secret, true), []string{"request login body $.<key sha256 "}},
 		"header field": {func(run int) string {
 			return `{"header":{"python_build":"b` + fmt.Sprint(run) + `"},"requests":[{"name":"r","body":"x"}]}` + "\n"
 		}, []string{"header.python_build"}},
@@ -526,5 +526,18 @@ func TestBothRecordingRunsGetTheSameEnvironment(t *testing.T) {
 	}
 	if len(fake.recordEnvs) != 2 || strings.Join(fake.recordEnvs[0], "\n") != strings.Join(fake.recordEnvs[1], "\n") {
 		t.Fatalf("the two recording runs got different environments: %v", fake.recordEnvs)
+	}
+}
+
+func TestAJSONKeyIsNeverPrintedInARefusal(t *testing.T) {
+	cfg, fake, _ := fixture(t, "")
+	const key = "SYNTHETIC_SECRET_KEY_DO_NOT_USE"
+	fake.perRun = func(run int) string {
+		body := strconv.Quote(`{"` + key + `":"value-` + fmt.Sprint(run) + `"}`)
+		return `{"requests":[{"name":"login","body":` + body + `}]}` + "\n"
+	}
+	_, err := Record(context.Background(), cfg)
+	if err == nil || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "request login body $.<key sha256 ") {
+		t.Fatalf("a JSON key was printed or the refusal lost its path: %v", err)
 	}
 }

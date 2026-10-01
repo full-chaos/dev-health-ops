@@ -720,10 +720,12 @@ func firstLeaf(a, b any, path string) (string, bool) {
 		for _, k := range sortedKeys(keys) {
 			xv, xok := x[k]
 			yv, yok := y[k]
+			// A key can be a secret too: it is named by its digest, never as written.
+			label := path + ".<key sha256 " + keyDigest(k) + ">"
 			if !xok || !yok {
-				return path + "." + k, true
+				return label, true
 			}
-			if p, ok := firstLeaf(xv, yv, path+"."+k); ok {
+			if p, ok := firstLeaf(xv, yv, label); ok {
 				return p, true
 			}
 		}
@@ -751,4 +753,10 @@ func firstLeaf(a, b any, path string) (string, bool) {
 func describe(text string) string {
 	sum := sha256.Sum256([]byte(text))
 	return fmt.Sprintf("%d bytes, sha256 %s", len(text), hex.EncodeToString(sum[:])[:8])
+}
+
+// keyDigest is the head of a JSON key's sha256.
+func keyDigest(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])[:8]
 }

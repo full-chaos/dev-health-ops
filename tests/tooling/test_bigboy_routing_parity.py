@@ -212,4 +212,17 @@ def test_tracked_list_parses_and_marks_testops_risk() -> None:
     assert "testopsRisk" in ops.known_missing
     assert "CHAOS-6993" in ops.known_missing["testopsRisk"]
     assert "testopsRisk" not in ops.required
-    assert len(ops.required) + len(ops.known_missing) == 50
+    # Prod has every registered operation enabled (the 2026-10-01 readback): the five
+    # saved-report mutations and the three seeded reads are listed, not left out.
+    assert len(ops.required) + len(ops.known_missing) == 58
+    for enabled_on_prod in (
+        "createSavedReport",
+        "updateSavedReport",
+        "deleteSavedReport",
+        "cloneSavedReport",
+        "triggerReport",
+        "home",
+        "recommendations",
+        "workItemTeamAttributions",
+    ):
+        assert enabled_on_prod in ops.required, enabled_on_prod

@@ -3,17 +3,9 @@ package cli
 import (
 	_ "embed"
 	"encoding/json"
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"sort"
 	"strings"
-	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 //go:embed testdata/root_flags_oracle.py
@@ -111,79 +103,15 @@ func rootResult(argv []string) map[string]any {
 	}}
 }
 
-// TestRootFlagsMatchLivePython compares the root parser with the real
-// build_parser().parse_args(...) + main()'s _resolve_org over the corpus: the
-// exit code of what refuses, and the value of every root option of what parses.
-// Named limits: a root value is handed to the command, where a flag typed after
-// the command wins (asserted by the dispatch tests, not by this oracle); the
-// environment defaults of the root parser (LOG_LEVEL, POSTGRES_URI, ...) stay
-// each command's own, so the oracle runs with them unset.
-func TestRootFlagsMatchLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR") == "" {
-		t.Fatal("live Python oracle opt-in requires a proof directory from ci/check_go.sh")
-	}
-	_, currentFile, _, _ := runtime.Caller(0)
-	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
-	python := pyoracle.Resolve(t, repoRoot)
-	probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
-	pyoracle.RequireDeployed(t, python, probe, probeErr)
-
-	corpus := rootCorpus()
-	input, err := json.Marshal(corpus)
-	if err != nil {
-		t.Fatal(err)
-	}
-	command := exec.Command(python, "-c", rootFlagsOracleProgram)
-	command.Stdin = strings.NewReader(string(input))
-	command.Env = append(os.Environ(), "PYTHONHASHSEED=0")
-	output, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr))
-	}
-	var want []map[string]any
-	if err := json.Unmarshal(output, &want); err != nil {
-		t.Fatalf("decode python answer: %v", err)
-	}
-	if len(want) != len(corpus) {
-		t.Fatalf("python answered %d for %d cases", len(want), len(corpus))
-	}
-	stages := map[string]int{}
-	mismatches := 0
-	for index, argv := range corpus {
-		got := rootResult(argv)
-		if _, compared := got["msg"]; !compared {
-			// dho's other refusals are worded by its own dispatcher; only the exit code is compared.
-			delete(want[index], "msg")
-		}
-		gotJSON, _ := json.Marshal(got)
-		wantJSON, _ := json.Marshal(want[index])
-		stages[fmt.Sprint(got["stage"])]++
-		if canonicalJSON(gotJSON) != canonicalJSON(wantJSON) {
-			mismatches++
-			t.Errorf("case %d %q:\n go     %s\n python %s", index, argv, gotJSON, wantJSON)
-		}
-	}
-	names := make([]string, 0, len(stages))
-	for name := range stages {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	t.Logf("%d command lines compared, %d mismatches, stages %v", len(corpus), mismatches, stages)
-	// A corpus that only ever parses, or only ever refuses, compares nothing.
-	if stages["ok"] < 40 || stages["exit"] < 20 {
-		t.Fatalf("the corpus did not reach both outcomes: %v", stages)
-	}
-	if err := os.WriteFile(filepath.Join(os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"), "cli-root-flags"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
+// The frozen oracle (rootflags_golden_test.go) is an external test package,
+// because the venue golden harness it uses imports this package. These are
+// its handles on the corpus, the Go side and the Python program.
+var (
+	RootCorpus             = rootCorpus
+	RootResult             = rootResult
+	CanonicalJSON          = canonicalJSON
+	RootFlagsOracleProgram = func() string { return rootFlagsOracleProgram }
+)
 
 func canonicalJSON(raw []byte) string {
 	var value any

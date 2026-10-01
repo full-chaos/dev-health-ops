@@ -33,7 +33,7 @@ func TestEveryFileATestReadsIsInItsManifest(t *testing.T) {
 
 func TestRemainingCountsTheDayOneListByTopLevelPackage(t *testing.T) {
 	repo := t.TempDir()
-	write(t, repo, DayOneList, "# note\ninternal/b/testdata/x\ninternal/a/testdata/y\ninternal/a/sub/testdata/z\ntests/fixtures/f.json\n")
+	write(t, repo, DayOneList, "# note\ninternal/b/testdata/x\ninternal/a/testdata/y\ninternal/a/sub/testdata/z\n"+fixtures+"/f.json\n")
 	got, err := Remaining(repo)
 	want := "4 files are still unclassified (their bytes are pinned, their kind is not known; " + DayOneList + "): internal/a 2, internal/b 1, tests/fixtures 1"
 	if err != nil || got != want {
@@ -50,20 +50,20 @@ func tree(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	for file, text := range map[string]string{
-		"go.mod":                              "module example\n",
-		"a/testdata/case.json":                `{"case": 1}`,
-		"a/testdata/recorded.json":            `{"python": "said this"}`,
-		"a/testdata/sub/second_recorded.txt":  "and this\n",
-		"a/testdata/golden/TestX.json":        goldenText,
-		"a/testdata/pages/page_0.json":        `{"page": 0}`,
-		"a/testdata/old.sql":                  "select 1;\n",
-		"tests/fixtures/x_python_golden.json": `{"x": 1.5}`,
+		"go.mod":                             "module example\n",
+		"a/testdata/case.json":               `{"case": 1}`,
+		"a/testdata/recorded.json":           `{"python": "said this"}`,
+		"a/testdata/sub/second_recorded.txt": "and this\n",
+		"a/testdata/golden/TestX.json":       goldenText,
+		"a/testdata/pages/page_0.json":       `{"page": 0}`,
+		"a/testdata/old.sql":                 "select 1;\n",
+		fixtures + "/x_python_golden.json":   `{"x": 1.5}`,
 	} {
 		write(t, repo, file, text)
 	}
 	set(t, repo, Change{}, "a/testdata/golden/TestX.json")
 	set(t, repo, Change{Kind: HandWritten}, "a/testdata/case.json")
-	set(t, repo, Change{Kind: PythonRecorded}, "a/testdata/recorded.json", "a/testdata/sub/second_recorded.txt", "tests/fixtures/x_python_golden.json")
+	set(t, repo, Change{Kind: PythonRecorded}, "a/testdata/recorded.json", "a/testdata/sub/second_recorded.txt", fixtures+"/x_python_golden.json")
 	set(t, repo, Change{Kind: ProviderRecorded}, "a/testdata/pages/page_0.json")
 	set(t, repo, Change{Kind: Unclassified, DayOne: true}, "a/testdata/old.sql")
 	return repo
@@ -139,8 +139,8 @@ func TestTheGuardRefusesEachWayAFileCanChangeUnseen(t *testing.T) {
 			[][]string{{"a/testdata/recorded.json changed", "its row in a/testdata.manifest.tsv holds", "recorded answer of a Python producer", "-recorded-again -kind python-recorded a/testdata/recorded.json"}}},
 		{"one byte more in a recorded file in a subdirectory", func(t *testing.T, repo string) { write(t, repo, "a/testdata/sub/second_recorded.txt", "and this\n\n") },
 			[][]string{{"a/testdata/sub/second_recorded.txt changed", "-recorded-again"}}},
-		{"one byte more in a file under tests/fixtures", func(t *testing.T, repo string) { write(t, repo, "tests/fixtures/x_python_golden.json", `{"x": 1.50}`) },
-			[][]string{{"tests/fixtures/x_python_golden.json changed", "its row in tests/fixtures.manifest.tsv holds", "-recorded-again"}}},
+		{"one byte more in a file under tests/fixtures", func(t *testing.T, repo string) { write(t, repo, fixtures+"/x_python_golden.json", `{"x": 1.50}`) },
+			[][]string{{fixtures + "/x_python_golden.json changed", "its row in tests/fixtures.manifest.tsv holds", "-recorded-again"}}},
 		{"one byte more in a provider's recorded page", func(t *testing.T, repo string) { write(t, repo, "a/testdata/pages/page_0.json", `{"page": 0} `) },
 			[][]string{{"a/testdata/pages/page_0.json changed", "-kind provider-recorded"}}},
 		{"one byte more in an unclassified file", func(t *testing.T, repo string) { write(t, repo, "a/testdata/old.sql", "select 2;\n") },
@@ -375,7 +375,7 @@ func TestTheVerbWritesWhatTheGuardAccepts(t *testing.T) {
 
 func TestRootsAreTheOutermostTestdataDirectoriesAndTheFixtures(t *testing.T) {
 	repo := t.TempDir()
-	for _, file := range []string{"go.mod", "a/testdata/x", "a/testdata/in/testdata/y", "a/b/testdata/z", "tests/fixtures/f", "tests/other/g",
+	for _, file := range []string{"go.mod", "a/testdata/x", "a/testdata/in/testdata/y", "a/b/testdata/z", fixtures + "/f", "tests/other/g",
 		".hidden/testdata/h", "node_modules/p/testdata/i", "testdata/top"} {
 		write(t, repo, file, "x")
 	}
@@ -393,7 +393,7 @@ func TestRootsAreTheOutermostTestdataDirectoriesAndTheFixtures(t *testing.T) {
 	if got, want := strings.Join(files, " "), "in/testdata/y x"; got != want {
 		t.Errorf("files = %q, want %q", got, want)
 	}
-	for file, want := range map[string]string{"a/testdata/in/testdata/y": "a/testdata|in/testdata/y", "tests/fixtures/d/f.json": "tests/fixtures|d/f.json", "testdata/top": "testdata|top"} {
+	for file, want := range map[string]string{"a/testdata/in/testdata/y": "a/testdata|in/testdata/y", fixtures + "/d/f.json": "tests/fixtures|d/f.json", "testdata/top": "testdata|top"} {
 		root, relative, err := RootOf(file)
 		if err != nil || root+"|"+relative != want {
 			t.Errorf("RootOf(%s) = %s|%s, %v, want %s", file, root, relative, err, want)

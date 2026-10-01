@@ -76,7 +76,7 @@ engine.dispose()
 
 # The fixture program that puts the measured operation's routing row in the
 # given mode (shadow, then canary) at the running build. It writes the row
-# directly: `go-api-routing enable` admits an operation only from a recorded
+# directly: `dho goapi routing enable` admits an operation only from a recorded
 # proof run or a written ledger limit, and the run this script checks is what
 # records the first one. The digests come from the running query-api's own /registry.
 GO_API_PROVE_E2E_ROUTING_PROGRAM='import json, os, sys

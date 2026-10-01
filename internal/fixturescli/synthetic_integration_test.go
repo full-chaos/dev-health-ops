@@ -97,6 +97,8 @@ func startClickHouse(t *testing.T) clickHouse {
 		t.Fatalf("start clickhouse: %v", err)
 	}
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	// Production's schema: ordering contract 2 (the migrator's head).
+	t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "2")
 	chschema.Apply(ctx, t, instance)
 	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
 	if err != nil {
@@ -312,6 +314,12 @@ func TestLoadSyntheticInsertsTheFrozenRows(t *testing.T) {
 						t.Fatalf("%s: the loader reported %d row(s), frozen %d", table.Name, counts[table.Name], len(table.Rows))
 					}
 					got := dumpTable(t, ch.httpDSN, table.Name)
+					if _, operational := operationalFamilies[table.Name]; operational {
+						// The stored stamp is the one derived from the stored row; the
+						// remaining columns are then compared with the frozen ones.
+						assertStoredStampOfTable(t, ch.httpDSN, WorldTable{FrozenTable: table})
+					}
+					got = withoutOrdering(t, got)
 					if !reflect.DeepEqual(got.Columns, table.Columns) {
 						t.Fatalf("%s: the schema's columns differ from the frozen ones:\n schema %v\n frozen %v", table.Name, got.Columns, table.Columns)
 					}

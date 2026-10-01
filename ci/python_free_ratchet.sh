@@ -25,7 +25,7 @@ set -euo pipefail
 # STRONG marker: the shim's own line, or the nonexistent interpreter path. WEAK marker ("exit status 97", all
 # a test prints when it shows only the error of a shim it ran) counts only in a package whose test binary
 # the tripwire log shows starting Python: a test that merely runs `exit 97` is a real failure.
-MARKER='PYTHON TRIPWIRE|python-tripwire/no-python'
+MARKER='PYTHON TRIPWIRE|python-tripwire[.][A-Za-z0-9]+/'
 WEAK_MARKER='exit status 97'
 # A skip whose reason says Python is missing, and does not blame the live-oracle gate (those skips are
 # the gated oracles and are expected).
@@ -102,17 +102,19 @@ classify() {
   done <"${tmp}/skipped.tsv"
   sort -u -o "${hits_out}" "${hits_out}"
   if [ -n "${log}" ] && [ -s "${log}" ]; then
-    # A test binary that started Python (the shim's parent) but has no HIT swallowed the failure.
-    local binary base
-    while IFS= read -r binary; do
+    # SWALLOWED START: every tripwire log line must be attributed to a FAILED test of the binary that started
+    # Python (a tripwire row in HITS_OUT). A line whose binary has no such row means the test ignored the
+    # shim's failure and passed, or skipped: it is named with its argv, and the run fails.
+    local shim argv binary base
+    while IFS=$'\t' read -r shim argv binary; do
       [ -n "${binary}" ] || continue
       base="${binary##*/}"
       base="${base%.test}"
-      if ! awk -F'\t' -v b="${base}" '{ n = split($1, parts, "/"); if (parts[n] == b) found = 1 } END { exit found ? 0 : 1 }' "${hits_out}"; then
-        printf 'UNATTRIBUTED PYTHON START: the test binary %s started Python (see the tripwire log) but no failed test names the tripwire\n' "${binary}" >&2
+      if ! awk -F'\t' -v b="${base}" '$3 == "tripwire" { n = split($1, parts, "/"); if (parts[n] == b) found = 1 } END { exit found ? 0 : 1 }' "${hits_out}"; then
+        printf 'SWALLOWED START: the test binary %s ran %s %s, but no failed test of it names the tripwire (the error was ignored, or the test passed or skipped)\n' "${binary}" "${shim}" "${argv}" >&2
         rc=1
       fi
-    done < <(sed -n 's/.*parent=\([^ ]*\).*/\1/p' "${log}" | sort -u)
+    done < <(sed -n 's/^.* shim=\([^ ]*\) argv=\(.*\) parent=\([^ ]*\)\( .*\)\{0,1\}$/\1\t\2\t\3/p' "${log}" | sort -u)
   fi
   rm -rf "${tmp}"
   printf 'python_free_ratchet: classified %s: %s tripwire hit(s)\n' "${json}" "$(wc -l <"${hits_out}" | tr -d ' ')"

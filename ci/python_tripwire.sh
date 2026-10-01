@@ -9,8 +9,8 @@
 #   * a shim directory is PREPENDED to PATH holding python, python3, python3.13, python3.14, pip,
 #     pip3 and uv; each prints "PYTHON TRIPWIRE: <argv> (parent: <cmdline>)" to stderr, appends one
 #     line to $PYTHON_TRIPWIRE_LOG and exits 97;
-#   * DEV_HEALTH_PYTHON and PYTHON point at a path that does not exist, so pyoracle.Resolve (which
-#     honours them first) resolves to a binary whose exec fails with the path in the message.
+#   * DEV_HEALTH_PYTHON and PYTHON point at the python3 shim itself, so pyoracle.Resolve (which
+#     honours them first) and any absolute-path start also reach the shim, which names the caller.
 #
 # This file ONLY prepends PATH and exports variables, in the sourcing shell. It never changes a mode,
 # never touches a system interpreter, and never writes outside its own temporary directory. Removing the
@@ -42,7 +42,19 @@ PYTHON_TRIPWIRE_LOG="${PYTHON_TRIPWIRE_LOG:-${PYTHON_TRIPWIRE_DIR}/hits.log}"
 _python_tripwire_template="${PYTHON_TRIPWIRE_DIR}/.shim-template"
 cat >"${_python_tripwire_template}" <<'SHIM'
 #!/bin/sh
+# parent = the nearest ancestor that is a Go test binary (*.test), else the direct parent: a start through
+# `sh -c` or a helper script is still attributed to the test binary that ran it.
 parent="$(tr '\000' ' ' < "/proc/$PPID/cmdline" 2>/dev/null)"
+p=$PPID
+depth=0
+while [ "$p" -gt 1 ] 2>/dev/null && [ "$depth" -lt 12 ]; do
+  cmd="$(tr '\000' ' ' < "/proc/$p/cmdline" 2>/dev/null)"
+  case "${cmd%% *}" in
+    *.test) parent="$cmd"; break ;;
+  esac
+  p="$(awk '/^PPid:/ { print $2 }' "/proc/$p/status" 2>/dev/null)"
+  depth=$((depth + 1))
+done
 printf 'pid=%s ppid=%s shim=%s argv=%s parent=%s\n' "$$" "$PPID" "@NAME@" "$*" "$parent" >> "@LOG@"
 echo "PYTHON TRIPWIRE: @NAME@ invoked with: $* (parent: $parent)" >&2
 exit 97
@@ -57,8 +69,9 @@ unset _python_tripwire_name
 
 export PYTHON_TRIPWIRE_DIR PYTHON_TRIPWIRE_LOG
 export PATH="${PYTHON_TRIPWIRE_DIR}:${PATH}"
-# A path that cannot exist: pyoracle.Resolve honours DEV_HEALTH_PYTHON, then PYTHON, before the repo .venv.
-export DEV_HEALTH_PYTHON=/python-tripwire/no-python
-export PYTHON=/python-tripwire/no-python
+# The shim itself: pyoracle.Resolve honours DEV_HEALTH_PYTHON, then PYTHON, before the repo .venv, so a test that
+# starts the interpreter by that absolute path reaches the shim too, which names the caller and logs the start.
+export DEV_HEALTH_PYTHON="${PYTHON_TRIPWIRE_DIR}/python3"
+export PYTHON="${PYTHON_TRIPWIRE_DIR}/python3"
 printf 'python_tripwire: armed: shims in %s, DEV_HEALTH_PYTHON=%s, hits log %s\n' \
   "${PYTHON_TRIPWIRE_DIR}" "${DEV_HEALTH_PYTHON}" "${PYTHON_TRIPWIRE_LOG}" >&2

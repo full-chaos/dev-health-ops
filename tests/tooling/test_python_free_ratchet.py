@@ -71,7 +71,7 @@ def test_a_failed_test_that_names_the_tripwire_is_a_hit_and_other_failures_are_n
         (
             "output",
             "TestViaPyoracle/sub",
-            "fork/exec /python-tripwire/no-python: no such file or directory\n",
+            "fork/exec /python-tripwire.AbC123/python3: no such file or directory\n",
             "",
         ),
         ("fail", "TestViaPyoracle/sub", "", ""),
@@ -172,7 +172,7 @@ def test_a_swallowed_python_start_is_unattributed_and_fails(tmp_path: Path) -> N
     log = "pid=1 ppid=2 shim=python3 argv=-c 1 parent=/tmp/go-build/b001/p.test -test.run X\n"
     result, _ = _classify(tmp_path, _events(("pass", "TestQuiet", "", "")), log)
     assert result.returncode == 1
-    assert "UNATTRIBUTED PYTHON START" in result.stderr
+    assert "SWALLOWED START" in result.stderr
 
 
 def _compare(tmp_path: Path, known: str, hits: dict[str, str]):
@@ -251,7 +251,11 @@ def test_the_armed_tripwire_names_the_caller_and_exits_97(tmp_path: Path) -> Non
     probe = 'source "$1" 2>/dev/null; python3 -c 1; echo "rc=$?"; echo "py=$DEV_HEALTH_PYTHON"; cat "$PYTHON_TRIPWIRE_LOG"'
     result = _run(["bash", "-c", probe, "x", str(TRIPWIRE)], env)
     assert "PYTHON TRIPWIRE: python3 invoked with: -c 1" in result.stderr
-    assert "rc=97" in result.stdout and "py=/python-tripwire/no-python" in result.stdout
+    assert "rc=97" in result.stdout
+    assert (
+        f"py={tmp_path}/python-tripwire." in result.stdout
+        and "/python3" in result.stdout
+    )
     assert "shim=python3" in result.stdout
 
 

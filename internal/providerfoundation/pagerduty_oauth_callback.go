@@ -127,7 +127,11 @@ func pagerDutyClient(doer HTTPDoer, followRedirects bool, timeout time.Duration)
 		return doer
 	}
 	client := &http.Client{Timeout: timeout}
-	if !followRedirects {
+	if followRedirects {
+		// Python's httpx follows here, and drops the credential when a redirect changes the origin: so does
+		// this (net/http alone would also replay it to a subdomain of the original host).
+		client.CheckRedirect = DropCredentialsOnHostChange
+	} else {
 		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	}
 	return client

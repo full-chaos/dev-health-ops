@@ -1,0 +1,626 @@
+{
+  "header": {
+    "test": "TestVenueOracleCustomerPushValidate",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/ -test '^TestVenueOracleCustomerPushValidate$' -python-root $DIR (records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
+    "python_env": "40519f219633b0ea42772427169bf257b346c7385b9cf76d2030ebd2a973af44"
+  },
+  "requests": [
+    {
+      "name": "anon",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "85e642f193fe2ff31861d7b294072a763fbb84fc946fa8b3065df5aaaeec1740",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "53d6dfd5-28b8-40f4-a7b2-35988b46d395"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "85e642f193fe2ff31861d7b294072a763fbb84fc946fa8b3065df5aaaeec1740",
+      "request_headers_sha256": "aa32771d459062c728b388c2411f415e9a397873370db2ed7d0ddfc61f12956d",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6e9a40d9-e9c1-436d-8f0f-de18c097d19d"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "community",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "request_headers_sha256": "e9451371556a7e8bb17360d3bbb48b7f1d9f18d4413410a33af0a117d2da8092",
+      "status": 402,
+      "headers": {
+        "content-length": "126",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a0db2446-da9f-41e4-b5a9-65a030f232fc"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_licensed\",\"feature\":\"customer_push_ingest\",\"required_tier\":\"team\",\"current_tier\":\"community\"}}"
+    },
+    {
+      "name": "disabled org",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "request_headers_sha256": "d65f3d9583a31435c88c793b5adf877a6d818d2a74fd640cd973a166e11e09fb",
+      "status": 403,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d45a50c5-5aab-43bb-a278-e52d5caa1f49"
+      },
+      "body": "{\"detail\":{\"error\":\"feature_not_enabled\",\"feature\":\"customer_push_ingest\",\"message\":\"Customer push ingest is not enabled for this organization\"}}"
+    },
+    {
+      "name": "unknown source",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/1faf2d54-ea65-553d-9bb4-7c8cdaa34555/validate",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6411d907-50b2-4260-b7cc-8bb6abc63fad"
+      },
+      "body": "{\"detail\":\"Source not found\"}"
+    },
+    {
+      "name": "bad source id",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/nope/validate",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c85c5562-5498-4e44-bb4d-f644d491a4d9"
+      },
+      "body": "{\"detail\":\"Source not found\"}"
+    },
+    {
+      "name": "body: array",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "188",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8f2002af-7df2-4d4b-9c54-a8f8a3f78a0e"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Input should be an object\",\"path\":null}]}"
+    },
+    {
+      "name": "body: bad utf-8",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "6828389c2f1c3262daed21dae1e982030e97a20ca4d3d17862e329b85049c496",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "222",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d40a2be7-1a00-40e0-9bec-903c11b9c74d"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Invalid JSON: invalid unicode code point at line 1 column 8\",\"path\":null}]}"
+    },
+    {
+      "name": "body: empty",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "221",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2162fb6c-331d-4909-9222-9934438f8058"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Invalid JSON: EOF while parsing a value at line 1 column 0\",\"path\":null}]}"
+    },
+    {
+      "name": "body: empty records",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "0418f90e9788ad5646a9e2dcb2f0bcfc8207f33b1abb1885393c3e4058410b1d",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "224",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "eeb6267f-5666-4320-b5fa-5d341fc9b757"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"List should have at least 1 item after validation, not 0\",\"path\":\"records\"}]}"
+    },
+    {
+      "name": "body: eof in object",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "20f1e5bca6ff55a221a3686d33e25b30423af8d09f00c6ba4bb81d9db174ae96",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "223",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3ab92421-c790-4b50-97a2-9fecad2c53ee"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Invalid JSON: EOF while parsing an object at line 1 column 6\",\"path\":null}]}"
+    },
+    {
+      "name": "body: expected value",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "61b6db809e2d25bd06dff0ddc202b1a7840eef821c26b95fd78dde1fae17d6ee",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "210",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "89b6476c-edbb-473e-bc4c-b87fc27a11b5"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Invalid JSON: expected value at line 3 column 3\",\"path\":null}]}"
+    },
+    {
+      "name": "body: field names",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "d60c386d07dfe442532fa72aa81df3c5349c4d240391d222e2614fb71b63740c",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "64",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f2192464-4cb0-4856-8629-e25e40b97f4c"
+      },
+      "body": "{\"valid\":true,\"items_accepted\":1,\"items_rejected\":0,\"errors\":[]}"
+    },
+    {
+      "name": "body: float integer part over limit",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "51663e10aecca0b6383251cc3dd9a7fda40e82fe7e5ee5c283a1fa24b1b4b328",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "218",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c57d1813-b385-4b24-b904-51ce317cbf5a"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Invalid JSON: number out of range at line 1 column 4311\",\"path\":null}]}"
+    },
+    {
+      "name": "body: integer part at limit",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "98594e3524b83c88aeefc3acabb8cffbf8bb7ba8874d79c348b69d471b1c3dac",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "680",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5f8f0e78-34c9-4241-bebc-7b484fab121e"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"extra\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Field required\",\"path\":\"schemaVersion\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Field required\",\"path\":\"idempotencyKey\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Field required\",\"path\":\"source\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Field required\",\"path\":\"records\"}]}"
+    },
+    {
+      "name": "body: integer part over limit",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "a605dec6ee2f647fcbc1aa1ef90ef582683eda3a94503f2692bd557132741761",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "218",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "21a9a094-281b-4f5b-bcae-ec678cc38d67"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Invalid JSON: number out of range at line 1 column 4311\",\"path\":null}]}"
+    },
+    {
+      "name": "body: invalid escape",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "482c6c9b5a862a762bcfa0b79d9a114ed565641f30968253badcee099273e18c",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "210",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "dcd80ffd-3aea-4ddf-a2c3-e808feb759f3"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Invalid JSON: invalid escape at line 1 column 8\",\"path\":null}]}"
+    },
+    {
+      "name": "body: no body",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "221",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8469c47f-fbe2-442e-bb3a-49e75109e6d7"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Invalid JSON: EOF while parsing a value at line 1 column 0\",\"path\":null}]}"
+    },
+    {
+      "name": "body: object errors",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "c306b51e8e29a7ca2089e8d5afb8e67502a000e12160fec5926afaf99f309572",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "1845",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b56d668e-254b-49f5-a2d7-bb3a92c40734"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"zzz\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Input should be a valid string\",\"path\":\"schemaVersion\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"String should have at least 1 character\",\"path\":\"idempotencyKey\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"source.extra\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Input should be 'github', 'gitlab', 'jira', 'linear', 'pagerduty', 'atlassian' or 'custom'\",\"path\":\"source.system\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"String should have at least 1 character\",\"path\":\"source.instance\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Value error, window.endedAt must be \u003e= window.startedAt\",\"path\":\"window.endedAt\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Input should be an object\",\"path\":\"records.0\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"records.1.q\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Input should be a valid string\",\"path\":\"records.1.kind\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"String should have at least 1 character\",\"path\":\"records.1.externalId\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Input should be an object\",\"path\":\"records.1.payload\"}]}"
+    },
+    {
+      "name": "body: record errors",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "9a8fc323a70c030b4897be6dcc5c0128b018c36d0cf6d0bc49d0b8bfdcb83689",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "196",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "86bb37f9-0df8-4cc4-92dd-16f14634007d"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"batch_too_large\",\"message\":\"Batch has 5 records; max is 3\",\"path\":\"records\"}]}"
+    },
+    {
+      "name": "body: signed integer part over",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "19fadea35dc2a44cf7910b0fafe3ca986de4e5f6b6ae21ed30de860c76842f01",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "218",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a13d3335-0c19-40ac-ab03-e7127e642d6d"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Invalid JSON: number out of range at line 1 column 4311\",\"path\":null}]}"
+    },
+    {
+      "name": "body: sixty errors",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "d7854474f6362fb667d4af18573e17f6d68489e0f6bc55daa37d32e5cadbc9a9",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "6554",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d4c698a8-035c-43f9-98a7-2f2aa4a648e8"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e0\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e1\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e2\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e3\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e4\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e5\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e6\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e7\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e8\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e9\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e10\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e11\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e12\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e13\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e14\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e15\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e16\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e17\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e18\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e19\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e20\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e21\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e22\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e23\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e24\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e25\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e26\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e27\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e28\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e29\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e30\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e31\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e32\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e33\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e34\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e35\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e36\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e37\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e38\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e39\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e40\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e41\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e42\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e43\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e44\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e45\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e46\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e47\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e48\"},{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Extra inputs are not permitted\",\"path\":\"e49\"}]}"
+    },
+    {
+      "name": "body: too many",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "d2a4b925635da608960ce2b731c106a3c453d1aed692da725c76c640843b2199",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "196",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a91912ef-ec21-480d-a5c0-264d3e01bf69"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"batch_too_large\",\"message\":\"Batch has 4 records; max is 3\",\"path\":\"records\"}]}"
+    },
+    {
+      "name": "body: trailing",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "3ed0053299c79af16137a0a62c02ef1168d2c4107f7a2182c16a92816fdf6f49",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "215",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "faee56db-2482-4a34-bf46-ef9839ca6d2d"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Invalid JSON: trailing characters at line 1 column 4\",\"path\":null}]}"
+    },
+    {
+      "name": "body: trailing comma",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "caefe64da8c00cdb4a70dead961d7cbf8fe57bd67b0ff3ced03756dfaa9ed063",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "210",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "23a3f97d-c078-44d1-9733-88c0589fe09d"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"invalid_envelope\",\"message\":\"Invalid JSON: trailing comma at line 1 column 9\",\"path\":null}]}"
+    },
+    {
+      "name": "body: valid",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "85e642f193fe2ff31861d7b294072a763fbb84fc946fa8b3065df5aaaeec1740",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "64",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "587e7830-531e-4a46-b115-3141371b445a"
+      },
+      "body": "{\"valid\":true,\"items_accepted\":1,\"items_rejected\":0,\"errors\":[]}"
+    },
+    {
+      "name": "body: wrong version",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "c9f541b902075ac1c2a5b8245ccec3210dec5a0d020c8d4e184dde104f5f3b38",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "226",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3e3155c2-1674-4eb6-85ee-d7a33a2c9a70"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"unsupported_schema_version\",\"message\":\"Unsupported schemaVersion: 'it\\\\'s \\\"v2\\\"'\",\"path\":\"schemaVersion\"}]}"
+    },
+    {
+      "name": "naive vs aware window",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "16e304a5cf7d053a25a52be062fa6c660c7c13a64b5c0dcc079e75745a9cd79b",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "too large",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "4afd31fcae19d78a942a88ed909e8b742f3a963a8597b844615c533b84e11d58",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 200,
+      "headers": {
+        "content-length": "195",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1004fdec-2477-49f1-9002-bb723704c5c2"
+      },
+      "body": "{\"valid\":false,\"items_accepted\":0,\"items_rejected\":0,\"errors\":[{\"index\":0,\"kind\":\"unknown\",\"external_id\":null,\"code\":\"payload_too_large\",\"message\":\"Request body exceeds 6000 bytes\",\"path\":null}]}"
+    },
+    {
+      "name": "form content type",
+      "method": "POST",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "85e642f193fe2ff31861d7b294072a763fbb84fc946fa8b3065df5aaaeec1740",
+      "request_headers_sha256": "962ee9de05bf11d790facdae52d6f42e34c3d7849dc577394d09cbc208a16a8c",
+      "status": 200,
+      "headers": {
+        "content-length": "64",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a706ca77-c715-4fa8-aa1d-c2d3a22f123e"
+      },
+      "body": "{\"valid\":true,\"items_accepted\":1,\"items_rejected\":0,\"errors\":[]}"
+    },
+    {
+      "name": "GET validate",
+      "method": "GET",
+      "path": "/api/v1/admin/customer-push/sources/24f9813e-6116-51fc-b9bc-16b92e3f5f3a/validate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "ef9736b668d1d4fec9de26db1ac09813dc579e2f2f772bbd937b2fa741e9a27d",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b6da474b-6564-4009-8234-2a64c07522f9"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    }
+  ]
+}

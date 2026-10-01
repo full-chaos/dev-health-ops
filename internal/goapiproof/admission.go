@@ -125,6 +125,10 @@ type AdmissionInput struct {
 	// leg, the proof that the edge is query-api alone, and never a
 	// reference answer.
 	GoEdge bool
+	// DocRouteReference selects the doc-route reference mode (CHAOS-7442): Baseline
+	// is query-api's own /graphql answer for the registered document, so it must be
+	// served by plane go (never python) from the named build, bound per response.
+	DocRouteReference bool
 
 	Candidate, Baseline         Observation
 	CandidateSnap, BaselineSnap Snapshot
@@ -243,7 +247,16 @@ func admitPlanes(in AdmissionInput) Admission {
 	case in.Baseline.Plane == "":
 		return refused(RefusalPlaneUnidentified,
 			fmt.Sprintf("baseline leg carried no %s header (status %d): the control cannot be shown to be Python, so the comparison cannot back a proof", planeHeader, in.Baseline.StatusCode))
-	case in.Baseline.Plane != "python":
+	case in.DocRouteReference && in.Baseline.Plane != "go":
+		return refused(RefusalWrongPlane,
+			fmt.Sprintf("baseline leg was served by plane %q -- the doc-route reference must be query-api itself (plane go)", in.Baseline.Plane))
+	case in.DocRouteReference && in.Baseline.Build == "":
+		return refused(RefusalBuildUnbound,
+			fmt.Sprintf("the document route stamps the serving build on every response and the reference carried no %s header: without it the two answers cannot be tied to one build", buildHeader))
+	case in.DocRouteReference && in.Baseline.Build != in.NamedBuild:
+		return refused(RefusalBuildMismatch,
+			fmt.Sprintf("the document route that served the reference reports build %q, but the receipt would name %q: the two answers come from different builds", in.Baseline.Build, in.NamedBuild))
+	case !in.DocRouteReference && in.Baseline.Plane != "python":
 		return refused(RefusalWrongPlane,
 			fmt.Sprintf("baseline leg was served by plane %q -- the control must be Python", in.Baseline.Plane))
 	}

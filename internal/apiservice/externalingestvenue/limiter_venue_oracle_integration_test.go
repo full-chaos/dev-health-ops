@@ -18,7 +18,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
@@ -35,11 +34,12 @@ import (
 // is 127.0.0.1) so the per-IP auth-attempt throttle, a different limiter, never
 // interferes with the route limiter under test.
 func TestExternalIngestLimiterVenueOracle(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("external-ingest-limiter-venue-oracle", t.Name(), "6c649c2f430612c0af99d26844e68095a0e8942ccd2223fe9d3817c0de22c735"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	seed := newSeed()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:      root,
+		Golden: golden, Root: golden.PythonRoot(t, root),
 		JWTKey:    "venue-oracle-jwt-signing-key-32-bytes-min",
 		PythonEnv: []string{"TRUSTED_PROXIES=testclient"},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
@@ -87,9 +87,11 @@ func TestExternalIngestLimiterVenueOracle(t *testing.T) {
 	batches := "/api/v1/external-ingest/batches/"
 	var requests []venueoracle.Request
 	// 125 lookups of 125 DISTINCT ids: each URL has its own budget (all 404).
-	requests = append(requests, burst("get batch, distinct ids", "GET", 125, func(int) string { return batches + uuid.NewString() }, true, distinctIP)...)
+	requests = append(requests, burst("get batch, distinct ids", "GET", 125, func(index int) string {
+		return batches + venueoracle.StableUUID(fmt.Sprintf("limiter-distinct-%d", index))
+	}, true, distinctIP)...)
 	// 125 lookups of ONE id: 120 answered, then 429 (a fixed window).
-	same := uuid.NewString()
+	same := venueoracle.StableUUID("limiter-one-id")
 	requests = append(requests, burst("get batch, one id", "GET", 125, func(int) string { return batches + same }, true, distinctIP)...)
 	// The same id in another spelling is another URL, hence another budget.
 	requests = append(requests, burst("get batch, same id upper-cased", "GET", 3, func(int) string { return batches + same[:8] + "-" + strings.ToUpper(same[9:]) }, true, distinctIP)...)
@@ -118,9 +120,10 @@ func TestExternalIngestLimiterVenueOracle(t *testing.T) {
 	post("validate, malformed body", "/api/v1/external-ingest/validate")
 	post("accept batch, malformed body", "/api/v1/external-ingest/batches")
 
-	python := venue.ServePython(t, requests)
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	python := golden.Python(t, venue, requests)
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Logf("%d requests compared\n%s", len(requests), receipt)
+	golden.Finish(t)
 }
 
 func repoRoot(t *testing.T) string {
@@ -137,7 +140,7 @@ func repoRoot(t *testing.T) string {
 type seed struct{ orgID, sourceID, token string }
 
 func newSeed() seed {
-	return seed{orgID: uuid.New().String(), sourceID: uuid.New().String(), token: "fcpush_venue-limiter-" + uuid.New().String()}
+	return seed{orgID: venueoracle.StableUUID("limiter-org"), sourceID: venueoracle.StableUUID("limiter-source"), token: "fcpush_venue-limiter-" + venueoracle.StableUUID("limiter-token")}
 }
 
 func seedVenue(t *testing.T, ctx context.Context, admin *pgxpool.Pool, seed seed) {
@@ -154,7 +157,7 @@ VALUES ($1::uuid, $2, 'github', 'acme/venue-repo', 'legacy', 'customer_push', tr
 			[]any{seed.sourceID, seed.orgID}},
 		{`INSERT INTO external_ingest_tokens (id, org_id, source_id, name, token_hash, token_prefix, scopes, created_at)
 VALUES ($1::uuid, $2, $3::uuid, 'venue limiter token', $4, 'fcpush_venue', $5::jsonb, now())`,
-			[]any{uuid.New().String(), seed.orgID, seed.sourceID, hex.EncodeToString(digest[:]), `["schema:read","ingest:write","ingest:status"]`}},
+			[]any{venueoracle.StableUUID("limiter-token-row"), seed.orgID, seed.sourceID, hex.EncodeToString(digest[:]), `["schema:read","ingest:write","ingest:status"]`}},
 	}
 	for _, statement := range statements {
 		if _, err := admin.Exec(ctx, statement.sql, statement.args...); err != nil {

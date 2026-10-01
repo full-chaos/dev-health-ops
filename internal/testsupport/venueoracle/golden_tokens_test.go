@@ -3,7 +3,9 @@ package venueoracle
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -548,5 +551,73 @@ func TestVolatileHeadersAreStoredAsAPlaceholderAndOtherHeadersStillCompare(t *te
 	}
 	if same(map[string]string{"x-request-id": "req-bbbb", "date": "Tue"}) {
 		t.Fatal("a missing non-volatile header no longer fails")
+	}
+}
+
+// executionRecordedGoldens is the closed list of the recorded Python facts that have NO venue
+// header: they are not HTTP oracles of a retired route (the goldenrecord verb and its header
+// serve those), but schema facts produced by executing the real Python migration chain on a
+// named build and digest-pinned IN SOURCE, every read verified against the pin (D3626). They are
+// exempt from the header, not from the checks: the walk above never sees them (it looks for the
+// header), so this test scans each for token shapes and verifies the pin by reading it out of the
+// pinning test's own source (CHAOS-7431). A new header-less recorded file is not allowed to
+// appear without a row here.
+//
+// LIMIT (stated, not hidden): the list covers exactly these three. It does NOT detect another
+// header-less recorded file added elsewhere; the walk above is keyed on the header and is
+// unchanged. About 180 other header-less JSON files whose names say golden, frozen, oracle,
+// python or recorded exist under testdata (providersync oracle_frozen, pythonparity, adminops...),
+// most pinned by their own tests; covering that whole class is a separate decision.
+var executionRecordedGoldens = []struct {
+	file     string // the recorded file
+	pinFile  string // the test source that pins it
+	pinMatch string // regexp (one submatch: the 64-hex pin) locating the pin in pinFile
+	build    string // regexp locating the 40-hex Python build the facts were executed on
+	reason   string
+}{
+	{"internal/chmigrate/testdata/python_chain_contract2.json", "internal/chmigrate/goldens_test.go",
+		`"python_chain_contract2\.json":\s+"([0-9a-f]{64})"`, `pythonGoldenBuild\s*=\s*"([0-9a-f]{40})"`,
+		"objects, rows and versions the real Python chain (contract 2) created: schema facts, no HTTP plane"},
+	{"internal/chmigrate/testdata/python_split.json", "internal/chmigrate/goldens_test.go",
+		`"python_split\.json":\s+"([0-9a-f]{64})"`, `pythonGoldenBuild\s*=\s*"([0-9a-f]{40})"`,
+		"split_sql_statements of every chain file: statement text, no HTTP plane"},
+	{"internal/testsupport/chschema/testdata/contract1_head.json", "internal/testsupport/chschema/contract_test.go",
+		`contract1HeadSHA256\s*=\s*"([0-9a-f]{64})"`, `contract1HeadBuild\s*=\s*"([0-9a-f]{40})"`,
+		"the objects whose CREATE differs under contract 1: schema facts, no HTTP plane"},
+}
+
+func TestExecutionRecordedGoldensHoldNoTokenAndMatchTheirSourcePin(t *testing.T) {
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, golden := range executionRecordedGoldens {
+		t.Run(filepath.Base(golden.file), func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join(root, golden.file))
+			if err != nil {
+				t.Fatalf("%s is missing: %v", golden.file, err)
+			}
+			if found := TokenShapesIn(string(raw)); len(found) > 0 {
+				t.Fatalf("%s holds token shapes (%s)", golden.file, strings.Join(found, ", "))
+			}
+			source, err := os.ReadFile(filepath.Join(root, golden.pinFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pin := regexp.MustCompile(golden.pinMatch).FindSubmatch(source)
+			if pin == nil {
+				t.Fatalf("%s holds no digest pin for %s", golden.pinFile, golden.file)
+			}
+			if build := regexp.MustCompile(golden.build).FindSubmatch(source); build == nil {
+				t.Fatalf("%s names no 40-hex Python build for %s", golden.pinFile, golden.file)
+			}
+			sum := sha256.Sum256(raw)
+			if got := hex.EncodeToString(sum[:]); got != string(pin[1]) {
+				t.Fatalf("%s sha256 %s, pinned in %s as %s: it was edited or replaced; re-record it and re-pin it", golden.file, got, golden.pinFile, pin[1])
+			}
+			if golden.reason == "" {
+				t.Fatalf("%s is exempt from the golden header without a reason", golden.file)
+			}
+		})
 	}
 }

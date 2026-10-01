@@ -1288,3 +1288,84 @@ func TestLocalSyncRerunKeepsHeldColumnsUnlikePythonFrozen(t *testing.T) {
 	golden.SkipDiff(t)
 	golden.Finish(t)
 }
+
+// outsideLinkRepo builds a repository whose link-outside entry points at a regular file outside it: relatively
+// (the form the frozen corpus holds) or by an ABSOLUTE path in the run's temporary directory (the form it cannot
+// hold, because the link text is in the commit and the path differs per run).
+func outsideLinkRepo(t *testing.T, name string, absolute bool) *fixture {
+	t.Helper()
+	f := newFixture(t, name)
+	f.write("real.txt", "real\n", 0o644)
+	outside := filepath.Join(filepath.Dir(f.dir), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := "../outside.txt"
+	if absolute {
+		target = outside
+	}
+	if err := os.Symlink(target, filepath.Join(f.dir, "link-outside")); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("links\n")
+	return f
+}
+
+// withoutHashes drops the commit hash column (the commit holds the link text, which differs between the two
+// forms by construction) and names the path-derived repository id, so the two repositories compare on the rest.
+func withoutHashes(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		parts := strings.Split(line, "\x1f")
+		kept := parts[:0]
+		for _, part := range parts {
+			if strings.HasPrefix(part, "commit_hash=") || strings.HasPrefix(part, "repo_id=") {
+				continue
+			}
+			kept = append(kept, part)
+		}
+		out[i] = strings.Join(kept, "\x1f")
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestLocalSyncBlameAbsoluteOutsideLinkMatchesRelative closes the gap the frozen corpus has (its outside link is
+// relative): an ABSOLUTE link to a file outside the repository must give the same git_files and git_blame rows,
+// compared without the hash columns, as the relative link, and the outside file must never be blamed. The
+// absolute target takes the same path in localgit.resolve: filepath.EvalSymlinks follows both forms
+// (internal/localgit/blame.go:83); only a BROKEN link tests IsAbs (blame.go:98).
+func TestLocalSyncBlameAbsoluteOutsideLinkMatchesRelative(t *testing.T) {
+	oracle := newLocalOracle(t)
+	rows := map[bool]map[string][]string{}
+	for _, absolute := range []bool{false, true} {
+		name := "outside-relative"
+		if absolute {
+			name = "outside-absolute"
+		}
+		f := outsideLinkRepo(t, name, absolute)
+		oracle.truncate()
+		args := []string{"--provider", "local", "--repo-path", f.dir, "--org", "oracle-org", "--analytics-db", oracle.goDSN}
+		if code, out, errText := runVerb(t, "blame", InlineExecutor(InlineDeps{}), args, map[string]string{}); code != cli.ExitOK {
+			t.Fatalf("%s: exit %d: %s%s", name, code, out, errText)
+		}
+		rows[absolute] = tablesSnapshot(oracle.ctx, t, oracle.admin, oracle.goDB)
+	}
+	for _, table := range []string{"git_files", "git_blame"} {
+		relative, absolute := withoutHashes(rows[false][table]), withoutHashes(rows[true][table])
+		if !equalLines(relative, absolute) {
+			t.Errorf("table %s: the absolute outside link differs from the relative one\n%s", table, lineDiff(relative, absolute))
+		}
+	}
+	if len(rows[true]["git_blame"]) != 1 || !strings.Contains(rows[true]["git_blame"][0], "path=real.txt") {
+		t.Errorf("only real.txt is blamed (the outside file never is): %v", rows[true]["git_blame"])
+	}
+	for _, line := range rows[true]["git_blame"] {
+		if strings.Contains(line, "line=outside") {
+			t.Errorf("the outside file was blamed: %q", line)
+		}
+	}
+	if len(rows[true]["git_files"]) < 2 {
+		t.Errorf("git_files holds %d rows, want the repository file and the link's resolved entry: %v", len(rows[true]["git_files"]), rows[true]["git_files"])
+	}
+}

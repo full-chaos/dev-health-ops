@@ -125,6 +125,7 @@ FILES=(
   "${ROOT}/ci/check_shellcheck_pin.sh"
   "${ROOT}/ci/check_migration_matrix.sh"
   "${ROOT}/ci/check_migration_matrix_test.sh"
+  "${ROOT}/ci/go_worker_fixture_test.sh"
   # CHAOS-4922: the single source of truth for PYTHON_BASE_IMAGE.
   "${ROOT}/ci/python_base_ref.sh"
   # CHAOS-4928 codex round 1, P1 fix: mirror-test-images.yml's `precheck`

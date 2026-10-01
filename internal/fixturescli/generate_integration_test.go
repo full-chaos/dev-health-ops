@@ -42,6 +42,16 @@ var generateParameterSets = []struct {
 		Provider: "synthetic", RepoName: "acme/live-e2e", RepoCount: 1, Days: 14, CommitsPerDay: 6, PRCount: 24, TeamCount: 10,
 		Seed: 20260219, WithMetrics: true, WithWorkGraph: true,
 	}},
+	// ci/run_live_backend_e2e.sh: raw git/PR/team data only, github provider label.
+	{"11111111-2222-4333-8444-555555555555", GenerateParams{
+		Provider: "github", RepoName: "acme/live-e2e", RepoCount: 1, Days: 14, CommitsPerDay: 6, PRCount: 24, TeamCount: 10,
+		Seed: 20260219,
+	}},
+	// ci/run_metrics_executed_proof.sh: one repo with one team, so the repo stays single-owner.
+	{"11111111-2222-4333-8444-555555555555", GenerateParams{
+		Provider: "synthetic", RepoName: "ci-metrics-executed-proof/repo", RepoCount: 1, Days: 7, CommitsPerDay: 5, PRCount: 20, TeamCount: 1,
+		Seed: 4276,
+	}},
 }
 
 // pythonGenerate runs the real `dev-hops fixtures generate` against the ClickHouse at dsn as a caller

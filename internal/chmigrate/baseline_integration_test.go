@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -23,37 +22,30 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
-
-// updateEnv, set to 1, rewrites baseline/head.json from the executed chain
-// instead of comparing against it. Only a person regenerating the head sets
-// it; CI never does, so there the capture is a drift check.
-const updateEnv = "DHO_CH_BASELINE_UPDATE"
 
 // productionContract is the ordering contract the head is captured with:
 // the one production runs (read from prod, 2026-09-24).
 const productionContract = 2
 
-// TestBaselineIsTheExecutedPythonChain is the head's provenance and the
+// TestBaselineMatchesTheFrozenPythonChain is the head's provenance and the
 // differential oracle:
 //
-//  1. capture: run the REAL Python chain, with production's contract, on a
-//     fresh database and read back every table and view, the seeded rows and
-//     the recorded versions.
+//  1. golden: testdata/python_chain_contract2.json is what the REAL Python
+//     chain built under production's contract on a fresh database (every table
+//     and view, the seeded rows and the recorded versions), recorded once; the
+//     Python producer is deleted with the Python CLI.
 //  2. oracle and drift check: `chmigrate.Upgrade` -- the baseline plus every
-//     chain file after it -- on a second fresh database must produce exactly
-//     what the Python chain produced: the same CREATE statements, seeded rows
-//     and versions. With no chain file after the head that also means the
-//     checked-in baseline equals the capture. This is by execution; nothing
-//     here reads a digest.
+//     chain file after it -- on a fresh database must produce exactly what the
+//     golden holds: the same CREATE statements, seeded rows and versions. This
+//     is by execution; nothing here reads a digest, and the Go chain is never
+//     compared with itself.
 //  3. a second Upgrade applies nothing; a database missing one baseline
 //     version is refused as below the head; an interrupted baseline resumes;
 //     an unversioned database holding an unrelated table is refused as
 //     foreign; status reads every one of these states without writing.
-func TestBaselineIsTheExecutedPythonChain(t *testing.T) {
+func TestBaselineMatchesTheFrozenPythonChain(t *testing.T) {
 	ctx := context.Background()
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
@@ -69,28 +61,11 @@ func TestBaselineIsTheExecutedPythonChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(chmigrate.OrderingContractEnv, fmt.Sprint(productionContract))
 
-	pythonDB := scratchDatabase(t, admin)
-	chschema.ApplyChain(ctx, t, httpDSN(t, ctx, instance, pythonDB))
-	captured := capture(t, ctx, openDatabase(t, instance.URI, pythonDB), pythonDB, productionContract)
-
-	var checkedIn chmigrate.Baseline
-	if os.Getenv(updateEnv) == "1" {
-		if len(chain) != 0 {
-			t.Fatalf("the baseline is the head before the chain; regenerate it only while internal/chmigrate/sql holds no migration (it holds %d)", len(chain))
-		}
-		writeBaseline(t, captured)
-		checkedIn = captured
-	} else if checkedIn, err = chmigrate.LoadBaseline(); err != nil {
+	captured := loadFrozenChain(t, "python_chain_contract2.json")
+	checkedIn, err := chmigrate.LoadBaseline()
+	if err != nil {
 		t.Fatal(err)
-	}
-	if len(chain) == 0 {
-		if diff := compare(captured, checkedIn); diff != "" {
-			t.Fatalf("baseline/head.json is not what the Python chain builds today (%s); "+
-				"regenerate it with %s=1 go test -tags=integration -run TestBaselineIsTheExecutedPythonChain ./internal/chmigrate",
-				diff, updateEnv)
-		}
 	}
 
 	goDB := scratchDatabase(t, admin)
@@ -507,62 +482,62 @@ func firstDifference(a, b []string) string {
 	return "none"
 }
 
-func writeBaseline(t *testing.T, baseline chmigrate.Baseline) {
+// loadFrozenChain reads a database state recorded from the real Python chain
+// (testdata/<name>): the objects, seeded rows and versions it built. The
+// producer is deleted with the Python CLI; the file is its recorded output.
+func loadFrozenChain(t *testing.T, name string) chmigrate.Baseline {
 	t.Helper()
-	data, err := json.MarshalIndent(baseline, "", "  ")
+	data, err := os.ReadFile(filepath.Join("testdata", name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join("baseline", "head.json")
-	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
-		t.Fatal(err)
+	var recorded chmigrate.Baseline
+	if err := json.Unmarshal(data, &recorded); err != nil {
+		t.Fatalf("decode %s: %v", name, err)
 	}
-	t.Logf("wrote %s: %d objects, %d seeded tables, %d versions", path, len(baseline.Objects), len(baseline.Rows), len(baseline.Versions))
+	if len(recorded.Objects) == 0 || len(recorded.Versions) == 0 {
+		t.Fatalf("%s holds %d objects and %d versions", name, len(recorded.Objects), len(recorded.Versions))
+	}
+	return recorded
 }
 
-// splitProgram prints, for every .sql migration, the statements the Python
-// runner executes -- split_sql_statements itself, not a copy of it.
-const splitProgram = `
-import json, pathlib, sys
-from dev_health_ops.migrations.clickhouse import split_sql_statements
-directory = pathlib.Path(sys.argv[1])
-out = {p.name: split_sql_statements(p.read_text(encoding="utf-8")) for p in sorted(directory.glob("*.sql"))}
-print(json.dumps(out))
-`
-
-// TestSplitterMatchesPython runs the Python runner's own splitter over every
-// real .sql migration and requires the Go port to produce the same statements.
-func TestSplitterMatchesPython(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
+// TestSplitterMatchesFrozenPythonSplit requires the Go splitter to produce,
+// for every real .sql migration, the statements the Python runner's own
+// split_sql_statements produced (testdata/python_split.json holds each file's
+// text and that split, recorded from the Python runner).
+func TestSplitterMatchesFrozenPythonSplit(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "python_split.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory := filepath.Join(root, "src", "dev_health_ops", "migrations", "clickhouse")
-	python := pyoracle.Resolve(t, root)
-	command := exec.Command(python, "-c", splitProgram, directory)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	output, err := command.Output()
-	if err != nil {
-		t.Fatal(pyoracle.RunError(python, err, output))
+	var want map[string]struct {
+		SQL        string   `json:"sql"`
+		Statements []string `json:"statements"`
 	}
-	var want map[string][]string
-	if err := json.Unmarshal(output, &want); err != nil {
+	if err := json.Unmarshal(data, &want); err != nil {
 		t.Fatalf("decode the Python split: %v", err)
 	}
 	if len(want) < 90 {
-		t.Fatalf("the Python split covered %d files; the chain has more than 90 .sql migrations", len(want))
+		t.Fatalf("the frozen split covered %d files; the chain has more than 90 .sql migrations", len(want))
 	}
-	for name, statements := range want {
-		data, err := os.ReadFile(filepath.Join(directory, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		got := chmigrate.SplitStatements(string(data))
+	for name, recorded := range want {
+		got := chmigrate.SplitStatements(recorded.SQL)
+		statements := recorded.Statements
 		if len(statements) == 0 {
 			statements = nil
 		}
 		if !reflect.DeepEqual(got, statements) {
 			t.Errorf("%s: Go split %d statements, Python %d; first difference %s", name, len(got), len(statements), firstDifference(got, statements))
+		}
+	}
+	chain, err := chmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range chain {
+		recorded, ok := want[file.Version]
+		if !ok || recorded.SQL != file.SQL {
+			t.Errorf("chain file %s is not the text the Python split was recorded from", file.Version)
 		}
 	}
 }

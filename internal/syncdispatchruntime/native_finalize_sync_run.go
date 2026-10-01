@@ -228,6 +228,20 @@ func (service *NativeFinalizeSyncRunService) finalize(
 	if aggregate.errorCategory != "" {
 		resultPayload["error_category"] = aggregate.errorCategory
 	}
+	if aggregate.reason != "" {
+		// The first failed unit's fixed-vocabulary, value-free reason (CHAOS-7132).
+		resultPayload["reason"] = aggregate.reason
+	}
+	// An additive leg of reference discovery that failed (CHAOS-7132, e.g. the jira Atlassian Teams leg)
+	// does not fail the run or its units, but the run must not read as a clean success: the ledger's
+	// degraded entries are copied into the run's result.
+	degraded, err := loadDiscoveryDegraded(ctx, tx, run.id)
+	if err != nil {
+		return err
+	}
+	if len(degraded) > 0 {
+		resultPayload["degraded"] = degraded
+	}
 	// Python: `if error_category == FEATURE_DISABLED_ERROR_CATEGORY and
 	// run.error is None:` -- a STRICT None check, not the whitespace-aware
 	// blank check the zero-unit branch below uses. An explicitly-empty-string
@@ -533,6 +547,7 @@ type finalizeSyncRunUnit struct {
 	mode           string
 	errorText      *string
 	errorCategory  string
+	reason         string
 	processorFlags map[string]any
 }
 
@@ -567,6 +582,9 @@ ORDER BY id`, runID)
 				if category, ok := stringField(decoded, "error_category"); ok {
 					unit.errorCategory = category
 				}
+				if reason, ok := stringField(decoded, "reason"); ok {
+					unit.reason = reason
+				}
 			}
 		}
 		if len(processorRaw) > 0 {
@@ -587,6 +605,7 @@ type finalizeAggregate struct {
 	successCount         int
 	failedCount          int
 	errorCategory        string
+	reason               string
 	firstFailedUnitError *string
 }
 
@@ -605,6 +624,9 @@ func aggregateFinalizeUnits(units []finalizeSyncRunUnit) finalizeAggregate {
 			aggregate.failedCount++
 			if aggregate.errorCategory == "" && unit.errorCategory != "" {
 				aggregate.errorCategory = unit.errorCategory
+			}
+			if aggregate.reason == "" && unit.reason != "" {
+				aggregate.reason = unit.reason
 			}
 			if aggregate.firstFailedUnitError == nil && unit.errorText != nil && *unit.errorText != "" {
 				text := *unit.errorText
@@ -1129,4 +1151,27 @@ func familyDatasetKeysFromFlags(flags map[string]any) []string {
 		}
 	}
 	return enabled
+}
+
+// loadDiscoveryDegraded reads the degraded legs the run's reference discovery recorded (empty for a
+// clean discovery, a run without one, or a discovery that has no such key).
+func loadDiscoveryDegraded(ctx context.Context, tx pgx.Tx, runID string) ([]map[string]any, error) {
+	var raw []byte
+	err := tx.QueryRow(ctx, `
+SELECT result::text FROM public.sync_run_reference_discoveries
+WHERE sync_run_id = $1::uuid AND status = $2 AND result IS NOT NULL
+ORDER BY created_at DESC LIMIT 1`, runID, discoveryStatusSuccess).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, ErrFinalizeSyncRunUnavailable
+	}
+	var decoded struct {
+		Degraded []map[string]any `json:"degraded"`
+	}
+	if json.Unmarshal(raw, &decoded) != nil {
+		return nil, nil
+	}
+	return decoded.Degraded, nil
 }

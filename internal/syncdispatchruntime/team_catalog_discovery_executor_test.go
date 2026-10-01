@@ -3,6 +3,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -374,5 +375,40 @@ func TestTeamCatalogDiscoveryExecutorFailsClosedWhenUnconstructed(t *testing.T) 
 	nativeOnly := &TeamCatalogDiscoveryExecutor{Native: map[string]providersync.TeamCatalogCollector{"linear": &fakeTeamCatalogCollector{}}}
 	if _, err := nativeOnly.Discover(context.Background(), testOrg, testRun, "linear"); !errors.Is(err, ErrReferenceDiscoveryUnavailable) {
 		t.Fatalf("native executor with no Clients error=%v want=%v", err, ErrReferenceDiscoveryUnavailable)
+	}
+}
+
+// CHAOS-7132: an additive leg that failed in an otherwise successful collection is never recorded as a
+// clean "native" success: the dispatch outcome is the nonfatal one and the ledger result names the leg,
+// with the detail sanitized and bounded.
+func TestTeamCatalogDiscoveryExecutorRecordsADegradedLeg(t *testing.T) {
+	collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{
+		TeamsWritten: 3,
+		DegradedLegs: []providersync.DegradedLeg{{Dataset: "teams", Leg: "jira_atlassian_teams", Outcome: "failed", Reason: "unclassified",
+			Detail: "Invalid Organization Ari: some-uuid Authorization: Bearer secret-token-value"}},
+	}}
+	observer := &fakeTeamCatalogObserver{}
+	executor := &TeamCatalogDiscoveryExecutor{
+		Native:     map[string]providersync.TeamCatalogCollector{"jira": collector},
+		Clients:    &fakeProviderClientResolver{credential: providerfoundation.Credential{Provider: "jira"}, integrationID: "integration-1"},
+		Selections: &fakeTeamCatalogSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
+		Observer:   observer,
+	}
+	summary, err := executor.Discover(context.Background(), testOrg, testRun, "jira")
+	if err != nil {
+		t.Fatalf("a failed additive leg must not fail discovery: %v", err)
+	}
+	if summary["outcome"] != "native_degraded" {
+		t.Errorf("outcome = %v, want native_degraded", summary["outcome"])
+	}
+	legs, _ := summary["degraded"].([]map[string]string)
+	if len(legs) != 1 || legs[0]["leg"] != "jira_atlassian_teams" || legs[0]["reason"] != "unclassified" {
+		t.Fatalf("degraded = %+v", summary["degraded"])
+	}
+	if strings.Contains(legs[0]["detail"], "secret-token-value") {
+		t.Errorf("the stored detail carries a token: %q", legs[0]["detail"])
+	}
+	if len(observer.dispatches) != 1 || observer.dispatches[0].outcome != jobruntime.TeamCatalogOutcomeNativeFailedNonfatal {
+		t.Errorf("dispatches = %+v, want one native_failed_nonfatal", observer.dispatches)
 	}
 }

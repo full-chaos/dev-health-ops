@@ -79,7 +79,22 @@ func (ref TeamCatalogReference) validate() error {
 // TeamCatalogResult reports rows written per destination table plus an
 // outcome label, the shape the telemetry layer (rows_written per table +
 // outcome: native|bridge|skipped_selection) reports directly.
+// DegradedLeg names one ADDITIVE leg of a team-catalog collection that failed while the rest of the
+// collection succeeded (CHAOS-7132, D2778: the jira Atlassian Teams leg is independent of the
+// project-as-team catalog). It is never silent and never a clean success: it is recorded in the
+// discovery ledger and the run's result, with a fixed-vocabulary value-free Reason and the error text
+// as Detail (the recorder bounds and sanitizes it before it is stored).
+type DegradedLeg struct {
+	Dataset string `json:"dataset"`
+	Leg     string `json:"leg"`
+	Outcome string `json:"outcome"`
+	Reason  string `json:"reason"`
+	Detail  string `json:"detail,omitempty"`
+}
+
 type TeamCatalogResult struct {
+	// DegradedLegs lists the additive legs that failed in an otherwise successful collection.
+	DegradedLegs       []DegradedLeg
 	TeamsWritten       int
 	MembersWritten     int
 	MembershipsWritten int

@@ -776,10 +776,17 @@ func constructProviderSyncWorkerWithDependencies(
 }
 
 func newWorkerCredentialCipher(cfg config.Config) (providerfoundation.FernetDecryptor, error) {
-	return providerfoundation.NewFernetDecryptor(
+	cipher, err := providerfoundation.NewFernetDecryptor(
 		cfg.SettingsEncryptionKey,
 		cfg.SettingsEncryptionSalt.Reveal(),
 	)
+	if err != nil {
+		// The family refuses to start; say why (CHAOS-7132). Without this the process reported only the
+		// generic "configure runtime dependencies" and the stored credentials failed one by one later.
+		slog.Default().Error("worker_credential_cipher_unavailable",
+			"reason", providerfoundation.FailureReason(err), "env", "SETTINGS_ENCRYPTION_KEY")
+	}
+	return cipher, err
 }
 
 type providerUnitTenantScope struct{}

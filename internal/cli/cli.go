@@ -15,6 +15,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"log/slog"
 	"os"
@@ -250,7 +251,7 @@ func Main(binary string, tree []Command) {
 	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
 	os.Exit(Execute(context.Background(), binary, tree, Env{
 		Args:   os.Args[1:],
-		Lookup: os.LookupEnv,
+		Lookup: envsecrets.ProcessLookup,
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,

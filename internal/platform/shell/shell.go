@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"log/slog"
 	"os"
@@ -214,7 +215,7 @@ func warnEnvOnlySettings(logger *slog.Logger, cfg config.Config) {
 
 // Main runs a production command and exits with its status.
 func Main(spec Spec) {
-	os.Exit(Execute(context.Background(), spec, os.Args[1:], os.LookupEnv, IO{
+	os.Exit(Execute(context.Background(), spec, os.Args[1:], envsecrets.ProcessLookup, IO{
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	}))

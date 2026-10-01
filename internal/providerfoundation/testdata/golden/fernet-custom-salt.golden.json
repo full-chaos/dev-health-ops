@@ -1,0 +1,31 @@
+{
+  "header": {
+    "test": "TestFernetCipherMatchesFrozenPythonCustomSalt",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providerfoundation/ -test '^TestFernetCipherMatchesFrozenPythonCustomSalt$' -python-root $DIR",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 628419b830b7036474e09ad0528bf34d795b2cfba85f04bc4eb459060d57c0b5 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\n"
+    },
+    {
+      "name": "fernet exchange",
+      "method": "PYTHON",
+      "path": "program sha256 e5c4d6ceb3fde1fcde0a6d684ad90524ecdd93f904a23b3a38138bc8cd35a53d env sha256 cf5f848bde61c370ddf1b7aea1ca18a698536e09a4d974be60e1b14ade84946b",
+      "body_sha256": "83f4669e0f13a78a775a4dac2842febde51c8c6d3190d093137bdd61366e4c3d",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"salt_in_environment\": true, \"python_opens_go\": \"pagerduty-oauth-token-payload\", \"python_ciphertext\": \"v1:gAAAAABlU_EAAAECAwQFBgcICQoLDA0OD1wKP1LzGu7SJ7H0I_eLU3CPIcmiaLLSc1a8zI5Kx3GJg8CrWkhYDV2EiLSzVGv6R6G0UBrhpcQe8F8wO97lELs=\"}\n"
+    }
+  ]
+}

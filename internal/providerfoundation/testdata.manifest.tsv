@@ -1,4 +1,10 @@
 # Every file under internal/providerfoundation/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/credential-field-grid-derive.golden.json
+-	header	golden/credential-field-grid.golden.json
+-	header	golden/credential-field-reads.golden.json
+-	header	golden/fernet-custom-salt.golden.json
+-	header	golden/fernet-default-salt.golden.json
+-	header	golden/fernet-no-key.golden.json
 7cda2577745f478c5694a83fc0152ea5f0ff7f6e253af58c1728643918e9803e	unclassified	normalized_envelope_parity.json
 f0fd858c887815455b8a903a255d378c12d713212411117ce473f04e1fb62438	unclassified	provider_parity.json

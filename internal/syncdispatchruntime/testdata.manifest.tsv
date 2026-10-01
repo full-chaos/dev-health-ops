@@ -2,3 +2,5 @@
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 5890053a3b0796a279988c4ed5f05c86d039b33e43efb8297467f6a528d3e9ab	unclassified	dispatch_admission_oracle.py
 0189a351d2b5acce23f527f4d856edaf2895f0afc3b95685e4621d502df3e9ef	unclassified	finalize_zero_unit_oracle.py
+-	header	golden/dispatch-admission.golden.json
+-	header	golden/finalize-zero-unit.golden.json

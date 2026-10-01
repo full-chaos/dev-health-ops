@@ -30,6 +30,16 @@ internal/syncdispatchruntime/testdata/dispatch_admission_oracle.py.
 
 from __future__ import annotations
 
+# Fernet seals with a random IV and the clock, so a recording would differ
+# from run to run. The IV is a counter and the time a constant: the token is
+# still the production Fernet format, made by the real encrypt_value.
+import itertools as _pin_itertools
+from cryptography.fernet import Fernet as _PinFernet
+_PIN_COUNTER = _pin_itertools.count(1)
+def _pinned_encrypt(self, data):
+    return self._encrypt_from_parts(data, 1700000000, next(_PIN_COUNTER).to_bytes(16, "big"))
+_PinFernet.encrypt = _pinned_encrypt
+
 import contextlib
 import itertools
 import json

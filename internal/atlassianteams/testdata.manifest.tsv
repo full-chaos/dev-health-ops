@@ -1,3 +1,4 @@
 # Every file under internal/atlassianteams/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 c87b9781b0117895c42afe610c1bda5238a219ac5487ef001847da7f3cf34f76	unclassified	atlassian_python_cb7c3665.zip
+-	header	golden/teams-client.golden.json

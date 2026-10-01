@@ -22,8 +22,8 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\nlimits 5.8.0\nuvico
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"forwarded-scheme.golden.json": "PIN:forwarded-scheme.golden",
-	"parse-limit.golden.json":      "PIN:parse-limit.golden",
+	"forwarded-scheme.golden.json": "a938727168cabd2797b78d60fed105c0ac2c71b4d89df7fdc97068150d541b6e",
+	"parse-limit.golden.json":      "9d005d9dcd987807b959eb499ff393d932e8812e4a15ce1cbd6495e3a693445e",
 }
 
 // goldens is the set of this package's frozen Python answers.

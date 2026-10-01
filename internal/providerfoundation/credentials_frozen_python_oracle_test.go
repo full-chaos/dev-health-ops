@@ -19,6 +19,11 @@ import (
 // request does not change from run to run.
 const fernetExchangeProgram = `
 import json, os, sys
+from cryptography.fernet import Fernet
+# Fernet seals with a random IV and the clock; both are pinned so the recording
+# is the same on every run (the token is still the production format, made by
+# the real encrypt_value).
+Fernet.encrypt = lambda self, data: self._encrypt_from_parts(data, 1700000000, bytes(range(16)))
 from dev_health_ops.core.encryption import decrypt_value, encrypt_value
 request = json.load(sys.stdin)
 print(json.dumps({

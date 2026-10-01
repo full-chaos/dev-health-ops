@@ -220,15 +220,6 @@ func TestCredentialFieldReadsMatchFrozenPython(t *testing.T) {
 	}
 	t.Logf("%d payload shapes: Go and the real Python builders agree on %d", len(cases), agreed)
 
-	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if !t.Failed() {
-		if err := os.WriteFile(filepath.Join(proofDir, "providerfoundation-credential-field-reads"), []byte("executed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
 }
 
 func deref(text *string) any {

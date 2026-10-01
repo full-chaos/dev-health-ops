@@ -22,12 +22,12 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0"
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"credential-field-grid.golden.json":        "PIN:credential-field-grid.golden",
-	"credential-field-grid-derive.golden.json": "PIN:credential-field-grid-derive.golden",
-	"credential-field-reads.golden.json":       "PIN:credential-field-reads.golden",
-	"fernet-custom-salt.golden.json":           "PIN:fernet-custom-salt.golden",
-	"fernet-default-salt.golden.json":          "PIN:fernet-default-salt.golden",
-	"fernet-no-key.golden.json":                "PIN:fernet-no-key.golden",
+	"credential-field-grid.golden.json":        "65dd63db8a3aad124445b2315cf4b4288605313fb363a9f61b5cac568e5b95c5",
+	"credential-field-grid-derive.golden.json": "b63edf0621072f9583264e92162e5371e1d28776e867876800159db0003bca51",
+	"credential-field-reads.golden.json":       "b0bbdea306eef69a39080c98f85ba39dbc132e9b9f6e0a50f6dc781e8dfd366b",
+	"fernet-custom-salt.golden.json":           "35ee080ae1e4ad46fbc73830e5df8d2bf68a6ee319c328b5cfc3067558be35db",
+	"fernet-default-salt.golden.json":          "12c9132f337547e1d4e8516284713116b989ef7dbd31ee758eed5be762b9291b",
+	"fernet-no-key.golden.json":                "0111efb8933a8b89830a68693b50c208822ec60b16e265be1cde60761b9f3c1a",
 }
 
 // goldens is the set of this package's frozen Python answers.

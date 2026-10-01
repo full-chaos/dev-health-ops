@@ -1102,3 +1102,71 @@ func TestMCPFragmentGraphIsSizedExactlyBeforeAnyStageWalksIt(t *testing.T) {
 		}
 	}
 }
+
+// D3611 (r3d on #3425): the MCP class is person-free, fails closed on any org
+// it does not own wherever the request carries one, and bounds the one input
+// that sizes resolver-side CPU. One cell per location; refusals make zero
+// ClickHouse calls.
+func TestMCPRefusesPersonSelectorsForeignOrgsAndOversizedSimulationsEverywhere(t *testing.T) {
+	const other = "11111111-0000-4000-8000-000000000002"
+	org := mcpTestOrg
+	hot := "query X($input: HotspotsInput!) { hotspots(input: $input) { rows { filePath } } }"
+	cat := func(args string) string {
+		return fmt.Sprintf("query { catalog(orgId: %q%s) { values { value } } }", org, args)
+	}
+	hv := mcpHotspotsVariables(org)
+	withExtra := func(extra map[string]any) map[string]any {
+		v := mcpHotspotsVariables(org)
+		for k, x := range extra {
+			v[k] = x
+		}
+		return v
+	}
+	cases := []struct {
+		name, query string
+		vars        map[string]any
+		status      int
+		reason      string // "" = served
+	}{
+		// person selectors
+		{"person: dimension AUTHOR literal", cat(", dimension: AUTHOR"), nil, 403, mcpReasonPersonScope},
+		{"person: scope level DEVELOPER literal", cat(", filters: {scope: {level: DEVELOPER, ids: [\"a\"]}}"), nil, 403, mcpReasonPersonScope},
+		{"person: who.developers literal", cat(", filters: {who: {developers: [\"a\"]}}"), nil, 403, mcpReasonPersonScope},
+		{"person: who.roles only", cat(", filters: {who: {roles: [\"r\"]}}"), nil, 403, mcpReasonPersonScope},
+		{"person: DEVELOPER through a variable", "query($f: FilterInput) { catalog(orgId: \"" + org + "\", filters: $f) { values { value } } }", map[string]any{"f": map[string]any{"scope": map[string]any{"level": "DEVELOPER", "ids": []any{"a"}}}}, 403, mcpReasonPersonScope},
+		{"person: undeclared extra variable who", hot, withExtra(map[string]any{"extra": map[string]any{"who": map[string]any{"developers": []any{"a"}}}}), 403, mcpReasonPersonScope},
+		{"person: analytics batch scope DEVELOPER", "query { analytics(orgId: \"" + org + "\", batch: {filters: {scope: {level: DEVELOPER, ids: [\"a\"]}}}) { timeseries { dimension } } }", nil, 403, mcpReasonPersonScope},
+		{"control: dimension REPO served", cat(", dimension: REPO"), nil, 200, ""},
+		// foreign org, every location
+		{"org: undeclared extra variable orgId", hot, withExtra(map[string]any{"extra": map[string]any{"orgId": other}}), 403, mcpReasonOrgMismatch},
+		{"org: undeclared extra variable ORG scope ids", hot, withExtra(map[string]any{"extra": map[string]any{"scope": map[string]any{"level": "ORG", "ids": []any{other}}}}), 403, mcpReasonOrgMismatch},
+		{"org: unused variable with a foreign default (validator refuses it first)", "query X($input: HotspotsInput!, $orgId: String = \"" + other + "\") { hotspots(input: $input) { rows { filePath } } }", hv, 400, mcpReasonInvalidDocument},
+		{"org: declared unused variable orgId (validator refuses it first)", "query X($input: HotspotsInput!, $orgId: String) { hotspots(input: $input) { rows { filePath } } }", withExtra(map[string]any{"orgId": other}), 400, mcpReasonInvalidDocument},
+		{"org: ORG scope ids literal", cat(", filters: {scope: {level: ORG, ids: [\"" + other + "\"]}}"), nil, 403, mcpReasonOrgMismatch},
+		{"org: non-string orgId in a variable", hot, withExtra(map[string]any{"extra": map[string]any{"orgId": 5}}), 403, mcpReasonInvalidOrgArgument},
+		{"control: ORG scope naming the header org", cat(", filters: {scope: {level: ORG, ids: [\"" + org + "\"]}}"), nil, 200, ""},
+		// simulations
+		{"simulations: 1000000 literal", fmt.Sprintf("query { capacityForecast(orgId: %q, input: {simulations: 1000000}) { p50Days } }", org), nil, 400, mcpReasonInputLimit},
+		{"simulations: 1000000 through a variable", fmt.Sprintf("query($i: CapacityForecastInput) { capacityForecast(orgId: %q, input: $i) { p50Days } }", org), map[string]any{"i": map[string]any{"simulations": 1000000}}, 400, mcpReasonInputLimit},
+		{"simulations: 10001 (cap+1)", fmt.Sprintf("query { capacityForecast(orgId: %q, input: {simulations: 10001}) { p50Days } }", org), nil, 400, mcpReasonInputLimit},
+		{"control: simulations 10000 (cap)", fmt.Sprintf("query { capacityForecast(orgId: %q, input: {simulations: 10000}) { p50Days } }", org), nil, 200, ""},
+		{"control: simulations omitted", fmt.Sprintf("query { capacityForecast(orgId: %q) { p50Days } }", org), nil, 200, ""},
+	}
+	for _, c := range cases {
+		ch := &countingMCPClient{}
+		l := newMCPTestListeners(t, ch, allMCPRootsEnabled(), mcpDefaultLimits())
+		rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, c.query, c.vars))
+		if rec.Code != c.status {
+			t.Errorf("%s: status %d, want %d; body %.240s", c.name, rec.Code, c.status, rec.Body.String())
+			continue
+		}
+		if c.reason != "" {
+			if reason, _ := mcpReason(t, rec); reason != c.reason {
+				t.Errorf("%s: reason %q, want %q", c.name, reason, c.reason)
+			}
+			if n := ch.calls.Load(); n != 0 {
+				t.Errorf("%s: refused request made %d ClickHouse calls", c.name, n)
+			}
+		}
+	}
+}

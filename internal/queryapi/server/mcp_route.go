@@ -113,8 +113,6 @@ const (
 	mcpMaxExecutionTimeSeconds = uint(10)
 )
 
-// mcpCallerClass is the caller_class telemetry value. The class comes from
-// WHERE the request arrived (internalidentity.MCP), never from a header.
 // The expanded-document bounds of mcpFragmentGraphCheck, as multiples of the
 // complexity and depth caps: every node kind counts (a spread and an inline
 // fragment are nodes, not only fields), and a legitimate field sits under at
@@ -124,6 +122,8 @@ const (
 	mcpExpandedDepthFactor = 4
 )
 
+// mcpCallerClass is the caller_class telemetry value. The class comes from
+// WHERE the request arrived (internalidentity.MCP), never from a header.
 const mcpCallerClass = "mcp"
 
 // mcpRootFieldAllowlist is the ceiling of what the MCP class may ever call:
@@ -209,6 +209,8 @@ const (
 	mcpReasonComplexity          = "complexity_limit"
 	mcpReasonInvalidOrgArgument  = "invalid_org_argument"
 	mcpReasonOrgMismatch         = "org_mismatch"
+	mcpReasonPersonScope         = "person_scope"
+	mcpReasonInputLimit          = "input_limit"
 	mcpReasonRootFieldNotEnabled = "root_field_not_enabled"
 	mcpReasonBytesCeiling        = "bytes_ceiling"
 	mcpReasonRowsCeiling         = "rows_ceiling"
@@ -537,6 +539,10 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if orgReason := mcpCheckOrgArguments(op.SelectionSet, doc.Fragments, variables, claims.OrgID); orgReason != "" {
 		refuse(http.StatusForbidden, orgReason, "every orgId argument must name the caller's org")
+		return
+	}
+	if status, reason := mcpCheckRequestInputs(op, doc.Fragments, variables, payload.Variables, claims.OrgID); reason != "" {
+		refuse(status, reason, "the request names another org, selects a person, or exceeds an input limit of the MCP caller class")
 		return
 	}
 	for _, root := range roots {
@@ -935,6 +941,126 @@ func mcpCheckNestedOrg(value any, check func(any)) {
 			mcpCheckNestedOrg(member, check)
 		}
 	}
+}
+
+// mcpMaxSimulations is the largest Monte Carlo draw count an MCP caller may
+// ask of capacityForecast: the SDL default. The resolver accepts up to
+// 1,000,000 (6.8 s of uncancellable CPU for one call, measured; times the
+// alias cap), and ClickHouse's budget does not bound resolver-side CPU.
+const mcpMaxSimulations = 10000
+
+// mcpPersonValues are enum values that select a person: ScopeLevelInput
+// DEVELOPER and DimensionInput AUTHOR. The MCP caller class is person-free
+// (CHAOS-7087); they are refused wherever they appear in a value.
+var mcpPersonValues = map[string]bool{"DEVELOPER": true, "AUTHOR": true}
+
+// mcpCheckRequestInputs fails closed over EVERY value the request carries,
+// not only the arguments the selected fields read: the field arguments
+// (literals and variables resolved), the coerced variables (declared, used or
+// not, with their defaults), and the raw variables (including undeclared
+// ones). It refuses another org's id anywhere (orgId/org_id members and the
+// ids of an ORG-level scope), any person selector (an enum value DEVELOPER or
+// AUTHOR, a `who` filter, a `developers` list) and a `simulations` count over
+// mcpMaxSimulations. It returns the HTTP status and reason, or 0 and "".
+func mcpCheckRequestInputs(op *ast.OperationDefinition, fragments ast.FragmentDefinitionList, variables, rawVariables map[string]any, orgID string) (int, string) {
+	status, reason := 0, ""
+	fail := func(s int, r string) {
+		if reason == "" {
+			status, reason = s, r
+		}
+	}
+	var scan func(key string, value any)
+	scan = func(key string, value any) {
+		switch v := value.(type) {
+		case string:
+			if mcpPersonValues[v] {
+				fail(http.StatusForbidden, mcpReasonPersonScope)
+			}
+			if key == "orgId" || key == "org_id" {
+				if v != orgID {
+					fail(http.StatusForbidden, mcpReasonOrgMismatch)
+				}
+			}
+		case map[string]any:
+			if level, _ := v["level"].(string); level == "ORG" {
+				if ids, ok := v["ids"].([]any); ok {
+					for _, id := range ids {
+						if s, _ := id.(string); s != orgID {
+							fail(http.StatusForbidden, mcpReasonOrgMismatch)
+						}
+					}
+				}
+			}
+			for k, member := range v {
+				switch k {
+				case "who":
+					if member != nil {
+						fail(http.StatusForbidden, mcpReasonPersonScope)
+					}
+				case "developers":
+					if list, ok := member.([]any); !ok || len(list) > 0 {
+						if member != nil {
+							fail(http.StatusForbidden, mcpReasonPersonScope)
+						}
+					}
+				case "simulations":
+					if n, ok := mcpInt(member); !ok || n > mcpMaxSimulations {
+						fail(http.StatusBadRequest, mcpReasonInputLimit)
+					}
+				case "orgId", "org_id":
+					if _, isString := member.(string); !isString {
+						fail(http.StatusForbidden, mcpReasonInvalidOrgArgument)
+					}
+				}
+				scan(k, member)
+			}
+		case []any:
+			for _, member := range v {
+				scan(key, member)
+			}
+		}
+	}
+	scan("", map[string]any(variables))
+	scan("", map[string]any(rawVariables))
+	for _, definition := range op.VariableDefinitions {
+		if definition.DefaultValue != nil {
+			if value, err := definition.DefaultValue.Value(nil); err == nil {
+				scan(definition.Variable, value)
+			}
+		}
+	}
+	mcpWalkFields(op.SelectionSet, fragments, func(field *ast.Field) {
+		for _, argument := range field.Arguments {
+			value, err := argument.Value.Value(variables)
+			if err != nil {
+				fail(http.StatusForbidden, mcpReasonInvalidOrgArgument)
+				return
+			}
+			if argument.Name == "simulations" {
+				if n, ok := mcpInt(value); !ok || n > mcpMaxSimulations {
+					fail(http.StatusBadRequest, mcpReasonInputLimit)
+				}
+			}
+			scan(argument.Name, value)
+		}
+	})
+	return status, reason
+}
+
+// mcpInt reads a JSON or coerced GraphQL number as an int.
+func mcpInt(value any) (int, bool) {
+	switch n := value.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), n == float64(int(n))
+	case json.Number:
+		i, err := n.Int64()
+		return int(i), err == nil
+	}
+	return 0, false
 }
 
 // writeMCPRefusal answers a refusal as a GraphQL error body with a typed

@@ -267,7 +267,7 @@ func seedRepoCredentials(t *testing.T, ctx context.Context, admin *pgxpool.Pool,
 		if row.config != "" {
 			config = row.config
 		}
-		id := uuid.New()
+		id := stableVenueID("repo-credential-" + org.String() + "-" + row.provider + "/" + row.name)
 		if _, err := admin.Exec(ctx, `INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, true, $5, $6::json, '2026-09-01T09:00:00Z', '2026-09-01T09:00:00Z')`,
 			id, org.String(), row.provider, row.name, ciphertext, config); err != nil {
@@ -375,6 +375,7 @@ func repoRequests(tokens map[string]string, ids map[string]string, otherOrgID st
 // real Python api and this Go api answer every request the same and send the
 // same requests to the GitLab stub.
 func TestVenueOracleCredentialRepos(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-credential-repos", t.Name(), "94938908eb57f33d409b33a42dc7520b775e94c846712dd374e33da0bf9ef393"))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	stub := newRepoStub(t)
@@ -404,7 +405,7 @@ func TestVenueOracleCredentialRepos(t *testing.T) {
 	var otherOrgID string
 	rows := repoSeedRows()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey,
 			"VENUE_PROVIDER_STUB_PORT=" + stub.port(),
@@ -427,9 +428,11 @@ func TestVenueOracleCredentialRepos(t *testing.T) {
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := repoRequests(venue.Tokens, ids, otherOrgID)
-	pythonResponses := venue.ServePython(t, requests)
-	pythonProvider := stub.take()
-	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{})
+	pythonResponses := golden.Python(t, venue, requests)
+	pythonProvider := strings.Split(golden.InspectRows(t, "python provider requests", func() string {
+		return strings.Join(stub.take(), "\n")
+	}), "\n")
+	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{Golden: golden})
 	goProvider := stub.take()
 
 	providerSame := len(goProvider) > 0 && strings.Join(pythonProvider, "\n") == strings.Join(goProvider, "\n")
@@ -438,4 +441,5 @@ func TestVenueOracleCredentialRepos(t *testing.T) {
 	}
 
 	t.Logf("\n%sprovider requests (%d): %s\n", receipt, len(goProvider), venueoracle.Mark(providerSame))
+	golden.Finish(t)
 }

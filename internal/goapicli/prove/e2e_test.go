@@ -40,7 +40,10 @@ import (
 type e2ePool struct {
 	mu          sync.Mutex
 	routingRows [][]any
-	execs       []e2eExec
+	// backedOps, when set, are the document operations the receipt-backed reader
+	// (go_api_proof_run) finds: CHAOS-7442's doc-route class proof reads them.
+	backedOps []string
+	execs     []e2eExec
 	// execErr, when set, fails every Exec after recording it.
 	execErr error
 	// queryErr, when set, fails every Query.
@@ -52,9 +55,16 @@ type e2eExec struct {
 	args []any
 }
 
-func (p *e2ePool) Query(context.Context, string, ...any) (pgx.Rows, error) {
+func (p *e2ePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	if p.queryErr != nil {
 		return nil, p.queryErr
+	}
+	if strings.Contains(sql, "FROM go_api_proof_run AS p") {
+		rows := make([][]any, 0, len(p.backedOps))
+		for _, op := range p.backedOps {
+			rows = append(rows, []any{op})
+		}
+		return &fakeRoutingRows{rows: rows}, nil
 	}
 	return &fakeRoutingRows{rows: p.routingRows}, nil
 }

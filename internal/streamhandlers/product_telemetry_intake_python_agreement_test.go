@@ -48,6 +48,7 @@ func storeEntry(t *testing.T, message streamrunner.Message) (string, error) {
 //
 //	{"z":1,"a":2,"m":3}  -> {"a":2,"m":3,"z":1}     keys are stored sorted
 //	{"f":1e999}          -> {"f":Infinity}          Python stored the word; chris's CHAOS-6299 ruling stores null
+//	{"f":1E999}          -> {"f":Infinity}          an UPPERCASE exponent is inf too (json.loads), so it is the same case
 //	{"f":1e999,"f":1}    -> {"f":1}                 json.loads keeps the LAST duplicate, so the overflow never exists
 //	{"a":1,"a":2}        -> {"a":2}
 //	9999...(4301 digits) -> json.loads raises ValueError; the intake answers 400 (4300-digit limit)
@@ -59,6 +60,10 @@ func TestIntakeAndConsumerAgreeWithPythonOnKeyOrderOverflowAndHugeIntegers(t *te
 	code, entry = intakeRawBody(t, batchWithPayload(`{"f":1e999}`))
 	if got, err := storeEntry(t, entry); code != http.StatusAccepted || err != nil || got != `{"f":null}` {
 		t.Fatalf("float overflow: status %d, stored %q, err %v (Python stored the word Infinity; CHAOS-6299 stores null)", code, got, err)
+	}
+	code, entry = intakeRawBody(t, batchWithPayload(`{"f":1E999}`))
+	if got, err := storeEntry(t, entry); code != http.StatusAccepted || err != nil || got != `{"f":null}` {
+		t.Fatalf("uppercase exponent overflow: status %d, stored %q, err %v (Python stored the word Infinity; CHAOS-6299 stores null)", code, got, err)
 	}
 	// A duplicate key: the last value wins (as json.loads), so an overflowing float it shadows is not an overflow.
 	for payload, want := range map[string]string{`{"f":1e999,"f":1}`: `{"f":1}`, `{"a":1,"a":2}`: `{"a":2}`} {
@@ -94,7 +99,9 @@ func TestConsumerKeepsTheLastDuplicatePayloadKeyLikePython(t *testing.T) {
 	if got, err := storeEntry(t, direct(`{"f":1e999,"f":1}`)); err != nil || got != `{"f":1}` {
 		t.Fatalf("shadowed overflow: stored %q, err %v, want {\"f\":1} (Python keeps the last duplicate)", got, err)
 	}
-	if got, err := storeEntry(t, direct(`{"f":1,"f":1e999}`)); err == nil {
-		t.Fatalf("a surviving overflow was stored as %q, want a permanent refusal", got)
+	for _, payload := range []string{`{"f":1,"f":1e999}`, `{"f":1E999}`, `{"f":-1E999}`} {
+		if got, err := storeEntry(t, direct(payload)); err == nil {
+			t.Fatalf("a surviving overflow %s was stored as %q, want a permanent refusal (Python's json.loads reads it as inf)", payload, got)
+		}
 	}
 }

@@ -553,6 +553,7 @@ wait_for_redis
 export OPERATIONAL_ORDERING_CONTRACT=2
 build_go_binaries
 CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}" "${BIN_DIR}/dho" migrate clickhouse upgrade
+FIXTURES_SINK="$(clickhouse_http_sink "${CLICKHOUSE_URI}")"
 echo "==> generating deterministic ClickHouse fixtures (raw git/PR/team data only)"
 (
   export ORG_ID="${E2E_ORG_ID}"
@@ -562,7 +563,7 @@ echo "==> generating deterministic ClickHouse fixtures (raw git/PR/team data onl
   # http:// spelled explicitly: dho reads a clickhouse:// DSN as native except on port 8123 and
   # CLICKHOUSE_URI is overrideable.
   "${BIN_DIR}/dho" fixtures generate \
-    --sink "${CLICKHOUSE_URI/#clickhouse:\/\//http://}" \
+    --sink "${FIXTURES_SINK}" \
     --db-type clickhouse \
     --repo-name "${FIXTURE_REPO_NAME}" \
     --provider "${FIXTURE_PROVIDER}" \

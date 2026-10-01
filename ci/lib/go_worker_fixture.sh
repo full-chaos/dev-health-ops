@@ -38,6 +38,25 @@
 # conservative convention; no longer load-bearing.
 
 # ---------------------------------------------------------------------------
+# clickhouse_http_sink URI -- prints the sink DSN `dho fixtures generate` takes
+# for a ClickHouse HTTP endpoint. dho reads a clickhouse:// DSN as the native
+# protocol except on port 8123, and the HTTP port a caller configures can be
+# anything, so the scheme is spelled out: clickhouse:// is rewritten to http://,
+# http:// and https:// pass through, and any other scheme is refused loudly
+# (exit 1, a message on stderr) instead of being guessed at.
+# ---------------------------------------------------------------------------
+clickhouse_http_sink() {
+  case "${1:-}" in
+    clickhouse://*) printf 'http://%s\n' "${1#clickhouse://}" ;;
+    http://* | https://*) printf '%s\n' "$1" ;;
+    *)
+      echo "ERROR: ClickHouse HTTP sink '${1:-}' must start with clickhouse://, http:// or https://" >&2
+      return 1
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # build_go_binaries -- builds the three Go binaries this fixture needs into
 # BIN_DIR (caller-set global; created by the caller beforehand).
 # ---------------------------------------------------------------------------

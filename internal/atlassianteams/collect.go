@@ -172,6 +172,17 @@ func memberID(account string) string {
 	return "jira:" + strings.ToLower(strings.TrimSpace(account))
 }
 
+// organizationARI is the organization id in the form teamSearchV2 accepts. tenantContexts answers a
+// bare UUID and the gateway refuses it ("Invalid Organization Ari", CHAOS-7132); an id that already is
+// an ARI is passed through unchanged.
+func organizationARI(id string) string {
+	id = strings.TrimSpace(id)
+	if strings.HasPrefix(strings.ToLower(id), "ari:") {
+		return id
+	}
+	return "ari:cloud:platform::org/" + id
+}
+
 // Collect reads the selected dimensions of every Atlassian team and returns
 // the rows to write. It is all or nothing: any read that fails fails the run
 // (a membership list cut short by an error would read as members who left).
@@ -192,7 +203,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 		resolver = identityalias.LoadDefault()
 	}
 
-	teams, err := client.SearchTeams(ctx, params.OrganizationID, params.SiteID, "", page)
+	teams, err := client.SearchTeams(ctx, organizationARI(params.OrganizationID), params.SiteID, "", page)
 	if err != nil {
 		return Rows{}, fmt.Errorf("search atlassian teams: %w", err)
 	}

@@ -26,7 +26,7 @@ var dbFailureText = regexp.MustCompile(`"error":"[^"]*sentinel retention delete 
 // and the rows the writes touched are compared after.
 func TestRetentionRoutesVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	golden := venueoracle.OpenGolden(t, governanceGolden("retention", "TestRetentionRoutesVenueOracle", "08f323ad51931f34f6a163e9988f68ff360487462c0c733d83b9eaa920f41513"))
+	golden := venueoracle.OpenGolden(t, governanceGolden("retention", "TestRetentionRoutesVenueOracle", "de6a34074ae06da8e8b928e79191d38d1a1b90831981fa7ada074a481780ba3d"))
 	root := golden.PythonRoot(t, repoRoot(t))
 	nextID := goldenIDs("ret")
 	const jwtKey = "venue-oracle-test-secret-key-for-retention-flow-32-bytes!"

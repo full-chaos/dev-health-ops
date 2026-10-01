@@ -366,7 +366,7 @@ type unpinnedColumn struct{ class, source string }
 // compared by value, so a new column that moves fails the freeze and the oracle until it is pinned
 // or classified here. A listed column is still checked: it must exist with its frozen type, a stamp
 // must lie inside the real-clock window of its run, an id must have an id's shape, and the number of
-// distinct ids (for a stamp: of rows that carry one) must agree.
+// rows that carry it must agree, and the ids must agree up to a consistent renaming (worldContent).
 var unpinnedColumns = map[string]map[string]unpinnedColumn{
 	"git_blame_dirty_paths": {
 		"marked_at": {serverStamp, "the materialized view writes now64(3, 'UTC'): migrations/clickhouse/095_git_blame_file_ownership.sql:44"},
@@ -387,21 +387,6 @@ var unpinnedColumns = map[string]map[string]unpinnedColumn{
 	"teams":                       {"team_uuid": {randomID, "models/teams.py:50: uuid.uuid4()"}},
 }
 
-// idLinks are the relations between random-id columns: the ids are not comparable between two runs,
-// but inside one run the left column's ids are all among the right column's. Where both tables
-// exist in a world the relation must hold (worldContent reports a broken one), so a producer change
-// that stops stamping two tables with one run id is seen although neither id is compared by value.
-var idLinks = [][2]string{
-	{"work_unit_membership.run_id", "work_unit_membership_runs.run_id"},
-	{"work_unit_membership_runs.run_id", "work_unit_membership.run_id"},
-	{"work_unit_investment_quotes.categorization_run_id", "work_unit_investments.categorization_run_id"},
-	{"work_unit_repo_effort.categorization_run_id", "work_unit_investments.categorization_run_id"},
-	{"llm_token_usage.run_id", "work_unit_investments.categorization_run_id"},
-	{"work_unit_investment_quotes.categorization_run_id", "work_unit_repo_effort.categorization_run_id"},
-	{"work_unit_repo_effort.categorization_run_id", "llm_token_usage.run_id"},
-	{"llm_token_usage.run_id", "work_unit_investment_quotes.categorization_run_id"},
-}
-
 // frozenStampWindow is how long after its frozen_at a world's unpinned stamps may lie: the freezer
 // pins the producer to the instant it starts at and produces every world twice before it writes.
 const frozenStampWindow = 30 * time.Minute
@@ -410,94 +395,90 @@ var randomIDText = regexp.MustCompile(`^([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0
 
 // worldContent is what two runs of the producer pinned to one instant must agree on, and what the
 // oracle compares a fresh run with the frozen world on. Per table: "#rows", "#columns", and one entry
-// per column: the digest of its values for a pinned column; for an unpinned one its class and the
-// number of distinct ids, or of rows that carry a stamp. problems lists every value of an unpinned column that breaks its
+// per column: the digest of its values for a pinned column; for a random id the digest of the ids
+// renamed by first appearance; for a stamp the number of rows that carry one. problems lists every value of an unpinned column that breaks its
 // class: a stamp outside [from, to] (the real-clock window of the run that wrote it), an id that
 // is not an id, a value of another JSON type.
 func worldContent(tables []WorldTable, from, to time.Time) (content map[string]map[string]string, problems []string) {
 	content = map[string]map[string]string{}
-	for _, table := range tables {
+	// The tables by name and each table's rows by their pinned content (unpinned columns blanked):
+	// an order that does not depend on a random id or a stamp, so a row is the same row in two runs.
+	sorted := append([]WorldTable{}, tables...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	// labels renames each random id to the order of its first appearance in that scan, across all
+	// tables: two runs never share an id, but an id that links rows (one run id in two tables, one
+	// id on every row of a run) gets one label in both, so the renamed values compare by value.
+	labels := map[string]string{}
+	for _, table := range sorted {
 		columns, _ := json.Marshal(table.Columns)
 		entry := map[string]string{"#rows": fmt.Sprint(len(table.Rows)), "#columns": string(columns)}
+		pinnedKey := make([]string, len(table.Rows))
+		for rowIndex, row := range table.Rows {
+			masked := make([]any, len(row))
+			for index, column := range table.Columns {
+				if _, listed := unpinnedColumns[table.Name][column.Name]; !listed && index < len(row) {
+					masked[index] = row[index]
+				}
+			}
+			raw, _ := json.Marshal(masked)
+			pinnedKey[rowIndex] = string(raw)
+		}
+		order := make([]int, len(table.Rows))
+		for index := range order {
+			order[index] = index
+		}
+		sort.SliceStable(order, func(i, j int) bool { return pinnedKey[order[i]] < pinnedKey[order[j]] })
 		for index, column := range table.Columns {
-			values := make([]string, 0, len(table.Rows))
-			for _, row := range table.Rows {
-				raw, _ := json.Marshal(row[index])
-				values = append(values, string(raw))
-			}
-			sort.Strings(values)
 			unpinned, listed := unpinnedColumns[table.Name][column.Name]
-			if !listed {
-				sum := sha256.Sum256([]byte(strings.Join(values, "\n")))
-				entry[column.Name] = "values " + hex.EncodeToString(sum[:])
-				continue
-			}
-			distinct, present := map[string]bool{}, 0
-			for _, raw := range values {
-				distinct[raw] = true
-				if raw == "null" {
+			values := make([]string, 0, len(table.Rows))
+			present := 0
+			for _, rowIndex := range order {
+				raw, _ := json.Marshal(table.Rows[rowIndex][index])
+				value := string(raw)
+				if !listed || value == "null" {
+					values = append(values, value)
 					continue
 				}
 				present++
 				var text string
-				if err := json.Unmarshal([]byte(raw), &text); err != nil {
-					problems = append(problems, fmt.Sprintf("%s.%s (%s): value %s is not a string", table.Name, column.Name, unpinned.class, raw))
+				if err := json.Unmarshal(raw, &text); err != nil {
+					problems = append(problems, fmt.Sprintf("%s.%s (%s): value %s is not a string", table.Name, column.Name, unpinned.class, value))
 					continue
 				}
-				switch unpinned.class {
-				case randomID:
+				if unpinned.class == randomID {
 					if !randomIDText.MatchString(text) {
 						problems = append(problems, fmt.Sprintf("%s.%s (%s): %q is not an id", table.Name, column.Name, unpinned.class, text))
 					}
-				default:
-					stamp, err := time.Parse("2006-01-02 15:04:05.999999999", text)
-					if err != nil || !strings.Contains(column.Type, "DateTime") {
-						problems = append(problems, fmt.Sprintf("%s.%s (%s, type %s): %q is not a DateTime value", table.Name, column.Name, unpinned.class, column.Type, text))
-					} else if stamp.Before(from.Add(-time.Second)) || stamp.After(to.Add(time.Second)) {
-						problems = append(problems, fmt.Sprintf("%s.%s (%s): %s is outside the run's clock window %s .. %s", table.Name, column.Name, unpinned.class, text,
-							from.Format(producerClockLayout), to.Format(producerClockLayout)))
+					if _, seen := labels[text]; !seen {
+						labels[text] = fmt.Sprintf("id#%d", len(labels))
 					}
+					values = append(values, labels[text])
+					continue
+				}
+				stamp, err := time.Parse("2006-01-02 15:04:05.999999999", text)
+				if err != nil || !strings.Contains(column.Type, "DateTime") {
+					problems = append(problems, fmt.Sprintf("%s.%s (%s, type %s): %q is not a DateTime value", table.Name, column.Name, unpinned.class, column.Type, text))
+				} else if stamp.Before(from.Add(-time.Second)) || stamp.After(to.Add(time.Second)) {
+					problems = append(problems, fmt.Sprintf("%s.%s (%s): %s is outside the run's clock window %s .. %s", table.Name, column.Name, unpinned.class, text,
+						from.Format(producerClockLayout), to.Format(producerClockLayout)))
 				}
 			}
-			// An id is drawn once per row or once per run, so the number of distinct ids is the
-			// producer's and must agree. A stamp is a clock read to the millisecond: how many
-			// distinct values a run holds depends on how fast it wrote, so only how many rows
-			// carry one is compared.
-			if unpinned.class == randomID {
-				entry[column.Name] = fmt.Sprintf("%s distinct=%d", unpinned.class, len(distinct))
-			} else {
+			sum := sha256.Sum256([]byte(strings.Join(values, "\n")))
+			switch {
+			case !listed:
+				// The rows are in pinned order, so the sequence is the column's content.
+				entry[column.Name] = "values " + hex.EncodeToString(sum[:])
+			case unpinned.class == randomID:
+				// The ids renamed by first appearance: which rows share an id, in this table and
+				// with the tables before it, compares by value; the id's own text does not.
+				entry[column.Name] = randomID + " renamed " + hex.EncodeToString(sum[:])
+			default:
+				// A stamp is a clock read to the millisecond: how many distinct values a run holds
+				// depends on how fast it wrote, so only how many rows carry one is compared.
 				entry[column.Name] = fmt.Sprintf("%s non-null=%d", unpinned.class, present)
 			}
 		}
 		content[table.Name] = entry
-	}
-	// The links between random-id columns, inside this one world.
-	ids := map[string]map[string]bool{}
-	for _, table := range tables {
-		for index, column := range table.Columns {
-			if unpinnedColumns[table.Name][column.Name].class != randomID {
-				continue
-			}
-			set := map[string]bool{}
-			for _, row := range table.Rows {
-				if text, ok := row[index].(string); ok {
-					set[text] = true
-				}
-			}
-			ids[table.Name+"."+column.Name] = set
-		}
-	}
-	for _, link := range idLinks {
-		left, leftHeld := ids[link[0]]
-		right, rightHeld := ids[link[1]]
-		if !leftHeld || !rightHeld {
-			continue
-		}
-		for id := range left {
-			if !right[id] {
-				problems = append(problems, fmt.Sprintf("%s holds the id %s, which %s does not: the two are stamped with one id in one run", link[0], id, link[1]))
-			}
-		}
 	}
 	sort.Strings(problems)
 	return content, problems
@@ -591,7 +572,8 @@ func TestWorldContentComparesValuesAndHoldsUnpinnedColumnsToTheirClass(t *testin
 		"a listed stamp that is a number":         {func(tables []WorldTable) { tables[1].Rows[0][1] = json.Number("1") }, "", "is not a string"},
 		"a listed id that is not an id":           {func(tables []WorldTable) { tables[2].Rows[0][1] = "team-1" }, "", "is not an id"},
 		"a listed stamp missing in one row":       {func(tables []WorldTable) { tables[1].Rows[0][1] = nil }, "git_blame_dirty_paths.marked_at", ""},
-		"a run marker with another run's id":      {func(tables []WorldTable) { tables[4].Rows[0][1] = "fedcba9876543210fedcba9876543210" }, "", "are stamped with one id in one run"},
+		"a run marker with another run's id":      {func(tables []WorldTable) { tables[4].Rows[0][1] = "fedcba9876543210fedcba9876543210" }, "work_unit_membership_runs.run_id", ""},
+		"one row pointing at another run's id":    {func(tables []WorldTable) { tables[3].Rows[1][1] = "fedcba9876543210fedcba9876543210" }, "work_unit_membership.run_id", ""},
 		"two rows sharing one listed id":          {func(tables []WorldTable) { tables[2].Rows[1][1] = tables[2].Rows[0][1] }, "teams.team_uuid", ""},
 		"a new column nobody classified": {func(tables []WorldTable) {
 			tables[0].Columns = append(tables[0].Columns, FrozenColumn{"synced_at", "DateTime64(3, 'UTC')"})

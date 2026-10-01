@@ -143,6 +143,20 @@ def test_the_ratchet_is_green_only_when_the_hit_set_equals_the_list(
     )
 
 
+def test_report_only_mode_prints_every_hit_and_exits_zero(tmp_path: Path) -> None:
+    listed = tmp_path / "known.tsv"
+    listed.write_text("# provisional\n")
+    directory = tmp_path / "hits"
+    directory.mkdir()
+    (directory / "a.hits").write_text(f"{PKG}\tTestA\n")
+    env = {"PYTHON_FREE_REPORT_ONLY": "1"}
+    result = _run(["bash", str(RATCHET), "compare", str(listed), str(directory)], env)
+    assert result.returncode == 0
+    assert f"HIT\t{PKG}\tTestA" in result.stdout and "new=1" in result.stdout
+    enforcing = _run(["bash", str(RATCHET), "compare", str(listed), str(directory)])
+    assert enforcing.returncode == 1
+
+
 def test_the_ratchet_refuses_a_list_row_without_a_ticket_and_a_run_that_reported_nothing(
     tmp_path: Path,
 ) -> None:

@@ -17,7 +17,8 @@
 #              (ci/python_free_known.tsv: package<TAB>TestName<TAB>CHAOS-ticket). Exit 0 only when
 #              the HIT set equals the list. A HIT not on the list is NEW (a new Python start); a listed
 #              test that did not hit is STALE (it was frozen: remove the entry in that PR). The summary
-#              line prints listed, hit, new and stale.
+#              line prints listed, hit, new and stale. PYTHON_FREE_REPORT_ONLY=1 (the provisional first
+#              run, before the list is filled in from a measured run) prints every HIT and exits 0.
 set -euo pipefail
 
 MARKER='PYTHON TRIPWIRE|python-tripwire/no-python|exit status 97'
@@ -118,6 +119,12 @@ compare() {
     sed 's/^/  /' "${tmp}/stale" >&2
   fi
   printf 'python-free ratchet: listed=%s hit=%s new=%s stale=%s\n' "${listed}" "${hit}" "${new}" "${stale}"
+  if [ "${PYTHON_FREE_REPORT_ONLY:-}" = "1" ]; then
+    printf 'python-free ratchet: REPORT-ONLY (provisional list). Every tripwire hit, as closed-list rows to fill in with a ticket:\n'
+    sed 's/^/HIT\t/' "${tmp}/hit"
+    rm -rf "${tmp}"
+    return 0
+  fi
   rm -rf "${tmp}"
   [ "${new}" -eq 0 ] && [ "${stale}" -eq 0 ]
 }

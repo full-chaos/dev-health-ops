@@ -42,6 +42,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/scanner"
+	"go/token"
 	"io"
 	"io/fs"
 	"os"
@@ -663,13 +665,43 @@ const legacyPlaneEnv = `v.pythonEnv = append([]string{"PYTHONPATH=" + filepath.J
 var (
 	planeEnvStatement = regexp.MustCompile(`(?s)v\.pythonEnv = append\(\[\]string\{.*?options\.PythonEnv\.\.\.\)`)
 	planeEnvFunction  = regexp.MustCompile(`(?s)\nfunc pythonPlaneEnv\(options Options, perRun map\[string\]string\) \[\]string \{.*?\n\}\n`)
-	commentLine       = regexp.MustCompile(`(?m)^\s*//.*$`)
-	blank             = regexp.MustCompile(`\s+`)
 )
 
-// codeText is source with its comment lines and all white space taken out.
-func codeText(source string) string {
-	return blank.ReplaceAllString(commentLine.ReplaceAllString(source, ""), "")
+// codeTokens is the Go tokens of source, comments left out, one per line: how
+// two pieces of code are compared as code. White space between tokens and
+// comments do not count; a string literal is one token and counts exactly, so
+// "X=1" and "X= 1" are different code. Text that is not Go tokens is an error.
+func codeTokens(source string) (string, error) {
+	var lexer scanner.Scanner
+	files := token.NewFileSet()
+	failed := false
+	lexer.Init(files.AddFile("", files.Base(), len(source)), []byte(source), func(token.Position, string) { failed = true }, 0)
+	var out strings.Builder
+	for {
+		_, kind, literal := lexer.Scan()
+		if kind == token.EOF {
+			break
+		}
+		// The scanner adds a semicolon at a line end: where the lines break is layout, not code.
+		if kind == token.SEMICOLON && literal == "\n" {
+			continue
+		}
+		fmt.Fprintf(&out, "%s %s\n", kind, literal)
+	}
+	if failed {
+		return "", errors.New("not Go code")
+	}
+	return out.String(), nil
+}
+
+// sameCode reports whether a and b are the same Go tokens.
+func sameCode(a, b string) bool {
+	left, err := codeTokens(a)
+	if err != nil {
+		return false
+	}
+	right, err := codeTokens(b)
+	return err == nil && left == right
 }
 
 // harnessEnvErr is an error unless the harness of tree hands the Python plane
@@ -684,7 +716,7 @@ func harnessEnvErr(root, tree string) error {
 		return err
 	}
 	if statement := planeEnvStatement.Find(start); statement != nil {
-		if codeText(string(statement)) != codeText(legacyPlaneEnv) {
+		if !sameCode(string(statement), legacyPlaneEnv) {
 			return errors.New("the harness of that commit handed the Python plane another environment than the one known for goldens from before the key")
 		}
 		return nil
@@ -698,7 +730,7 @@ func harnessEnvErr(root, tree string) error {
 		return err
 	}
 	then, now := planeEnvFunction.Find(theirs), planeEnvFunction.Find(ours)
-	if then == nil || now == nil || codeText(string(then)) != codeText(string(now)) {
+	if then == nil || now == nil || !sameCode(string(then), string(now)) {
 		return errors.New("the harness of that commit handed the Python plane another environment than the harness of the working tree does")
 	}
 	return nil

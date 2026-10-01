@@ -158,13 +158,15 @@ func TestMCPClassStatusShowsWhatTheClassProofRestsOn(t *testing.T) {
 		MCPClass: &MCPClassProvenance{Root: "hotspots", Reference: "go_document_route", Executed: 3, Matched: 3,
 			Excluded: []string{"featureFlagTimeseries=doc_operation_not_receipt_backed"}},
 	})
-	write := func(binding string) {
+	other, _ := json.Marshal(ReceiptProvenance{MCPClass: &MCPClassProvenance{Root: "hotspots", Reference: "NEWER_INADMISSIBLE", Executed: 99, Matched: 99}})
+	write := func(binding, route, ev string) {
 		t.Helper()
+		time.Sleep(5 * time.Millisecond)
 		if _, err := Write(ctx, pool, Receipt{
 			SchemaDigest: testSchemaDigest, DocumentDigest: digest, SelectedOperation: op, CandidateBuild: testCandidateBuild,
-			RequestIdentity: "identity-" + binding, Stage: EnablementProofStage, TerminalState: EnablementProofTerminalState,
-			MeasurementRoute: RouteProof, BuildBinding: binding, OrgID: "70d529e0", RecordedBy: "test",
-			ReviewEvidence: string(evidence), ObservedAt: time.Now().UTC(),
+			RequestIdentity: "identity-" + binding + route + ev[:5], Stage: EnablementProofStage, TerminalState: EnablementProofTerminalState,
+			MeasurementRoute: route, BuildBinding: binding, OrgID: "70d529e0", RecordedBy: "test",
+			ReviewEvidence: ev, ObservedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -183,11 +185,15 @@ func TestMCPClassStatusShowsWhatTheClassProofRestsOn(t *testing.T) {
 		t.Fatal("no hotspots row")
 		return MCPClassRootStatus{}
 	}
-	write(EdgeBuildAbsent) // inadmissible: shows nothing
+	write(EdgeBuildAbsent, RouteProof, string(evidence)) // inadmissible: shows nothing
 	if r := rootRow(); r.Proven || r.ProofReference != "" || len(r.ProofExcluded) != 0 {
 		t.Fatalf("an unbound receipt shows proof: %+v", r)
 	}
-	write(EdgeBuildPresent)
+	write(EdgeBuildPresent, RouteProof, string(evidence))
+	// NEWER receipts that are not admissible class receipts must not replace what is shown:
+	// one unbound, one on the edge route.
+	write(EdgeBuildAbsent, RouteProof, string(other))
+	write(EdgeBuildPresent, RouteEdge, string(other))
 	r := rootRow()
 	if !r.Proven || r.ProofReference != "go_document_route" || r.ProofExecuted != 3 || r.ProofMatched != 3 ||
 		len(r.ProofExcluded) != 1 || r.ProofExcluded[0] != "featureFlagTimeseries=doc_operation_not_receipt_backed" {

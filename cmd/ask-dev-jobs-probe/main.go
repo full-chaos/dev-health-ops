@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"log/slog"
 	"os"
@@ -41,6 +42,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/system"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
@@ -61,7 +63,7 @@ func main() {
 	// Linked job packages log through slog.Default(); this makes that the
 	// redacting handler, on stderr beside the probe's own output.
 	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
-	os.Exit(run(context.Background(), os.Args[1:], os.LookupEnv, os.Stdout, os.Stderr))
+	os.Exit(run(context.Background(), os.Args[1:], envsecrets.ProcessLookup, os.Stdout, os.Stderr))
 }
 
 func run(parent context.Context, args []string, lookup func(string) (string, bool), stdout, stderr io.Writer) int {
@@ -77,6 +79,7 @@ func run(parent context.Context, args []string, lookup func(string) (string, boo
 	}
 
 	uri, ok := lookup("POSTGRES_URI")
+	secrets.RegisterDSN("POSTGRES_URI", uri)
 	if uri == "" || !ok {
 		fmt.Fprintln(stderr, "POSTGRES_URI is not set")
 		return 1

@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"log/slog"
 	"net"
@@ -146,9 +147,9 @@ func NewSenderFromEnv(client *http.Client) (Sender, error) {
 		return &consoleSender{from: from}, nil
 	case "resend":
 		// Python accepted either name, preferring EMAIL_API_KEY.
-		key := strings.TrimSpace(os.Getenv("EMAIL_API_KEY"))
+		key := strings.TrimSpace(envsecrets.GetenvSecret("EMAIL_API_KEY"))
 		if key == "" {
-			key = strings.TrimSpace(os.Getenv("RESEND_API_KEY"))
+			key = strings.TrimSpace(envsecrets.GetenvSecret("RESEND_API_KEY"))
 		}
 		if key == "" {
 			slog.Error("mail resend API key is missing or empty",
@@ -249,8 +250,8 @@ func NewSenderFromEnv(client *http.Client) (Sender, error) {
 			from:      from,
 			host:      host,
 			port:      port,
-			username:  strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
-			password:  strings.TrimSpace(os.Getenv("SMTP_PASSWORD")),
+			username:  strings.TrimSpace(envsecrets.GetenvLogin("SMTP_USERNAME")),
+			password:  strings.TrimSpace(envsecrets.GetenvSecret("SMTP_PASSWORD")),
 			useTLS:    useTLS,
 			tlsConfig: tlsConfig,
 		}, nil

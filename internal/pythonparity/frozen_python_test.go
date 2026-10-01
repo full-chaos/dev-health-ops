@@ -23,16 +23,16 @@ const parityProducerIdentity = "python 3.14.7\nunicodedata 16.0.0"
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var parityGoldenPins = map[string]string{
-	"casing-multi-rune.golden.json":       "85a8b45c880693343ba0de32bb04a4e78420bb192ff77d083c00a19ecfbdd2c7",
-	"casing-sigma-distance.golden.json":   "9d83a8b00b9515df08d78fcf1537ea03c1aad822a6f4efdf2e7b1f24ca1a8566",
-	"casing-sigma-properties.golden.json": "1b13bcc8b298812a8c87d0510f9292c11d5db19c5500b3e6469455d269ea27e5",
-	"errorsanitize.golden.json":           "e9e8bf2d88d8ccd4fc3990bafd6fddb02d3f135788a3bccb474375195ec25c37",
-	"fnmatch.golden.json":                 "951fe8a5fbcec332b52a939946d80df50d2ca0b31c268d9f1b0beddfd0c0a16d",
-	"isoformat.golden.json":               "8d605cc0e9d71c1178fdf900dfa20317516a85026387c2866f777d71c90d5a83",
-	"seqratio.golden.json":                "f10b09a91df58bc94cfd7bd27c0516aa764649bf9a34d73c86c4ffcccc63409f",
-	"strrepr.golden.json":                 "7f2e7ea3c9b8998110abee0a4b30c5c352a9780d0618c43c274c04d1d10f38e6",
-	"urlsplit.golden.json":                "86a8ebed0469a0d4f987816dd4b118aed74de156ecd7848eb7e37e87f0db3ecb",
-	"utf8replace.golden.json":             "fd67060a2f796214171aedcbba1278fbb20014c887e467ddd24cd1e963f6e676",
+	"casing-multi-rune.golden.json":       "4310cc31a85d42ca93e8bb6ef4d614d4a4c02deb5ecd63d376984dfda7fa80f5",
+	"casing-sigma-distance.golden.json":   "3de72ac51892b9a287693cb70ac04d504413ee7accf19095ee060e7e63998190",
+	"casing-sigma-properties.golden.json": "fbd0ed22057ecb8c49bbc024a8d6a30bfc2cf939ad22028764569e8e32e0495d",
+	"errorsanitize.golden.json":           "f24ba04f425c388fdd33ff5714a14dff0fd19cfec58e915ef8efe509c6d7356b",
+	"fnmatch.golden.json":                 "5a8b106fb0f27f55610af0eff8089d09b625081f8c901a66802ddc78d102330a",
+	"isoformat.golden.json":               "e1fd71f57ff802c5413412c2d81e3c4bc188744d9c103dc4f5a31ba02e49e540",
+	"seqratio.golden.json":                "a98a13c5da8408a4a5345e6780a80b03ceb0b4f41e4d8b4bc7df61cfe98effe3",
+	"strrepr.golden.json":                 "a6b29a5054fa01c07ba9164c51e6c22cc3e1dd82dec5d52c31224a9e19500fde",
+	"urlsplit.golden.json":                "26e28e8e05502b3d86b539701e7ca77d921853f32c483405ff52290435db3629",
+	"utf8replace.golden.json":             "88be96ac3a79b38cea4d49c28a385206688bf4de196fa669aeb6ff5f413bf448",
 }
 
 // parityGoldens is the set of this package's frozen Python answers.

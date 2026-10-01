@@ -22,7 +22,7 @@ func TestRunAnswersFromTheGolden(t *testing.T) {
 	spec := venueoracle.GoldenSpec{
 		Path:        "testdata/golden/run.golden.json",
 		PythonBuild: runGoldenPythonBuild,
-		SHA256:      "f4777075bb6f8df8d57eedb9661bcf2e1e6089f4550cc2932181121d0b97b9a3",
+		SHA256:      "6c3807fe456312d0464a8eca1e752311b8cbbbdd7277792d4d038b73e66b9c45",
 		Recipe: "git worktree add --detach $DIR " + runGoldenPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/testsupport/programoracle/ -test '^TestRunAnswersFromTheGolden$' -python-root $DIR",
 	}

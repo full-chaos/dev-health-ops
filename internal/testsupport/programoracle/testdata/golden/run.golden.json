@@ -13,7 +13,7 @@
       "body_sha256": "619e1fe4b126e252d580a45380c8bf3e7b4412a4be2e9dac6e522e5d0b5de3c7",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "CORPUS"
     },
     {
@@ -23,7 +23,7 @@
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 3,
-      "headers": null,
+      "headers": {},
       "body": "partial"
     },
     {
@@ -33,7 +33,7 @@
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "keyed 0 1\n"
     }
   ]

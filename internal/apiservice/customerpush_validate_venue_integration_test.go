@@ -50,7 +50,7 @@ func customerPushValidateRequests(f customerPushWriteFixture, tokens map[string]
 	add("unknown source", "/api/v1/admin/customer-push/sources/"+f.sourceOther.String()+"/validate", `{`, bearer("admin"))
 	add("bad source id", "/api/v1/admin/customer-push/sources/nope/validate", `{`, bearer("admin"))
 	// Envelope failures: 200 rows.
-	for name, body := range map[string]string{
+	for name, body := range ordered(map[string]string{
 		"no body": "\x00", "empty": ``, "eof in object": `{"a":1`, "trailing": `{} x`, "expected value": "\n\n  x",
 		"trailing comma": `{"a":[1,]}`, "invalid escape": `{"a":"\q"}`, "bad utf-8": "{\"a\":\"\xff\"}", "array": `[]`,
 		"object errors": `{"schemaVersion":1,"idempotencyKey":"","source":{"system":"x","instance":"","extra":1},"window":{"startedAt":"2026-01-02T00:00:00Z","endedAt":"2026-01-01T00:00:00Z"},"records":[1,{"kind":1,"externalId":"","payload":[],"q":1}],"zzz":1}`,
@@ -69,7 +69,7 @@ func customerPushValidateRequests(f customerPushWriteFixture, tokens map[string]
 		"integer part over limit":       `{"extra":` + strings.Repeat("1", 4301) + `}`,
 		"signed integer part over":      `{"extra":-` + strings.Repeat("1", 4300) + `}`,
 		"float integer part over limit": `{"extra":` + strings.Repeat("1", 4301) + `.5}`,
-	} {
+	}) {
 		add("body: "+name, p, body, bearer("admin"))
 	}
 	add("naive vs aware window", p, `{"schemaVersion":"external-ingest.v1","idempotencyKey":"k","source":{"system":"github","instance":"i"},"window":{"startedAt":"2026-01-02T00:00:00","endedAt":"2026-01-01T00:00:00Z"},"records":[{"kind":"k","externalId":"e","payload":{}}]}`, bearer("admin"))
@@ -93,13 +93,14 @@ func sixtyExtraKeys() string {
 // route's differential: status and body bytes and headers, on every
 // envelope, record and limit outcome.
 func TestVenueOracleCustomerPushValidate(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-customer-push-validate", t.Name(), "b78e0de2caae3e8f9201c8a89694dd8ac9ae7ca62e8406e70ecc76365befdf2e"))
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	t.Setenv("EXTERNAL_INGEST_MAX_RECORDS", "3")
 	t.Setenv("EXTERNAL_INGEST_MAX_BODY_BYTES", "6000")
 	var seed customerPushWriteFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{"EXTERNAL_INGEST_MAX_RECORDS=3", "EXTERNAL_INGEST_MAX_BODY_BYTES=6000"},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = customerPushWriteSeed(t, ctx, admin)
@@ -114,9 +115,10 @@ func TestVenueOracleCustomerPushValidate(t *testing.T) {
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := customerPushValidateRequests(seed, venue.Tokens)
-	receipt := venueoracle.Diff(t, base, requests, venue.ServePython(t, requests), venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, base, requests, golden.Python(t, venue, requests), venueoracle.DiffOptions{Golden: golden})
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	golden.Finish(t)
 }

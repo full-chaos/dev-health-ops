@@ -355,10 +355,6 @@ def test_the_three_state_watch_never_reads_a_missing_run_as_green(
 ) -> None:
     now = 1_790_000_000
     fresh = "2026-09-30T00:00:00Z"
-    env = lambda gh: {
-        "LAST_PYTHON_FREE_RUN_GH": str(gh),
-        "LAST_PYTHON_FREE_RUN_NOW": str(now),
-    }  # noqa: E731
     created = int(
         subprocess.run(
             ["date", "-u", "-d", fresh, "+%s"],
@@ -367,10 +363,19 @@ def test_the_three_state_watch_never_reads_a_missing_run_as_green(
             check=True,
         ).stdout
     )
-    env_fresh = lambda gh: {
-        "LAST_PYTHON_FREE_RUN_GH": str(gh),
-        "LAST_PYTHON_FREE_RUN_NOW": str(created + 3600),
-    }  # noqa: E731
+
+    def env(gh: Path) -> dict[str, str]:
+        return {
+            "LAST_PYTHON_FREE_RUN_GH": str(gh),
+            "LAST_PYTHON_FREE_RUN_NOW": str(now),
+        }
+
+    def env_fresh(gh: Path) -> dict[str, str]:
+        return {
+            "LAST_PYTHON_FREE_RUN_GH": str(gh),
+            "LAST_PYTHON_FREE_RUN_NOW": str(created + 3600),
+        }
+
     run = {"id": 7, "head_sha": "abc", "created_at": fresh}
     passed = _run(
         ["bash", str(LAST_RUN)],

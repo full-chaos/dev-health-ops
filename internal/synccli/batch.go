@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"math"
 	"math/big"
 	"sort"
@@ -13,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 

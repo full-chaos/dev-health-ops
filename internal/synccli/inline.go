@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"sort"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 )

@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/localgit"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // runLocalRepo is sync_local_target for git and prs (CHAOS-6775) and blame (CHAOS-6776): main()'s

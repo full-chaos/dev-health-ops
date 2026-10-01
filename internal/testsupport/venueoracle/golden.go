@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // Golden freezes the Python plane's answers for a venue oracle whose Python
@@ -85,6 +86,12 @@ type GoldenSpec struct {
 	// and must be deterministic and idempotent. A golden stores no token value:
 	// the recorder refuses a candidate that still holds a token shape.
 	Scrub func(text string) string
+	// KeyScrub turns a value in a REQUEST that the Python plane issued earlier
+	// and the test sends back (a mailed link token) into a placeholder, for the
+	// request's key only: the request sent to Python is untouched. A JWT in a
+	// request is projected without it. Like Scrub it must be deterministic and
+	// idempotent, and it is not applied to the authorization header.
+	KeyScrub func(text string) string
 }
 
 // Golden is an opened GoldenSpec.
@@ -578,6 +585,72 @@ func producerDigest(dir string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// keyOf is the key of request as this golden holds it: the key of the request
+// after the golden's own projection (tokens to their claims, the spec's Scrub),
+// so a request that carries a token or id the Python plane issued earlier has
+// the same key in every recording and in the replay, whose request is built
+// from the projected answers. A request the projection leaves unchanged has
+// the key requestKey gives it, byte for byte.
+func (g *Golden) keyOf(request Request) goldenRequest {
+	return requestKey(g.projectRequest(request))
+}
+
+// sameKeySameAnswerErr is an error when an earlier request of this recording
+// has the key of entry (the same request once its tokens and generated values
+// are projected) and another answer: the replay could not tell the two apart,
+// so it would serve one answer for both. Two requests that differ only in a
+// projected value may fold only when the Python plane answered both alike.
+func (g *Golden) sameKeySameAnswerErr(entry goldenRequest) error {
+	for _, earlier := range g.recorded.Requests {
+		if earlier.Name != entry.Name || earlier.Method != entry.Method || earlier.Path != entry.Path ||
+			earlier.BodySHA256 != entry.BodySHA256 || earlier.HeadersSHA256 != entry.HeadersSHA256 || earlier.CallEnv != entry.CallEnv {
+			continue
+		}
+		if earlier.Status != entry.Status || !reflect.DeepEqual(earlier.Headers, entry.Headers) || earlier.Body != entry.Body {
+			return fmt.Errorf("golden %s: two requests named %q have the same key once their tokens and generated values are projected (path %s, body %s.., headers %s..), and the Python plane answered them differently: the replay could not tell them apart; give them different names or stable values", g.spec.Path, entry.Name, entry.Path, short(entry.BodySHA256), short(entry.HeadersSHA256))
+		}
+	}
+	return nil
+}
+
+// projectKeyText is a text as the golden holds it in a request key: its tokens
+// projected and the spec's KeyScrub applied (not Scrub: an id the test writes in
+// a request on purpose is part of the request, and stays in its key). It is idempotent, so the request of a
+// recording (real token) and of its replay (projected token) key alike.
+func (g *Golden) projectKeyText(text string) string {
+	text = ProjectTokens(text)
+	if g.spec.KeyScrub != nil {
+		text = g.spec.KeyScrub(text)
+	}
+	return text
+}
+
+// projectRequest is request with its path, its body (decoded from base64, and
+// encoded again only when the projection changed it) and its header values but
+// the authorization one (headersDigest reduces a bearer token to its claims)
+// projected.
+func (g *Golden) projectRequest(request Request) Request {
+	out := request
+	out.Path = g.projectKeyText(request.Path)
+	if request.Body != nil {
+		if raw, err := base64.StdEncoding.DecodeString(*request.Body); err == nil && utf8.Valid(raw) {
+			if projected := g.projectKeyText(string(raw)); projected != string(raw) {
+				out.Body = B64(projected)
+			}
+		}
+	}
+	if len(request.Headers) > 0 {
+		out.Headers = make(map[string]string, len(request.Headers))
+		for name, value := range request.Headers {
+			if strings.ToLower(name) != "authorization" {
+				value = g.projectKeyText(value)
+			}
+			out.Headers[name] = value
+		}
+	}
+	return out
+}
+
 func requestKey(request Request) goldenRequest {
 	sum := sha256.Sum256([]byte(""))
 	if request.Body != nil {
@@ -866,9 +939,12 @@ func (g *Golden) answer(t *testing.T, call, callEnv string, requests []Request, 
 			t.Fatalf("golden %s: the Python producer answered %d of %d requests", g.spec.Path, len(answers), len(requests))
 		}
 		for index, request := range requests {
-			entry := requestKey(request)
+			entry := g.keyOf(request)
 			entry.CallEnv = callEnv
 			entry.Status, entry.Headers, entry.Body = answers[index].Status, answers[index].Headers, answers[index].Body
+			if err := g.sameKeySameAnswerErr(entry); err != nil {
+				t.Fatal(err)
+			}
 			g.recorded.Requests = append(g.recorded.Requests, entry)
 		}
 	} else {
@@ -884,7 +960,7 @@ func (g *Golden) answer(t *testing.T, call, callEnv string, requests []Request, 
 		markFrozenTree(t, "the frozen answers of golden "+g.spec.Path)
 	}
 	for index := range answers {
-		g.slots = append(g.slots, answerSlot{request: requestIdentity(requests[index])})
+		g.slots = append(g.slots, answerSlot{request: g.identityOf(requests[index])})
 		answers[index].slot = len(g.slots)
 	}
 	if g.state == stateOpen {
@@ -913,7 +989,7 @@ func (g *Golden) frozenAnswers(requests []Request, callEnv string) ([]Response, 
 	}
 	out := make([]Response, len(requests))
 	for index, request := range requests {
-		want := requestKey(request)
+		want := g.keyOf(request)
 		got := g.loaded.Requests[g.served+index]
 		if got.Name != want.Name || got.Method != want.Method || got.Path != want.Path || got.BodySHA256 != want.BodySHA256 || got.HeadersSHA256 != want.HeadersSHA256 {
 			return nil, fmt.Errorf("golden %s request %d is %q %s %s (body %s.., headers %s..); the test sends %q %s %s (body %s.., headers %s..); regenerate: %s",
@@ -1033,7 +1109,7 @@ func (g *Golden) bindAnswers(requests []Request, answers []Response) error {
 			return fmt.Errorf("golden %s: the Python answer for request %d (%q) did not come from golden.Python", g.spec.Path, index, request.Name)
 		}
 		bound := &g.slots[slot-1]
-		if bound.request != requestIdentity(request) {
+		if bound.request != g.identityOf(request) {
 			return fmt.Errorf("golden %s: request %d (%q) was given the answer that belongs to another request (%s): each answer answers the one request it was fetched for", g.spec.Path, index, request.Name, bound.request)
 		}
 		if bound.compared || bound.consumed {
@@ -1204,8 +1280,13 @@ func sameDirectory(a, b string) bool {
 }
 
 // requestIdentity is what makes a request the same request across processes.
-func requestIdentity(request Request) string {
-	key := requestKey(request)
+func (g *Golden) identityOf(request Request) string {
+	return identityOfKey(g.keyOf(request))
+}
+
+func requestIdentity(request Request) string { return identityOfKey(requestKey(request)) }
+
+func identityOfKey(key goldenRequest) string {
 	return fmt.Sprintf("%s %s %s body=%s headers=%s", key.Name, key.Method, key.Path, key.BodySHA256, key.HeadersSHA256)
 }
 

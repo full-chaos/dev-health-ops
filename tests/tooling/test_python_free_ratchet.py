@@ -220,6 +220,22 @@ def test_the_workflow_is_path_scoped_and_keeps_python_out_of_the_shard() -> None
     )
     assert run_step["env"]["GO_PYTHON_FREE"] == "1"
     assert workflow["jobs"]["ratchet"]["if"] == "always()"
+    compare = next(
+        step
+        for step in workflow["jobs"]["ratchet"]["steps"]
+        if "closed list" in step.get("name", "")
+    )
+    assert "PYTHON_FREE_REPORT_ONLY" not in compare.get("env", {}), "the ratchet must enforce"
+
+
+def test_every_closed_list_row_cites_a_ticket_and_the_list_has_no_duplicates() -> None:
+    rows = [
+        line.split("\t")
+        for line in (REPO_ROOT / "ci" / "python_free_known.tsv").read_text().splitlines()
+        if line and not line.startswith("#")
+    ]
+    assert rows and all(len(row) == 3 and row[2].startswith("CHAOS-") for row in rows)
+    assert len({(row[0], row[1]) for row in rows}) == len(rows)
 
 
 def _gh(tmp_path: Path, runs: list[dict]) -> Path:

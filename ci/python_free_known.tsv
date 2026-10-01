@@ -1,3 +1,25 @@
 # Closed list of Go tests that still start Python (CHAOS-7384). Columns, tab separated:
 #   package<TAB>TestName (top level)<TAB>the CHAOS ticket that freezes it
 # The go-python-free job is green when the tripwire-hit set equals this list. Remove a row in the PR that freezes its test.
+# Measured by the first go-python-free PR run (run 36821812014). A FROZEN test that hits the tripwire is a defect in its freeze, never a row here.
+# Ticket per row = the open freeze/delete ticket of the owning family (CHAOS-7058 inventory). Remove a row in the PR that freezes its test.
+github.com/full-chaos/dev-health-ops/internal/admincli	TestSeedVenueOracleMatchesThePythonProducer	CHAOS-7303
+github.com/full-chaos/dev-health-ops/internal/admincli	TestStandardFeaturesVenueOracleMatchesPythonRegistry	CHAOS-7303
+github.com/full-chaos/dev-health-ops/internal/apiservice/admin	TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex	CHAOS-7303
+github.com/full-chaos/dev-health-ops/internal/apiservice/admin	TestOrgDeletionTargetsMatchThePythonList	CHAOS-7303
+github.com/full-chaos/dev-health-ops/internal/joboperator	TestEveryAuditedActionPassesTheMigratedAuditConstraints	CHAOS-7337
+github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining	TestRecommendationsLoaderMatchesPythonAgainstClickHouse	CHAOS-7308
+github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks	TestMigration084CarriesExistingRows	CHAOS-7353
+github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks	TestMigration084ConvergesFromAPartialRun	CHAOS-7353
+github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks	TestMigration084RefusesADefaultVersionColumn	CHAOS-7353
+github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks	TestMigration084RefusesWhenAMergeLandsMidCopy	CHAOS-7353
+github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestBaselineVenueOracleIsTheExecutedPythonUpgrade	CHAOS-7049
+github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestBuildHeadsAreTheOldScriptsHeads	CHAOS-7049
+github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestHistoryGraphIsTheAlembicChain	CHAOS-6469
+github.com/full-chaos/dev-health-ops/internal/pgmigrate	TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead	CHAOS-7049
+github.com/full-chaos/dev-health-ops/internal/queryapi/server	TestDailyFamilyTablesCollapseCopiesWithoutChangingReaderRows	CHAOS-7308
+github.com/full-chaos/dev-health-ops/internal/scheduler/fixed	TestAskDevRetentionAdmissionUsesEntitlementForFirstUseButNeverStrandsState	CHAOS-7380
+github.com/full-chaos/dev-health-ops/internal/streamhandlers	TestExternalSinkOutcomesMatchPythonAgainstClickHouse	CHAOS-7307
+github.com/full-chaos/dev-health-ops/internal/synccli	TestDBLookupsMatchLivePython	CHAOS-7319
+github.com/full-chaos/dev-health-ops/internal/synccli	TestLocalSyncMatchesLivePython	CHAOS-7319
+github.com/full-chaos/dev-health-ops/internal/synccli	TestLocalSyncRerunKeepsHeldColumnsUnlikePython	CHAOS-7319

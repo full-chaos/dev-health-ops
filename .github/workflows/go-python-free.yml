@@ -154,10 +154,6 @@ jobs:
           merge-multiple: true
 
       - name: Compare the tripwire hits with the closed list
-        env:
-          # PROVISIONAL: the closed list is filled in from the first measured run, then this line is
-          # removed and the ratchet enforces (CHAOS-7384).
-          PYTHON_FREE_REPORT_ONLY: '1'
         run: |
           set -euo pipefail
           out="$(mktemp)"

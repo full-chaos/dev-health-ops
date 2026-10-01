@@ -1752,7 +1752,9 @@ def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
     # (goWorkers.operationalOrderingContract, read in the helper) moves both together.
     helpers = (_HELM_DIR / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
     assert ".Values.goWorkers.operationalOrderingContract" in helpers
-    assert 'include "dev-health.operationalOrderingContract"' in helm_migrate_template, (
+    assert (
+        'include "dev-health.operationalOrderingContract"' in helm_migrate_template
+    ), (
         "helm migrate job should reuse the one operational ordering contract helper "
         "(one knob for migrate + every worker), not a second, driftable value"
     )

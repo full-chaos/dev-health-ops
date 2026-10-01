@@ -225,9 +225,14 @@ Every check below fails loud with a named finding; none can pass on an empty or 
 
 ## GraphQL prove harness (CHAOS-6993, partial)
 
-`bigboy-graphql-prove.sh <full ops sha>` + `compose.bigboy.prove.yml` run the prove leg of prod's
-STEP 216 (`pod-r216.sh`) on the compose stack, from `venue-prove` (api's network namespace, so the
-edge is `localhost:8000`):
+`bigboy-graphql-prove.sh <full ops sha> [--go-edge]` + `compose.bigboy.prove.yml` run the prove leg of
+prod's STEP 216 (`pod-r216.sh`) on the compose stack, from `venue-prove`. The edge is the caller's
+explicit choice: by default the Python edge (`localhost:8000`, api's network namespace: the prover's
+Python-reference mode); with `--go-edge` the ROUTED `/graphql` (`http://traefik:3000/graphql`, which
+the plane-split router sends to query-api once the pinned deploy values list `/graphql` in
+`ingress.queryApiPaths`, CHAOS-6263: the prover's Go-edge mode, `dho goapi prove -go-edge`). In
+Go-edge mode every proof is the candidate alone, and the prover refuses by name if a Python plane
+still answers the routed `/graphql`. The steps:
 
 1. refuse unless `venue-prove`'s image is `go-api-tools:sha-<sha>` (prover build skew);
 2. derive the local org read-only (the single org of the local admin account; never printed);

@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# bigboy-graphql-prove.sh <full ops sha> -- CHAOS-6993: the bigboy GraphQL prove harness.
+# bigboy-graphql-prove.sh <full ops sha> [--go-edge] -- CHAOS-6993: the bigboy GraphQL prove harness.
+#
+# The edge it proves through is the caller's explicit choice, never inferred:
+#   (default)  the Python edge: api's own /graphql (localhost:8000 from venue-prove, which
+#              shares api's network namespace), the prover's Python-reference mode;
+#   --go-edge  the ROUTED /graphql: the plane-split router's internal hostname, which sends
+#              /graphql to query-api once the pinned deploy values list it in
+#              ingress.queryApiPaths (CHAOS-6263), the prover's Go-edge mode. The prover
+#              refuses, by name, if a Python plane still answers there.
 #
 # `dho goapi routing enable` refuses an operation that has no deployed_executed proof
 # receipt for the RUNNING build (prod's receipts do not count on bigboy). This runs the
@@ -26,6 +34,11 @@
 # step failed.
 set -u
 NEW=${1:?full ops sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
+case "${2:-}" in
+  "") EDGE_ARGS="-edge-url http://localhost:8000/graphql"; EDGE_NOTE="the Python edge" ;;
+  --go-edge) EDGE_ARGS="-go-edge -edge-url http://traefik:3000/graphql"; EDGE_NOTE="the routed /graphql in Go-edge mode" ;;
+  *) echo "usage: bigboy-graphql-prove.sh <full ops sha> [--go-edge]" >&2; exit 2 ;;
+esac
 R=/home/ubuntu/devhealth; HERE=$(cd "$(dirname "$0")" && pwd)
 TS=$(date -u +%Y%m%dT%H%M%SZ); OUT=$R/_records/bigboy-$N8/graphql-prove-$TS
 LOCAL_ADMIN_EMAIL=${LOCAL_ADMIN_EMAIL:-admin@test.com}
@@ -68,13 +81,13 @@ rc=$?; st repoint $rc; grep -E 'repointed total=' "$OUT/repoint.out"
 
 # 3. prove. The key file is loaded into THIS process's env inside the container only.
 docker compose "${BASE[@]}" -f "$HERE/compose.bigboy.prove.yml" run --rm --no-deps -T venue-prove \
-  "GO_API_ENVELOPE_PRIVATE_KEY=\"\$(cat /keys/envelope.pem)\" dho goapi prove $U -edge-url http://localhost:8000/graphql \
+  "GO_API_ENVELOPE_PRIVATE_KEY=\"\$(cat /keys/envelope.pem)\" dho goapi prove $U $EDGE_ARGS \
    -documents /app/go-api/documents.json -org \"\$PROVE_ORG\" -artifact-dir /proof/bodies -key-id $KEY_ID -candidate-build $NEW \
    -recorded-by bigboy-graphql-prove \
-   -review-evidence 'CHAOS-6993: deployed_executed proof of query-api build $NEW on bigboy (compose venue), local org, read-only' \
+   -review-evidence 'CHAOS-6993: deployed_executed proof of query-api build $NEW on bigboy (compose venue) through $EDGE_NOTE, local org, read-only' \
    -report /proof/prove-report.json" > "$OUT/prove.out" 2>&1
 rc=$?; st prove $rc; [ $rc = 0 ] || fail=1
-grep -E 'attempted=|PROVEN_GO_ONLY|terminal_state|refused ' "$OUT/prove.out" | sed 's/org=[^ ]*/org=<local>/' | head -20
+grep -E 'edge_mode=|attempted=|PROVEN_GO_ONLY|terminal_state|refused ' "$OUT/prove.out" | sed 's/org=[^ ]*/org=<local>/' | head -20
 
 # 4. enable the known-missing operations, one at a time
 OPS=${ENABLE_OPS:-$(awk '!/^#/ && $2=="KNOWN-MISSING"{print $1}' "$HERE/routing-ops.txt")}

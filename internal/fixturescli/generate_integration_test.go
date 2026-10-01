@@ -418,7 +418,8 @@ func TestGenerateVenueOracleMatchesThePythonProducer(t *testing.T) {
 		frozen := map[string]int{}
 		for _, table := range world.Tables {
 			frozen[table.Name] = len(table.Rows)
-			columns := worldColumns(t, ch.httpDSN, table.Name)
+			// The frozen table has no server-stamped column (WithoutServerStamped), so compare like with like.
+			columns := FrozenTable{Name: table.Name, Columns: worldColumns(t, ch.httpDSN, table.Name)}.WithoutServerStamped().Columns
 			if !reflect.DeepEqual(columns, table.Columns) {
 				t.Fatalf("%s: the schema's columns differ from the frozen ones", table.Name)
 			}

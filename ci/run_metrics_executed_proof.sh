@@ -267,10 +267,12 @@ echo "   -- fixtures generate (CHAOS-4276: git_commits + a repo-pattern team for
 # 2-team/1-repo seed here would have exercised membership fallback instead
 # of the repo-pattern-first path this job's comment above says it proves.
 # One team keeps the repo genuinely single-owner.
-# dho loads the frozen world (CHAOS-7301) and refuses a PostgreSQL URI in its environment.
+# dho loads the frozen world (CHAOS-7301) and refuses a PostgreSQL URI in its environment. The sink is
+# spelled http:// explicitly: dho reads a clickhouse:// DSN as native except on port 8123, and the
+# HTTP port here is overrideable.
 env -u DATABASE_URI -u POSTGRES_URI -u DATABASE_URL ORG_ID="${ORG_ID}" OTEL_ENABLED=false \
   "${BIN_DIR}/dho" fixtures generate \
-  --sink "${CLICKHOUSE_URI_HTTP}" \
+  --sink "http://${CLICKHOUSE_URI_HTTP#clickhouse://}" \
   --db-type clickhouse \
   --org "${ORG_ID}" \
   --provider synthetic \

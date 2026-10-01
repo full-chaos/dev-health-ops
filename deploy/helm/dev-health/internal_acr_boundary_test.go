@@ -196,7 +196,7 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 	// A referenced backend Service must exist.
 	for name, args := range map[string][]string{
 		"goApi disabled": {"--set", "goApi.enabled=false"},
-		"api disabled":   {"--set", "goApi.enabled=true", "--set", "api.enabled=false"},
+		"api disabled":   {"--set", "goApi.enabled=true", "--set", "api.enabled=false", "--set-json", `ingress.pythonAllowList=[{"path":"/metrics$","pathType":"ImplementationSpecific"}]`},
 	} {
 		full := append([]string{"template", "b", ".", "--set", "ingress.enabled=true", "--set-json",
 			`ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`}, args...)
@@ -263,8 +263,9 @@ func TestPerHostPythonAllowList(t *testing.T) {
 	if got := strings.Count(ownRules, "- path: "); got != 4 {
 		t.Errorf("own-list host must render exactly its 3 allow-list paths plus \"/\", got %d paths:\n%s", got, ownRules)
 	}
-	if got := strings.Count(shared, "- path: "); got != 2 {
-		t.Errorf("shared-list host must render exactly the 1 default path plus \"/\", got %d paths:\n%s", got, shared)
+	// The shared default is EMPTY (query-api answers /graphql): the shared-list host renders "/" and nothing else.
+	if got := strings.Count(shared, "- path: "); got != 1 || strings.Contains(shared, "dev-health-api\n") {
+		t.Errorf("shared-list host must render exactly \"/\" and no Python backend, got %d paths:\n%s", got, shared)
 	}
 	// Every allow-listed path, on both hosts, backs onto the Python api Service and "/" onto the Go api (r2 P3:
 	// the security-relevant /api/v1/internal backend was not asserted).
@@ -280,10 +281,15 @@ func TestPerHostPythonAllowList(t *testing.T) {
 			t.Errorf("own-list host: %s must back onto the Python api Service:\n%s", path, ownRules)
 		}
 	}
-	for _, path := range []string{"/graphql$"} {
-		if !strings.Contains(backendOf(shared, path), "name: b-dev-health-api\n") {
-			t.Errorf("shared-list host: %s must back onto the Python api Service:\n%s", path, shared)
-		}
+	// A values file that lists a shared path still gets it on the Python api for a `true` host.
+	listed, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
+		"--set-json", `ingress.pythonAllowList=[{"path":"/graphql$","pathType":"ImplementationSpecific"}]`,
+		"--set-json", `ingress.hosts=[{"host":"shared.test","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`).CombinedOutput()
+	if err != nil {
+		t.Fatalf("a listed shared path must render: %v\n%s", err, listed)
+	}
+	if !strings.Contains(backendOf(hostRules(string(listed), "shared.test"), "/graphql$"), "name: b-dev-health-api\n") {
+		t.Errorf("shared-list host: a listed /graphql$ must back onto the Python api Service:\n%s", listed)
 	}
 	for _, rules := range []string{ownRules, shared} {
 		if !strings.Contains(backendOf(rules, "/"), "name: b-dev-health-go-api\n") {
@@ -359,9 +365,13 @@ func TestAnchoredAllowListEntries(t *testing.T) {
 	if got := strings.Count(doc, "pathType: ImplementationSpecific"); got != 3 {
 		t.Errorf("want 3 ImplementationSpecific rules, got %d:\n%s", got, doc)
 	}
-	// The shared default list is anchored too (host `true`), so it also turns regex mode on.
-	if o, err := render(host("true")); err != nil || !strings.Contains(ingressDoc(o), `use-regex: "true"`) || !strings.Contains(ingressDoc(o), "- path: /graphql$\n") {
-		t.Errorf("a `true` host uses the anchored shared default and must enable use-regex: err=%v\n%s", err, o)
+	// The shared default list is EMPTY (query-api answers /graphql), so a `true` host renders no Python path and no
+	// regex mode; a values file that lists an anchored shared entry turns regex mode on for that host.
+	if o, err := render(host("true")); err != nil || strings.Contains(ingressDoc(o), "use-regex") || strings.Contains(ingressDoc(o), "/graphql") {
+		t.Errorf("a `true` host with the default (empty) shared list must render no Python path and no use-regex: err=%v\n%s", err, o)
+	}
+	if o, err := render(host("true"), "--set-json", `ingress.pythonAllowList=[{"path":"/graphql$","pathType":"ImplementationSpecific"}]`); err != nil || !strings.Contains(ingressDoc(o), `use-regex: "true"`) || !strings.Contains(ingressDoc(o), "- path: /graphql$\n") {
+		t.Errorf("a `true` host with an anchored shared entry must enable use-regex: err=%v\n%s", err, o)
 	}
 	// No anchored entry anywhere -> no annotation (literal-only lists render as before).
 	if o, err := render(host(`[{"path":"/graphql","pathType":"Exact"},` + internal + `]`)); err != nil || strings.Contains(ingressDoc(o), "use-regex") {
@@ -484,5 +494,32 @@ func TestAllowListNeedsNoInternalCover(t *testing.T) {
 	// A go-api path may still not cover /api/v1/internal (kept as defence in depth).
 	if o, err := render(`[{"host":"h","pythonAllowList":true,"paths":[{"path":"/api/v1/internal","pathType":"Prefix","service":"go-api"}]}]`); err == nil || !strings.Contains(o, "covers /api/v1/internal") {
 		t.Errorf("a go-api path covering /api/v1/internal must stay refused: err=%v\n%s", err, o)
+	}
+}
+
+// TestDefaultAllowListNeedsNoPythonAPI pins CHAOS-6263: the shared allow-list is empty by default (query-api answers
+// /graphql), so a host that opts in routes NOTHING to the Python api and renders with the Python api disabled; the
+// moment a values file lists a path, the Python api Service is required again.
+func TestDefaultAllowListNeedsNoPythonAPI(t *testing.T) {
+	render := func(extra ...string) (string, error) {
+		args := append([]string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true", "--set", "api.enabled=false",
+			"--set-json", `ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`}, extra...)
+		out, err := exec.Command("helm", args...).CombinedOutput()
+		return string(out), err
+	}
+	out, err := render()
+	if err != nil {
+		t.Fatalf("the default (empty) allow-list must render without the Python api: %v\n%s", err, out)
+	}
+	for _, d := range strings.Split(out, "\n---") {
+		if documentKind(d) != "Ingress" {
+			continue
+		}
+		if strings.Count(d, "- path: ") != 1 || strings.Contains(d, "/graphql") || strings.Contains(d, "dev-health-api\n") || !strings.Contains(d, "name: b-dev-health-go-api\n") {
+			t.Errorf("the Ingress must carry only \"/\" -> go-api:\n%s", d)
+		}
+	}
+	if out, err := render("--set-json", `ingress.pythonAllowList=[{"path":"/graphql$","pathType":"ImplementationSpecific"}]`); err == nil || !strings.Contains(out, "api.enabled is false") {
+		t.Errorf("a listed path with the Python api disabled must fail the render: err=%v\n%s", err, out)
 	}
 }

@@ -1,74 +1,109 @@
 package server
 
 import (
-	"os"
+	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
+
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 )
 
-// The guard CHAOS-7330 asks for. What selects a person is derived from the
-// schema (mcp_person_policy.go); this pins what the derivation sees. Every
-// argument, input-object field and enum value reachable from an allow-listed
-// root field's arguments is in the golden with its classification. A schema
-// change that adds or renames one -- under ANY name, person word or not --
-// fails this test until a reviewer classifies the new member in the golden.
-func TestMCPReachableInputsMatchTheReviewedGolden(t *testing.T) {
-	es := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{}})
+func allowlistedRoots() []string {
 	var roots []string
 	for root := range mcpRootFieldAllowlist {
 		roots = append(roots, root)
 	}
 	sort.Strings(roots)
-	got := mcpReachableInputMembers(es.Schema(), roots)
-	raw, err := os.ReadFile("testdata/mcp_reachable_inputs.golden")
-	if err != nil {
-		t.Fatalf("the reviewed golden is missing, which is a failure, not a skip: %v", err)
-	}
-	want := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-	gotSet, wantSet := map[string]bool{}, map[string]bool{}
-	for _, line := range got {
-		gotSet[line] = true
-	}
-	for _, line := range want {
-		wantSet[line] = true
-	}
-	for _, line := range got {
-		if !wantSet[line] {
-			t.Errorf("new or reclassified reachable input member not in the golden (review whether it selects a person): %s", line)
+	return roots
+}
+
+// lintMCPInputClasses returns what is wrong with a class table: a position
+// whose name carries a person word but is not classed person.
+func lintMCPInputClasses(classes map[string]string) []string {
+	var bad []string
+	for key, class := range classes {
+		position := strings.Fields(key)[1]
+		name := position[strings.LastIndex(position, ".")+1:]
+		if mcpIsPersonName(name) && class != "person" {
+			bad = append(bad, key+" is classed "+class+" but its name carries a person word")
 		}
 	}
-	for _, line := range want {
-		if !gotSet[line] {
-			t.Errorf("golden member no longer in the schema: %s", line)
+	sort.Strings(bad)
+	return bad
+}
+
+// Every position a request value can land on, reachable from an allow-listed
+// root field, has an explicit class in mcp_input_classes.txt. A schema change
+// that adds one -- under ANY name -- fails here, and at runtime the listener
+// refuses the position as unclassified until a PR classifies it. There is no
+// human gate outside the PR: the table is the source of truth, the build is
+// the gate.
+func TestMCPInputClassesCoverEveryReachablePositionExactly(t *testing.T) {
+	es := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{}})
+	reachable := mcpReachableInputMembers(es.Schema(), allowlistedRoots())
+	inSchema := map[string]bool{}
+	for _, line := range reachable {
+		inSchema[line] = true
+		if mcpInputClasses[line] == "" {
+			t.Errorf("reachable position has no class (the listener refuses it as unclassified): %s", line)
 		}
+	}
+	for key := range mcpInputClasses {
+		if !inSchema[key] {
+			t.Errorf("class for a position no allow-listed root reaches any more: %s", key)
+		}
+	}
+	if bad := lintMCPInputClasses(mcpInputClasses); len(bad) > 0 {
+		t.Errorf("person-named positions not classed person:\n%s", strings.Join(bad, "\n"))
 	}
 }
 
-// The person set the golden classifies, pinned by name: the four members the
-// MCP class refuses today. Adding a person-named member to the schema changes
-// this list through the golden test above.
-func TestMCPPersonMembersAreExactlyTheReviewedFour(t *testing.T) {
-	raw, err := os.ReadFile("testdata/mcp_reachable_inputs.golden")
+func TestMCPPersonPositionsAreExactlyTheReviewedFour(t *testing.T) {
+	var person []string
+	for key, class := range mcpInputClasses {
+		if class == "person" {
+			person = append(person, key)
+		}
+	}
+	sort.Strings(person)
+	want := []string{"enum DimensionInput.AUTHOR", "enum ScopeLevelInput.DEVELOPER", "input FilterInput.who", "input WhoFilterInput.developers"}
+	if strings.Join(person, "|") != strings.Join(want, "|") {
+		t.Fatalf("person positions = %v, want %v", person, want)
+	}
+}
+
+// Plants: a person selector under a NEUTRAL name, and a classified-other
+// person-worded name. Both must be caught.
+func TestMCPUnclassifiedPositionIsRefusedAndAPersonNamedOtherIsLinted(t *testing.T) {
+	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "plant", Input: `
+		type Query { people(filter: HandleFilter, kind: Kind): String }
+		input HandleFilter { handle: String }
+		enum Kind { ENGINEER_OF_RECORD }
+	`})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var person []string
-	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
-		if strings.HasSuffix(line, " person") {
-			person = append(person, line)
-		}
+	field := schema.Query.Fields.ForName("people")
+	filter := field.Arguments.ForName("filter")
+	if got := mcpClassifyValue(schema, filter.Type, map[string]any{"handle": "ada"}); got != mcpInputUnclassified {
+		t.Fatalf("an unlisted input field under a neutral name = verdict %d, want unclassified (fail closed)", got)
 	}
-	want := []string{
-		"enum DimensionInput.AUTHOR person",
-		"enum ScopeLevelInput.DEVELOPER person",
-		"input FilterInput.who person",
-		"input WhoFilterInput.developers person",
+	if got := mcpClassifyValue(schema, field.Arguments.ForName("kind").Type, "ENGINEER_OF_RECORD"); got != mcpInputUnclassified {
+		t.Fatalf("an unlisted enum value = verdict %d, want unclassified", got)
 	}
-	if strings.Join(person, "|") != strings.Join(want, "|") {
-		t.Fatalf("person members = %v, want %v", person, want)
+	if got := mcpClassifyArgument(schema, "Query", "people", filter, map[string]any{}); got != mcpInputUnclassified {
+		t.Fatalf("an unlisted argument position = verdict %d, want unclassified", got)
+	}
+	if bad := lintMCPInputClasses(map[string]string{"input HandleFilter.reviewerHandle": "other"}); len(bad) != 1 {
+		t.Fatalf("a person-worded name classed other must be linted, got %v", bad)
+	}
+	if got := fmt.Sprint(mcpReachableInputMembers(schema, []string{"people"})); !strings.Contains(got, "input HandleFilter.handle") || !strings.Contains(got, "enum Kind.ENGINEER_OF_RECORD") || !strings.Contains(got, "arg Query.people.filter") {
+		t.Fatalf("the reachable lister missed a position: %s", got)
 	}
 }
 
@@ -83,4 +118,21 @@ func TestMCPPersonNamesAreRecognisedPerToken(t *testing.T) {
 			t.Errorf("mcpIsPersonName(%q) = %v, want %v", name, got, want)
 		}
 	}
+}
+
+// The runtime half: with one reachable position missing from the table, the
+// MCP listener refuses a request that uses it, before any ClickHouse call.
+func TestMCPListenerRefusesAnUnclassifiedPositionAtRuntime(t *testing.T) {
+	const key = "input ScopeFilterInput.ids"
+	class, ok := mcpInputClasses[key]
+	if !ok {
+		t.Fatalf("%s is not in the table", key)
+	}
+	delete(mcpInputClasses, key)
+	defer func() { mcpInputClasses[key] = class }()
+	ch := &countingMCPClient{}
+	l := newMCPTestListeners(t, ch, allMCPRootsEnabled(), mcpDefaultLimits())
+	query := fmt.Sprintf("query { catalog(orgId: %q, filters: {scope: {level: TEAM, ids: [\"t\"]}}) { values { value } } }", mcpTestOrg)
+	rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, query, nil))
+	assertMCPRefused(t, rec, ch, http.StatusForbidden, mcpReasonUnclassifiedInput)
 }

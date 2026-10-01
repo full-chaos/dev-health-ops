@@ -1,6 +1,8 @@
 package server
 
 import (
+	_ "embed"
+	"fmt"
 	"sort"
 	"strings"
 	"unicode"
@@ -9,13 +11,33 @@ import (
 )
 
 // The MCP caller class is person-free (CHAOS-7087). What selects a person is
-// decided from the SCHEMA, at the typed position where a value lands, never
-// from a hand-kept list of names: an argument, an input-object field or an
-// enum value selects a person when its name carries a person word. A schema
-// addition that carries one is refused automatically; one that selects a
-// person under a name with no person word is caught by the reachable-input
-// golden (testdata/mcp_reachable_inputs.golden), which fails until the new
-// member is classified by review.
+// an explicit CLASS, person or other, for every position a request value can
+// land on: an argument of a reachable field, a field of an input object, an
+// enum value. The classes live in mcp_input_classes.txt (embedded, reviewed by
+// PR, no human gate at runtime). A position the table does not list is
+// UNCLASSIFIED and the listener refuses it (fail closed) until it is classified;
+// the test below fails the build for the same reason. The person words are only
+// a lint over the table: a position whose name carries one must be classed
+// person.
+
+//go:embed mcp_input_classes.txt
+var mcpInputClassesFile string
+
+// mcpInputClasses maps "<kind> <position>" (arg Query.catalog.dimension,
+// input FilterInput.who, enum ScopeLevelInput.DEVELOPER) to "person"/"other".
+var mcpInputClasses = mustParseMCPInputClasses(mcpInputClassesFile)
+
+func mustParseMCPInputClasses(raw string) map[string]string {
+	classes := map[string]string{}
+	for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 || (fields[2] != "person" && fields[2] != "other") {
+			panic(fmt.Sprintf("mcp_input_classes.txt: malformed line %q (want: kind position person|other)", line))
+		}
+		classes[fields[0]+" "+fields[1]] = fields[2]
+	}
+	return classes
+}
 
 // mcpPersonWords are the stems of the words that name a person, matched per
 // token of a camelCase / snake_case / SCREAMING_CASE name, after stripping a
@@ -82,67 +104,104 @@ func mcpValueIsEmpty(value any) bool {
 	return false
 }
 
-// mcpValueSelectsPerson walks a resolved value (variables substituted) along
-// its declared type and reports whether it selects a person: a person-named
-// input-object field carrying a value, or an enum value with a person word.
-func mcpValueSelectsPerson(schema *ast.Schema, t *ast.Type, value any) bool {
+// mcpInputVerdict is what the classes say about one value.
+type mcpInputVerdict int
+
+const (
+	mcpInputOK mcpInputVerdict = iota
+	mcpInputPerson
+	mcpInputUnclassified
+)
+
+func worse(a, b mcpInputVerdict) mcpInputVerdict {
+	if b > a {
+		return b
+	}
+	return a
+}
+
+// mcpClassifyValue walks a resolved value along its declared type and returns
+// the worst verdict: a position classed person that carries a value, or a
+// position no class lists. Position keys are the ones mcpReachableInputMembers
+// produces.
+func mcpClassifyValue(schema *ast.Schema, t *ast.Type, value any) mcpInputVerdict {
 	if value == nil || t == nil {
-		return false
+		return mcpInputOK
 	}
 	if t.Elem != nil {
+		verdict := mcpInputOK
 		if list, ok := value.([]any); ok {
 			for _, member := range list {
-				if mcpValueSelectsPerson(schema, t.Elem, member) {
-					return true
-				}
+				verdict = worse(verdict, mcpClassifyValue(schema, t.Elem, member))
 			}
-			return false
+			return verdict
 		}
-		return mcpValueSelectsPerson(schema, t.Elem, value)
+		return mcpClassifyValue(schema, t.Elem, value)
 	}
 	definition := schema.Types[t.NamedType]
 	if definition == nil {
-		return false
+		return mcpInputOK
 	}
 	switch definition.Kind {
 	case ast.Enum:
 		s, _ := value.(string)
-		return mcpIsPersonName(s)
+		switch mcpInputClasses["enum "+definition.Name+"."+s] {
+		case "other":
+			return mcpInputOK
+		case "person":
+			return mcpInputPerson
+		}
+		return mcpInputUnclassified
 	case ast.InputObject:
 		object, ok := value.(map[string]any)
 		if !ok {
-			return false
+			return mcpInputOK
 		}
+		verdict := mcpInputOK
 		for _, field := range definition.Fields {
 			member, present := object[field.Name]
 			if !present || member == nil {
 				continue
 			}
-			if mcpIsPersonName(field.Name) && !mcpValueIsEmpty(member) {
-				return true
+			switch mcpInputClasses["input "+definition.Name+"."+field.Name] {
+			case "person":
+				if !mcpValueIsEmpty(member) {
+					verdict = worse(verdict, mcpInputPerson)
+				}
+			case "other":
+			default:
+				verdict = worse(verdict, mcpInputUnclassified)
 			}
-			if mcpValueSelectsPerson(schema, field.Type, member) {
-				return true
-			}
+			verdict = worse(verdict, mcpClassifyValue(schema, field.Type, member))
 		}
+		return verdict
 	}
-	return false
+	return mcpInputOK
 }
 
-// mcpArgumentSelectsPerson is mcpValueSelectsPerson for a field argument.
-func mcpArgumentSelectsPerson(schema *ast.Schema, definition *ast.ArgumentDefinition, value any) bool {
+// mcpClassifyArgument is mcpClassifyValue for a field argument; the object is
+// the type that declares the field.
+func mcpClassifyArgument(schema *ast.Schema, object, field string, definition *ast.ArgumentDefinition, value any) mcpInputVerdict {
 	if definition == nil || value == nil {
-		return false
+		return mcpInputOK
 	}
-	if mcpIsPersonName(definition.Name) && !mcpValueIsEmpty(value) {
-		return true
+	verdict := mcpInputOK
+	switch mcpInputClasses["arg "+object+"."+field+"."+definition.Name] {
+	case "person":
+		if !mcpValueIsEmpty(value) {
+			verdict = mcpInputPerson
+		}
+	case "other":
+	default:
+		verdict = mcpInputUnclassified
 	}
-	return mcpValueSelectsPerson(schema, definition.Type, value)
+	return worse(verdict, mcpClassifyValue(schema, definition.Type, value))
 }
 
-// mcpReachableInputMembers lists, for the given root fields, every argument,
-// every input-object field and every enum value reachable through their
-// arguments, each classified person / other. It is the golden's content.
+// mcpReachableInputMembers lists, for the given root fields, every position
+// a request value can land on -- an argument of the root or of any field
+// reachable through its result types, every input-object field and every enum
+// value reachable through those arguments -- as "<kind> <position>".
 func mcpReachableInputMembers(schema *ast.Schema, roots []string) []string {
 	seen := map[string]bool{}
 	var lines []string
@@ -152,22 +211,16 @@ func mcpReachableInputMembers(schema *ast.Schema, roots []string) []string {
 			lines = append(lines, line)
 		}
 	}
-	class := func(name string) string {
-		if mcpIsPersonName(name) {
-			return "person"
-		}
-		return "other"
-	}
-	visited := map[string]bool{}
-	var visitType func(t *ast.Type)
-	visitType = func(t *ast.Type) {
+	visitedInput := map[string]bool{}
+	var visitInput func(t *ast.Type)
+	visitInput = func(t *ast.Type) {
 		for t != nil && t.Elem != nil {
 			t = t.Elem
 		}
-		if t == nil || visited[t.NamedType] {
+		if t == nil || visitedInput[t.NamedType] {
 			return
 		}
-		visited[t.NamedType] = true
+		visitedInput[t.NamedType] = true
 		definition := schema.Types[t.NamedType]
 		if definition == nil {
 			return
@@ -175,12 +228,33 @@ func mcpReachableInputMembers(schema *ast.Schema, roots []string) []string {
 		switch definition.Kind {
 		case ast.Enum:
 			for _, value := range definition.EnumValues {
-				add("enum " + definition.Name + "." + value.Name + " " + class(value.Name))
+				add("enum " + definition.Name + "." + value.Name)
 			}
 		case ast.InputObject:
 			for _, field := range definition.Fields {
-				add("input " + definition.Name + "." + field.Name + " " + class(field.Name))
-				visitType(field.Type)
+				add("input " + definition.Name + "." + field.Name)
+				visitInput(field.Type)
+			}
+		}
+	}
+	visitedOutput := map[string]bool{}
+	var visitFields func(object string, fields ast.FieldList)
+	visitFields = func(object string, fields ast.FieldList) {
+		for _, field := range fields {
+			for _, argument := range field.Arguments {
+				add("arg " + object + "." + field.Name + "." + argument.Name)
+				visitInput(argument.Type)
+			}
+			t := field.Type
+			for t != nil && t.Elem != nil {
+				t = t.Elem
+			}
+			if t == nil || visitedOutput[t.NamedType] {
+				continue
+			}
+			visitedOutput[t.NamedType] = true
+			if definition := schema.Types[t.NamedType]; definition != nil && (definition.Kind == ast.Object || definition.Kind == ast.Interface) {
+				visitFields(definition.Name, definition.Fields)
 			}
 		}
 	}
@@ -189,10 +263,7 @@ func mcpReachableInputMembers(schema *ast.Schema, roots []string) []string {
 		if field == nil {
 			continue
 		}
-		for _, argument := range field.Arguments {
-			add("arg Query." + root + "." + argument.Name + " " + class(argument.Name))
-			visitType(argument.Type)
-		}
+		visitFields("Query", ast.FieldList{field})
 	}
 	sort.Strings(lines)
 	return lines

@@ -212,6 +212,7 @@ const (
 	mcpReasonInvalidOrgArgument  = "invalid_org_argument"
 	mcpReasonOrgMismatch         = "org_mismatch"
 	mcpReasonPersonScope         = "person_scope"
+	mcpReasonUnclassifiedInput   = "unclassified_input"
 	mcpReasonInputLimit          = "input_limit"
 	mcpReasonRootFieldNotEnabled = "root_field_not_enabled"
 	mcpReasonBytesCeiling        = "bytes_ceiling"
@@ -1020,8 +1021,13 @@ func mcpCheckRequestInputs(schema *ast.Schema, op *ast.OperationDefinition, frag
 				fail(http.StatusForbidden, mcpReasonInvalidOrgArgument)
 				return
 			}
-			if field.Definition != nil && mcpArgumentSelectsPerson(schema, field.Definition.Arguments.ForName(argument.Name), value) {
-				fail(http.StatusForbidden, mcpReasonPersonScope)
+			if field.Definition != nil && field.ObjectDefinition != nil {
+				switch mcpClassifyArgument(schema, field.ObjectDefinition.Name, field.Name, field.Definition.Arguments.ForName(argument.Name), value) {
+				case mcpInputPerson:
+					fail(http.StatusForbidden, mcpReasonPersonScope)
+				case mcpInputUnclassified:
+					fail(http.StatusForbidden, mcpReasonUnclassifiedInput)
+				}
 			}
 			if argument.Name == "simulations" {
 				if n, ok := mcpInt(value); !ok || n > mcpMaxSimulations {
@@ -1161,11 +1167,11 @@ func (o *mcpObservation) fieldErrorCount() int {
 	return o.fieldErrors
 }
 
-func (o *mcpObservation) observe(err error) {
+func (o *mcpObservation) observe(err error, elapsed, ceiling time.Duration) {
 	if err == nil {
 		return
 	}
-	reason := mcpBudgetReason(err)
+	reason := mcpBudgetReason(err, elapsed, ceiling)
 	if reason == "" {
 		return
 	}
@@ -1182,9 +1188,17 @@ func (o *mcpObservation) budgetReason() string {
 	return o.budget
 }
 
+// mcpCeilingSlack is how early a socket deadline may fire against the ceiling
+// measured from the observed client's own clock: the driver's deadline starts
+// a moment before Query returns control here.
+const mcpCeilingSlack = 250 * time.Millisecond
+
 // mcpBudgetReason classifies a ClickHouse error as one of the class's
-// budget refusals, or "".
-func mcpBudgetReason(err error) string {
+// budget refusals, or "". elapsed is the time since the failing query started
+// and ceiling the read ceiling it ran under: a NET timeout is the time ceiling
+// only once the ceiling has passed; a timeout before it (a dial or any other
+// connectivity timeout) is a store fault and stays unclassified.
+func mcpBudgetReason(err error, elapsed, ceiling time.Duration) string {
 	var exception *clickhousedriver.Exception
 	if errors.As(err, &exception) {
 		switch exception.Code {
@@ -1218,6 +1232,9 @@ func mcpBudgetReason(err error) string {
 	if errors.As(err, &opErr) && opErr.Op == "dial" {
 		return ""
 	}
+	if elapsed < ceiling-mcpCeilingSlack {
+		return ""
+	}
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		return mcpReasonTimeCeiling
 	}
@@ -1233,6 +1250,15 @@ func mcpBudgetReason(err error) string {
 // or at Close.
 type mcpObservedClient struct {
 	next featureflags.QueryClient
+	// ceiling is the read ceiling the client runs under (zero: production's).
+	ceiling time.Duration
+}
+
+func (c mcpObservedClient) readCeiling() time.Duration {
+	if c.ceiling > 0 {
+		return c.ceiling
+	}
+	return time.Duration(mcpMaxExecutionTimeSeconds) * time.Second
 }
 
 func (c mcpObservedClient) Query(ctx context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
@@ -1240,39 +1266,42 @@ func (c mcpObservedClient) Query(ctx context.Context, statement string, bindings
 	if obs != nil {
 		obs.call()
 	}
+	started := time.Now()
 	rows, err := c.next.Query(ctx, statement, bindings)
 	if err != nil {
 		if obs != nil {
-			obs.observe(err)
+			obs.observe(err, time.Since(started), c.readCeiling())
 		}
 		return nil, err
 	}
 	if obs == nil {
 		return rows, nil
 	}
-	return mcpObservedRows{RowScanner: rows, obs: obs}, nil
+	return mcpObservedRows{RowScanner: rows, obs: obs, started: started, ceiling: c.readCeiling()}, nil
 }
 
 type mcpObservedRows struct {
 	dhclickhouse.RowScanner
-	obs *mcpObservation
+	obs     *mcpObservation
+	started time.Time
+	ceiling time.Duration
 }
 
 func (r mcpObservedRows) Scan(dest ...any) error {
 	err := r.RowScanner.Scan(dest...)
-	r.obs.observe(err)
+	r.obs.observe(err, time.Since(r.started), r.ceiling)
 	return err
 }
 
 func (r mcpObservedRows) Err() error {
 	err := r.RowScanner.Err()
-	r.obs.observe(err)
+	r.obs.observe(err, time.Since(r.started), r.ceiling)
 	return err
 }
 
 func (r mcpObservedRows) Close() error {
 	err := r.RowScanner.Close()
-	r.obs.observe(err)
+	r.obs.observe(err, time.Since(r.started), r.ceiling)
 	return err
 }
 

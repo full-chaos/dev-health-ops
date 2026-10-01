@@ -604,14 +604,15 @@ func localScenarios() []localScenario {
 			mustSymlink("real.txt", "link-to-file")
 			mustSymlink("dir", "link-to-dir")
 			mustSymlink("nowhere.txt", "broken-link")
-			// A regular file outside the repository, at a FIXED absolute path both the recorder and the replay
-			// create with the same bytes: the link's target is part of the commit, and a per-run path (the
-			// temporary directory) would make the commit hash differ between the recording and the replay.
-			const outside = "/tmp/dho-local-oracle-outside.txt"
+			// A regular file outside the repository, a sibling of the repository directory in the run's own
+			// temporary directory, reached by a RELATIVE link: the link's text is part of the commit, so an
+			// absolute target (the per-run temporary path) would make the commit hash differ between the
+			// recording and the replay. The absolute form of an outside link is not in the frozen corpus.
+			outside := filepath.Join(filepath.Dir(f.dir), "outside.txt")
 			if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
 				f.t.Fatal(err)
 			}
-			mustSymlink(outside, "link-outside")
+			mustSymlink("../outside.txt", "link-outside")
 			f.commit("links\n")
 		}},
 		{name: "blame: a .git file and a nested .git directory", build: func(f *fixture) {

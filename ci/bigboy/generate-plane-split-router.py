@@ -188,7 +188,7 @@ def python_allow_list_from_doc(doc: dict) -> list[tuple[str, str]]:
 
 
 def allow_list_literal(path: str, path_type: str) -> str:
-    """The literal path an allow-list entry names (an anchored entry without its `$` and `\.`)."""
+    """The literal path an allow-list entry names (an anchored entry without its `$` and with its escaped dots as dots)."""
     if path_type == "ImplementationSpecific":
         return path.removesuffix("$").replace(chr(92) + ".", ".")
     return path

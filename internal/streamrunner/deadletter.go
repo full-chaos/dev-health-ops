@@ -85,7 +85,7 @@ func retentionFor(message Message, reason string) payloadRetention {
 	case reason == blockedPayloadReason:
 		retention.Mode = RetentionWithheld
 	case len(text) > MaxRetainedPayloadBytes || !replayFieldsFit(message):
-		// A row whose replay fields (stream, entry id, source, org hash) would be cut cannot rebuild
+		// A row whose replay fields (stream, entry id, ingestion id, source, org hash) would be cut cannot rebuild
 		// the entry, so it keeps the digest and sizes instead of a text it could not replay.
 		retention.Mode = RetentionOverBound
 	default:
@@ -104,7 +104,7 @@ func replayFieldsFit(message Message) bool {
 	if len(message.Stream) > MaxDeadLetterFieldBytes || len(message.ID) > MaxDeadLetterFieldBytes {
 		return false
 	}
-	for _, key := range retainedFields {
+	for _, key := range append([]string{"ingestion_id"}, retainedFields...) {
 		if len(message.Fields[key]) > MaxDeadLetterFieldBytes {
 			return false
 		}

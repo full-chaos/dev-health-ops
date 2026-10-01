@@ -377,11 +377,20 @@ func (r *Runner) quarantine(ctx context.Context, message Message, reason string)
 			return fmt.Errorf("finalize permanent message: %w", err)
 		}
 	}
+	// The dead-letter row is durable from here: count and log it now, so a quarantine whose ACK then
+	// fails (the entry is redelivered and written again) is still visible, once per row written.
+	r.recordQuarantineRow(ctx, message, reason)
 	if err := r.transport.Ack(ctx, message.Stream, r.config.ConsumerGroup, message.ID); err != nil {
 		return fmt.Errorf("ack quarantined message: %w", err)
 	}
 	r.mu.Lock()
 	r.quarantined++
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *Runner) recordQuarantineRow(ctx context.Context, message Message, reason string) {
+	r.mu.Lock()
 	if r.quarantinedBy == nil {
 		r.quarantinedBy = make(map[quarantineKey]uint64)
 	}
@@ -394,7 +403,6 @@ func (r *Runner) quarantine(ctx context.Context, message Message, reason string)
 		"fields", len(message.Fields), "events_retention", retention.Mode,
 		"events_bytes", retention.Bytes, "events_count", retention.EventsCount,
 		"row_bytes", deadLetterRowBytes(message, reason))
-	return nil
 }
 
 // quarantineKey is the bounded label set of the per-reason counter: the stream
@@ -557,10 +565,11 @@ func waitForContext(ctx context.Context, duration time.Duration) bool {
 	}
 }
 
-// deadLetterRowBytes is the size of the field names and values the dead-letter row carries.
+// deadLetterRowBytes is the size of the field names and values the dead-letter row carries, with
+// moved_at counted at its longest RFC3339Nano form.
 func deadLetterRowBytes(message Message, reason string) int {
 	total := 0
-	for key, value := range DeadLetterFields(message, reason, "") {
+	for key, value := range DeadLetterFields(message, reason, "0000-00-00T00:00:00.000000000Z") {
 		total += len(key) + len(value)
 	}
 	return total

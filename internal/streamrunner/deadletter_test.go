@@ -3,6 +3,7 @@ package streamrunner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -193,7 +194,7 @@ func TestDeadLetterTombstoneSaysThereIsNothingToReplay(t *testing.T) {
 func TestDeadLetterKeptRowCutsAnOversizedIdentityAndReason(t *testing.T) {
 	huge := strings.Repeat("i", 50*1024)
 	message := telemetryMessage(`[{"name":"page_viewed"}]`)
-	message.Fields["ingestion_id"] = huge
+	message.Fields["binding_id"] = huge
 	row := DeadLetterFields(message, huge, "t")
 	if row["events_retention"] != RetentionKept {
 		t.Fatalf("retention = %q, want kept (the replay fields fit)", row["events_retention"])
@@ -202,5 +203,64 @@ func TestDeadLetterKeptRowCutsAnOversizedIdentityAndReason(t *testing.T) {
 		if key != eventsField && len(value) > MaxDeadLetterFieldBytes {
 			t.Fatalf("field %s is %d bytes, over the bound", key, len(value))
 		}
+	}
+}
+
+// An oversized ingestion id is a replay field: the row cannot rebuild the entry, so it must not claim
+// to (the replayed ingestion id would be the cut one).
+func TestDeadLetterOversizedIngestionIDIsNotReplayable(t *testing.T) {
+	message := telemetryMessage(`[{"name":"page_viewed"}]`)
+	message.Fields["ingestion_id"] = strings.Repeat("i", MaxDeadLetterFieldBytes+1)
+	row := DeadLetterFields(message, "invalid_telemetry_event", "t")
+	if row["events_retention"] != RetentionOverBound {
+		t.Fatalf("retention = %q, want over_bound", row["events_retention"])
+	}
+	if _, ok := MessageFromDeadLetter(row); ok {
+		t.Fatal("a row with a cut ingestion id claimed to be replayable")
+	}
+	exact := telemetryMessage(`[{"name":"page_viewed"}]`)
+	exact.Fields["ingestion_id"] = strings.Repeat("i", MaxDeadLetterFieldBytes)
+	replay, ok := MessageFromDeadLetter(DeadLetterFields(exact, "r", "t"))
+	if !ok || replay.Fields["ingestion_id"] != exact.Fields["ingestion_id"] {
+		t.Fatal("an ingestion id exactly at the bound was not replayed whole")
+	}
+}
+
+// A quarantine whose ACK fails after the dead-letter row was written is still counted and logged
+// (the entry is redelivered and written again, so the counter reads rows written).
+func TestRunnerCountsAndLogsAQuarantineWhoseAckFails(t *testing.T) {
+	transport := &fakeTransport{new: []Message{{Stream: telemetryStream, ID: "1-0", Fields: map[string]string{eventsField: `[{}]`}}}}
+	var logs bytes.Buffer
+	config := testConfig()
+	config.Streams = []string{telemetryStream}
+	config.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error {
+		return &PermanentError{Reason: "invalid_telemetry_event"}
+	}), config, health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport.ackErr = errors.New("injected ACK failure")
+	if err := runner.window(context.Background()); err == nil {
+		t.Fatal("a failed ACK of a quarantined message was treated as success")
+	}
+	var metrics bytes.Buffer
+	if err := runner.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metrics.String(), `worker_stream_quarantined_by_reason_total{stream="product-telemetry",reason="invalid_telemetry_event"} 1`) {
+		t.Fatalf("no per-reason count after a quarantine whose ACK failed:\n%s", metrics.String())
+	}
+	if !strings.Contains(logs.String(), "stream message quarantined") {
+		t.Fatalf("no quarantine log line after a quarantine whose ACK failed: %q", logs.String())
+	}
+}
+
+// row_bytes is an upper bound of the row actually written, moved_at included.
+func TestRowBytesCoversTheWrittenRow(t *testing.T) {
+	message := telemetryMessage(`[{"name":"page_viewed"}]`)
+	actual := rowBytes(DeadLetterFields(message, "invalid_telemetry_event", time.Now().UTC().Format(time.RFC3339Nano)))
+	if got := deadLetterRowBytes(message, "invalid_telemetry_event"); got < actual {
+		t.Fatalf("row_bytes %d is below the %d bytes written", got, actual)
 	}
 }

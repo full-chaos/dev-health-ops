@@ -60,8 +60,8 @@ func TestTheProducersCommandRunsInTheClosedEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(root, ".venv", "bin", "python3"); command.Path != want {
-		t.Fatalf("the command runs %s, want the checkout's interpreter %s", command.Path, want)
+	if want := filepath.Join(root, ".venv", "bin", "python3"); command.Path != want || command.Args[0] != want {
+		t.Fatalf("the command runs %s under the name %s, want the checkout's interpreter %s under its full path (a bare name is looked up in the child's PATH, which is the host's)", command.Path, command.Args[0], want)
 	}
 	if got, want := strings.Join(command.Env, "\n"), strings.Join(pyoracle.ClosedEnv(root, "DECLARED_A=1", "DECLARED_B=2", "DATABASE_URI=postgresql://run"), "\n"); got != want {
 		t.Fatalf("the command's environment:\n%s\nwant the one closed form with the declared entries in name order and the call's entries last:\n%s", got, want)

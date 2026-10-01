@@ -100,6 +100,12 @@ func (p *Producer) Command(ctx context.Context, declared map[string]string, extr
 	case command.Path != p.python:
 		return nil, fmt.Errorf("produce: python3 through PATH is now %s, the producer's interpreter is %s: PATH changed after the producer was built, and another interpreter would answer under the same key", command.Path, p.python)
 	}
+	// The interpreter finds its own environment (the checkout's installed
+	// packages) from the name it was started under. The closed environment's
+	// PATH does not hold the interpreter's directory, so a bare "python3"
+	// would be looked up there and found as the host's: the child is started
+	// under its full path.
+	command.Args[0] = p.python
 	command.Env = p.Env(declared, extra...)
 	return command, nil
 }

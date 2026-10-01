@@ -173,6 +173,17 @@ ARTIFACTS = [
     artifact(subject_id="22", sensitive_repo=False, repo_allows_ai=False),
     # 23. UNKNOWN allowlist status is not DISALLOWED: no DISALLOWED_TOOL violation.
     artifact(subject_id="23", tool_allowlist_status=ToolAllowlistStatus.UNKNOWN),
+    # 24/25. Same day-of-month and month as the roll-up day (2026-09-03) in another YEAR, and the
+    #     same day-of-month and year in another MONTH: the roll-up day filter is a whole-date
+    #     comparison (`observed_at.date() != day`), so neither belongs in the 2026-09-03 roll-up.
+    artifact(
+        subject_id="24",
+        observed_at=datetime(2025, 9, 3, 12, 0, 0, tzinfo=timezone.utc),
+    ),
+    artifact(
+        subject_id="25",
+        observed_at=datetime(2026, 8, 3, 12, 0, 0, tzinfo=timezone.utc),
+    ),
 ]
 
 

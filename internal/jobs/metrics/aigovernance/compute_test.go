@@ -32,7 +32,7 @@ func runPythonOracle(t *testing.T) pythonOracleOutput {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := rotguard.Spec("testdata/golden/governance_oracle.json", "c4bbe2b27fee8f25d0e3d12ef14f4d56f8c28d5ca7c0a0aae4a3f9259532a804",
+	spec := rotguard.Spec("testdata/golden/governance_oracle.json", "0fe9461d42c737348aabbc6bb393d209eb3282e388cb2877bb9212f2ba6fec98",
 		"./internal/jobs/metrics/aigovernance/", "^TestGovernanceRowsMatchLivePythonProduction$")
 	answers := programoracle.Run(t, spec, root, []programoracle.Program{
 		programoracle.Script("governance oracle", scriptPath, string(source), nil),
@@ -198,6 +198,8 @@ func fixtureArtifacts() []Artifact {
 		fixtureArtifact(func(a *Artifact) { a.SubjectID = "21"; a.SubjectType = "commit" }),
 		fixtureArtifact(func(a *Artifact) { a.SubjectID = "22"; a.SensitiveRepo = false; a.RepoAllowsAI = false }),
 		fixtureArtifact(func(a *Artifact) { a.SubjectID = "23"; a.ToolAllowlistStatus = AllowlistUnknown }),
+		fixtureArtifact(func(a *Artifact) { a.SubjectID = "24"; a.ObservedAt = time.Date(2025, 9, 3, 12, 0, 0, 0, time.UTC) }),
+		fixtureArtifact(func(a *Artifact) { a.SubjectID = "25"; a.ObservedAt = time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC) }),
 	}
 }
 

@@ -10,7 +10,7 @@
     {
       "name": "governance oracle",
       "method": "PYTHON",
-      "path": "program sha256 6b3afe9bed90c46f83e756928977d317d94cbfaf20a4f01794d9e6e59cbcc627 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "path": "program sha256 90661fad3ddcbea6257331bc37612bfb01ee125b1eb36d99907fb6d88e55cb30 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,

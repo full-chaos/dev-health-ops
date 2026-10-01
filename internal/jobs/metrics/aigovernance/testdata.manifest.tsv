@@ -1,4 +1,4 @@
 # Every file under internal/jobs/metrics/aigovernance/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 -	header	golden/governance_oracle.json
-2b2cf1eca9777f35311c0efd8744b55dfc831772ce9f521d9090fe6d329da3dd	hand-written	python_governance_oracle.py
+3a697d11da1c0f4ee750cbfb9ec3278c7209425d597e7524f575ded79b87d029	hand-written	python_governance_oracle.py

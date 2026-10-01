@@ -166,6 +166,20 @@ print(json.dumps({
 				"does not. First: %U",
 				class.name, len(assignedButExcluded), derived.Unicode, sample)
 		}
+		// The substitution carries its own pin of the runes the interpreter's UCD leaves
+		// unassigned (isPythonUnassigned) and refuses them, so the Go-only residue is
+		// EMPTY for every class. Asserting that, and not only "all Cn", is what pins the
+		// guard: with it removed Go's \d accepts U+11DE0..U+11DE9, which are Cn to Python,
+		// and the Cn-subset check above would still pass.
+		if len(goOnly) != 0 {
+			sample := goOnly
+			if len(sample) > 12 {
+				sample = sample[:12]
+			}
+			t.Errorf("%s: %d rune(s) accepted by the Go substitution and not by live Python (UCD %s), "+
+				"all unassigned there: the unassigned-rune guard no longer refuses them. First: %U",
+				class.name, len(goOnly), derived.Unicode, sample)
+		}
 		t.Logf("%s: go-only residue %d rune(s), all unassigned in UCD %s",
 			class.name, len(goOnly), derived.Unicode)
 	}

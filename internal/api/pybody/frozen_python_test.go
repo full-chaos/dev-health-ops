@@ -22,13 +22,13 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\nemail-validator 2.3
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"body-int.golden.json":                "2677e0cf2418973c993122a559ab9d7d8d91c1e82f1413b69b71a76648ec9468",
-	"date-and-aware-datetime.golden.json": "3977dfd499647556c6429032ca379a6afe28517ae840b6e6c62125396f08ce51",
-	"email-str.golden.json":               "44cf0c6f066b6b0914f74692d8dedf94402f9a920f368f1e9f54e19b828e3a49",
-	"query-bool.golden.json":              "acc669ff07d489be7ef8de414597045c85a2bce7e39ab67abe4cf126afacd760",
-	"query-int.golden.json":               "c3a58d6e35f1ece487f17277d6bca510124ef506869eabdcb3f087294219d926",
-	"query-uuid.golden.json":              "8d11358e3279d13d9c59cc014ec1bad44288cf1de6440410a1b07975b24cfabd",
-	"string.golden.json":                  "82c0f9e7274269ae00e5b10fc61f2add0c931558784829f7005dc26e9ecab8f8",
+	"body-int.golden.json":                "489acb16919046efc3d34cf6d6e70e399749b6f07f4b7aacf4c2ecbbc1328cb8",
+	"date-and-aware-datetime.golden.json": "6d673713bdb9000f2813110cdde7a097b29c918b236e4f41c779d931b111ea7a",
+	"email-str.golden.json":               "a13bbf8c10847e4ea3c3c7f2c25afb0c598f8e65b9b178ed2be2a0dc0cd1dcc0",
+	"query-bool.golden.json":              "93b70d593c839b9a365c0acec7896cf63713a93f29636b64c3819f90bbc1b2fa",
+	"query-int.golden.json":               "b4e201b66d52daf0b5de2cbaa48cf85a61745482cfb0cf1f0fdf17aa06caae9a",
+	"query-uuid.golden.json":              "669a6094edf5df1935465ddc72dcf408a1470374361d3803604c427006783d5f",
+	"string.golden.json":                  "2cd2c73d2906b69773146a545c731f9d72a66538efb6de1a4c90c339c189ee9b",
 }
 
 // goldens is the set of this package's frozen Python answers.

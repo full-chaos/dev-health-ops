@@ -1,0 +1,31 @@
+{
+  "header": {
+    "test": "TestDecodeBodyMatchesFrozenPythonJSONLoads",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/pyjson/ -test '^TestDecodeBodyMatchesFrozenPythonJSONLoads$' -python-root $DIR",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "producer identity",
+      "method": "PYTHON",
+      "path": "program sha256 fddb871377b6d2b359e8aa66f30eddeaa90ee7a69fde325372a0c2f64e1870e9 env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npydantic_core 2.46.5\n"
+    },
+    {
+      "name": "json.loads of bytes",
+      "method": "PYTHON",
+      "path": "program sha256 343e8bcd05381a0d426e3455be60b3014a501c56cfc3e27a5410b73ba252c76c env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "79f2bd55b2b7047f805e027c863786364a54328561fe59298a6b94efa37db200",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "[\"{\\\"a\\\":\\\"\\\\u00e9\\\\ud83d\\\\ude00\\\"}\", \"{\\\"a\\\":\\\"\\\\u00e9\\\\ud83d\\\\ude00\\\"}\", \"{\\\"a\\\":\\\"\\\\u00e9\\\\ud83d\\\\ude00\\\"}\", \"{\\\"a\\\":\\\"\\\\u00e9\\\\ud83d\\\\ude00\\\"}\", \"{\\\"a\\\":\\\"\\\\u00e9\\\\ud83d\\\\ude00\\\"}\", \"{\\\"a\\\":\\\"\\\\u00e9\\\\ud83d\\\\ude00\\\"}\", \"{\\\"a\\\":\\\"\\\\u00e9\\\\ud83d\\\\ude00\\\"}\", \"{\\\"a\\\":\\\"\\\\u00e9\\\\ud83d\\\\ude00\\\"}\", \"Error\", \"\\\"\\\\ud800\\\"\", \"Error\", \"1\", \"1\", \"\\\"\\\\ud800\\\"\", \"Error\"]\n"
+    }
+  ]
+}

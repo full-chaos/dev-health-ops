@@ -22,11 +22,11 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npy
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"decode-body.golden.json":       "861b5ee34e4980f6fbea8e94a862eeafe29dcda6acb2cd27531e92a95ab82ba0",
-	"dumps-default.golden.json":     "fffefe2f7f11729c8164ab1b544a5d1ac2eab7d3abd5e738853a8c5a0fe46d55",
-	"marshal.golden.json":           "9f9630c0d074beec8a1404dfd5cc75db0cc8bd179a84f71fff634a80d8c7cf89",
-	"model.golden.json":             "c41cca829ac0d4d9b61a8f428f7cf977c524bfa4ff0215680e7b14fa1b6ba821",
-	"syntax-error-text.golden.json": "b55e358088bc547a5054d60f5d288476720eba9553e212b9750e78936cb584f9",
+	"decode-body.golden.json":       "137806e607a7c7517e0e02629aae9e1feb32d8a0f823ef79743783836fcbda77",
+	"dumps-default.golden.json":     "63b2147eb205253b4274d2c88fff413923922f2271692a38ae1d0ea3dd480862",
+	"marshal.golden.json":           "57c8fd0a46e9ecc09c8ebc63f335e7db69c27f1b9d9d038d4c40c9fdeea26301",
+	"model.golden.json":             "97e29f3e9a7f163c7801aac4496e9887bdc946daecf90af7ddd4dc6cbbb3f732",
+	"syntax-error-text.golden.json": "3e190ffdc070267ed2f7289c254bb4eca0f923e17f16b54507723f889f6554b1",
 }
 
 // goldens is the set of this package's frozen Python answers.

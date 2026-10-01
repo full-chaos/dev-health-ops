@@ -1,0 +1,9 @@
+# Every file under internal/api/pybody/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/body-int.golden.json
+-	header	golden/date-and-aware-datetime.golden.json
+-	header	golden/email-str.golden.json
+-	header	golden/query-bool.golden.json
+-	header	golden/query-int.golden.json
+-	header	golden/query-uuid.golden.json
+-	header	golden/string.golden.json

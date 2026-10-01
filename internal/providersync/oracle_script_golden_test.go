@@ -125,6 +125,9 @@ func frozenScriptAnswer(t *testing.T, oracle scriptOracle) []byte {
 		})
 	golden.Consumed(t, answers...)
 	output := []byte(oraclePairAnswerText(t, answers[0].Body))
+	if err := scriptPerRunErr(oracle.name, output); err != nil {
+		t.Fatalf("golden %s: %v", name, err)
+	}
 	golden.SkipDiff(t)
 	golden.Finish(t)
 	return output

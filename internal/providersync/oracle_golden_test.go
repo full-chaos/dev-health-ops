@@ -103,8 +103,8 @@ func frozenPairAnswer(t *testing.T, pairID string, encodedCases []byte) []byte {
 	if err := untaggedLeafErr(output); err != nil {
 		t.Fatalf("pair %q: %v", pairID, err)
 	}
-	if err := perRunFieldsErr(pairID, output); err != nil {
-		t.Fatal(err)
+	if err := pairPerRunErr(pairID, output); err != nil {
+		t.Fatalf("golden %s: %v", name, err)
 	}
 	golden.SkipDiff(t)
 	golden.Finish(t)

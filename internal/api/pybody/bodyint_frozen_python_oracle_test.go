@@ -1,17 +1,14 @@
-package pybody
+package pybody_test
 
 import (
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // bodyIntCorpus is JSON text a client can send for an int field.
@@ -44,23 +41,13 @@ for text in json.loads(sys.stdin.read()):
 print(json.dumps(out))
 `
 
-// TestBodyIntMatchesLivePydantic compares the unbounded and bounded body int
+// TestBodyIntMatchesFrozenPydantic compares the unbounded and bounded body int
 // helpers with pydantic 2's lax int on every JSON shape a client can send,
 // including booleans (accepted as 0/1) and integers past the int64 range.
-func TestBodyIntMatchesLivePydantic(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestBodyIntMatchesFrozenPydantic(t *testing.T) {
 	input, _ := json.Marshal(bodyIntCorpus)
-	command := exec.Command(python, "-c", pythonBodyIntProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live pydantic: %v", pyoracle.RunError(python, err, output))
-	}
+	output := frozenPython(t, "body-int.golden.json",
+		programoracle.Program{Name: "body-int", Text: pythonBodyIntProgram, Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []map[string]struct{ OK, Type, Msg, Input string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -69,7 +56,7 @@ func TestBodyIntMatchesLivePydantic(t *testing.T) {
 	if len(want) != len(bodyIntCorpus) {
 		t.Fatalf("python answered %d of %d", len(want), len(bodyIntCorpus))
 	}
-	render := func(value string, ok bool, errs Errors) string {
+	render := func(value string, ok bool, errs pybody.Errors) string {
 		if ok {
 			return "ok:" + value
 		}
@@ -87,19 +74,19 @@ func TestBodyIntMatchesLivePydantic(t *testing.T) {
 		object := pyjson.NewObject()
 		object.Set("v", value)
 
-		var minErrs Errors
+		var minErrs pybody.Errors
 		minValue, minOK := minErrs.DefaultedMinInt(object, "v", 1)
 		minText := ""
 		if minOK {
 			minText = minValue.String()
 		}
-		var laxErrs Errors
+		var laxErrs pybody.Errors
 		laxValue, laxOK := laxErrs.OptionalLaxInt(object, "v")
 		laxText := ""
 		if laxOK {
 			laxText = laxValue.String()
 		}
-		var boundedErrs Errors
+		var boundedErrs pybody.Errors
 		boundedValue, boundedOK := boundedErrs.DefaultedBoundedInt(object, "v", 0, 2)
 		for name, got := range map[string]string{
 			"min":     render(minText, minOK, minErrs),
@@ -115,12 +102,5 @@ func TestBodyIntMatchesLivePydantic(t *testing.T) {
 				t.Errorf("%s %s: go %q, python %q", name, text, got, wantText)
 			}
 		}
-	}
-	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" {
-		if err := os.WriteFile(filepath.Join(proof, "api-pybody-bodyint"), []byte("executed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
 }

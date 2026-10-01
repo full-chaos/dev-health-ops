@@ -1,17 +1,14 @@
-package pybody
+package pybody_test
 
 import (
 	"encoding/json"
 	"math/rand"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // queryIntCorpus is text a client can put in an int query parameter.
@@ -124,21 +121,13 @@ func longQueryInts() []string {
 		"1."+strings.Repeat("0", 5000), "1."+strings.Repeat("0", 5000)+"1", strings.Repeat("1", 10)+"."+strings.Repeat("0", 5000))
 }
 
-func TestQueryIntMatchesLivePydantic(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestQueryIntMatchesFrozenPydantic(t *testing.T) {
 	corpus := append(append(append(append([]string(nil), queryIntCorpus...), fuzzQueryInts()...), exhaustiveQueryInts()...), longQueryInts()...)
 	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonQueryIntProgram)
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live pydantic: %v", pyoracle.RunError(python, err, output))
-	}
+	answers := frozenPython(t, "query-int.golden.json",
+		programoracle.Program{Name: "query-int", Text: pythonQueryIntProgram, Stdin: input},
+		programoracle.Program{Name: "query-int plain", Text: pythonPlainIntProgram, Stdin: input})
+	output := answers[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct{ OK, Type, Msg, Ctx string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -150,7 +139,7 @@ func TestQueryIntMatchesLivePydantic(t *testing.T) {
 	ge, le := int64(1), int64(200)
 	mismatches := 0
 	for index, text := range corpus {
-		var errs Errors
+		var errs pybody.Errors
 		raw := text
 		value, ok := errs.QueryInt("limit", &raw, 50, &ge, &le)
 		got := ""
@@ -175,19 +164,14 @@ func TestQueryIntMatchesLivePydantic(t *testing.T) {
 	}
 	// The exact parsed value, unbounded: a wrong value on the same side of a
 	// bound would pass the bounded comparison above.
-	plain := exec.Command(python, "-c", pythonPlainIntProgram)
-	plain.Stdin = strings.NewReader(string(input))
-	plainOutput, err := plain.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live pydantic (plain int): %v", pyoracle.RunError(python, err, plainOutput))
-	}
+	plainOutput := answers[1]
 	plainLines := strings.Split(strings.TrimSpace(string(plainOutput)), "\n")
 	var plainWant []string
 	if err := json.Unmarshal([]byte(plainLines[len(plainLines)-1]), &plainWant); err != nil || len(plainWant) != len(corpus) {
 		t.Fatalf("decode plain: %v (%d of %d)", err, len(plainWant), len(corpus))
 	}
 	for index, text := range corpus {
-		value, failure := ParsePydanticInt(text)
+		value, failure := pybody.ParsePydanticInt(text)
 		var got string
 		if failure != nil {
 			got = "E:" + failure.Type
@@ -198,13 +182,6 @@ func TestQueryIntMatchesLivePydantic(t *testing.T) {
 			mismatches++
 			t.Errorf("%s: go value %q, python %q", abbreviate(text), got, plainWant[index])
 		}
-	}
-	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" {
-		if err := os.WriteFile(filepath.Join(proof, "api-pybody-queryint"), []byte("executed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
 	t.Logf("%d query ints compared, %d mismatches", len(corpus), mismatches)
 }

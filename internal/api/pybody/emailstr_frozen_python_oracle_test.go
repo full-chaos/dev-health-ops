@@ -1,19 +1,13 @@
-package pybody
+package pybody_test
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // emailStrProgram serves each raw JSON body to a real FastAPI route per
@@ -58,16 +52,10 @@ var emailStrBodies = []string{
 	`{"email": "` + strings.Repeat("a", 2049) + `"}`, `{"email": "a@b.com", "other": 1}`, `[]`, `"a@b.com"`, `null`,
 }
 
-// TestEmailStrMatchesLiveFastAPI compares RequiredEmailStr and
+// TestEmailStrMatchesFrozenFastAPI compares RequiredEmailStr and
 // OptionalEmailStr, rendered as a route renders them, with FastAPI's own
 // 422 body (and the handler's view of the value on success), byte for byte.
-func TestEmailStrMatchesLiveFastAPI(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+func TestEmailStrMatchesFrozenFastAPI(t *testing.T) {
 	type request struct {
 		Path string `json:"path"`
 		Body string `json:"body"`
@@ -79,14 +67,8 @@ func TestEmailStrMatchesLiveFastAPI(t *testing.T) {
 		}
 	}
 	payload, _ := json.Marshal(requests)
-	command := exec.Command(python, "-c", emailStrProgram)
-	command.Stdin = bytes.NewReader(payload)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("live fastapi: %v", pyoracle.RunError(python, err, stderr.Bytes()))
-	}
+	output := frozenPython(t, "email-str.golden.json",
+		programoracle.Program{Name: "email-str", Text: emailStrProgram, Stdin: payload})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct {
 		Status int    `json:"status"`
@@ -97,60 +79,11 @@ func TestEmailStrMatchesLiveFastAPI(t *testing.T) {
 	}
 	for index, req := range requests {
 		body, _ := base64.StdEncoding.DecodeString(req.Body)
-		status, got := serveEmailStr(t, req.Path, body)
+		status, got := pybody.ServeEmailStr(t, req.Path, body)
 		expected, _ := base64.StdEncoding.DecodeString(want[index].Body)
 		if status != want[index].Status || got != string(expected) {
 			t.Errorf("%s %s:\n  go     %d %s\n  python %d %s", req.Path, body, status, got, want[index].Status, expected)
 		}
 	}
 	t.Logf("%d requests compared", len(requests))
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "api-pybody-emailstr"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// serveEmailStr is what a route does with the helpers: 422 with the
-// detail list, else 200 with the value the handler received. A body that
-// cannot be rendered (a lone surrogate) is Starlette's plain 500.
-func serveEmailStr(t *testing.T, path string, body []byte) (int, string) {
-	t.Helper()
-	request := httptest.NewRequest("POST", path, bytes.NewReader(body))
-	request.Header.Set("Content-Type", "application/json")
-	parsed, outcome, decodeErr, err := Read(request)
-	if err != nil || outcome != Ready {
-		t.Fatalf("read %s: outcome=%v err=%v", body, outcome, err)
-	}
-	var errs Errors
-	if decodeErr != nil {
-		errs = append(errs, *decodeErr)
-	}
-	var value pyjson.Value
-	if object, ok := errs.Object(parsed); ok {
-		var email string
-		var present bool
-		if path == "/required" {
-			email, present = errs.RequiredEmailStr(object, "email")
-		} else {
-			email, present = errs.OptionalEmailStr(object, "email")
-		}
-		if present {
-			value = email
-		}
-	}
-	status := 200
-	out := pyjson.NewObject()
-	out.Set("email", value)
-	rendered := pyjson.Value(out)
-	if len(errs) > 0 {
-		status, rendered = 422, Detail(errs)
-	}
-	encoded, err := pyjson.Marshal(rendered)
-	if err != nil {
-		return 500, "Internal Server Error"
-	}
-	return status, string(encoded)
 }

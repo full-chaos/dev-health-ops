@@ -200,7 +200,7 @@ func TestDirectAdapterProjectionsMatchTheFrozenPythonSink(t *testing.T) {
 		t.Run(result.ID, func(t *testing.T) {
 			goColumns := insertColumns(t, testCase.columns)
 			if strings.Join(goColumns, ",") != strings.Join(result.ColumnNames, ",") {
-				t.Fatalf("column list diverges from the live Python sink\npython=%v\ngo    =%v",
+				t.Fatalf("column list diverges from the frozen Python sink\npython=%v\ngo    =%v",
 					result.ColumnNames, goColumns)
 			}
 			if len(result.Rows) != len(testCase.rows) {

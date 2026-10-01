@@ -127,7 +127,7 @@ func TestGitHubPRSNormalizationMatchesFrozenPythonFunctions(t *testing.T) {
 				t.Fatalf("parse oracle resolved_created_at: %v", err)
 			}
 			if !gotResolved.Equal(wantResolved) {
-				t.Fatalf("resolveCreatedAt = %v, oracle (live Python) = %v", gotResolved, wantResolved)
+				t.Fatalf("resolveCreatedAt = %v, oracle (frozen Python) = %v", gotResolved, wantResolved)
 			}
 			if gotResolved.Equal(sentinelNow) {
 				t.Fatalf("resolveCreatedAt fell through to the now() branch; "+
@@ -166,7 +166,7 @@ func TestGitHubPRSNormalizationMatchesFrozenPythonFunctions(t *testing.T) {
 
 // assertOracleTimePointerMatchesInput compares an oracle-decoded,
 // ISO8601-string-or-null field against the *time.Time (possibly nil) that
-// was fed into the live Python call for the same case.
+// was fed into the Python call that was recorded for the same case.
 func assertOracleTimePointerMatchesInput(
 	t *testing.T,
 	caseID, field string,

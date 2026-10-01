@@ -123,7 +123,7 @@ func TestGitHubWorkItemRequestPlansCoverEveryAliasAndPRPressure(t *testing.T) {
 	}
 }
 
-// expectedGoPlan is the live Python oracle's own estimates, widened with
+// expectedGoPlan is the frozen Python oracle's own estimates, widened with
 // every DOCUMENTED, computed Go-only delta -- a named mechanism and
 // direction, never a blanket allowance. Every dataset not named here
 // stays exact-equal to Python: a new, unnamed delta on ANY other

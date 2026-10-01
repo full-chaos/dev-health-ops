@@ -63,6 +63,6 @@ func oracleDeploymentCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForDeploymentsRowConstruction(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForDeploymentsRowConstruction(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "github/deployments/row", oracleDeploymentCases(), buildDeploymentRowForOracle, oracleDeploymentsGoOnlyFields)
 }

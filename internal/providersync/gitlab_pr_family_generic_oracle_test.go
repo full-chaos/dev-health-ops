@@ -168,7 +168,7 @@ func buildGitLabPullRequestReviewForOracle(t *testing.T, input map[string]any) p
 	return reviews[index]
 }
 
-func TestGitLabPullRequestRowsMatchLivePythonAcrossAllAliases(t *testing.T) {
+func TestGitLabPullRequestRowsMatchFrozenPythonAcrossAllAliases(t *testing.T) {
 	rowCases := oracleGitLabPullRequestCases()[:2]
 	for _, pairID := range []string{"gitlab/prs/row", "gitlab/pr-comments/row"} {
 		t.Run(pairID, func(t *testing.T) {
@@ -177,7 +177,7 @@ func TestGitLabPullRequestRowsMatchLivePythonAcrossAllAliases(t *testing.T) {
 	}
 }
 
-func TestGitLabPullRequestReviewRowsMatchLivePython(t *testing.T) {
+func TestGitLabPullRequestReviewRowsMatchFrozenPython(t *testing.T) {
 	cases := oracleGitLabPullRequestCases()
 	for index := range cases {
 		cases[index].Input["review_index"] = 0

@@ -292,6 +292,17 @@ func startGoMutationServer(t *testing.T, ctx context.Context, venue *venueoracle
 			t.Fatalf("grant %s: %v", table.TableName, err)
 		}
 	}
+	// The column-scoped half of the same manifest (the identity tables the
+	// edge-token carrier reads): each named column, nothing table-wide. Both
+	// halves come from the manifest itself, so this role is granted what the
+	// migration grants the deployed role, and the posture check below fails
+	// on any class of grant the manifest gains that this function does not
+	// give.
+	for _, column := range postgresstore.QueryAPIPosture().ColumnScoped {
+		if _, err := admin.Exec(ctx, "GRANT "+column.Privilege+" ("+column.ColumnName+") ON public."+column.TableName+" TO "+role); err != nil {
+			t.Fatalf("grant %s.%s: %v", column.TableName, column.ColumnName, err)
+		}
+	}
 	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
 
 	pool, err := pgxpool.New(ctx, withRole(t, venue.AdminURI(t, venue.GoDB), role, password))

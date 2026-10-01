@@ -68,7 +68,7 @@ func oraclePagerDutyUserCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForPagerDutyUserRow(t *testing.T) {
+func TestGenericOracleMatchesFrozenPythonForPagerDutyUserRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t, "pagerduty/users/row", oraclePagerDutyUserCases(),
 		buildPagerDutyUserRowForOracle, nil,

@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestGitHubPullRequestWorkItemMatchesLivePythonProductionRow(t *testing.T) {
+func TestGitHubPullRequestWorkItemMatchesFrozenPythonProductionRow(t *testing.T) {
 	compareRowsAgainstPythonOracle(
 		t,
 		"github/work-items/pr",
@@ -33,7 +33,7 @@ func TestGitHubPullRequestWorkItemMatchesLivePythonProductionRow(t *testing.T) {
 	)
 }
 
-func TestGitHubWorkItemStatusTransitionMatchesLivePythonProductionRow(t *testing.T) {
+func TestGitHubWorkItemStatusTransitionMatchesFrozenPythonProductionRow(t *testing.T) {
 	events := []any{
 		map[string]any{"event": "reopened", "created_at": "2026-08-02T09:00:00Z"},
 		map[string]any{"event": "merged", "created_at": "2026-08-03T09:29:00Z"},
@@ -72,7 +72,7 @@ func TestGitHubWorkItemStatusTransitionMatchesLivePythonProductionRow(t *testing
 	)
 }
 
-func TestGitHubWorkItemReopenMatchesLivePythonProductionRow(t *testing.T) {
+func TestGitHubWorkItemReopenMatchesFrozenPythonProductionRow(t *testing.T) {
 	input := githubIssueSemanticOracleInput(
 		map[string]any{
 			"number": 42, "title": "Repair delivery path", "state": "open",
@@ -95,7 +95,7 @@ func TestGitHubWorkItemReopenMatchesLivePythonProductionRow(t *testing.T) {
 	)
 }
 
-func TestGitHubWorkItemInteractionMatchesLivePythonProductionRow(t *testing.T) {
+func TestGitHubWorkItemInteractionMatchesFrozenPythonProductionRow(t *testing.T) {
 	comment := map[string]any{
 		"id": 99, "body": "Looks good 👋",
 		"created_at": "2026-08-03T08:30:00Z",
@@ -120,7 +120,7 @@ func TestGitHubWorkItemInteractionMatchesLivePythonProductionRow(t *testing.T) {
 	)
 }
 
-func TestGitHubWorkItemDependencyMatchesLivePythonProductionRows(t *testing.T) {
+func TestGitHubWorkItemDependencyMatchesFrozenPythonProductionRows(t *testing.T) {
 	bodyInput := githubIssueSemanticOracleInput(
 		map[string]any{
 			"number": 42, "title": "Repair delivery path",
@@ -161,7 +161,7 @@ func TestGitHubWorkItemDependencyMatchesLivePythonProductionRows(t *testing.T) {
 	)
 }
 
-func TestGitHubAIAttributionMatchesLivePythonProductionRows(t *testing.T) {
+func TestGitHubAIAttributionMatchesFrozenPythonProductionRows(t *testing.T) {
 	base := map[string]any{
 		"number": 17, "title": "Repair delivery path", "body": "Routine repair",
 		"state": "open", "created_at": "2026-08-01T08:00:00Z",

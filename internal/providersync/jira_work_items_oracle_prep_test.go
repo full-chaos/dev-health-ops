@@ -44,7 +44,7 @@ type jiraWorkItemOraclePrepRow struct {
 	OrgID         string     `json:"org_id"`
 }
 
-func TestJiraWorkItemMatchesLivePythonProductionRow(t *testing.T) {
+func TestJiraWorkItemMatchesFrozenPythonProductionRow(t *testing.T) {
 	// CHAOS-5329/CHAOS-3092: jira_issue_to_work_item (Python) is deleted --
 	// providersync's normalizeJiraWorkItem owns this row now. Frozen, see
 	// testdata/oracle_frozen/README.md.

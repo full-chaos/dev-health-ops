@@ -39,24 +39,20 @@ type clickHouse struct {
 }
 
 // startClickHouse migrates a container to the head under the given operational
-// ordering contract: "" is the default (the legacy table shape), "2" the shape
-// with the ordering columns.
+// ordering contract: "" is the legacy table shape (contract 1), "2" the shape
+// with the ordering columns (production's head).
 func startClickHouse(t *testing.T, contract string) clickHouse {
 	t.Helper()
-	if contract != "" {
-		t.Setenv(ContractEnv, contract)
-	}
 	ctx := context.Background()
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
 		t.Fatalf("start clickhouse: %v", err)
 	}
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
-	chschema.Apply(ctx, t, instance)
-	if contract != "" {
-		// The environment selected the shape while the chain ran; the run under
-		// test chooses its own.
-		os.Unsetenv(ContractEnv)
+	if contract == "2" {
+		chschema.Apply(ctx, t, instance)
+	} else {
+		chschema.ApplyOrderingContract1(ctx, t, instance)
 	}
 	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
 	if err != nil {

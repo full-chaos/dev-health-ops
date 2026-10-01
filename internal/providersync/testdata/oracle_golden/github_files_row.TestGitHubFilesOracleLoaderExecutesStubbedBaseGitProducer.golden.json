@@ -1,0 +1,20 @@
+{
+  "header": {
+    "test": "TestGitHubFilesOracleLoaderExecutesStubbedBaseGitProducer",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "pair github/files/row: git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGitHubFilesOracleLoaderExecutesStubbedBaseGitProducer$' -python-root $DIR"
+  },
+  "requests": [
+    {
+      "name": "github/files/row",
+      "method": "PYTHON",
+      "path": "program sha256 5a6c83b51c7c88108f903fe1868b454d6ff5c2a63f72819df67f67907bcc7bc5 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "42f9b29850d75c69945b027176a28d94edc6d87d9389c4188748d5e7beacc974",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": null,
+      "body": "{\"cases\": [{\"id\": \"stubbed_base_git\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"path\": {\"t\": \"str\", \"v\": \"src/main.go\"}, \"executable\": {\"t\": \"bool\", \"v\": \"false\"}, \"contents\": {\"t\": \"str\", \"v\": \"package main\\n\"}}}], \"excluded_fields\": {\"last_synced\": \"stamped by ClickHouseStore.insert_git_file_data, not backfill_file_records\"}}\n"
+    }
+  ]
+}

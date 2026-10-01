@@ -5,6 +5,7 @@ package workerservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -351,29 +352,84 @@ func TestExecutionLivenessIgnoresATransientIdempotencyFailureThatRecovers(t *tes
 	// long-standing backlog arm (not this change) reads it red: that is a separate
 	// finding, not this control's question, which is a single Begin blip.
 	f := newBackoffFixture(t, 1, 15*time.Second)
+	// The retry wait is held by the database, not by the clock: a trigger pushes
+	// scheduled_at an hour out whenever River parks the row as retryable, so the
+	// gap lasts until this test releases it and no poll timing can miss it.
+	for _, statement := range []string{
+		`CREATE FUNCTION river.hold_retry() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.state = 'retryable' THEN NEW.scheduled_at := now() + interval '1 hour'; END IF; RETURN NEW; END $$`,
+		`CREATE TRIGGER hold_retry BEFORE UPDATE ON river.river_job FOR EACH ROW EXECUTE FUNCTION river.hold_retry()`,
+	} {
+		if _, err := f.pool.Exec(context.Background(), statement); err != nil {
+			t.Fatalf("install the retry hold: %v", err)
+		}
+	}
+	// The hold also goes away when the test fails before the release step.
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS hold_retry ON river.river_job`)
+	})
 	// The claim clock was seeded when the fixture was built, before the container
 	// and River client finished starting. Age it from the moment the job exists.
 	f.claim.recordClaim("retention", time.Now())
 	id := f.insert(t)
-	deadline := time.Now().Add(45 * time.Second)
-	var sawRetryable bool
+	started := time.Now()
+	deadline := started.Add(45 * time.Second)
+	// timeline records every observed transition so a failure names the missing
+	// signal (which state was never seen, and when) instead of "wrong state".
+	var timeline []string
+	var last string
+	observe := func(state string, attempt int) {
+		if key := fmt.Sprintf("%s/%d", state, attempt); key != last {
+			last = key
+			timeline = append(timeline, fmt.Sprintf("+%s %s", time.Since(started).Round(time.Millisecond), key))
+		}
+	}
+	// Phase 1: wait for River to park the failed attempt as retryable. The hold
+	// keeps it there, so this wait ends on the state, not on a timing window.
 	for {
 		state, attempt := f.jobState(t, id)
+		observe(state, attempt)
 		if state == "retryable" {
-			sawRetryable = true
+			// The (state, liveness) pair: row read and readiness answered in the
+			// same step, inside the backoff gap.
+			if err := f.ready(context.Background()); err != nil {
+				t.Fatalf("a single transient Begin failure turned readiness red in the retry wait (attempt=%d): %v timeline=%v", attempt, err, timeline)
+			}
+			break
 		}
+		if state == "completed" || time.Now().After(deadline) {
+			t.Fatalf("the job never parked as retryable (state=%s attempt=%d) timeline=%v", state, attempt, timeline)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// Phase 2: release the retry and require readiness to stay green to completion.
+	if _, err := f.pool.Exec(context.Background(), `DROP TRIGGER hold_retry ON river.river_job`); err != nil {
+		t.Fatalf("remove the retry hold: %v", err)
+	}
+	if _, err := f.pool.Exec(context.Background(), `UPDATE river.river_job SET scheduled_at = now() WHERE id = $1`, id); err != nil {
+		t.Fatalf("release the retry: %v", err)
+	}
+	for {
+		state, attempt := f.jobState(t, id)
+		observe(state, attempt)
 		if err := f.ready(context.Background()); err != nil {
-			t.Fatalf("a single transient Begin failure turned readiness red (state=%s attempt=%d): %v", state, attempt, err)
+			t.Fatalf("a single transient Begin failure turned readiness red (state=%s attempt=%d): %v timeline=%v", state, attempt, err, timeline)
 		}
 		if state == "completed" {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the job never completed (state=%s attempt=%d)", state, attempt)
+			t.Fatalf("the job never completed after the retry was released (state=%s attempt=%d) timeline=%v", state, attempt, timeline)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if !sawRetryable {
-		t.Fatal("the transient failure never parked the job as retryable: the control ran the wrong state")
+	// Durable mechanism evidence: River recorded exactly one failed attempt and the
+	// retry then ran to completion.
+	var attempt, errorCount int
+	if err := f.pool.QueryRow(context.Background(),
+		`SELECT attempt, COALESCE(cardinality(errors), 0) FROM river.river_job WHERE id = $1`, id).Scan(&attempt, &errorCount); err != nil {
+		t.Fatal(err)
+	}
+	if attempt != 2 || errorCount != 1 {
+		t.Fatalf("the transient Begin failure was not recorded as exactly one failed attempt (attempt=%d errors=%d) timeline=%v", attempt, errorCount, timeline)
 	}
 }

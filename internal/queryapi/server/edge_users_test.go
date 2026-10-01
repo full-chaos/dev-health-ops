@@ -33,8 +33,8 @@ func (f *fakeEdgeUsers) UserState(context.Context, uuid.UUID) (policy.UserState,
 	return f.state, f.found, f.err
 }
 
-func (f *fakeEdgeUsers) IsMember(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
-	return false, errors.New("IsMember must not be read")
+func (f *fakeEdgeUsers) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
+	return "", false, errors.New("Membership must not be read")
 }
 
 func (f *fakeEdgeUsers) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impersonation, error) {

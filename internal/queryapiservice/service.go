@@ -65,10 +65,9 @@ func configure(
 	registry *health.Registry,
 	logger *slog.Logger,
 ) ([]lifecycle.Component, error) {
-	plane, err := server.Build(func(name string) string {
-		value, _ := cfg.Setting(name)
-		return value
-	})
+	// cfg.Setting tells an absent setting from an empty one, which
+	// CORS_ALLOWED_ORIGINS needs (see server.BuildWithLookup).
+	plane, err := server.BuildWithLookup(cfg.Setting)
 	if err != nil {
 		// The error names a route and its configuration, never a secret, but the
 		// shell's rule is that a dependency error is not assumed free of DSNs:

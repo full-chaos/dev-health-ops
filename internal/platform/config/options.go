@@ -226,8 +226,8 @@ var coreOptions = []Option{
 	},
 	{
 		Flag: "cors-allowed-origins", Env: "CORS_ALLOWED_ORIGINS", Kind: KindString,
-		Default: defaultCORSAllowedOrigins, Services: []string{APIServiceName}, Group: GroupRuntime,
-		Usage: "comma-separated CORS allow-list for the api (same format as the Python api)",
+		Default: defaultCORSAllowedOrigins, Services: []string{APIServiceName, QueryAPIServiceName}, Group: GroupRuntime,
+		Usage: "comma-separated CORS allow-list for the api and query-api's /graphql (same format as the Python api)",
 	},
 	{
 		Flag: "pagerduty-oauth-redirect-uri", Env: "PAGER_DUTY_REDIRECT_URI", Kind: KindString, Services: []string{APIServiceName}, Group: GroupRuntime,

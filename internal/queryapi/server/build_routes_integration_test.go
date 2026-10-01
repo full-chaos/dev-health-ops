@@ -54,6 +54,7 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 		"GO_API_ENVELOPE_AUDIENCE":     itTestAudience,
 		"DEV_HEALTH_ENV":               "ci",
 		"GO_API_PROOF_ROUTE_ENABLED":   "true",
+		edgeJWTSecretEnvVar:            "build-routes-edge-secret-32-bytes-long!!",
 	}
 	// Every route switch the source names, on.
 	for _, name := range switchNames(t) {
@@ -108,6 +109,11 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 	}
 	if probe(plane.InternalHandler, http.MethodPost, "/query/proof-write") == http.StatusNotFound {
 		t.Errorf("POST /query/proof-write on the INTERNAL handler answered 404: the route is not mounted there")
+	}
+	// /graphql, the product path, is on the public route set: an empty,
+	// credential-less POST is the edge's 401, never the mux's 404.
+	if got := probe(plane.Handler, http.MethodPost, graphQLEdgePath); got != http.StatusUnauthorized {
+		t.Errorf("POST %s on the PUBLIC handler answered %d, want 401 (mounted, refusing the missing credential)", graphQLEdgePath, got)
 	}
 }
 

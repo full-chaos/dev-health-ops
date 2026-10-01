@@ -1,6 +1,8 @@
-package apiservice
+package pyheaders
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 	"slices"
 	"sort"
@@ -151,7 +153,8 @@ func (c *CORS) preflight(w http.ResponseWriter, r *http.Request, origin string) 
 	header.Set("Content-Type", "text/plain; charset=utf-8")
 	header.Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
-	writeFixedBody(w, []byte(body))
+	// A fixed text, copied as bytes: nothing in it comes from the request.
+	_, _ = io.Copy(w, bytes.NewReader([]byte(body)))
 }
 
 // applySimple mirrors CORSMiddleware.send for http.response.start: the

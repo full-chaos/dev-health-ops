@@ -39,6 +39,7 @@ type fakeEdgeStore struct {
 	states       map[uuid.UUID]policy.UserState
 	found        map[uuid.UUID]bool
 	members      map[[2]uuid.UUID]bool
+	roles        map[[2]uuid.UUID]string
 	sessions     map[uuid.UUID]*policy.Impersonation
 	errUserState error
 	errIsMember  error
@@ -52,11 +53,21 @@ func (f *fakeEdgeStore) UserState(_ context.Context, id uuid.UUID) (policy.UserS
 	return f.states[id], f.found[id], nil
 }
 
-func (f *fakeEdgeStore) IsMember(_ context.Context, userID, orgID uuid.UUID) (bool, error) {
+// Membership answers the row's existence from members and its role from
+// roles (a member with no roles entry holds "admin", the role every token in
+// these tests states for its own org).
+func (f *fakeEdgeStore) Membership(_ context.Context, userID, orgID uuid.UUID) (string, bool, error) {
 	if f.errIsMember != nil {
-		return false, f.errIsMember
+		return "", false, f.errIsMember
 	}
-	return f.members[[2]uuid.UUID{userID, orgID}], nil
+	key := [2]uuid.UUID{userID, orgID}
+	if !f.members[key] {
+		return "", false, nil
+	}
+	if role, ok := f.roles[key]; ok {
+		return role, true, nil
+	}
+	return "admin", true, nil
 }
 
 func (f *fakeEdgeStore) ActiveImpersonation(_ context.Context, adminID uuid.UUID) (*policy.Impersonation, error) {
@@ -261,7 +272,7 @@ func TestEdgeCarrier_ImpersonatingSuperuserSetsImpersonationActive(t *testing.T)
 	store := &fakeEdgeStore{
 		states:   map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
 		found:    map[uuid.UUID]bool{ecUser: true},
-		sessions: map[uuid.UUID]*policy.Impersonation{ecUser: {TargetUserID: ecTarget, TargetOrgID: ecOrg}},
+		sessions: map[uuid.UUID]*policy.Impersonation{ecUser: {TargetUserID: ecTarget, TargetOrgID: ecOrg, TargetRole: "viewer"}},
 	}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
@@ -280,6 +291,32 @@ func TestEdgeCarrier_ImpersonatingSuperuserSetsImpersonationActive(t *testing.T)
 	}
 	if got.OrgID != ecOrg.String() {
 		t.Fatalf("OrgID = %q, want the impersonation session's target org %q (never the token's own org_id claim while impersonating)", got.OrgID, ecOrg.String())
+	}
+	if got.Role != "viewer" {
+		t.Fatalf("Role = %q, want the impersonation session's target role %q (the effective principal is the target's, as the Python edge stated it)", got.Role, "viewer")
+	}
+}
+
+// TestEdgeCarrier_SessionOfAUserTheRowSaysIsNotASuperuserIsIgnored: only a
+// caller the live users row confirms is a superuser can be impersonating, so
+// a session row left behind for a caller whose superuser flag was cleared
+// (even one whose token still claims it) changes nothing: the caller is
+// served as themself, a member of their own org.
+func TestEdgeCarrier_SessionOfAUserTheRowSaysIsNotASuperuserIsIgnored(t *testing.T) {
+	store := &fakeEdgeStore{
+		states:   map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: false, TokenVersion: 5}},
+		found:    map[uuid.UUID]bool{ecUser: true},
+		members:  map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
+		sessions: map[uuid.UUID]*policy.Impersonation{ecUser: {TargetUserID: ecTarget, TargetOrgID: uuid.MustParse("44444444-4444-4444-4444-444444444444"), TargetRole: "viewer"}},
+	}
+	auth := ecEdgeAuth(t, store)
+	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", isSuperuser: true, tokenVersion: 5})
+
+	rec := ecPost(handler, token)
+	want := authctx.Claims{OrgID: ecOrg.String(), Role: "admin"}
+	if rec.Code != http.StatusOK || len(*seen) != 1 || (*seen)[0] != want {
+		t.Fatalf("got %d claims=%v, want 200 and exactly %+v", rec.Code, *seen, want)
 	}
 }
 

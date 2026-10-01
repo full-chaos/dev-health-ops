@@ -41,6 +41,7 @@ func TestQueryAPIPostureIsPinned(t *testing.T) {
 		{"users", "email", "SELECT"},
 		{"memberships", "user_id", "SELECT"},
 		{"memberships", "org_id", "SELECT"},
+		{"memberships", "role", "SELECT"},
 		{"impersonation_sessions", "id", "SELECT"},
 		{"impersonation_sessions", "admin_user_id", "SELECT"},
 		{"impersonation_sessions", "target_user_id", "SELECT"},

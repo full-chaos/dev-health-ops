@@ -13,13 +13,14 @@ func TestScrubRunValuesBlanksGeneratedIDsAndRunTimesOnly(t *testing.T) {
 	scrub := ScrubRunValues(floor, ceiling, seededV4)
 	seeded := StableUUID("seed-1")
 	random := "3f2a9c10-7b1e-4c55-9d02-1a2b3c4d5e6f"
+	timeOrdered := "0192f3a4-5b6c-7d8e-8f90-a1b2c3d4e5f6"
 	in := strings.Join([]string{
-		"id=" + seeded, "id=" + random, "id=" + seededV4, "id=" + strings.ToUpper(seededV4),
+		"id=" + seeded, "id=" + random, "id=" + timeOrdered, "id=" + seededV4, "id=" + strings.ToUpper(seededV4),
 		"run=2026-10-01T12:00:00.123456Z", "run=2026-10-01 12:00:00.5+00", "run=2026-10-01 12:00:00+00:00", "run=2026-10-01T12:00:00",
 		"seeded=2026-08-01T00:00:00Z", "request=2031-01-01T00:00:00.5+05:30", "notatime=2026-13-45T99:99:99",
 	}, "\n")
 	want := strings.Join([]string{
-		"id=" + seeded, "id=<id>", "id=" + seededV4, "id=" + strings.ToUpper(seededV4),
+		"id=" + seeded, "id=<id>", "id=<id>", "id=" + seededV4, "id=" + strings.ToUpper(seededV4),
 		"run=<now>", "run=<now>", "run=<now>", "run=<now>",
 		"seeded=2026-08-01T00:00:00Z", "request=2031-01-01T00:00:00.5+05:30", "notatime=2026-13-45T99:99:99",
 	}, "\n")

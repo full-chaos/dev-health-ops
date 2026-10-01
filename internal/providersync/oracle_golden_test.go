@@ -91,7 +91,7 @@ func frozenPairAnswer(t *testing.T, pairID string, encodedCases []byte) []byte {
 	keyed, passed := oraclePairEnvironment(t, pairID)
 	request := venueoracle.ProgramRequest(pairID, manifest, encodedCases, keyed)
 	answers := golden.Produce(t, root, []venueoracle.Request{request},
-		func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 			output := runPinnedPairOracle(t, root, manifest, pairID, encodedCases, passed)
 			if len(output) > oraclePairPackAbove {
 				return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}

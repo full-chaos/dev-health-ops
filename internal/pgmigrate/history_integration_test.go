@@ -100,7 +100,7 @@ func TestHistoryMatchesTheFrozenAlembicOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("history scenarios", pythonCLIProgram, input, historyPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		produced := historyGoldenFile{History: map[string]string{}}
 		for _, scenario := range historyScenarios {
 			code, text := pythonMigrate(t, root, historyPythonSettings, scenario.env, "", "history")

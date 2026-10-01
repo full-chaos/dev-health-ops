@@ -347,7 +347,8 @@ func TestValidateFlagsAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("validate-flags scenarios", validateFlagsPatchedProgram, input, validateFlagsPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		root := producer.Root
 		ch := startClickHouse(t)
 		seed(t, ch)
 		var produced validateFlagsAnswers

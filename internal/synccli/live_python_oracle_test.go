@@ -280,7 +280,8 @@ func TestSyncTargetMatchesFrozenPython(t *testing.T) {
 	// The key names the corpus by its digest (the corpus holds test environment credentials, which a golden
 	// does not store); a changed corpus is another request.
 	request := venueoracle.ProgramRequest("sync target corpus", syncTargetOracleProgram, []byte("corpus sha256 "+hex.EncodeToString(keySum[:])), syncTargetPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		root := producer.Root
 		python := pyoracle.Resolve(t, root)
 		keyFile := filepath.Join(t.TempDir(), "app-key.pem")
 		if err := os.WriteFile(keyFile, []byte("-----BEGIN KEY-----\n"), 0o600); err != nil {

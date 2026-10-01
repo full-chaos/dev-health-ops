@@ -279,7 +279,8 @@ func TestDBLookupsMatchFrozenPython(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := venueoracle.ProgramRequest("db lookup scenarios", dbLookupOracleProgram, keyBytes, dbLookupPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		root := producer.Root
 		produced := produceDBLookupAnswers(ctx, t, root, scenarios)
 		body, err := json.Marshal(produced)
 		if err != nil {

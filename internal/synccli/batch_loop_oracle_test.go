@@ -186,7 +186,8 @@ func TestBatchLoopMatchesFrozenPython(t *testing.T) {
 		input.WriteByte('\n')
 	}
 	request := venueoracle.ProgramRequest("batch loop corpus", batchLoopOracleProgram, []byte(input.String()), batchLoopPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(root string, _ []venueoracle.Request) []venueoracle.Response {
+	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
+		root := producer.Root
 		python := pyoracle.Resolve(t, root)
 		command := exec.Command(python, "-c", batchLoopOracleProgram)
 		command.Stdin = strings.NewReader(input.String())

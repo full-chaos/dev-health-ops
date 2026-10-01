@@ -81,7 +81,10 @@ var interpreterPythonEnv = []string{"PYTHONHASHSEED=0", "PYTHONDONTWRITEBYTECODE
 func testSetEnv() []string { return testSetSince(processEnvAtInit, os.Environ()) }
 
 func testSetSince(before map[string]string, now []string) []string {
-	inherited := map[string]bool{}
+	// The names that are never handed on as the test's: the inherited ones
+	// (the venue fixes their values itself) and the producer guard's poison,
+	// which the harness sets in the process while a producer runs.
+	inherited := map[string]bool{producerPoisonName: true}
 	for _, name := range inheritedPythonEnv {
 		inherited[name] = true
 	}

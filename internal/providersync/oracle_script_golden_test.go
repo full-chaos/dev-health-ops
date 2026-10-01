@@ -116,7 +116,7 @@ func frozenScriptAnswer(t *testing.T, oracle scriptOracle) []byte {
 	keyed, passed := oraclePairEnvironment(t, oracle.name)
 	request := venueoracle.ProgramRequest(oracle.name, program, oracle.input, keyed)
 	answers := golden.Produce(t, root, []venueoracle.Request{request},
-		func(root string, _ []venueoracle.Request) []venueoracle.Response {
+		func(_ *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 			output := runPinnedScriptOracle(t, root, harness, oracle, passed)
 			if len(output) > oraclePairPackAbove {
 				return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}

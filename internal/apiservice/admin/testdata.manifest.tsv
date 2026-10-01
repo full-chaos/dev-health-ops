@@ -1,20 +1,21 @@
 # Every file under internal/apiservice/admin/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	governance/credentialdelete.json
--	header	governance/governance.json
--	header	governance/llmsettings_keyed.json
--	header	governance/llmsettings_nokey.json
--	header	governance/retention.json
--	header	governance/settings_keyed.json
--	header	governance/settings_nokey.json
+# header-before-stamp set: c3d34e59f6eca4adf409d5dc646b19677cd267b9e5e36948996656eb543675b1 (17 files)
+a3ca62cf86105653b606b6e6f310a6f5ebad5087c687c55069627e290f7e3c7f	header-before-stamp	governance/credentialdelete.json
+686d3bae4e71ab6b655b2d57dc647f86b8d907bfef485292a0a7dc151b0ecbcf	header-before-stamp	governance/governance.json
+8406fe1dbdd8b3bc7556426178e4dc7c43f7eab33f1a454c07ef3256d646f140	header-before-stamp	governance/llmsettings_keyed.json
+d8df8c6f79575fcbc32c2295909dbe40e575935233acd667634f6c585f9f4d2d	header-before-stamp	governance/llmsettings_nokey.json
+de6a34074ae06da8e8b928e79191d38d1a1b90831981fa7ada074a481780ba3d	header-before-stamp	governance/retention.json
+ac548730e699f7105fade5a7e11cc8afccea56d761bd48b37304255ad810bd5e	header-before-stamp	governance/settings_keyed.json
+3a998e6f57e3d134a8085c00c7895f88570b3bb9767b03a9cd29eea0d56a725a	header-before-stamp	governance/settings_nokey.json
 905e28cee1f2795abf68734185de52ce42b61da85202d64dc497f7cbf662f770	unclassified	llmreadinessoracle/certify_oracle.py
--	header	pagerduty/authorize_full.json
--	header	pagerduty/authorize_noclientid.json
--	header	pagerduty/authorize_nokey.json
--	header	pagerduty/bindings.json
--	header	pagerduty/callback.json
--	header	pagerduty/disconnect.json
--	header	pagerduty/disconnect_noclient.json
--	header	pagerduty/services_full.json
--	header	pagerduty/services_noapp.json
--	header	pagerduty/status_preflight.json
+e6661cf8d7a7777c81b8291758b2bf7c578db83c83427ac0a5aaa66b71984018	header-before-stamp	pagerduty/authorize_full.json
+bb86324d617e55aa1280989f9b5dfb9629399c9244788d3f30430806f2f3983f	header-before-stamp	pagerduty/authorize_noclientid.json
+0f0bc9e37a62e06533420f939128bd0984c993e03c23ed357df0eeaae911672e	header-before-stamp	pagerduty/authorize_nokey.json
+f37e54df955700a2096f721b60935f87e8967c753a783a83221f42a60e041dac	header-before-stamp	pagerduty/bindings.json
+4abac9d40a4a717bc3dbef25ec0c2548b83dd6b5338fb1b91d6efeb07e034c45	header-before-stamp	pagerduty/callback.json
+fde105bee2dd3c2db34a0aee1d6a6eb95116a6a76b53ed9c5de6cdb39844dc2d	header-before-stamp	pagerduty/disconnect.json
+0f0082dda881b4fe43e504ede265ca8a4337559bb0272610f424e25e839683ae	header-before-stamp	pagerduty/disconnect_noclient.json
+48ca8e096ae3c5ca4d01ed55625ea925f086cb10925bf1212a11a388b522e84b	header-before-stamp	pagerduty/services_full.json
+9b5dd2956a82585962b42963d6960ed46daeffe603b3a36d78f15a6026e4f0eb	header-before-stamp	pagerduty/services_noapp.json
+330564a0e051de2fcfce96251f9f048e5a4ccc26bce120fcdabefc9c8ba86858	header-before-stamp	pagerduty/status_preflight.json

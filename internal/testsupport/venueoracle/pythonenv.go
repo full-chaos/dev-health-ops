@@ -81,7 +81,10 @@ var interpreterPythonEnv = []string{"PYTHONHASHSEED=0", "PYTHONDONTWRITEBYTECODE
 func testSetEnv() []string { return testSetSince(processEnvAtInit, os.Environ()) }
 
 func testSetSince(before map[string]string, now []string) []string {
-	inherited := map[string]bool{}
+	// The names that are never handed on as the test's: the inherited ones
+	// (the venue fixes their values itself) and the producer guard's poison,
+	// which the harness sets in the process while a producer runs.
+	inherited := map[string]bool{producerPoisonName: true}
 	for _, name := range inheritedPythonEnv {
 		inherited[name] = true
 	}
@@ -174,6 +177,7 @@ var perRunPythonEnv = map[string]perRunName{
 	"REDIS_URL":      {false, "the address of the run's own cache"},
 	"TMPDIR":         {false, "inherited: the host's directory for temporary files"},
 
+	"GITHUB_APP_PRIVATE_KEY":              {true, "a private key generated for the run (the GitHub App venue signs with a new RSA key every run)"},
 	"REQUESTS_CA_BUNDLE":                  {true, "a temporary certificate file of the test's fake TLS server"},
 	"TELEMETRY_ENDPOINT":                  {true, "the address of the test's fake telemetry endpoint"},
 	"VENUE_PAGERDUTY_API_BASE_OVERRIDE":   {true, "the address of the test's fake PagerDuty server"},

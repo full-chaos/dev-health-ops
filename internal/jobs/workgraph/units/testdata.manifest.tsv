@@ -1,0 +1,10 @@
+# Every file under internal/jobs/workgraph/units/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: 5567bf0bedb21bd82ebe1b659cba61ce37f3a4fcf7934b3e860864ae906785a0 (7 files)
+d415002f628fbab23ed593cf445905831f85f90fd3308e64f6fd26b5b2caa033	header-before-stamp	golden/confidence_coercion_rot_guard.json
+899cf483964e63531298b171f569cdb4ffb49e6976c9c4c7bca8611904ee4955	header-before-stamp	golden/corpus_discovery_rot_guard.json
+f204cdfc890bdaead2e47b5e11fe0729f0aeaa245cd39740fb817e6268575d06	header-before-stamp	golden/decimal_digits_rot_guard.json
+14ac5576ae7a172223555a36058f90e3daf1d13acf403988efe8b8297a0c03ef	header-before-stamp	golden/investment_quality_rot_guard.json
+4ce4c6a2fefffc0d25ae762d1c4f747c130226d737121d6ff92697a17e2c9e2e	header-before-stamp	golden/max_component_nodes_rot_guard.json
+aa4d13fc9bed1978b7471d3f66b3245f0f82dda163adcd75683bd26a68c4bd05	header-before-stamp	golden/time_bounds_rot_guard.json
+03f9fcfca79dd1b6a845c488386e3f9ac60b0f670b7cf9fc871c6fda4c320603	header-before-stamp	golden/workgraph_components_rot_guard.json

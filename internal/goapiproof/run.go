@@ -395,6 +395,9 @@ type sealedOutcome struct {
 	terminalState   string
 	executed        bool
 	admitted        bool
+	// provenUnder is the comparator's own verdict on HOW the measurement was proven (ProvenUnderStochasticLeafClass,
+	// ProvenUnderGoOnly, ...), sealed with the rest: the MCP class proof reads it instead of parsing a citation string.
+	provenUnder string
 
 	baselineRef  string
 	candidateRef string
@@ -1404,6 +1407,7 @@ func (r *Runner) seal(outcome Outcome, variables map[string]any) sealedOutcome {
 		terminalState:                    outcome.terminalState,
 		executed:                         outcome.Executed,
 		admitted:                         outcome.admitted,
+		provenUnder:                      outcome.ProvenUnder,
 		baselineRef:                      observationRef(outcome.Baseline),
 		candidateRef:                     observationRef(outcome.Candidate),
 		baselineDefects:                  append([]string(nil), outcome.BaselineDefects...),

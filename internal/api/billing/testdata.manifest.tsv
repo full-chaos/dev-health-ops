@@ -1,0 +1,6 @@
+# Every file under internal/api/billing/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: 7b67626d3299efecefc430063bddab28f49cfb4cdb6b98ed4be3441087f12653 (3 files)
+06792c4c527015100942788b97b8b158af574c2c373385269151c661f57b83d4	header-before-stamp	golden/billing-bodies.golden.json
+cfacd91e3e9112b20ed4e94d5fb58c9a1b0b11609831e52b00017d29d1a52ea6	header-before-stamp	golden/billing-helpers.golden.json
+3650f0bf59c5a5bababba1eb721666d2f6d4aca7d3a195326aa1324c6d98dc7f	header-before-stamp	golden/stripe-signature.golden.json

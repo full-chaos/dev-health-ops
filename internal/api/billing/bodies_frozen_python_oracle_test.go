@@ -4,16 +4,12 @@ import (
 	"encoding/json"
 	"math/rand"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
 // pythonBodiesProgram mounts the REAL billing request models on a bare
@@ -95,16 +91,20 @@ func bodyFields(random *rand.Rand) map[string][]string {
 	}
 }
 
+// bodiesModels are the models in the order the corpus names them: the corpus
+// is the program's input, so its order is the same in every run.
+var bodiesModels = []string{"create", "update", "checkout", "change", "cancel"}
+
 func bodiesCorpus() [][2]string {
 	var corpus [][2]string
-	for model := range modelFields {
+	for _, model := range bodiesModels {
 		for _, body := range []string{``, `null`, `[]`, `"x"`, `1`, `{}`, `{`, `{"a":1}`, `{"x": NaN}`} {
 			corpus = append(corpus, [2]string{model, body})
 		}
 	}
 	random := rand.New(rand.NewSource(62560))
 	fields := bodyFields(random)
-	for _, model := range []string{"create", "update", "checkout", "change", "cancel"} {
+	for _, model := range bodiesModels {
 		count := 1200
 		if len(modelFields[model]) < 3 {
 			count = 150
@@ -128,6 +128,21 @@ func bodiesCorpus() [][2]string {
 			prices[random.Intn(3)] + `,` + prices[random.Intn(3)] + `],"bundle_ids":["b1"],"display_order":"2","is_active":"on"}`
 		corpus = append(corpus, [2]string{"create", body}, [2]string{"update", body})
 	}
+	// Valid bodies that leave optional fields out, so every default of the
+	// models is compared: the random bodies seldom make a valid plan.
+	for _, body := range []string{
+		`{"key":"team","name":"Team","tier":"team"}`,
+		`{"key":"team","name":"Team","tier":"team","is_active":false}`,
+		`{"key":"team","name":"Team","tier":"team","display_order":7}`,
+		`{"key":"team","name":"Team","tier":"team","metadata":{"a":1}}`,
+		`{"key":"team","name":"Team","tier":"team","prices":[{"interval":"monthly","amount":100}]}`,
+		`{"key":"team","name":"Team","tier":"team","bundle_ids":["b1"]}`,
+		`{"key":"team","name":"Team","tier":"team","description":"d","stripe_product_id":"prod_x"}`,
+	} {
+		corpus = append(corpus, [2]string{"create", body}, [2]string{"update", body})
+	}
+	corpus = append(corpus, [2]string{"checkout", `{"tier":"team"}`}, [2]string{"checkout", `{"tier":"team","success_url":"/ok","cancel_url":"/no"}`},
+		[2]string{"change", `{"price_id":"price_x"}`}, [2]string{"cancel", `{"immediately":true}`})
 	return corpus
 }
 
@@ -262,25 +277,20 @@ func nullable(null bool, value pyjson.Value) pyjson.Value {
 	return value
 }
 
-func TestBillingBodiesMatchLiveFastAPI(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	python := pyoracle.Resolve(t, root)
+// TestBillingBodiesMatchFrozenFastAPI holds the Go request models of the
+// billing routes to the frozen answers of the real models on a FastAPI app:
+// the status and the text of every answer, for each body of the corpus.
+func TestBillingBodiesMatchFrozenFastAPI(t *testing.T) {
 	corpus := bodiesCorpus()
-	input, _ := json.Marshal(corpus)
-	command := exec.Command(python, "-c", pythonBodiesProgram)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	command.Stdin = strings.NewReader(string(input))
-	output, err := command.CombinedOutput()
+	input, err := json.Marshal(corpus)
 	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	output := frozenPython(t, "billing-bodies.golden.json", programoracle.Program{
+		Name: "billing request bodies", Text: pythonBodiesProgram, Stdin: input,
+	})[0]
 	var want [][2]any
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+	if err := json.Unmarshal([]byte(output), &want); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(want) != len(corpus) {
@@ -307,13 +317,6 @@ func TestBillingBodiesMatchLiveFastAPI(t *testing.T) {
 	}
 	if statuses[200] == 0 || statuses[422] == 0 {
 		t.Fatalf("corpus is one-sided: %v", statuses)
-	}
-	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proof == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proof, "api-billing-bodies"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	t.Logf("%d bodies compared (status counts %v); 0 mismatches", len(corpus), statuses)
 }

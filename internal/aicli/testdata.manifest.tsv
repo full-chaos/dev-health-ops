@@ -1,3 +1,4 @@
 # Every file under internal/aicli/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
--	header	golden/allowlist.json
+# header-before-stamp set: 4658f7666fdede1f34d4fec9ea9dbbe65ed3a9de2e2d01399639155ed555cf7a (1 files)
+2dafa998aefaca5d73d2bce10af8b549577d4cdadb937bb0eadf9e85edef36ee	header-before-stamp	golden/allowlist.json

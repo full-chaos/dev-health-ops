@@ -43,6 +43,7 @@ func recordingWith(t *testing.T, scrub func(string) string) *Golden {
 }
 
 func TestARecordingWritesWhatItBlankedAsPatternsAndOnlyDigestsOfRawValues(t *testing.T) {
+	underTheVerb(t)
 	scrub := ScrubRunValues(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC), time.Date(2030, 12, 1, 0, 0, 0, 0, time.UTC))
 	golden := recordingWith(t, scrub)
 	rawID := "3f2a9c10-7b1e-4c55-9d02-1a2b3c4d5e6f"

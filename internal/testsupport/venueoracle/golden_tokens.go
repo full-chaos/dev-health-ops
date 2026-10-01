@@ -317,6 +317,10 @@ func (g *Golden) project(request, kind, text string) (string, error) {
 // volatileHeaderValue is what a golden stores for the value of a Volatile header.
 const volatileHeaderValue = "<volatile>"
 
+// projectedLengthValue is what a golden stores for content-length when the
+// projection changed the body.
+const projectedLengthValue = "<length of projected body>"
+
 // projectResponse is response with every header value and the body projected.
 func (g *Golden) projectResponse(response Response) (Response, error) {
 	return g.projectResponseAt("", response)
@@ -338,6 +342,20 @@ func (g *Golden) projectResponseAt(request string, response Response) (Response,
 			// name stays, so a response that lacks or gains it is still seen.
 			out.Headers[name] = volatileHeaderValue
 			if value != volatileHeaderValue {
+				if err := g.noteBlank(request, blankedLeaf{pattern: kind, raw: value}, false); err != nil {
+					return out, err
+				}
+			}
+			continue
+		}
+		if strings.ToLower(name) == "content-length" && out.Body != response.Body {
+			// The projection changed the body (a token, a generated id, a
+			// run time became a placeholder), so the length the plane sent
+			// is the length of text the golden does not hold, and it differs
+			// from run to run with the digits of the blanked values. Diff
+			// already skips this header for such a body.
+			out.Headers[name] = projectedLengthValue
+			if value != projectedLengthValue {
 				if err := g.noteBlank(request, blankedLeaf{pattern: kind, raw: value}, false); err != nil {
 					return out, err
 				}

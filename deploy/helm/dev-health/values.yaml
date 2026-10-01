@@ -1048,6 +1048,13 @@ ingress:
   #    no Python api Service. A values file that still wants Python to answer
   #    /graphql lists `{path: "/graphql$", pathType: ImplementationSpecific}`
   #    here (the rollback); it must not also route /graphql to query-api.
+  #    An entry may name its backend: `service: query-api` sends the path to
+  #    the query-api Service; no key (or `service: api`) is the Python api. A
+  #    path changes its backend this way INSIDE the Ingress object that holds
+  #    it, in one update. Moving the path to another Ingress object instead is
+  #    denied by ingress-nginx's admission webhook in one direction (two live
+  #    objects may not claim one host and path) and leaves the path without a
+  #    rule for a moment in the other.
   pythonAllowList: []
   tls: []
   #  - secretName: dev-health-tls

@@ -16,7 +16,6 @@ from typing import Any
 from dev_health_ops.metrics.schemas import (
     CapacityForecastRecord,
     CICDMetricsDailyRecord,
-    CommitMetricsRecord,
     DeployMetricsDailyRecord,
     DORAMetricsRecord,
     EstimateCoverageMetricsDailyRecord,
@@ -26,7 +25,6 @@ from dev_health_ops.metrics.schemas import (
     FileComplexitySnapshot,
     FileHotspotDaily,
     FileMetricsRecord,
-    ICLandscapeRollingRecord,
     IncidentMetricsDailyRecord,
     InvestmentClassificationRecord,
     InvestmentExplanationRecord,
@@ -39,7 +37,6 @@ from dev_health_ops.metrics.schemas import (
     ProjectRecord,
     ReleaseImpactDailyRecord,
     RepoComplexityDaily,
-    RepoMetricsDailyRecord,
     ReviewEdgeDailyRecord,
     TeamMembershipRecord,
     TeamMetricsDailyRecord,
@@ -90,7 +87,7 @@ class BaseMetricsSink(ABC):
         sink = create_sink("clickhouse://localhost:8123/default")
         try:
             sink.ensure_schema()
-            sink.write_repo_metrics(rows)
+            sink.write_team_metrics(rows)
         finally:
             sink.close()
     """
@@ -133,16 +130,6 @@ class BaseMetricsSink(ABC):
     # -------------------------------------------------------------------------
     # Core metrics write methods
     # -------------------------------------------------------------------------
-
-    @abstractmethod
-    def write_repo_metrics(self, rows: Sequence[RepoMetricsDailyRecord]) -> None:
-        """Write daily repo-level metrics."""
-        ...
-
-    @abstractmethod
-    def write_commit_metrics(self, rows: Sequence[CommitMetricsRecord]) -> None:
-        """Write per-commit metrics."""
-        ...
 
     @abstractmethod
     def write_file_metrics(self, rows: Sequence[FileMetricsRecord]) -> None:
@@ -202,13 +189,6 @@ class BaseMetricsSink(ABC):
     @abstractmethod
     def write_review_edges(self, rows: Sequence[ReviewEdgeDailyRecord]) -> None:
         """Write daily review relationship edges (author->reviewer)."""
-        ...
-
-    @abstractmethod
-    def write_ic_landscape_rolling(
-        self, rows: Sequence[ICLandscapeRollingRecord]
-    ) -> None:
-        """Write rolling IC landscape metrics (30-day windows)."""
         ...
 
     # -------------------------------------------------------------------------

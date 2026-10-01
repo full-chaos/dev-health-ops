@@ -1,6 +1,7 @@
 # Every file under internal/pythonparity/pyidna/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: 5ce1fd4228af8f63e1d48a313f4c3d0b4d9a2f8d02e6316b2527e2ffa11a5f4c (3 files)
 eb1dcfcb3fc1dc9f4edce5cde33efa59de187dd2ef4ce381e36fdc549c242eeb	unclassified	behaviour_golden.jsonl
--	header	golden/behaviour.golden.json
--	header	golden/codec.golden.json
--	header	golden/tables.golden.json
+93b5c472ff5a24f78361316db00d137b81fae0c58f9227f816d92650f9fc4c7c	header-before-stamp	golden/behaviour.golden.json
+7b8d4babc5d978a05857218669e702c036a65b9671190577fefb308e5e296b79	header-before-stamp	golden/codec.golden.json
+bbcae66d509029c29e39c60f1491b1f5f3de915208509cfdc8f94d0398c6ea8d	header-before-stamp	golden/tables.golden.json

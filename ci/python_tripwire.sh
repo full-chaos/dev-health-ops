@@ -38,17 +38,21 @@ PYTHON_TRIPWIRE_DIR="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/python-tripwir
 PYTHON_TRIPWIRE_LOG="${PYTHON_TRIPWIRE_LOG:-${PYTHON_TRIPWIRE_DIR}/hits.log}"
 : >"${PYTHON_TRIPWIRE_LOG}"
 
+# The shim body, written once from a quoted template: @NAME@ and @LOG@ are the only substitutions.
+_python_tripwire_template="${PYTHON_TRIPWIRE_DIR}/.shim-template"
+cat >"${_python_tripwire_template}" <<'SHIM'
+#!/bin/sh
+parent="$(tr '\000' ' ' < "/proc/$PPID/cmdline" 2>/dev/null)"
+printf 'pid=%s ppid=%s shim=%s argv=%s parent=%s\n' "$$" "$PPID" "@NAME@" "$*" "$parent" >> "@LOG@"
+echo "PYTHON TRIPWIRE: @NAME@ invoked with: $* (parent: $parent)" >&2
+exit 97
+SHIM
 for _python_tripwire_name in python python3 python3.13 python3.14 pip pip3 uv; do
-  {
-    printf '#!/bin/sh\n'
-    printf 'parent="$(tr "\\000" " " < "/proc/$PPID/cmdline" 2>/dev/null)"\n'
-    printf 'printf "pid=%%s ppid=%%s shim=%%s argv=%%s parent=%%s\\n" "$$" "$PPID" "%s" "$*" "$parent" >> "%s"\n' \
-      "${_python_tripwire_name}" "${PYTHON_TRIPWIRE_LOG}"
-    printf 'echo "PYTHON TRIPWIRE: %s invoked with: $* (parent: $parent)" >&2\n' "${_python_tripwire_name}"
-    printf 'exit 97\n'
-  } >"${PYTHON_TRIPWIRE_DIR}/${_python_tripwire_name}"
+  sed -e "s|@NAME@|${_python_tripwire_name}|g" -e "s|@LOG@|${PYTHON_TRIPWIRE_LOG}|g" \
+    "${_python_tripwire_template}" >"${PYTHON_TRIPWIRE_DIR}/${_python_tripwire_name}"
   chmod +x "${PYTHON_TRIPWIRE_DIR}/${_python_tripwire_name}"
 done
+rm -f "${_python_tripwire_template}"
 unset _python_tripwire_name
 
 export PYTHON_TRIPWIRE_DIR PYTHON_TRIPWIRE_LOG

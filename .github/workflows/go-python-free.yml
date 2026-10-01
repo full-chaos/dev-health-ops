@@ -31,6 +31,7 @@ on:
     branches: [main]
     paths: &own_paths
       - '.github/workflows/go-python-free.yml'
+      - 'ci/check_go.sh'
       - 'ci/python_tripwire.sh'
       - 'ci/python_free_ratchet.sh'
       - 'ci/python_free_known.tsv'
@@ -41,6 +42,8 @@ on:
 
 permissions:
   contents: read
+  # Pull the mirrored test-dependency images from ghcr.io (the same grant as go.yml, CHAOS-4778).
+  packages: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

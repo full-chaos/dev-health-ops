@@ -22,7 +22,11 @@
 #              run, before the list is filled in from a measured run) prints every HIT and exits 0.
 set -euo pipefail
 
-MARKER='PYTHON TRIPWIRE|python-tripwire/no-python|exit status 97'
+# STRONG marker: the shim's own line, or the nonexistent interpreter path. WEAK marker ("exit status 97", all
+# a test prints when it shows only the error of a shim it ran) counts only in a package whose test binary
+# the tripwire log shows starting Python: a test that merely runs `exit 97` is a real failure.
+MARKER='PYTHON TRIPWIRE|python-tripwire/no-python'
+WEAK_MARKER='exit status 97'
 # A skip whose reason says Python is missing, and does not blame the live-oracle gate (those skips are
 # the gated oracles and are expected).
 SKIP_MARKER='(?i)(neither python|no python|python[0-9.]*.*(not on path|not found|is missing|unavailable|cannot be)|(not on path|not found|missing).*python)'
@@ -36,16 +40,27 @@ classify() {
   [ -s "${json}" ] || die "no go test output in ${json}: a measurement that did not happen is a failure"
   local tmp rc=0
   tmp="$(mktemp -d)"
-  # Failed top-level tests, each marked tripwire|other by its own (and its subtests') output.
-  jq -rs --arg marker "${MARKER}" '
+  # Test binaries (package base names) the tripwire log shows starting Python.
+  local bins='[]'
+  if [ -n "${log}" ] && [ -s "${log}" ]; then
+    bins="$(sed -n 's/.*parent=\([^ ]*\).*/\1/p' "${log}" | sed 's|.*/||; s|\.test$||' | sort -u | jq -R . | jq -cs .)"
+  fi
+  # A failed top-level test is a tripwire hit only when EVERY failed leaf under it carries the marker
+  # (its own output, as go test -json attributes it): a sibling subtest that failed an ordinary assertion
+  # is a real failure and must not hide behind the one that hit the tripwire.
+  jq -rs --arg marker "${MARKER}" --arg weak "${WEAK_MARKER}" --argjson bins "${bins}" '
     [ .[] | select(.Package != null) ] as $events
-    | ( $events | map(select(.Test != null and .Action == "fail") | {p: .Package, t: (.Test | split("/")[0])}) | unique ) as $failed
-    | $failed[]
-    | . as $f
-    | ( $events
-        | map(select(.Package == $f.p and .Test != null and (.Test | split("/")[0]) == $f.t and .Action == "output") | .Output)
-        | join("") ) as $text
-    | [ (if ($text | test($marker)) then "tripwire" else "other" end), $f.p, $f.t ] | @tsv
+    | ( $events | map(select(.Test != null and .Action == "fail") | {p: .Package, t: .Test}) | unique ) as $failed
+    | ( $failed | map(select(. as $f | ($failed | map(select(.p == $f.p and (.t | startswith($f.t + "/")))) | length) == 0)) ) as $leaves
+    | $leaves
+    | map(
+        . as $l
+        | ( $events | map(select(.Package == $l.p and .Test == $l.t and .Action == "output") | .Output) | join("") ) as $text
+        | ( $l.p | split("/") | last ) as $base
+        | { p: $l.p, top: ($l.t | split("/")[0]),
+            hit: (($text | test($marker)) or (($text | contains($weak)) and (($bins | index($base)) != null))) } )
+    | group_by([.p, .top])[]
+    | [ (if all(.[]; .hit) then "tripwire" else "other" end), .[0].p, .[0].top ] | @tsv
   ' "${json}" >"${tmp}/failed.tsv"
   # Package-level failures with no failed test under them (build error, TestMain, panic) are real failures.
   jq -rs '

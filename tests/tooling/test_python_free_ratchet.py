@@ -92,6 +92,37 @@ def test_a_failed_test_that_names_the_tripwire_is_a_hit_and_other_failures_are_n
     assert "NON-TRIPWIRE FAILURE" in result.stderr and "TestReal" in result.stderr
 
 
+def test_a_subtest_regression_is_not_hidden_by_a_sibling_that_hit_the_tripwire(
+    tmp_path: Path,
+) -> None:
+    stream = _events(
+        ("output", "TestMixed/python", "PYTHON TRIPWIRE: python3 invoked\n", ""),
+        ("fail", "TestMixed/python", "", ""),
+        ("output", "TestMixed/regression", "assertion failed: got=4 want=5\n", ""),
+        ("fail", "TestMixed/regression", "", ""),
+        ("fail", "TestMixed", "", ""),
+    )
+    result, hits = _classify(tmp_path, stream)
+    assert result.returncode == 1
+    assert "NON-TRIPWIRE FAILURE" in result.stderr and "TestMixed" in result.stderr
+    assert hits == ""
+
+
+def test_exit_status_97_alone_counts_only_when_the_tripwire_log_shows_the_test_binary(
+    tmp_path: Path,
+) -> None:
+    stream = _events(
+        ("output", "TestShows", "helper: exit status 97\n", ""),
+        ("fail", "TestShows", "", ""),
+    )
+    unrelated, _ = _classify(tmp_path, stream)
+    assert unrelated.returncode == 1 and "NON-TRIPWIRE FAILURE" in unrelated.stderr
+    log = "pid=1 ppid=2 shim=python3 argv=-c 1 parent=/tmp/go-build/b001/p.test -test.run X\n"
+    related, hits = _classify(tmp_path, stream, log)
+    assert related.returncode == 0, related.stderr
+    assert hits.splitlines() == [f"{PKG}\tTestShows\ttripwire"]
+
+
 def test_a_skip_that_says_python_is_missing_is_a_second_class_but_a_gated_skip_is_not(
     tmp_path: Path,
 ) -> None:
@@ -222,6 +253,28 @@ def test_the_armed_tripwire_names_the_caller_and_exits_97(tmp_path: Path) -> Non
     assert "PYTHON TRIPWIRE: python3 invoked with: -c 1" in result.stderr
     assert "rc=97" in result.stdout and "py=/python-tripwire/no-python" in result.stdout
     assert "shim=python3" in result.stdout
+
+
+def test_arming_the_tripwire_changes_no_file_mode_outside_its_own_directory(
+    tmp_path: Path,
+) -> None:
+    system = tmp_path / "usr-bin"
+    system.mkdir()
+    fake_python = system / "python3"
+    fake_python.write_text("#!/bin/sh\necho real\n")
+    fake_python.chmod(0o755)
+    before = fake_python.stat().st_mode
+    env = {
+        "GITHUB_ACTIONS": "true",
+        "RUNNER_TEMP": str(tmp_path),
+        "PATH": f"{system}:{os.environ['PATH']}",
+    }
+    probe = 'source "$1" 2>/dev/null; command -v python3; ls "$PYTHON_TRIPWIRE_DIR"'
+    result = _run(["bash", "-c", probe, "x", str(TRIPWIRE)], env)
+    assert fake_python.stat().st_mode == before
+    assert result.stdout.splitlines()[0].startswith(str(tmp_path / "python-tripwire."))
+    assert "python3" in result.stdout.splitlines()[1:]
+    assert ".shim-template" not in result.stdout
 
 
 def test_the_tripwire_script_never_changes_a_mode_outside_its_own_shims() -> None:

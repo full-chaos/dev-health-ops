@@ -100,3 +100,25 @@ func TestPrintMCPClassStatusNamesTheProofAndItsExcludedShapes(t *testing.T) {
 		t.Fatalf("%d proof lines, want 4 (analytics and the three older-receipt roots):\n%s", n, got)
 	}
 }
+
+// CHAOS-7499: a root proven under the stochastic leaf class says so in `status`: counted, named, never matched.
+func TestPrintMCPClassStatusNamesTheStochasticShapes(t *testing.T) {
+	var out bytes.Buffer
+	previous := stdout
+	stdout = &out
+	t.Cleanup(func() { stdout = previous })
+	mode := "canary"
+	printMCPClassStatus(statusReport{MCPClass: []statusReportMCPRoot{
+		{Root: "capacityForecast", Operation: "mcp:capacityForecast", DigestState: "MATCH", Mode: &mode, Reachable: true, Proven: true,
+			ProofReference: "go_document_route", ProofShapesCounted: 1, ProofShapesMatched: 0, ProofShapesStochastic: []string{"capacityForecast"}},
+	}})
+	got := out.String()
+	for _, want := range []string{
+		"proof: reference=go_document_route shapes counted=1 matched=0 excluded=0",
+		"proven under the stochastic leaf class (not a match): capacityForecast",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output lacks %q:\n%s", want, got)
+		}
+	}
+}

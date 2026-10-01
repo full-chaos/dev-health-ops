@@ -1,0 +1,21 @@
+{
+  "header": {
+    "test": "TestMaxComponentNodesGoldenMatchesLivePython",
+    "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
+    "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
+    "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/workgraph/units/ -test '^TestMaxComponentNodesGoldenMatchesLivePython$' -python-root $DIR",
+    "blanked": {}
+  },
+  "requests": [
+    {
+      "name": "max component nodes golden generator",
+      "method": "PYTHON",
+      "path": "program sha256 4aab49ac1f9688c5284e6ead2f6ba0a256e88b3e908f84fe0e592a0807db103a env sha256 969169a1702b285f3a9e4b602d19052b0d6a3c6b2a44dd7425bef0f696436295",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "gzip+base64:H4sIAAAAAAAC/+zcXWvbVgMH8Pt8ioNvnmeQpJKO35rrjZLB2rKW3YzVyLacGBIpWHLqUPrdh7ysV3kRUTpS+P1//Eub+JyjHDk4lBN/OQhhMFtUl5dF2QxOwuBNURabvCmWYX4TmqJu6ler9a7Zbor61dnt52aX+a4dc1WVRdnMympZ1LOz6mJZlMdXN8fh5yqUVRPO83J5VCzXzfHgcL9MWTVFu8amqKuL62IZ1nXIw4ePv5++fRPmxSLf1kV4f9OcV+X/6rAum///1D5kW86rbbksliEvl+E6v9gWdcjn1XURsk/jGBZ52S63aR901GzWVyGvw68f3r0N5fZyXmzq4/CmCnXebNuLr0NThd/y3WnZhFW1CdW2OapWR5u8PCvC+3cfTj+e/vHL7SqH4fP5enHeXsS8OM+v19V2k19c3IRily+ak1BW4ds2tJcRit2iKJb/Tr/fmMNQVyEPi/wqVKuQJp+Gyf7r+Pah2wfXVxfrJqyXRdmsF+0it7u2yOuiHpyEPw9CCOHL/s8QBpv88+y82LXbGdM4isng8Nunbre3/Vw6Sgb7j389fGD8PWMfHzmM2d1jh9mjg7N5v+FJlsR0tIpJq/3X3VOlSdJlC9qJ2t47yeNzZDGNwziJwziNMY7bv989W5YOJ8NpHA8nT5l0+sik08e3btl92i5PoDvne/30+eLrmMUstpnELCb7GadxtF9hEkdxGpP79vZ1lsU4yZI4no6Gk8lomkyeZ71p1/U67X+PFTvekS4r9LlH6fO650o6psstflb3PBk6psv9+2/2t8udTp5Xnyvp9R3RZ/S859ppv9H9XuBHqz7rt6+N/UY/8LraYYZxOs7G8enje+z8Qz9WdPrasyKO+jzfJ9OY9vqOScej2GPv0kX/Hy7b8enq5bzSAAAAAAAAAADwj34n9kREREREREREXkL8agoAAAAAAAAAwEv75ZSub7cLAAAAAAAAAEAanekAAAAAAAAAAEijUx0PnepIssT+AQAAAAAAAAB8L+3pjKef7YgJAAAAAAAAAADfgxMdAAAAAAAAAAAxcaYDAAAAAAAAAIAHje4+0TFyngMAAAAAAAAA4MWd6ej0Lh3paKWqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqvpj9J732RARERERERER+YFy+4ahByH81f5fx2BdNrPLfDerm81suT5bN/XgJAxjkhx8Pfh7APrQadwgogEA"
+    }
+  ]
+}

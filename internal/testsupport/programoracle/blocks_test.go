@@ -267,7 +267,7 @@ func TestAKnownDefectMustBeFoundInItsBlock(t *testing.T) {
 	if err := findsDefectErr("sweep", output, BlockLines+500, fixedLines(lines), right); err == nil || !strings.Contains(err.Error(), "block 1") {
 		t.Errorf("the right answer passed as a defect: %v", err)
 	}
-	if err := findsDefectErr("sweep", output, len(lines), fixedLines(lines), wrong); err == nil {
-		t.Error("a defect outside the sweep was accepted")
+	if err := findsDefectErr("sweep", output, len(lines), fixedLines(lines), wrong); err == nil || !strings.Contains(err.Error(), "is not one of the") {
+		t.Errorf("a defect outside the sweep: %v", err)
 	}
 }

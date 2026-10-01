@@ -1063,7 +1063,7 @@ const teamsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
 // openTeamsGolden opens the golden of one provider's teams oracle and returns the answers frozen in it (the
 // legacy verb's, one per scenario) once it has been recorded by executing the real verb on teamsPythonBuild.
-func openTeamsGolden(t *testing.T, provider, name, program string, key []byte, record func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen) ([]teamsFrozen, *venueoracle.Golden) {
+func openTeamsGolden(t *testing.T, provider, name, pin, program string, key []byte, record func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen) ([]teamsFrozen, *venueoracle.Golden) {
 	t.Helper()
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -1072,7 +1072,7 @@ func openTeamsGolden(t *testing.T, provider, name, program string, key []byte, r
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/teams_" + provider + ".json",
 		PythonBuild: teamsPythonBuild,
-		SHA256:      "PIN:teams_" + provider,
+		SHA256:      pin,
 		Recipe: "git worktree add --detach $DIR " + teamsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^" + name + "$' -python-root $DIR",
 	})
@@ -1099,7 +1099,7 @@ func openTeamsGolden(t *testing.T, provider, name, program string, key []byte, r
 // on teamsPythonBuild and are frozen in testdata/golden/teams_github.json (the recipe regenerates them by
 // execution). The rows differ by design in the columns teamsRules names; everything else must be equal.
 func TestSyncTeamsGitHubMatchesFrozenPython(t *testing.T) {
-	frozen, golden := openTeamsGolden(t, "github", "TestSyncTeamsGitHubMatchesFrozenPython", teamsSyncOracleProgram, githubCorpusKey(),
+	frozen, golden := openTeamsGolden(t, "github", "TestSyncTeamsGitHubMatchesFrozenPython", "PIN:teams_github", teamsSyncOracleProgram, githubCorpusKey(),
 		func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen {
 			o := newTeamsOracle(t)
 			o.startPython(producer, teamsSyncOracleProgram)

@@ -13,7 +13,7 @@
       "body_sha256": "507d888d00e978114c06330db8a6af6a2cd5f4b47053b4aef6475e6c4752515d",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"pagewise_enrichment_notes_pagination_and_since_stop\", \"row\": {\"producer_requests\": [{\"t\": \"str\", \"v\": \"/api/v4/projects/123/merge_requests?order_by=updated_at\u0026page=1\u0026per_page=2\u0026sort=desc\u0026state=all\"}, {\"t\": \"str\", \"v\": \"/api/v4/projects/123/merge_requests/7/approvals\"}, {\"t\": \"str\", \"v\": \"/api/v4/projects/123/merge_requests/7/notes?order_by=created_at\u0026page=1\u0026per_page=2\u0026sort=asc\"}, {\"t\": \"str\", \"v\": \"/api/v4/projects/123/merge_requests/7/notes?order_by=created_at\u0026page=2\u0026per_page=2\u0026sort=asc\"}, {\"t\": \"str\", \"v\": \"/api/v4/projects/123/merge_requests?order_by=updated_at\u0026page=2\u0026per_page=2\u0026sort=desc\u0026state=all\"}], \"usage_request_count\": {\"t\": \"int\", \"v\": \"5\"}, \"rows\": [{\"number\": {\"t\": \"int\", \"v\": \"7\"}, \"state\": {\"t\": \"str\", \"v\": \"open\"}, \"reviews_count\": {\"t\": \"int\", \"v\": \"2\"}, \"comments_count\": {\"t\": \"int\", \"v\": \"4\"}, \"first_review_at\": {\"t\": \"str\", \"v\": \"2026-07-16T11:00:00Z\"}}]}}], \"excluded_fields\": {}}\n"
     }
   ]

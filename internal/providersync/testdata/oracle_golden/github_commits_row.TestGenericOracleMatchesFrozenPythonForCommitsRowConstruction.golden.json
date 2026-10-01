@@ -13,7 +13,7 @@
       "body_sha256": "6021bc0538a7574ecb127dabb060d6de6498eaab3ad25b70c1b2800b62d57c45",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"github_user_precedence\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"hash\": {\"t\": \"str\", \"v\": \"abc\"}, \"message\": {\"t\": \"str\", \"v\": \"message\"}, \"author_name\": {\"t\": \"str\", \"v\": \"api-author\"}, \"author_email\": {\"t\": \"str\", \"v\": \"embedded@example.com\"}, \"author_when\": {\"t\": \"datetime\", \"v\": \"2026-07-25T10:00:00Z\"}, \"committer_name\": {\"t\": \"str\", \"v\": \"api-committer\"}, \"committer_email\": null, \"committer_when\": {\"t\": \"datetime\", \"v\": \"2026-07-25T11:00:00Z\"}, \"parents\": {\"t\": \"int\", \"v\": \"2\"}}}], \"excluded_fields\": {\"last_synced\": \"stamped by ClickHouse persistence, not the producer\"}}\n"
     }
   ]

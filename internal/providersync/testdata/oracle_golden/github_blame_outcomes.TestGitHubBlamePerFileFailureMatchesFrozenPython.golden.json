@@ -13,7 +13,7 @@
       "body_sha256": "dd208400c0f390c4c87e0f4c60ee49f3e29e23085cd7c2e0d9ad0d6e091bc437",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"middle_file_fails\", \"row\": {\"attempted_paths\": [{\"t\": \"str\", \"v\": \"src/file-000.go\"}, {\"t\": \"str\", \"v\": \"src/file-001.go\"}, {\"t\": \"str\", \"v\": \"src/file-002.go\"}], \"persisted_paths\": [{\"t\": \"str\", \"v\": \"src/file-000.go\"}, {\"t\": \"str\", \"v\": \"src/file-000.go\"}, {\"t\": \"str\", \"v\": \"src/file-002.go\"}, {\"t\": \"str\", \"v\": \"src/file-002.go\"}], \"raised\": {\"t\": \"bool\", \"v\": \"false\"}}}], \"excluded_fields\": {}}\n"
     }
   ]

@@ -13,7 +13,7 @@
       "body_sha256": "6627f2a5cd1943eeaf5b899b81a59ced1896a9a2dbc8dd1ffa181c9b09a84d88",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"nullable_and_fallback_values\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"hash\": {\"t\": \"str\", \"v\": \"abc\"}, \"message\": null, \"author_name\": {\"t\": \"str\", \"v\": \"Unknown\"}, \"author_email\": null, \"author_when\": {\"t\": \"datetime\", \"v\": \"2026-08-03T11:12:13.456000Z\"}, \"committer_name\": {\"t\": \"str\", \"v\": \"Unknown\"}, \"committer_email\": null, \"committer_when\": {\"t\": \"datetime\", \"v\": \"2026-08-03T11:12:13.456000Z\"}, \"parents\": {\"t\": \"int\", \"v\": \"2\"}}}, {\"id\": \"canonical_values_and_short_id_fallback\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"hash\": {\"t\": \"str\", \"v\": \"def\"}, \"message\": {\"t\": \"str\", \"v\": \"preserved\"}, \"author_name\": {\"t\": \"str\", \"v\": \"Author\"}, \"author_email\": null, \"author_when\": {\"t\": \"datetime\", \"v\": \"2026-08-01T10:00:00Z\"}, \"committer_name\": {\"t\": \"str\", \"v\": \"Committer\"}, \"committer_email\": null, \"committer_when\": {\"t\": \"datetime\", \"v\": \"2026-08-01T11:00:00Z\"}, \"parents\": {\"t\": \"int\", \"v\": \"0\"}}}], \"excluded_fields\": {\"last_synced\": \"stamped by ClickHouse persistence, not the producer\"}}\n"
     }
   ]

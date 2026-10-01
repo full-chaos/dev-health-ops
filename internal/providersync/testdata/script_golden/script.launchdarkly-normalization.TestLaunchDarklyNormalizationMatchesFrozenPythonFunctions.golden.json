@@ -13,7 +13,7 @@
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"events\":[{\"actor_type\":\"operator@example.test\",\"dedupe_key\":\"event-1\",\"environment\":\"prod\",\"event_ts\":\"2024-08-30T06:40:01.234000Z\",\"event_type\":\"toggle\",\"flag_key\":\"checkout\",\"ingested_at\":\"2026-07-23T12:34:56.789000Z\",\"next_state\":null,\"org_id\":\"org-acme\",\"prev_state\":null,\"repo_id\":null,\"source_event_id\":\"event-1\"},{\"actor_type\":\"member-2\",\"dedupe_key\":\"event-2\",\"environment\":\"production\",\"event_ts\":\"2026-07-22T01:02:03Z\",\"event_type\":\"customKind\",\"flag_key\":\"search\",\"ingested_at\":\"2026-07-23T12:34:56.789000Z\",\"next_state\":null,\"org_id\":\"org-acme\",\"prev_state\":null,\"repo_id\":null,\"source_event_id\":\"event-2\"}],\"flags\":[{\"archived_at\":null,\"created_at\":\"2024-08-30T06:40:00.123000Z\",\"environment\":\"production\",\"flag_key\":\"checkout\",\"flag_type\":\"multivariate\",\"last_synced\":\"2026-07-23T12:34:56.789000Z\",\"org_id\":\"org-acme\",\"project_key\":\"payments\",\"provider\":\"launchdarkly\",\"repo_id\":null},{\"archived_at\":null,\"created_at\":null,\"environment\":\"production\",\"flag_key\":\"search\",\"flag_type\":\"boolean\",\"last_synced\":\"2026-07-23T12:34:56.789000Z\",\"org_id\":\"org-acme\",\"project_key\":null,\"provider\":\"launchdarkly\",\"repo_id\":null}]}\n"
     }
   ]

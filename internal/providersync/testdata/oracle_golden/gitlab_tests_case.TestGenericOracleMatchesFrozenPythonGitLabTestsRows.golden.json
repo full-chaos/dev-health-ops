@@ -13,7 +13,7 @@
       "body_sha256": "2870b75714f665f522eaa3aca168250ced895d5cd01cb5dee039256bda2fba05",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"active_gitlab_testops_rows\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"run_id\": {\"t\": \"str\", \"v\": \"9001\"}, \"suite_id\": {\"t\": \"str\", \"v\": \"f40a6122a0aa4ac3646a1781058771fbc24354ca131086d2336c1b2ece0d2941\"}, \"case_id\": {\"t\": \"str\", \"v\": \"fd1f9ddc5064b6c3989985f50bb3da033b01c9013d47f6e28825e678b0b7d7ab\"}, \"case_name\": {\"t\": \"str\", \"v\": \"fails\"}, \"class_name\": {\"t\": \"str\", \"v\": \"tests.TestAPI\"}, \"status\": {\"t\": \"str\", \"v\": \"failed\"}, \"duration_seconds\": null, \"retry_attempt\": {\"t\": \"int\", \"v\": \"0\"}, \"failure_message\": null, \"failure_type\": null, \"stack_trace\": {\"t\": \"str\", \"v\": \"stderr\\nstderr\"}, \"is_quarantined\": {\"t\": \"bool\", \"v\": \"false\"}, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}], \"excluded_fields\": {\"last_synced\": \"stamped by the Go complete-route effect boundary\"}}\n"
     }
   ]

@@ -13,7 +13,7 @@
       "body_sha256": "aa0fb865037e8ba64afa1b6852637f2ab33ec57aa75951c9eb17014616ec10e4",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"project_key_candidate\", \"row\": {\"id\": {\"t\": \"str\", \"v\": \"team-eng\"}, \"key\": {\"t\": \"str\", \"v\": \"ENG\"}, \"name\": {\"t\": \"str\", \"v\": \"Engineering\"}}}, {\"id\": \"native_key_candidate\", \"row\": {\"id\": {\"t\": \"str\", \"v\": \"PLAT\"}, \"key\": {\"t\": \"str\", \"v\": \"PLAT\"}, \"name\": {\"t\": \"str\", \"v\": \"PLAT\"}}}], \"excluded_fields\": {}}\n"
     }
   ]

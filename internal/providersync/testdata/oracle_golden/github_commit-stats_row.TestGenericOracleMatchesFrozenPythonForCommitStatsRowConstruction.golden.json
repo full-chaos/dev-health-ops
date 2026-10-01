@@ -13,7 +13,7 @@
       "body_sha256": "da2d08f8b722cd87f90c9020c193edd0d8039ec742e95c2012b398f787e58851",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
-      "headers": null,
+      "headers": {},
       "body": "{\"cases\": [{\"id\": \"commit_file_stat_defaults_modes_at_sink\", \"row\": {\"repo_id\": {\"t\": \"str\", \"v\": \"c7198fbc-1945-3717-05d8-eb78866b4e79\"}, \"commit_hash\": {\"t\": \"str\", \"v\": \"abc123\"}, \"file_path\": {\"t\": \"str\", \"v\": \"src/main.go\"}, \"additions\": {\"t\": \"int\", \"v\": \"4\"}, \"deletions\": {\"t\": \"int\", \"v\": \"2\"}, \"old_file_mode\": {\"t\": \"str\", \"v\": \"unknown\"}, \"new_file_mode\": {\"t\": \"str\", \"v\": \"unknown\"}}}], \"excluded_fields\": {\"old_file_mode\": \"ClickHouseStore.insert_git_commit_stats supplies unknown when Python leaves the model field unset\", \"new_file_mode\": \"ClickHouseStore.insert_git_commit_stats supplies unknown when Python leaves the model field unset\", \"last_synced\": \"ClickHouseStore.insert_git_commit_stats stamps persistence time after the producer boundary\"}}\n"
     }
   ]

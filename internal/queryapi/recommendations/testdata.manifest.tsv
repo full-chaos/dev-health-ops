@@ -1,0 +1,8 @@
+# Every file under internal/queryapi/recommendations/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: 024220614ebd91c5b7901d14b942d0685ac0084e78c8c0f39e5e9927d5c26154 (3 files)
+be927cc74ab9cbcd635a2bde0d33b1a47fc4e276b338420716a1443958625e95	python-recorded	evidence_golden.json
+f1831375e44a5291749b157335c6239a8ebf540ad21a98ae8f83b7d9ec0280d0	python-recorded	failure_modes_golden.json
+c798c498497214a9d1c2b4cd21742ca6bce045a6fde54f8dd669b738d6ddee56	unclassified	gen_evidence_golden.py
+126a48603966901745ff4e5eba41c5b9309f1dcf875833e435719015285a054b	unclassified	gen_failure_modes_golden.py
+ef1a89761977b4b1c6bb4b28cb94dd9a1d0261551aae6a6f916d152ec11b26de	unclassified	gen_window_golden.py
+b5022077a4c1c7c1d66787e480b059a4c31e239a55e83a2dd129e9b6226c20ea	python-recorded	window_golden.json

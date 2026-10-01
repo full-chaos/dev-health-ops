@@ -291,44 +291,57 @@ func leaf(name string, value any) string {
 // JWTs projected, then the spec's Scrub. A packed body (PackBody) is unpacked,
 // projected and packed again, so a token inside it is projected too; one that
 // does not unpack is an error.
-func (g *Golden) project(text string) (string, error) {
+func (g *Golden) project(request, kind, text string) (string, error) {
 	if strings.HasPrefix(text, packedPrefix) {
 		raw, err := unpackBody(text)
 		if err != nil {
 			return "", err
 		}
-		projected, err := g.project(raw)
+		projected, err := g.project(request, kind, raw)
 		if err != nil || projected == raw {
 			return text, err
 		}
 		return PackBody([]byte(projected)), nil
 	}
-	text = ProjectTokens(text)
+	stageA := ProjectTokens(text)
+	stageB := stageA
 	if g.spec.Scrub != nil {
-		text = g.spec.Scrub(text)
+		stageB = g.spec.Scrub(stageA)
 	}
-	return text, nil
+	if err := g.noteBlanks(request, kind, text, stageA, stageB); err != nil {
+		return "", err
+	}
+	return stageB, nil
 }
 
 // volatileHeaderValue is what a golden stores for the value of a Volatile header.
 const volatileHeaderValue = "<volatile>"
 
-// projectResponse is response in the form a golden stores and compares: the
-// body and every header value projected, a Volatile header's value replaced
-// by a placeholder, and an Allow header in the comparison's order. These are
-// the two rules that make a header's stored text independent of the run.
+// projectResponse is response with every header value and the body projected.
 func (g *Golden) projectResponse(response Response) (Response, error) {
+	return g.projectResponseAt("", response)
+}
+
+// projectResponseAt is projectResponse for the answer to request: the leaves it
+// replaces are noted under that request's name.
+func (g *Golden) projectResponseAt(request string, response Response) (Response, error) {
 	out := clone(response)
 	var err error
-	if out.Body, err = g.project(out.Body); err != nil {
+	if out.Body, err = g.project(request, "body", out.Body); err != nil {
 		return out, err
 	}
 	for name, value := range out.Headers {
+		kind := "header " + strings.ToLower(name)
 		if Volatile[strings.ToLower(name)] {
 			// A per-response header Diff never compares (a request id, a date):
 			// stored as a placeholder, so no two recordings differ by it. The
 			// name stays, so a response that lacks or gains it is still seen.
 			out.Headers[name] = volatileHeaderValue
+			if value != volatileHeaderValue {
+				if err := g.noteBlank(request, blankedLeaf{pattern: kind, raw: value}, false); err != nil {
+					return out, err
+				}
+			}
 			continue
 		}
 		if strings.ToLower(name) == "allow" {
@@ -340,7 +353,7 @@ func (g *Golden) projectResponse(response Response) (Response, error) {
 			out.Headers[name] = sortedAllow(value)
 			continue
 		}
-		if out.Headers[name], err = g.project(value); err != nil {
+		if out.Headers[name], err = g.project(request, kind, value); err != nil {
 			return out, err
 		}
 	}

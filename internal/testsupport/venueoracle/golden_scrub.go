@@ -34,8 +34,9 @@ var timestampLayouts = []string{
 // and runs on both planes.
 //
 // keep lists ids that have the shape of a random UUID and are deterministic
-// (a test that seeds "10000000-0000-4000-8000-000000000001"): they are never
-// blanked, so they stay compared by value. A test names its seeded ids here;
+// (a test that seeds "10000000-0000-4000-8000-000000000001") and times inside
+// the window that are deterministic (a seeded time): written exactly as they
+// appear, they are never blanked, so they stay compared by value. A test names its seeded ids here;
 // StableUUID ids need no entry.
 func ScrubRunValues(floor, ceiling time.Time, keep ...string) func(string) string {
 	kept := map[string]bool{}
@@ -50,6 +51,9 @@ func ScrubRunValues(floor, ceiling time.Time, keep ...string) func(string) strin
 			return "<id>"
 		})
 		return isoTimestamp.ReplaceAllStringFunc(text, func(match string) string {
+			if kept[strings.ToLower(match)] {
+				return match
+			}
 			for _, layout := range timestampLayouts {
 				if at, err := time.Parse(layout, match); err == nil {
 					if !at.Before(floor) && at.Before(ceiling) {

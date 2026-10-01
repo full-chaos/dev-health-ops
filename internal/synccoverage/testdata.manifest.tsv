@@ -1,0 +1,4 @@
+# Every file under internal/synccoverage/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+a8908607839e43ff009f4834d5f04507e32b4374975ab6ded02584fc3dab2ec5	hand-written	payload_oracle_case.json
+12be555821198bacc8786d41fed0a112491210997761e632dbfb7c4c62445186	unclassified	python_payload_oracle.py

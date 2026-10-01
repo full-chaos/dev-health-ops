@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -266,9 +265,11 @@ func TestLoaderQueriesSeenAreTheTablesTheCaseSupplies(t *testing.T) {
 	}
 }
 
-// TestSignalsGeneratorIsARealFile pins the signals golden's `_generator`: the path of the script
-// that records it must exist, so the file can still be traced to its recorder.
-func TestSignalsGeneratorIsARealFile(t *testing.T) {
+// TestSignalsGeneratorIsTheNamedRecorder pins the signals golden's `_generator` as TEXT: it must
+// name the recorder under this package's testdata. It deliberately does NOT stat the file: the
+// recorder imports the Python tree, which CHAOS-6264 deletes, and a claim here must hold after
+// that tree is gone and with no Python or Python file present at test time.
+func TestSignalsGeneratorIsTheNamedRecorder(t *testing.T) {
 	raw, err := os.ReadFile("testdata/recommendations_signals_golden.json")
 	if err != nil {
 		t.Fatal(err)
@@ -279,10 +280,8 @@ func TestSignalsGeneratorIsARealFile(t *testing.T) {
 	if err := json.Unmarshal(raw, &document); err != nil {
 		t.Fatal(err)
 	}
-	if document.Generator == "" {
-		t.Fatal("the signals golden names no generator")
-	}
-	if _, err := os.Stat(filepath.Join("..", "..", "..", "..", document.Generator)); err != nil {
-		t.Fatalf("the recorded generator %q does not exist: %v", document.Generator, err)
+	const want = "internal/jobs/metrics/remaining/testdata/generate_recommendations_signals_golden.py"
+	if document.Generator != want {
+		t.Fatalf("_generator = %q, want %q", document.Generator, want)
 	}
 }

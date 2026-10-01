@@ -1,8 +1,11 @@
 package venueoracle
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -147,12 +150,19 @@ func TestTheBackfillAddsOnlyTheKeyToTheHeader(t *testing.T) {
 	if err != nil || len(digest) != 64 {
 		t.Fatalf("candidate: %v %q", err, digest)
 	}
-	var before, after map[string]any
 	rawBefore, _ := os.ReadFile(path)
 	rawAfter, _ := os.ReadFile(path + GoldenCandidateSuffix)
-	if json.Unmarshal(rawBefore, &before) != nil || json.Unmarshal(rawAfter, &after) != nil {
-		t.Fatal("decode")
+	// Numbers stay the text the file holds: a float64 would call two numbers equal that are not.
+	decode := func(raw []byte) map[string]any {
+		var out map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
 	}
+	before, after := decode(rawBefore), decode(rawAfter)
 	header := after["header"].(map[string]any)
 	if header["python_env"] != key {
 		t.Fatalf("the candidate's key is %v, want %s", header["python_env"], key)
@@ -176,5 +186,59 @@ func TestTheBackfillAddsOnlyTheKeyToTheHeader(t *testing.T) {
 	other, _ := frozenWithEnv(t, strings.Repeat("b", 64))
 	if err := other.bindPythonEnv(declared); err == nil || !strings.Contains(err.Error(), "recorded under other Python settings") {
 		t.Fatalf("the backfill switch accepted a golden recorded under other settings: %v", err)
+	}
+}
+
+// The real Start, in a child process: a frozen golden recorded under one set of
+// Python settings is refused, before anything is built, by a test that declares
+// another value (the pinned clock), one variable more, or none.
+func TestStartRefusesAGoldenRecordedUnderOtherPythonSettings(t *testing.T) {
+	declared := []string{"VENUE_PINNED_NOW=2026-01-01T00:00:00Z", "SETTINGS_ENCRYPTION_KEY=k"}
+	cases := map[string][]string{
+		"a changed value":  {"VENUE_PINNED_NOW=2099-01-01T00:00:00Z", declared[1]},
+		"a variable more":  append(append([]string{}, declared...), "TRIAL_DAYS=7"),
+		"no settings":      nil,
+		"another per-run":  append(append([]string{}, declared...), "VENUE_STRIPE_API_BASE=http://127.0.0.1:1"),
+		"the same (start)": declared,
+	}
+	const childEnv = "VENUEORACLE_PYTHON_ENV_START_CHILD"
+	if name := os.Getenv(childEnv); name != "" {
+		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLES", "1")
+		t.Setenv(goldenUpdateEnv, "")
+		t.Setenv(goldenCandidateEnv, "")
+		t.Setenv(goldenBackfillPythonEnv, "")
+		key, err := pythonEnvKey(declared)
+		if err != nil {
+			t.Fatal(err)
+		}
+		golden, _ := frozenWithEnv(t, key)
+		// A cancelled context: a Start that gets past the settings check fails on
+		// its first build step instead of building a venue.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		t.Log("START CALLED")
+		Start(t, ctx, Options{Root: t.TempDir(), JWTKey: "k", Golden: golden, PythonEnv: cases[name]})
+		t.Log("START RETURNED")
+		return
+	}
+	for name := range cases {
+		command := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
+		command.Env = append(os.Environ(), childEnv+"="+name)
+		raw, err := command.CombinedOutput()
+		output := string(raw)
+		if !strings.Contains(output, "START CALLED") {
+			t.Fatalf("%s: the child did not reach Start:\n%s", name, output)
+		}
+		refused := strings.Contains(output, "recorded under other Python settings")
+		if name == "the same (start)" {
+			// The control: with the recorded settings the check lets Start go on.
+			if refused {
+				t.Errorf("%s: refused:\n%s", name, output)
+			}
+			continue
+		}
+		if err == nil || !refused || strings.Contains(output, "START RETURNED") {
+			t.Errorf("%s: Start did not refuse (err %v):\n%s", name, err, output)
+		}
 	}
 }

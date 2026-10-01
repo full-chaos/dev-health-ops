@@ -4,13 +4,14 @@
     "python_build": "a4847c5e93607451a0c987b314d37e02fc43ce85",
     "producer_digest": "6e1dc97e68624398015f60caee160cceee6ae601bd434d01b8b7d5975267e137",
     "recipe": "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/metricsvenue/ -test '^TestPythonMetricsTableSweepVenueOracle$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
     "blanked": {}
   },
   "requests": [
     {
       "name": "python api route sweep",
       "method": "PYTHON",
-      "path": "program sha256 932577243706c87c45de0fd247db7a54c3d05b0c9baa228b8ba385e690b00868 env sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "path": "program sha256 932577243706c87c45de0fd247db7a54c3d05b0c9baa228b8ba385e690b00868 env sha256 8897f6de5dc9a2241dd5a3ea5217bfd4c546179afd765c351643cf9c48e418be",
       "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,

@@ -140,7 +140,7 @@ const noRequest = "<no request>"
 // reach is not proven: a family fired only on an untested path reads as
 // not firing under that route.
 func TestPythonMetricsTableSweepVenueOracle(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, sweepGoldenSpec(t.Name(), "593383bbe6fbd862f840e71b5db308445a06c6556c5cc7fa61ebeb3d5a6e1589"))
+	golden := venueoracle.OpenGolden(t, sweepGoldenSpec(t.Name(), "0136d988806c3ac67a419b4822044730e368d05cd8ae49b84f8d3df1dfdbf2f0"))
 	root := golden.PythonRoot(t, venueRoot())
 	// The sweep is one Python run (the migrations, then the api's route tests
 	// under sweepPlugin); its answer is the map of metric families to the routes
@@ -177,7 +177,7 @@ func TestPythonMetricsTableSweepVenueOracle(t *testing.T) {
 const sweepPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
 // sweepGoldenSpec is the GoldenSpec of the sweep's golden; digest is the
-// SHA-256 the test pins ("593383bbe6fbd862f840e71b5db308445a06c6556c5cc7fa61ebeb3d5a6e1589" until its first recording).
+// SHA-256 the test pins ("0136d988806c3ac67a419b4822044730e368d05cd8ae49b84f8d3df1dfdbf2f0" until its first recording).
 func sweepGoldenSpec(test, digest string) venueoracle.GoldenSpec {
 	return venueoracle.GoldenSpec{
 		Path:        "testdata/table-sweep.golden.json",

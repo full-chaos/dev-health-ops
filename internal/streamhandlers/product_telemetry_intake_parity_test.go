@@ -53,8 +53,9 @@ var payloadKnownDefects = map[string]struct{ goText, pythonText string }{
 	"payload_big_int": {`{"i":9007199254740992}`, `{"i":9007199254740993}`},
 }
 
-// refusedBelowClickHouseMin are corpus shapes Python's row holds but the consumer still refuses: their
-// timestamp is before ClickHouse's DateTime64 range, where the Go driver would store 1970 silently.
+// refusedBelowClickHouseMin are corpus shapes whose Python row holds the timestamp but whose Python
+// insert raised (ValueError, year 0001), so the Python consumer dead-lettered them: the Go consumer
+// refuses them as well, because its driver would store 1970 silently.
 var refusedBelowClickHouseMin = map[string]struct{}{"ts_year1": {}}
 
 type parityStreams struct{ fields map[string]string }

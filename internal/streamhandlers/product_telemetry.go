@@ -30,9 +30,9 @@ var blockedProductPayloadKeys = map[string]struct{}{
 }
 
 // clickHouseMinYear is the first year ClickHouse's DateTime64 holds. An earlier timestamp cannot be
-// stored as sent (the driver writes the zero time as 1970), so the entry is refused as it was before
-// the intake shapes were accepted; the Python consumer's row held the year, whether its insert kept
-// it was not measured (CHAOS-7467 RISK-NOTES).
+// stored as sent (the driver writes the zero time as 1970), so the entry is refused. The Python
+// consumer refused it too: its ClickHouse writer raised ValueError for a year-0001 datetime and the
+// entry was dead-lettered (CHAOS-7467 body).
 const clickHouseMinYear = 1900
 
 // presentString is a required JSON string that may be empty: pydantic's `str` field accepts "" and

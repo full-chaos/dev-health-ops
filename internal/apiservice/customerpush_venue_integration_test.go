@@ -4,6 +4,7 @@ package apiservice
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -49,11 +50,11 @@ func (f customerPushFixture) tokenSpecs() map[string]map[string]any {
 func customerPushSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) customerPushFixture {
 	t.Helper()
 	f := customerPushFixture{}
-	for _, id := range []*uuid.UUID{&f.orgTeam, &f.orgCommunity, &f.orgDisabled, &f.orgLicenseWins, &f.admin, &f.member,
+	for index, id := range []*uuid.UUID{&f.orgTeam, &f.orgCommunity, &f.orgDisabled, &f.orgLicenseWins, &f.admin, &f.member,
 		&f.communityOwner, &f.disabledAdmin, &f.licAdmin, &f.superuser, &f.sourceGitHub, &f.sourceGitLab, &f.sourceCustom,
 		&f.sourceOther, &f.tokenBound, &f.tokenOrgWide, &f.tokenRevoked, &f.tokenOther, &f.batchMain, &f.batchOld,
 		&f.batchOtherSource, &f.batchOtherOrg} {
-		*id = uuid.New()
+		*id = stableVenueID(fmt.Sprintf("customer-push-seed-%d", index))
 	}
 	team, community := f.orgTeam.String(), f.orgCommunity.String()
 	statements := []struct {
@@ -69,16 +70,16 @@ func customerPushSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) cus
 			($3,'cp-disabled','CP Disabled','enterprise'), ($4,'cp-license','CP License','team')`,
 			[]any{f.orgTeam, f.orgCommunity, f.orgDisabled, f.orgLicenseWins}},
 		{`INSERT INTO org_licenses (id, org_id, tier, licensed_users, licensed_repos, is_valid, created_at, updated_at)
-			VALUES (gen_random_uuid(), $1, 'community', 5, 5, true, now(), now())`, []any{f.orgLicenseWins}},
+			VALUES (md5('customerpush_v-row-1')::uuid, $1, 'community', 5, 5, true, now(), now())`, []any{f.orgLicenseWins}},
 		{`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, created_at, updated_at)
-			SELECT gen_random_uuid(), $1, id, false, now(), now() FROM feature_flags WHERE key = 'customer_push_ingest'`, []any{f.orgDisabled}},
+			SELECT md5('customerpush_v-row-2')::uuid, $1, id, false, now(), now() FROM feature_flags WHERE key = 'customer_push_ingest'`, []any{f.orgDisabled}},
 		{`INSERT INTO users (id, email, is_superuser, is_active, token_version) VALUES
 			($1,'cp-admin@x',false,true,0), ($2,'cp-member@x',false,true,0), ($3,'cp-owner@x',false,true,0),
 			($4,'cp-dis@x',false,true,0), ($5,'cp-lic@x',false,true,0), ($6,'cp-su@x',true,true,0)`,
 			[]any{f.admin, f.member, f.communityOwner, f.disabledAdmin, f.licAdmin, f.superuser}},
 		{`INSERT INTO memberships (id, user_id, org_id, role) VALUES
-			(gen_random_uuid(),$1,$5,'admin'), (gen_random_uuid(),$2,$5,'member'), (gen_random_uuid(),$3,$6,'owner'),
-			(gen_random_uuid(),$4,$7,'admin')`, []any{f.admin, f.member, f.communityOwner, f.disabledAdmin, f.orgTeam, f.orgCommunity, f.orgDisabled}},
+			(md5('customerpush_v-row-3')::uuid,$1,$5,'admin'), (md5('customerpush_v-row-4')::uuid,$2,$5,'member'), (md5('customerpush_v-row-5')::uuid,$3,$6,'owner'),
+			(md5('customerpush_v-row-6')::uuid,$4,$7,'admin')`, []any{f.admin, f.member, f.communityOwner, f.disabledAdmin, f.orgTeam, f.orgCommunity, f.orgDisabled}},
 		{`INSERT INTO external_ingest_sources (id, org_id, system, instance, entity_family, display_name, mode, enabled,
 			webhook_mode, matched_integration_source_id, created_at, updated_at) VALUES
 			($1,$5,'github','Acme/API','legacy','Acme API','customer_push',true,'disabled',NULL,'2026-09-01T10:00:00.123456Z','2026-09-02T11:00:00Z'),
@@ -103,9 +104,9 @@ func customerPushSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) cus
 			($4,$6,'k4','p4','github','other/repo','ci',NULL,'external-ingest.v1',NULL,NULL,'completed',1,1,1,0,NULL,NULL,'2026-09-06T00:00:00Z','2026-09-06T00:00:00Z',NULL)`,
 			[]any{f.batchMain, f.batchOld, f.batchOtherSource, f.batchOtherOrg, team, community}},
 		{`INSERT INTO external_ingest_rejections (id, org_id, ingestion_id, record_index, record_kind, external_id, code, message, path) VALUES
-			(gen_random_uuid(),$2,$1,4,'work_item','w-4','invalid_field','bad "value"','payload.state'),
-			(gen_random_uuid(),$2,$1,0,'pull_request',NULL,'missing_field','required',NULL),
-			(gen_random_uuid(),$2,$1,2,'work_item','w-2','unknown_kind','nope','kind')`, []any{f.batchMain, team}},
+			(md5('customerpush_v-row-7')::uuid,$2,$1,4,'work_item','w-4','invalid_field','bad "value"','payload.state'),
+			(md5('customerpush_v-row-8')::uuid,$2,$1,0,'pull_request',NULL,'missing_field','required',NULL),
+			(md5('customerpush_v-row-9')::uuid,$2,$1,2,'work_item','w-2','unknown_kind','nope','kind')`, []any{f.batchMain, team}},
 	}
 	for _, statement := range statements {
 		if _, err := pool.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -144,10 +145,10 @@ func customerPushRequests(f customerPushFixture, tokens map[string]string) []ven
 	add("superuser x-org team", "GET", p+"/sources", bearer("superuser", "X-Org-Id", f.orgTeam.String()))
 	add("admin x-org stranger", "GET", p+"/sources", bearer("admin", "X-Org-Id", f.orgCommunity.String()))
 	// Source ids as uuid.UUID() reads them.
-	for name, id := range map[string]string{
+	for name, id := range ordered(map[string]string{
 		"upper": strings.ToUpper(github), "braces": "{" + github + "}", "no dashes": strings.ReplaceAll(github, "-", ""),
 		"urn": "urn:uuid:" + github, "other org": other, "not uuid": "nope", "short": github[:30],
-	} {
+	}) {
 		add("source id "+name, "GET", p+"/sources/"+id, bearer("admin"))
 		add("tokens source id "+name, "GET", p+"/sources/"+id+"/tokens", bearer("admin"))
 	}
@@ -155,7 +156,7 @@ func customerPushRequests(f customerPushFixture, tokens map[string]string) []ven
 	add("source custom", "GET", p+"/sources/"+f.sourceCustom.String(), bearer("admin"))
 	// Batch filters and query validation.
 	batches := p + "/sources/" + github + "/batches"
-	for name, query := range map[string]string{
+	for name, query := range ordered(map[string]string{
 		"status": "?status=completed", "empty status": "?status=", "producer": "?producer=ci", "no producer match": "?producer=zz",
 		"from": "?from=2026-09-05T00:00:00Z", "to date only": "?to=2026-09-05", "from unix": "?from=1757030400",
 		"page": "?limit=1&offset=1", "repeated limit": "?limit=1&limit=2", "limit float zeros": "?limit=2.00",
@@ -163,25 +164,25 @@ func customerPushRequests(f customerPushFixture, tokens map[string]string) []ven
 		"offset -1": "?offset=-1", "from bad": "?from=2026-13-01", "to bad": "?to=x", "all bad": "?from=x&to=y&limit=0&offset=-1",
 		"huge limit": "?limit=99999999999999999999999", "huge offset": "?offset=99999999999999999999",
 		"offset max int64": "?offset=9223372036854775807",
-	} {
+	}) {
 		add("batches "+name, "GET", batches+query, bearer("admin"))
 	}
 	add("batches unknown source", "GET", p+"/sources/"+other+"/batches", bearer("admin"))
 	add("batches bad query and no auth", "GET", batches+"?limit=0", nil)
 	add("batches bad query and gate refused", "GET", batches+"?limit=0", bearer("community_owner"))
 	detail := p + "/batches/"
-	for name, path := range map[string]string{
+	for name, path := range ordered(map[string]string{
 		"main": f.batchMain.String(), "main page": f.batchMain.String() + "?rejected_records_limit=1&rejected_records_offset=1",
 		"old": f.batchOld.String(), "other source": f.batchOtherSource.String(), "other org": f.batchOtherOrg.String(),
 		"not uuid": "nope", "upper": strings.ToUpper(f.batchMain.String()),
 		"limit 0": f.batchMain.String() + "?rejected_records_limit=0", "offset bad": f.batchMain.String() + "?rejected_records_offset=x",
 		"offset huge": f.batchMain.String() + "?rejected_records_offset=99999999999999999999",
-	} {
+	}) {
 		add("batch "+name, "GET", detail+path, bearer("admin"))
 	}
 	// Schemas.
-	for name, version := range map[string]string{"v2": "external-ingest.v2", "quote": "it's", "both quotes": `a'b"c`,
-		"escaped": "%E2%80%A8x", "tab": "a%09b"} {
+	for name, version := range ordered(map[string]string{"v2": "external-ingest.v2", "quote": "it's", "both quotes": `a'b"c`,
+		"escaped": "%E2%80%A8x", "tab": "a%09b"}) {
 		add("schema "+name, "GET", p+"/schemas/"+version, bearer("admin"))
 	}
 	// Routing edges.
@@ -196,12 +197,13 @@ func customerPushRequests(f customerPushFixture, tokens map[string]string) []ven
 // routes' differential: the real Python api and dho api answer every
 // request byte for byte, on two copies of one seeded database.
 func TestVenueOracleCustomerPushReads(t *testing.T) {
+	golden := venueoracle.OpenGolden(t, venueGolden("venue-oracle-customer-push-reads", t.Name(), "00df525e40311b58f00693f3eb6650875a966f8ef6173d629883f75b8460faff"))
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	t.Setenv("EXTERNAL_INGEST_MAX_RECORDS", " 2_500 ")
 	var seed customerPushFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{"EXTERNAL_INGEST_MAX_RECORDS= 2_500 "},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = customerPushSeed(t, ctx, admin)
@@ -216,9 +218,10 @@ func TestVenueOracleCustomerPushReads(t *testing.T) {
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := customerPushRequests(seed, venue.Tokens)
-	receipt := venueoracle.Diff(t, base, requests, venue.ServePython(t, requests), venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, base, requests, golden.Python(t, venue, requests), venueoracle.DiffOptions{Golden: golden})
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	golden.Finish(t)
 }

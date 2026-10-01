@@ -6,22 +6,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// The operator dataset mapping is compared with the real sync/datasets.py over
-// every provider spelling and every subset of the legacy targets (plus one
-// target no provider knows). goldenSHA256 pins the frozen subset in testdata
-// (R24): the producer is deleted with the Python CLI, so this is a rot guard,
-// not a freshness check. The file is only rewritten by the venue oracle with
-// DHO_OPERATOR_DATASETS_GOLDEN_UPDATE=1, then this digest is updated.
+// The operator dataset mapping is compared with the frozen answers of the real
+// sync/datasets.py over every provider spelling and every subset of the legacy
+// targets (plus one target no provider knows). goldenSHA256 pins the readable
+// subset of those answers in testdata (R24); the full comparison checks that
+// the file is still that subset.
 const operatorDatasetsGoldenSHA256 = "8210d5c6419796e2092e375518052d419653dc778f41c7a5312233a4de9d13c6"
 
 const operatorDatasetsGolden = "testdata/operator_datasets_golden.json"
@@ -95,32 +91,24 @@ func keep(entry oracleEntry) bool {
 	return len(entry.Targets) <= 2 || len(entry.Targets) >= len(oracleTargets)-1
 }
 
-func TestOperatorDatasetsVenueOracleMatchesThePythonProducer(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
-	}
-	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	python := pyoracle.Resolve(t, root)
+// TestOperatorDatasetsMatchFrozenPythonOnEverySubset compares PlannerDatasetKeys
+// and SupportedLegacyTargets with the frozen answers of planner_dataset_keys
+// and supported_legacy_targets for every provider spelling and every subset.
+func TestOperatorDatasetsMatchFrozenPythonOnEverySubset(t *testing.T) {
 	all := subsets()
 	input, err := json.Marshal(map[string]any{"providers": oracleProviders, "subsets": all})
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, "-c", operatorDatasetsPython)
-	command.Stdin = bytes.NewReader(input)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_ENABLED=false")
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("the Python producer failed: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
-	}
+	output := frozenPython(t, "operator-datasets.golden.json", programoracle.Program{
+		Name: "operator datasets", Text: operatorDatasetsPython, Stdin: input, Env: map[string]string{"OTEL_ENABLED": "false"},
+	})[0]
 	var python2 map[string]oracleProvider
-	if err := json.Unmarshal(output, &python2); err != nil {
+	if err := json.Unmarshal([]byte(output), &python2); err != nil {
 		t.Fatal(err)
+	}
+	if len(python2) != len(oracleProviders) {
+		t.Fatalf("the frozen answer holds %d providers, want %d", len(python2), len(oracleProviders))
 	}
 	frozen := map[string]oracleProvider{}
 	nonEmpty := 0
@@ -129,8 +117,14 @@ func TestOperatorDatasetsVenueOracleMatchesThePythonProducer(t *testing.T) {
 		if !slices.Equal(want.Supported, got.Supported) {
 			t.Fatalf("SupportedLegacyTargets(%q) = %v, Python %v", provider, got.Supported, want.Supported)
 		}
+		if len(want.Entries) != len(got.Entries) {
+			t.Fatalf("the frozen answer holds %d subsets for %q, want %d", len(want.Entries), provider, len(got.Entries))
+		}
 		for index := range want.Entries {
 			w, g := want.Entries[index], got.Entries[index]
+			if !slices.Equal(w.Targets, g.Targets) {
+				t.Fatalf("answer %d of %q is for the targets %v, want %v", index, provider, w.Targets, g.Targets)
+			}
 			if !slices.Equal(w.Keys, g.Keys) || w.Error != g.Error {
 				t.Fatalf("PlannerDatasetKeys(%q, %v) = %v %q, Python %v %q", provider, w.Targets, g.Keys, g.Error, w.Keys, w.Error)
 			}
@@ -149,19 +143,19 @@ func TestOperatorDatasetsVenueOracleMatchesThePythonProducer(t *testing.T) {
 	if nonEmpty < 1000 {
 		t.Fatalf("only %d of the compared answers selected a dataset: the comparison would measure nothing", nonEmpty)
 	}
-	if os.Getenv("DHO_OPERATOR_DATASETS_GOLDEN_UPDATE") == "1" {
-		raw, err := json.MarshalIndent(frozen, "", " ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(operatorDatasetsGolden, append(raw, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	// The readable subset in testdata is cut from these answers: it must
+	// still be exactly that cut.
+	rendered, err := json.MarshalIndent(frozen, "", " ")
+	if err != nil {
+		t.Fatal(err)
 	}
-	venueoracle.WriteProof(t)
+	committed, err := os.ReadFile(operatorDatasetsGolden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(committed, append(rendered, '\n')) {
+		t.Fatalf("%s is not the subset of the frozen Python answers it is cut from", operatorDatasetsGolden)
+	}
 }
 
 func TestOperatorDatasetsGoldenIsTheFileTheDigestPins(t *testing.T) {

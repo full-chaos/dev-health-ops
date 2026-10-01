@@ -3,6 +3,7 @@ package shell
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -149,4 +150,87 @@ func runShellHelper() {
 	code := Execute(ctx, Spec{Service: "dev-health-worker"}, nil, lookup, IO{Stdout: &stdout, Stderr: &stderr})
 	_, _ = os.Stderr.WriteString("helper exit=" + strconv.Itoa(code) + "\n" + stdout.String() + stderr.String())
 	os.Exit(0)
+}
+
+// runShellShutdownHelper starts the shell against a collector port that nothing
+// listens on, stops it after a second, and prints how long the stop took.
+func runShellShutdownHelper() {
+	ctx, cancel := context.WithCancel(context.Background())
+	var stdout, stderr bytes.Buffer
+	lookup := testLookup(map[string]string{
+		"DEV_HEALTH_HTTP_ADDR":        os.Getenv("SHELL_OTLP_HTTP_ADDR"),
+		"DEV_HEALTH_SHUTDOWN_TIMEOUT": "10s",
+	})
+	done := make(chan int, 1)
+	go func() {
+		done <- Execute(ctx, Spec{Service: "dev-health-worker"}, nil, lookup, IO{Stdout: &stdout, Stderr: &stderr})
+	}()
+	time.Sleep(1500 * time.Millisecond)
+	stopped := time.Now()
+	cancel()
+	code := <-done
+	_, _ = os.Stderr.WriteString("SHUTDOWN_MS=" + strconv.FormatInt(time.Since(stopped).Milliseconds(), 10) + " CODE=" + strconv.Itoa(code) + "\n")
+	os.Exit(0)
+}
+
+// TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound: with the OTLP push
+// on and nothing listening on the collector port, the stop returns inside the
+// metrics flush bound plus slack, with exit code 0, not after the whole
+// shutdown budget (10 s here). The container smoke gives a stopping container
+// five seconds.
+func TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound(t *testing.T) {
+	if os.Getenv("SHELL_OTLP_HELPER") == "shutdown" {
+		runShellShutdownHelper()
+		return
+	}
+	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpAddress := httpListener.Addr().String()
+	_ = httpListener.Close()
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedAddress := closed.Addr().String()
+	_ = closed.Close() // nothing listens here any more
+	command := exec.Command(os.Args[0], "-test.run=^TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound$")
+	command.Env = append(os.Environ(),
+		"SHELL_OTLP_HELPER=shutdown",
+		"SHELL_OTLP_HTTP_ADDR="+httpAddress,
+		"OTEL_ENABLED=true",
+		"OTEL_SAMPLE_RATE=0",
+		"OTEL_EXPORTER_OTLP_ENDPOINT="+closedAddress,
+		"OTEL_METRIC_EXPORT_INTERVAL=200",
+	)
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
+	done := make(chan error, 1)
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { done <- command.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(25 * time.Second):
+		_ = command.Process.Kill()
+		t.Fatalf("the shell did not stop within 25 s; output:\n%s", output.String())
+	}
+	text := output.String()
+	index := strings.Index(text, "SHUTDOWN_MS=")
+	if index < 0 {
+		t.Fatalf("the helper did not report its stop time:\n%s", text)
+	}
+	var millis int64
+	var code int
+	if _, err := fmt.Sscanf(text[index:], "SHUTDOWN_MS=%d CODE=%d", &millis, &code); err != nil {
+		t.Fatalf("unreadable helper report %q: %v", text[index:], err)
+	}
+	if code != 0 {
+		t.Errorf("the stop exited %d with an unreachable collector, want 0", code)
+	}
+	if limit := (metricsFlushTimeout + 1500*time.Millisecond).Milliseconds(); millis > limit {
+		t.Errorf("the stop took %d ms with an unreachable collector, want <= %d ms (flush bound %v)", millis, limit, metricsFlushTimeout)
+	}
 }

@@ -462,5 +462,7 @@ func (m metricsFlush) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// metricsFlushTimeout bounds the final OTLP flush.
-const metricsFlushTimeout = 2 * time.Second
+// metricsFlushTimeout bounds the final OTLP flush. One second: the final
+// trace flush has its own bound, and a stopping container is given five
+// seconds in total by the container smoke (docker stop --time 5).
+const metricsFlushTimeout = time.Second

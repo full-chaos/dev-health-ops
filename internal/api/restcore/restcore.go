@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -141,6 +142,11 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 			body, err = io.ReadAll(response.Body)
 			response.Body.Close()
 		}
+		if err != nil && strings.Contains(err.Error(), "failed to parse Location header") {
+			// net/http refused the redirect itself and its error text quotes the whole Location (CHAOS-7927): say that
+			// the redirect was refused, not where to.
+			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: the Location header is not a valid URL (%s); the instrumented core does not follow redirects", c.Provider, operation, redirectUnparsable)}
+		}
 		if err != nil {
 			// Only a timeout and a connection failure are retried
 			// (httpx.TimeoutException, httpx.ConnectError); any other
@@ -164,11 +170,11 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 			return got, nil
 		}
 		if got.Status < 400 {
-			location, present := got.HeaderText("Location")
-			if !present {
-				location = "<no Location header>"
+			target := "<no Location header>"
+			if location, present := got.HeaderText("Location"); present {
+				target = RedirectTarget(location)
 			}
-			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: HTTP %d -> %s; the instrumented core does not follow redirects (pass raw_redirect=True to receive the redirect response and handle Location manually)", c.Provider, operation, got.Status, location)}
+			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: HTTP %d -> %s; the instrumented core does not follow redirects (pass raw_redirect=True to receive the redirect response and handle Location manually)", c.Provider, operation, got.Status, target)}
 		}
 		if retryable(got) && attempt < retries-1 {
 			wait := c.RetryAfter(got)
@@ -184,6 +190,29 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 		return Response{}, c.raise(got, operation)
 	}
 	return Response{}, &Error{"APIException", fmt.Sprintf("%s request failed on %s: unknown error", c.Provider, operation)}
+}
+
+const (
+	redirectRelative   = "<relative Location>"
+	redirectUnparsable = "<unparsable Location>"
+)
+
+// RedirectTarget is what an error text may say of a redirect's Location: the scheme and the host (with its port), never
+// the userinfo, the path, the query or the fragment, which can carry a credential or an id (CHAOS-7927). A Location with no
+// host is "<relative Location>"; one that does not parse is "<unparsable Location>". Python's text carries the raw header;
+// this is a named difference.
+func RedirectTarget(location string) string {
+	parsed, err := url.Parse(strings.TrimSpace(location))
+	if err != nil {
+		return redirectUnparsable
+	}
+	if parsed.Host == "" {
+		return redirectRelative
+	}
+	if parsed.Scheme == "" {
+		return "//" + parsed.Host
+	}
+	return parsed.Scheme + "://" + parsed.Host
 }
 
 // raise is _raise_for_status: classify_error first, then the generic

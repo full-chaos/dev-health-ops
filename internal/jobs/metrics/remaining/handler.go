@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 type Store interface {
@@ -278,7 +279,17 @@ func releaseClaim(store Store, ctx context.Context, claim Claim) {
 func releaseClaimTerminally(store Store, ctx context.Context, claim Claim) {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_ = store.ReleasePartitionTerminally(releaseCtx, claim)
+	err := store.ReleasePartitionTerminally(releaseCtx, claim)
+	if err == nil {
+		return
+	}
+	// The terminal release is fenced on a LIVE lease: a claimant whose lease expired (a slow complete, a lost renewal)
+	// cannot take it, and no later attempt exists to move the run out of 'running' (CHAOS-8177). Say so, then mark the
+	// partition exhausted without the lease predicate (an expired lease is taken, a live one is left alone).
+	// Fixed text plus the bounded error class (logging.ErrorArgs, D4317): never the error text.
+	slog.WarnContext(ctx, "remaining metrics terminal release failed; exhausting the partition",
+		append([]any{"partition_id", claim.Partition.ID}, logging.ErrorArgs(err)...)...)
+	exhaustPartition(store, ctx, claim.Partition.ID)
 }
 
 func exhaustPartition(store Store, ctx context.Context, partitionID string) {

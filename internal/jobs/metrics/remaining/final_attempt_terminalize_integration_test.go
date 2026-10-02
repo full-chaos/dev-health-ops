@@ -446,3 +446,41 @@ func TestExhaustPartitionLeavesALiveLeaseAlone(t *testing.T) {
 		t.Fatalf("partition = %q, want running (live lease untouched)", status)
 	}
 }
+
+type expiringCompleteStore struct {
+	*PostgresStore
+	clock *time.Time
+}
+
+// CompletePartition lets the lease run out and then fails: the shape of a slow complete on the last attempt.
+func (s *expiringCompleteStore) CompletePartition(context.Context, Claim, string) error {
+	*s.clock = s.clock.Add(2 * defaultLease)
+	return errors.New("complete partition: connection reset")
+}
+
+// CHAOS-8177 (gwc-review r2 P1-2): on the LAST attempt a complete that fails after the lease expired is fenced out of
+// the terminal release (live-lease predicate), and no later attempt exists. The run must still end failed.
+func TestALastAttemptCompleteFailureAfterLeaseExpiryEndsTheRunFailed(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newRemainingRedriveTestStack(t)
+	clock := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return clock }
+	org := "00000000-0000-4000-8000-000000009811"
+	run, err := store.StartRun(ctx, StartRunRequest{OrganizationID: org, Family: "capacity", Generation: "expired-lease", ScopeKey: "all-teams",
+		GenerationSeed: int64Pointer(811), Scopes: []json.RawMessage{capacityScopeJSON(90)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partition := deterministicPartitionID(run.ID, 1)
+	handler, _ := NewPartitionHandler[jobruntime.RemainingCapacityArgs](&expiringCompleteStore{PostgresStore: store, clock: &clock}, &handlerExecutor{}, "capacity")
+	if workErr := handler.Work(ctx, capacityExecutionFor(org, partition, run.ID, 3, 3)); workErr == nil {
+		t.Fatal("work error = nil, want the retryable complete failure")
+	}
+	var runStatus, partitionStatus string
+	var exhausted bool
+	_ = pool.QueryRow(ctx, "SELECT status FROM remaining_metric_runs WHERE id=$1::uuid", run.ID).Scan(&runStatus)
+	_ = pool.QueryRow(ctx, "SELECT status, completed_at IS NOT NULL FROM remaining_metric_partitions WHERE id=$1::uuid", partition).Scan(&partitionStatus, &exhausted)
+	if runStatus != "failed" || partitionStatus != "failed" || !exhausted {
+		t.Fatalf("run=%s partition=%s exhausted=%t, want failed/failed/true", runStatus, partitionStatus, exhausted)
+	}
+}

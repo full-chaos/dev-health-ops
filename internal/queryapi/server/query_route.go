@@ -1677,6 +1677,38 @@ const registeredAiAttributedPrsDocument = `query AIAttributedPrs($orgId: String!
   }
 }`
 
+// registeredAiAttributedPrsV1Document is the text of `aiAttributedPrs` BEFORE the PR Evidence list asked for
+// `repoName` (CHAOS-7991, CHAOS-8000 dual accept): a web build still on the old text keeps working while the new
+// one rolls out. Listed in legacyDigestsByOperation; remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/aiattributedprs_v1_captured.graphql).
+const registeredAiAttributedPrsV1Document = `query AIAttributedPrs($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $limit: Int! = 50, $offset: Int! = 0) {
+  aiAttributedPrs(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    limit: $limit
+    offset: $offset
+  ) {
+    orgId
+    startDate
+    endDate
+    total
+    hasMore
+    dataAvailable
+    rows {
+      repoId
+      number
+      title
+      kind
+      workType
+      teamId
+      mergedAt
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredAiAttributionOverviewDocument is the registered document for the
 // `aiAttributionOverview` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/aiattributionoverview_captured.graphql).
@@ -3560,7 +3592,9 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // `registered<Operation>V1Document` const (a literal, so cmd/registrydump can read it) named once here and never in
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
-var legacyDigestsByOperation = map[string][]string{}
+var legacyDigestsByOperation = map[string][]string{
+	"aiAttributedPrs": {digestHex(registeredAiAttributedPrsV1Document)},
+}
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's
 // current digest plus its legacy ones. A digest that maps to two operations is refused (the lookup would be

@@ -29,3 +29,36 @@ func TestRegisteredAiAttributedPrsDocument_RequestsRepoNameInRows(t *testing.T) 
 		}
 	}
 }
+
+// CHAOS-8000 dual accept: the OLD text (no repoName) is the operation's legacy text, so a web build still on it keeps
+// resolving to aiAttributedPrs while the new one rolls out.
+func TestAiAttributedPrs_AcceptsTheOldAndTheNewText(t *testing.T) {
+	byDigest, err := buildOperationByDigest(
+		map[string]string{"aiAttributedPrs": digestHex(registeredAiAttributedPrsDocument)},
+		legacyDigestsByOperation,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{
+		"new text": registeredAiAttributedPrsDocument,
+		"old text": registeredAiAttributedPrsV1Document,
+	} {
+		if op, ok := operationForDocument(text, byDigest); !ok || op != "aiAttributedPrs" {
+			t.Errorf("%s resolves to %q, %v; want aiAttributedPrs, true", name, op, ok)
+		}
+	}
+	rows := func(doc string) string {
+		s := doc[strings.Index(doc, "rows {"):]
+		return s[:strings.Index(s, "}")]
+	}
+	if strings.Contains(rows(registeredAiAttributedPrsV1Document), "repoName") {
+		t.Error("the legacy text requests repoName; it must be the text from before")
+	}
+	if !strings.Contains(rows(registeredAiAttributedPrsDocument), "repoName") {
+		t.Error("the current text does not request repoName")
+	}
+	if got := legacyDigestsByOperation["aiAttributedPrs"]; len(got) != 1 || got[0] != digestHex(registeredAiAttributedPrsV1Document) {
+		t.Errorf("legacyDigestsByOperation[aiAttributedPrs] = %v, want the digest of the V1 text", got)
+	}
+}
